@@ -1841,6 +1841,68 @@ static void BotsRollAndLockOn() {
     CHECK(seen.count(static_cast<int>(Anim::SideL)) || seen.count(static_cast<int>(Anim::SideR)));
 }
 
+static void BotsPlayLikePlayers() {
+    // Fights: side hops and back flips beside the rolls, jump slashes to open an exchange, and the shield raised against a swing.
+    std::set<int> seen;
+    for (uint64_t seed = 40; seed < 48; seed++) {
+        Simulation sim(seed, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* a = sim.match.Find(1000);
+        PlayerState* b = sim.match.Find(1001);
+        a->pos = {-160, 0}; b->pos = {160, 0};
+        a->weapon = b->weapon = {ItemId::MasterSword, Rarity::Rare};
+        a->hasShield = b->hasShield = true;
+        a->shield = b->shield = {ItemId::HylianShield, Rarity::Rare};
+        a->maxHealth = a->health = b->maxHealth = b->health = 400.0f;
+        for (int i = 0; i < 20 * 20; i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->alive = false;
+            for (uint32_t id : {1000u, 1001u}) seen.insert(sim.match.Find(id)->anim);
+        }
+    }
+    CHECK(seen.count(static_cast<int>(Anim::HopL)) || seen.count(static_cast<int>(Anim::HopR)));
+    CHECK(seen.count(static_cast<int>(Anim::JumpSlash)));
+    CHECK(seen.count(static_cast<int>(Anim::Guard)));
+    CHECK(seen.count(static_cast<int>(Anim::Jump)));
+    CHECK(IsDodge(static_cast<uint8_t>(Anim::HopL)) && IsDodge(static_cast<uint8_t>(Anim::Backflip)) && !IsDodge(static_cast<uint8_t>(Anim::Guard)));
+
+    // Chests: the bot stops, kicks it open, then holds up what was inside.
+    {
+        Simulation sim = Duel(77, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        LootSpawn chest{{150, 0}, ItemId::MasterSword, Rarity::Epic, true, true};
+        sim.match.AddLoot(chest);
+        std::vector<int> order;
+        for (int i = 0; i < 8 * kTickHz; i++) {
+            sim.Tick(kDt);
+            if (order.empty() || order.back() != a->anim) order.push_back(a->anim);
+        }
+        auto at = [&](Anim x) { return std::find(order.begin(), order.end(), static_cast<int>(x)) - order.begin(); };
+        CHECK(a->weapon.item == ItemId::MasterSword);
+        CHECK(at(Anim::OpenChest) < static_cast<long>(order.size()) && at(Anim::ItemGet) < static_cast<long>(order.size()) && at(Anim::OpenChest) < at(Anim::ItemGet));
+    }
+
+    // Bushes and rocks: a bot short of arrows cuts the bush beside it; the server is asked to break it.
+    {
+        Simulation sim = Duel(78, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        a->weapon = {ItemId::FairyBow, Rarity::Rare};
+        a->ammo.fill(0);
+        sim.bots.SetProps({{{200, 0}, PropKind::Bush, 0}, {{0, 2500}, PropKind::Rock, 0}});
+        std::vector<std::pair<uint32_t, size_t>> asked;
+        for (int i = 0; i < 6 * kTickHz && asked.empty(); i++) {
+            sim.Tick(kDt);
+            asked = sim.bots.DrainSmashes();
+        }
+        CHECK(asked.size() == 1 && asked[0].first == 1000 && asked[0].second == 0);
+        CHECK(Distance(a->pos, {200, 0}) < 200.0f);
+    }
+}
+
 static void BotsLeaveBlastRings() {
     // Hard bots standing in a marked blast walk or roll out before it lands; they are not stuck there taking it.
     int escaped = 0, trials = 0;
@@ -2650,7 +2712,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

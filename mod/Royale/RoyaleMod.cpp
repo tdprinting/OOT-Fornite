@@ -543,58 +543,365 @@ void ApplyChickenDance(Player* p, float t) {
 }
 
 std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
+std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a flinch left (set when they are seen getting hurt)
+std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
+std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
 
+// ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
+
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
-// Actions are played once, from their first frame, each time one begins (see Puppet_Update); `combo` varies a sword's slash.
+
+// How a weapon is held decides which of Link's move sets it uses (one-handed sword, two-handed sword, hammer, bow...).
+enum class Grip : uint8_t { OneHand, TwoHand, Hammer, Bow, Hook, Boomerang, Explosive, Ocarina, Bare };
+Grip GripOf(royale::ItemId w) {
+    using royale::ItemId;
+    switch (w) {
+        case ItemId::BiggoronSword: return Grip::TwoHand;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return Grip::Hammer;
+        case ItemId::FairyBow: case ItemId::Slingshot: case ItemId::TripleSlingshot: case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows: return Grip::Bow;
+        case ItemId::Hookshot: case ItemId::Longshot: return Grip::Hook;
+        case ItemId::Boomerang: return Grip::Boomerang;
+        case ItemId::Bombs: case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::DekuNuts: return Grip::Explosive;
+        default: break;
+    }
+    const Look look = LookFor(w);
+    if (look.modelGroup == PLAYER_MODELGROUP_OCARINA || look.modelGroup == PLAYER_MODELGROUP_OOT) return Grip::Ocarina;
+    if (look.modelGroup == PLAYER_MODELGROUP_SWORD_AND_SHIELD || look.modelGroup == PLAYER_MODELGROUP_10) return Grip::OneHand;
+    return Grip::Bare;
+}
+
+// An action is up to three of the game's animations in a row: a slash and its recovery, a potion opened, drunk and finished, a spell
+// gathered, loosed and ended. The last one loops (walking, holding a stance) or holds its final pose until the player does something else.
+struct AnimStep { LinkAnimationHeader* anim; bool loop; };
+struct AnimSeq {
+    AnimStep step[3] = {};
+    int count = 0;
+    AnimSeq() = default;
+    AnimSeq(LinkAnimationHeader* a, bool loop) { Add(a, loop); }
+    AnimSeq& Add(LinkAnimationHeader* a, bool loop = false) { if (count < 3 && a != nullptr) step[count++] = { a, loop }; return *this; }
+};
+
+// Actions are played once, from their first frame, each time one begins (see Puppet_Update).
 bool OneShotAnim(uint8_t anim) {
-    switch (static_cast<royale::Anim>(anim)) {
-        case royale::Anim::Attack: case royale::Anim::Shoot: case royale::Anim::Throw: case royale::Anim::Drink:
-        case royale::Anim::Play: case royale::Anim::Cast: case royale::Anim::Roll: return true;
+    using royale::Anim;
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Attack: case Anim::Shoot: case Anim::Throw: case Anim::Drink: case Anim::Play: case Anim::Cast: case Anim::Roll:
+        case Anim::JumpSlash: case Anim::SpinAttack: case Anim::HopL: case Anim::HopR: case Anim::Backflip: case Anim::ItemGet:
+        case Anim::OpenChest: case Anim::Jump: case Anim::Hurt: case Anim::Dead: case Anim::Guard: return true;
         default: return false;
     }
 }
-LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword, int combo = 0) {
-    using royale::ItemId;
-    const bool hammer = weapon == ItemId::MegatonHammer || weapon == ItemId::GiantsHammer;
-    switch (static_cast<royale::Anim>(anim)) {
-        case royale::Anim::Attack: {
-            if (hammer) return RA(hammer_hit);
-            static LinkAnimationHeader* const slashes[4] = { RA(fighter_Lnormal_kiru), RA(fighter_LLside_kiru), RA(fighter_LRside_kiru), RA(fighter_Lpierce_kiru) };
-            if (weapon == ItemId::DekuStick) return RA(fighter_normal_kiru);
-            return slashes[combo & 3];
+
+// The game's sword swings in the order a player strings them together: a slash, a slash from the other side, then a finishing blow
+// (sometimes a stab). One-handed swords, the two-handed Biggoron's Sword and the hammer each have their own set.
+AnimSeq SwingFor(Grip grip, int combo) {
+    const int n = combo % 4;
+    switch (grip) {
+        case Grip::Hammer:
+            return n % 2 == 0 ? AnimSeq(RA(hammer_hit), false).Add(RA(hammer_hit_end)) : AnimSeq(RA(hammer_side_hit), false).Add(RA(hammer_side_hit_end));
+        case Grip::TwoHand: {
+            static LinkAnimationHeader* const hit[4] = { RA(fighter_Lnormal_kiru), RA(fighter_LLside_kiru), RA(fighter_LRside_kiru_finsh), RA(fighter_Lpierce_kiru) };
+            static LinkAnimationHeader* const end[4] = { RA(fighter_Lnormal_kiru_end), RA(fighter_LLside_kiru_end), RA(fighter_LRside_kiru_finsh_end), RA(fighter_Lpierce_kiru_end) };
+            return AnimSeq(hit[n], false).Add(end[n]);
         }
-        case royale::Anim::Shoot:
-            if (weapon == ItemId::Hookshot || weapon == ItemId::Longshot) return RA(hook_shot_ready);
-            return RA(bow_bow_shoot);
-        case royale::Anim::Throw:
-            if (weapon == ItemId::Boomerang) return RA(boom_throwR);
-            if (weapon == ItemId::Bombs || weapon == ItemId::Bombchus || weapon == ItemId::HomingBombchus) return RA(normal_throw);
-            return RA(boom_throwL);
-        case royale::Anim::Drink: return RA(bottle_drink_demo_start);
-        case royale::Anim::Play: return RA(normal_okarina_start);
-        case royale::Anim::Cast:
-            if (weapon == ItemId::DinsFire) return RA(magic_honoo1);
-            if (weapon == ItemId::FaroresWind) return RA(magic_kaze1);
-            return RA(magic_tamashii1);
-        case royale::Anim::Roll: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_landing_roll;           // a dodge roll
-        case royale::Anim::SideL: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkL;            // the lock-on footwork
-        case royale::Anim::SideR: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkR;
-        case royale::Anim::Back: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_back_walk;
-        case royale::Anim::Stance: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_waitR;
-        case royale::Anim::Emote1: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_bikkuri;     // startled: "Wow!"
-        case royale::Anim::Emote2: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_jibunmiru;   // looks at his own hands
-        case royale::Anim::Emote3: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kaoage;      // looks up
-        case royale::Anim::Emote4: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kenmiru1;    // admires a sword
-        case royale::Anim::Emote5: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;      // the chicken dance poses the limbs itself (ApplyChickenDance)
-        case royale::Anim::Walk:
-        case royale::Anim::Run:
-            return (LinkAnimationHeader*)&gPlayerAnim_link_normal_run;
-        default: // Idle, Attack, Hurt, Dead and anything newer than this build: stand still for now
-            return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;
+        default: {
+            static LinkAnimationHeader* const hit[4] = { RA(fighter_normal_kiru), RA(fighter_Lside_kiru), RA(fighter_Rside_kiru_finsh), RA(fighter_pierce_kiru) };
+            static LinkAnimationHeader* const end[4] = { RA(fighter_normal_kiru_end), RA(fighter_Lside_kiru_end), RA(fighter_Rside_kiru_finsh_end), RA(fighter_pierce_kiru_end) };
+            return AnimSeq(hit[n], false).Add(end[n]);
+        }
     }
 }
+
+// Standing ready with what is in hand, and the lock-on footwork, both as the game shows them for that weapon.
+LinkAnimationHeader* StanceFor(Grip grip) {
+    switch (grip) {
+        case Grip::Bow: return RA(bow_bow_wait);
+        case Grip::Hook: return RA(hook_wait);
+        case Grip::Boomerang: return RA(boom_throw_waitR);
+        case Grip::TwoHand: case Grip::Hammer: return RA(fighter_waitR_long);
+        default: return RA(anchor_waitR);
+    }
+}
+LinkAnimationHeader* SideStepFor(Grip grip, bool left) {
+    switch (grip) {
+        case Grip::Bow: return RA(bow_side_walk);
+        case Grip::Hook: return RA(hook_side_walk);
+        case Grip::Boomerang: return left ? RA(boom_throw_side_walkL) : RA(boom_throw_side_walkR);
+        case Grip::Explosive: return left ? RA(anchor_bom_side_walkL) : RA(anchor_bom_side_walkR);
+        case Grip::TwoHand: case Grip::Hammer: return left ? RA(fighter_side_walkL_long) : RA(fighter_side_walkR_long);
+        default: return left ? RA(anchor_side_walkL) : RA(anchor_side_walkR);
+    }
+}
+
+// The spells and songs: which magic pose (fire, wind or soul) a spell is cast with.
+AnimSeq CastFor(royale::ItemId ability) {
+    using royale::ItemId;
+    switch (ability) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return AnimSeq(RA(magic_honoo1), false).Add(RA(magic_honoo2)).Add(RA(magic_honoo3));
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: case ItemId::EponasSong: case ItemId::MinuetOfForest:
+            return AnimSeq(RA(magic_kaze1), false).Add(RA(magic_kaze2)).Add(RA(magic_kaze3));
+        case ItemId::LensOfTruth: return AnimSeq(RA(normal_okarina_start), false);   // held up to the eye
+        case ItemId::MagicBeans: return AnimSeq(RA(normal_put), false);               // planted at his feet
+        default: return AnimSeq(RA(magic_tamashii1), false).Add(RA(magic_tamashii2)).Add(RA(magic_tamashii3));
+    }
+}
+
+AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ability, Player* player) {
+    using royale::Anim;
+    using royale::ItemId;
+    const Grip grip = GripOf(weapon);
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Walk: return AnimSeq(RA(normal_walk), true);
+        case Anim::Run: return AnimSeq(RA(normal_run), true);
+        case Anim::Attack:
+            if (grip == Grip::Bow || grip == Grip::Explosive || grip == Grip::Boomerang || grip == Grip::Hook || grip == Grip::Ocarina || grip == Grip::Bare)
+                return AnimSeq(RA(fighter_normal_kiru), false).Add(RA(fighter_normal_kiru_end));   // bashing with whatever is in hand
+            return SwingFor(grip, combo);
+        case Anim::JumpSlash:
+            if (grip == Grip::Hammer) return AnimSeq(RA(hammer_hit), false).Add(RA(hammer_hit_end));
+            return AnimSeq(RA(fighter_Lpower_jump_kiru), false).Add(RA(fighter_Lpower_jump_kiru_hit)).Add(RA(fighter_Lpower_jump_kiru_end));
+        case Anim::SpinAttack:
+            if (grip == Grip::TwoHand || grip == Grip::Hammer) return AnimSeq(RA(fighter_Lrolling_kiru), false).Add(RA(fighter_Lrolling_kiru_end));
+            return AnimSeq(RA(fighter_rolling_kiru), false).Add(RA(fighter_rolling_kiru_end));
+        case Anim::Shoot:
+            if (grip == Grip::Hook) return AnimSeq(RA(hook_shot_ready), false).Add(RA(hook_wait), true);
+            return AnimSeq(RA(bow_bow_shoot), false).Add(RA(bow_bow_shoot_end)).Add(RA(bow_bow_wait), true);
+        case Anim::Throw:
+            if (ability == ItemId::Hookshot || ability == ItemId::Longshot) return AnimSeq(RA(hook_shot_ready), false).Add(RA(hook_wait), true);
+            if (weapon == ItemId::Boomerang) return AnimSeq(RA(boom_throwR), false).Add(RA(boom_throw_wait2waitR)).Add(RA(boom_throw_waitR), true);
+            return AnimSeq(RA(normal_throw), false);
+        case Anim::Drink: return AnimSeq(RA(bottle_drink_demo_start), false).Add(RA(bottle_drink_demo_wait)).Add(RA(bottle_drink_demo_end));
+        case Anim::Play: return AnimSeq(RA(normal_okarina_start), false).Add(RA(normal_okarina_swing), true);
+        case Anim::Cast: return CastFor(ability);
+        case Anim::Roll: return AnimSeq(RA(normal_landing_roll), false);
+        case Anim::HopL: return AnimSeq(RA(fighter_Lside_jump), false).Add(RA(fighter_Lside_jump_end));
+        case Anim::HopR: return AnimSeq(RA(fighter_Rside_jump), false).Add(RA(fighter_Rside_jump_end));
+        case Anim::Backflip: return AnimSeq(RA(fighter_backturn_jump), false).Add(RA(fighter_backturn_jump_end));
+        case Anim::Guard:
+            if (grip == Grip::TwoHand || grip == Grip::Hammer) return AnimSeq(RA(fighter_defense_long), false).Add(RA(fighter_defense_long_wait), true);
+            return AnimSeq(RA(anchor_waitR2defense), false).Add(RA(anchor_waitR_defense_wait), true);
+        case Anim::ItemGet: return AnimSeq(RA(demo_get_itemB), false);
+        case Anim::OpenChest: return AnimSeq(player != nullptr && player->ageProperties != nullptr ? player->ageProperties->unk_98 : RA(demo_Tbox_open), false);
+        case Anim::Jump: return AnimSeq(RA(normal_run_jump), false).Add(RA(normal_landing));
+        case Anim::Hurt: return AnimSeq(RA(normal_front_shit), false);
+        case Anim::Dead: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));
+        case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
+        case Anim::SideR: return AnimSeq(SideStepFor(grip, false), true);
+        case Anim::Back: return AnimSeq(grip == Grip::Bow || grip == Grip::Hook ? SideStepFor(grip, false) : RA(anchor_back_walk), true);
+        case Anim::Stance: return AnimSeq(StanceFor(grip), true);
+        case Anim::Emote1: return AnimSeq(RA(demo_bikkuri), false);     // startled: "Wow!"
+        case Anim::Emote2: return AnimSeq(RA(demo_jibunmiru), false);   // looks at his own hands
+        case Anim::Emote3: return AnimSeq(RA(demo_kaoage), false).Add(RA(demo_kaoage_wait), true);   // looks up
+        case Anim::Emote4: return AnimSeq(RA(demo_kenmiru1), false).Add(RA(demo_kenmiru1_wait), true);   // admires a sword
+        case Anim::Emote5: return AnimSeq(RA(normal_wait), true);       // the chicken dance poses the limbs itself (ApplyChickenDance)
+        default: return AnimSeq(RA(normal_wait), true);                 // Idle and anything newer than this build
+    }
+}
+// The first animation of an action (the corpses' emote doubles use it).
+LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword, int combo = 0) {
+    return SeqFor(anim, weapon, combo, royale::ItemId::DinsFire, nullptr).step[0].anim;
+}
+
+// ---- how other players sound: the game's own effects and Link's voice, from where they stand -----------------------------------
+
+constexpr float kPuppetHearing = 1600.0f;   // sounds further off than this are not played at all (the game fades them with distance anyway)
+int gPuppetSfxThisFrame = 0;               // a cap, so 31 players at once don't use up every sound channel
+u32 gPuppetSfxFrame = 0;
+
+bool PuppetAudible(const Actor* actor) {
+    if (gPlayState == nullptr) return false;
+    if (gPuppetSfxFrame != gPlayState->gameplayFrames) { gPuppetSfxFrame = gPlayState->gameplayFrames; gPuppetSfxThisFrame = 0; }
+    if (gPuppetSfxThisFrame >= 6) return false;
+    const Player* me = GET_PLAYER(gPlayState);
+    const float dx = actor->world.pos.x - me->actor.world.pos.x, dz = actor->world.pos.z - me->actor.world.pos.z;
+    return dx * dx + dz * dz < kPuppetHearing * kPuppetHearing;
+}
+void PuppetSfx(Actor* actor, u16 sfx) {
+    if (!PuppetAudible(actor)) return;
+    gPuppetSfxThisFrame++;
+    Audio_PlaySoundGeneral(sfx, &actor->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+// Link's voice: the child and adult voices are separate sounds, as in the game.
+void PuppetVoice(Player* player, u16 sfx) { PuppetSfx(&player->actor, static_cast<u16>(sfx + player->ageProperties->unk_92)); }
+// Footsteps, jumps and landings sound like the ground they are on (grass, dirt, stone, water...).
+u16 PuppetFloorSfx(Player* player, u16 sfx) { return static_cast<u16>(sfx + player->floorSfxOffset + player->ageProperties->unk_94); }
+
+void PuppetStep(Player* player, float speedPerFrame) {
+    if (!PuppetAudible(&player->actor)) return;
+    gPuppetSfxThisFrame++;
+    func_800F4010(&player->actor.projectedPos, PuppetFloorSfx(player, NA_SE_PL_WALK_GROUND), speedPerFrame);
+}
+
+// A spell or a song's own sound when somebody uses it (the tune itself is played by PlaySongMelody).
+u16 AbilitySfx(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return NA_SE_PL_MAGIC_FIRE;
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: return NA_SE_PL_MAGIC_WIND_WARP;
+        case ItemId::NayrusLove: case ItemId::PreludeOfLight: return NA_SE_PL_MAGIC_SOUL_NORMAL;
+        case ItemId::Hookshot: case ItemId::Longshot: return NA_SE_IT_HOOKSHOT_CHAIN;
+        case ItemId::ShockwaveGrenade: return NA_SE_IT_BOMB_EXPLOSION;
+        case ItemId::MagicBeans: return NA_SE_PL_PLANT_GROW_UP;
+        case ItemId::LensOfTruth: return NA_SE_PL_MAGIC_SOUL_FLASH;
+        default: return NA_SE_PL_MAGIC_SOUL_BALL;
+    }
+}
+u16 AbilityVoice(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return NA_SE_VO_LI_MAGIC_ATTACK;
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: return NA_SE_VO_LI_MAGIC_FROL;
+        case ItemId::NayrusLove: case ItemId::PreludeOfLight: return NA_SE_VO_LI_MAGIC_NALE;
+        default: return 0;
+    }
+}
+
+// The sound of an action starting: the swish of the swing and Link's shout, the bow string, the bottle, the roll...
+void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo) {
+    using royale::Anim;
+    using royale::ItemId;
+    const Grip grip = GripOf(weapon);
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Attack:
+            if (grip == Grip::Hammer) PuppetSfx(&player->actor, NA_SE_IT_HAMMER_SWING);
+            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
+            PuppetVoice(player, combo % 4 == 2 || grip == Grip::Hammer || grip == Grip::TwoHand ? NA_SE_VO_LI_SWORD_L : NA_SE_VO_LI_SWORD_N);
+            break;
+        case Anim::JumpSlash:
+            PuppetVoice(player, NA_SE_VO_LI_SWORD_L);
+            PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
+            break;
+        case Anim::SpinAttack:
+            PuppetSfx(&player->actor, NA_SE_IT_ROLLING_CUT);
+            PuppetVoice(player, NA_SE_VO_LI_SWORD_L);
+            break;
+        case Anim::Shoot:
+            PuppetSfx(&player->actor, grip == Grip::Hook ? NA_SE_IT_HOOKSHOT_READY : weapon == ItemId::Slingshot || weapon == ItemId::TripleSlingshot ? NA_SE_IT_SLING_DRAW : NA_SE_IT_BOW_DRAW);
+            break;
+        case Anim::Throw: PuppetVoice(player, NA_SE_VO_LI_SWORD_N); PuppetSfx(&player->actor, NA_SE_PL_THROW); break;
+        case Anim::Drink: PuppetSfx(&player->actor, NA_SE_PL_PUT_OUT_ITEM); break;
+        case Anim::Roll: PuppetSfx(&player->actor, NA_SE_PL_ROLL); break;
+        case Anim::HopL: case Anim::HopR: case Anim::Backflip: case Anim::Jump:
+            PuppetVoice(player, NA_SE_VO_LI_AUTO_JUMP);
+            PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
+            break;
+        case Anim::Guard: PuppetSfx(&player->actor, NA_SE_IT_SHIELD_POSTURE); break;
+        case Anim::OpenChest: PuppetSfx(&player->actor, NA_SE_EV_TBOX_OPEN); break;
+        case Anim::ItemGet: PuppetSfx(&player->actor, NA_SE_SY_GET_ITEM); break;
+        case Anim::Emote1: PuppetVoice(player, NA_SE_VO_LI_SURPRISE); break;
+        case Anim::Hurt: PuppetVoice(player, NA_SE_VO_LI_DAMAGE_S); break;
+        case Anim::Dead: PuppetVoice(player, NA_SE_VO_LI_DOWN); break;
+        default: break;
+    }
+}
+
+// Songs: when somebody near you plays one, you hear the real tune on the ocarina, one at a time.
+int OcarinaSongOf(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::ZeldasLullaby: return OCARINA_SONG_LULLABY;
+        case ItemId::EponasSong: return OCARINA_SONG_EPONAS;
+        case ItemId::SariasSong: return OCARINA_SONG_SARIAS;
+        case ItemId::SunsSong: return OCARINA_SONG_SUNS;
+        case ItemId::SongOfTime: return OCARINA_SONG_TIME;
+        case ItemId::SongOfStorms: return OCARINA_SONG_STORMS;
+        case ItemId::MinuetOfForest: return OCARINA_SONG_MINUET;
+        case ItemId::BoleroOfFire: return OCARINA_SONG_BOLERO;
+        case ItemId::SerenadeOfWater: return OCARINA_SONG_SERENADE;
+        case ItemId::NocturneOfShadow: return OCARINA_SONG_NOCTURNE;
+        case ItemId::RequiemOfSpirit: return OCARINA_SONG_REQUIEM;
+        case ItemId::PreludeOfLight: return OCARINA_SONG_PRELUDE;
+        case ItemId::FairyOcarina: { static const int simple[] = { OCARINA_SONG_LULLABY, OCARINA_SONG_EPONAS, OCARINA_SONG_SARIAS, OCARINA_SONG_SUNS, OCARINA_SONG_TIME, OCARINA_SONG_STORMS }; return simple[static_cast<int>(Rand_ZeroOne() * 5.99f)]; }
+        case ItemId::OcarinaOfTime: return static_cast<int>(Rand_ZeroOne() * 11.99f);   // any of the twelve
+        default: return -1;
+    }
+}
+struct SongPlayback { bool on = false; double started = 0; };
+SongPlayback gSongPlayback;
+bool SongBlocked() {
+    if (gPlayState == nullptr || gPlayState->pauseCtx.state != 0) return true;
+    return (GET_PLAYER(gPlayState)->stateFlags2 & PLAYER_STATE2_OCARINA_PLAYING) != 0;   // you are playing the real ocarina yourself
+}
+void PlaySongMelody(int song) {
+    if (song < 0 || gSongPlayback.on || SongBlocked()) return;
+    Audio_OcaSetInstrument(1);
+    Audio_OcaSetSongPlayback(static_cast<s8>(song + 1), 1);
+    gSongPlayback = { true, ImGui::GetTime() };
+}
+void UpdateSongMelody() {
+    if (!gSongPlayback.on) return;
+    const double age = ImGui::GetTime() - gSongPlayback.started;
+    const OcarinaStaff* staff = Audio_OcaGetDisplayingStaff();
+    if ((age > 0.5 && staff != nullptr && staff->state == 0) || age > 8.0 || (gPlayState != nullptr && gPlayState->pauseCtx.state != 0)) {
+        Audio_OcaSetSongPlayback(0, 0);
+        Audio_OcaSetInstrument(0);
+        gSongPlayback.on = false;
+    }
+}
+
+// Someone used an ability: the spell's sound and Link's shout from where they stand, and the tune if it was a song and they are close.
+void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
+    gLastAbility[who] = item;
+    gLastAbilityAt[who] = ImGui::GetTime();
+    if (!InGame()) return;
+    const bool song = royale::IsSong(item) || item == royale::ItemId::FairyOcarina || item == royale::ItemId::OcarinaOfTime;
+    Player* me = GET_PLAYER(gPlayState);
+    const float d = std::hypot(x - me->actor.world.pos.x, z - me->actor.world.pos.z);
+    if (song && (self || d < 900.0f)) PlaySongMelody(OcarinaSongOf(item));
+    if (self) return;   // your own spell already made its sound when you used it
+    auto a = gActorOf.find(who);
+    if (a == gActorOf.end() || a->second == nullptr) return;
+    Player* p = (Player*)a->second;
+    if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
+    if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
+}
+
+// ---- the puppet itself ------------------------------------------------------------------------------------------------------------
+
+// Each puppet's place in its current action, how fast it is really moving (to match its legs to it), and when it last made a sound.
+struct PuppetMotion {
+    uint8_t anim = 255;         // the action being shown
+    AnimSeq seq;
+    int step = 0;
+    int combo = 0;
+    royale::ItemId seqAbility = royale::ItemId::Count;
+    float lastX = 0, lastZ = 0;
+    bool havePos = false;
+    float speed = 0;            // units per game frame, smoothed
+    float prevFrame = 0;        // for footsteps
+    int idleFrames = 0;         // standing about: now and then a look round
+    float jumpT = -1;           // a bot's jump arc, 0..1 (bots move on flat ground, so the jump is drawn here)
+    int floorCheck = 0;
+    royale::ItemId heldWeapon = royale::ItemId::Count;
+    int flinch = 0;
+};
+std::unordered_map<const Actor*, PuppetMotion> gMotion;
+
+void StartStep(PlayState* play, Player* player, PuppetMotion& m, int step, float morph) {
+    m.step = step;
+    const AnimStep& st = m.seq.step[step];
+    LinkAnimation_Change(play, &player->skelAnime, st.anim, 1.0f, 0.0f, Animation_GetLastFrame(st.anim), st.loop ? ANIMMODE_LOOP : ANIMMODE_ONCE, morph);
+    m.prevFrame = 0;
+}
+void StartSeq(PlayState* play, Player* player, PuppetMotion& m, const AnimSeq& seq, float morph) {
+    m.seq = seq;
+    if (m.seq.count == 0) m.seq = AnimSeq(RA(normal_wait), true);
+    StartStep(play, player, m, 0, morph);
+}
+
+// Which ground the puppet stands on, for its footsteps (checked a few times a second).
+void UpdatePuppetFloor(PlayState* play, Player* player, PuppetMotion& m) {
+    if (m.floorCheck-- > 0) return;
+    m.floorCheck = 8;
+    CollisionPoly poly;
+    s32 bgId = BGCHECK_SCENE;
+    Vec3f pos = { player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z };
+    const float y = BgCheck_AnyRaycastFloor2(&play->colCtx, &poly, &bgId, &pos);
+    player->floorSfxOffset = y > BGCHECK_Y_MIN + 1.0f ? SurfaceType_GetSfx(&play->colCtx, &poly, bgId) : 0;
+}
+
 
 void Puppet_Init(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
@@ -693,6 +1000,20 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         }
     }
 
+    PuppetMotion& m = gMotion[actor];
+    {   // how fast they really move (snapshots arrive in steps, so smoothed): the legs are matched to it
+        if (m.havePos) {
+            const float moved = std::hypot(s.x - m.lastX, s.z - m.lastZ);
+            if (moved < 80.0f) m.speed = m.speed * 0.7f + moved * 0.3f;
+        }
+        m.lastX = s.x; m.lastZ = s.z; m.havePos = true;
+    }
+    UpdatePuppetFloor(play, player, m);
+    if (m.heldWeapon != s.weapon) {   // a weapon swapped in: the game's draw sound
+        if (m.heldWeapon != royale::ItemId::Count && s.alive) PuppetSfx(actor, NA_SE_PL_CHANGE_ARMS);
+        m.heldWeapon = s.weapon;
+    }
+
     {   // somebody has just loosed an arrow or thrown something: show it in flight
         static std::unordered_map<uint16_t, uint8_t> previous;
         uint8_t& before = previous[s.id];
@@ -700,50 +1021,106 @@ void Puppet_Update(Actor* actor, PlayState* play) {
             SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot);
         before = s.anim;
     }
-    // Actions play once, from their first frame, every time they begin, and hold their last pose until the player does something else:
-    // that is what makes a slash, a shot or a throw read as a movement instead of a looping wiggle. Sword slashes cycle through the
-    // game's four different swings.
-    static std::unordered_map<const Actor*, uint8_t> lastAnim;
-    static std::unordered_map<uint16_t, int> combo;
-    bool restart = false;
-    LinkAnimationHeader* want = nullptr;
-    const bool hanging = HangingFromGlider(&s, actor, play);
-    if (hanging) {   // both hands up on the glider's bar (the game's ledge-hang pose)
-        want = RA(normal_jump_climb_wait);
-        auto cur = gPlaying.find(actor);
-        if (cur == gPlaying.end() || cur->second != (const void*)want) { LinkAnimation_PlayLoop(play, &player->skelAnime, want); gPlaying[actor] = (const void*)want; }
+    if (HangingFromGlider(&s, actor, play)) {   // both hands up on the glider's bar (the game's ledge-hang pose)
+        if (m.anim != 254) { StartSeq(play, player, m, AnimSeq(RA(normal_jump_climb_wait), true), -6.0f); m.anim = 254; }
         LinkAnimation_Update(play, &player->skelAnime);
         Vec3f ignored;
         SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
-        lastAnim[actor] = 255;
         return;
     }
+
+    // What to show. Mostly the player's own state; but when they are seen landing a blow (or taking one) and their state doesn't say so
+    // yet, the swing (or the flinch) is shown anyway, so a fight always reads as one.
+    using royale::Anim;
+    uint8_t want = s.anim;
+    bool forced = false;
     {
         auto sw = gSwingFrames.find(s.id);
-        const bool hitting = sw != gSwingFrames.end() && sw->second > 0;
-        const bool swingStart = hitting && sw->second == 10;
-        if (hitting) sw->second--;
-        uint8_t& before = lastAnim[actor];
-        const bool attackStart = s.anim == static_cast<uint8_t>(royale::Anim::Attack) && before != s.anim;
-        if (swingStart || attackStart) {
-            want = AnimFor(static_cast<uint8_t>(royale::Anim::Attack), s.weapon, combo[s.id]++);
-            restart = true;
-        } else if (hitting) {
-            auto cur = gPlaying.find(actor);
-            want = cur != gPlaying.end() ? (LinkAnimationHeader*)cur->second : AnimFor(s.anim, s.weapon);
-        } else {
-            want = AnimFor(s.anim, s.weapon, combo[s.id]);
-            restart = OneShotAnim(s.anim) && before != s.anim;
+        auto fl = gFlinchFrames.find(s.id);
+        const bool busy = royale::IsStrike(s.anim) || royale::IsDodge(s.anim) || OneShotAnim(s.anim);
+        if (sw != gSwingFrames.end() && sw->second > 0) {
+            if (!busy) { want = static_cast<uint8_t>(Anim::Attack); forced = sw->second == 10; }
+            sw->second--;
+        } else if (fl != gFlinchFrames.end() && fl->second > 0) {
+            if (!busy && s.alive) { want = static_cast<uint8_t>(Anim::Hurt); forced = fl->second == 8; }
+            fl->second--;
         }
-        before = s.anim;
     }
-    auto playing = gPlaying.find(actor);
-    if (restart || playing == gPlaying.end() || playing->second != (const void*)want) {
-        if (OneShotAnim(s.anim) || restart) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
-        else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
-        gPlaying[actor] = (const void*)want;
+    const auto ab = gLastAbility.find(s.id);
+    royale::ItemId ability = ab != gLastAbility.end() ? ab->second : royale::ItemId::NayrusLove;
+    {   // a throw is the hookshot only if they have just used one; otherwise it is whatever is in their hand
+        auto at = gLastAbilityAt.find(s.id);
+        if (want == static_cast<uint8_t>(royale::Anim::Throw) && (at == gLastAbilityAt.end() || ImGui::GetTime() - at->second > 1.2)) ability = royale::ItemId::Count;
     }
-    LinkAnimation_Update(play, &player->skelAnime);
+    // A spell's pose depends on which spell: if word of it arrives just after the pose began, start again with the right one.
+    const bool respell = (want == static_cast<uint8_t>(Anim::Cast) || want == static_cast<uint8_t>(Anim::Throw)) && m.anim == want && m.seqAbility != ability && m.step == 0 &&
+                         player->skelAnime.curFrame < 6.0f;
+    // Standing about for a while: a look round, a stretch, as Link does when you leave the stick alone.
+    bool fidget = false;
+    if (want == static_cast<uint8_t>(Anim::Idle)) {
+        if (++m.idleFrames > 110 + static_cast<int>(s.id % 7) * 20 && s.health > 1.0f) { fidget = true; m.idleFrames = 0; }
+    } else {
+        m.idleFrames = 0;
+    }
+    if (want != m.anim || forced || respell || fidget) {
+        const bool strike = royale::IsStrike(want);
+        if (strike && !respell) m.combo++;
+        AnimSeq seq = SeqFor(want, s.weapon, m.combo, ability, player);
+        if (fidget) {   // the game's own idle fidgets: a look round, a stretch, a practice swing, tugging the tunic, tapping a foot, the shield
+            const Grip grip = GripOf(s.weapon);
+            LinkAnimationHeader* const looks[6] = { RA(normal_wait_typeA_20f), RA(wait_typeD_20f), grip == Grip::TwoHand || grip == Grip::Hammer ? RA(wait_itemD2_20f) : RA(wait_itemD1_20f),
+                                                    RA(wait_itemA_20f), RA(wait_itemB_20f), RA(wait_itemC_20f) };
+            seq = AnimSeq(looks[(play->gameplayFrames / 7 + s.id) % 6], false).Add(RA(normal_wait), true);
+        }
+        if (want == static_cast<uint8_t>(Anim::Idle) && s.alive && s.health <= 1.0f) seq = AnimSeq(RA(wait_heat1_20f), false).Add(RA(wait_heat2_20f), true);   // nearly dead: doubled over, panting
+        // Moving between walking, running and standing blends over a few frames; an action snaps in quickly, as the game does.
+        const float morph = OneShotAnim(want) ? -3.0f : -6.0f;
+        StartSeq(play, player, m, seq, morph);
+        m.seqAbility = ability;
+        if (!respell && !fidget && s.alive) ActionSounds(player, want, s.weapon, m.combo);
+        m.jumpT = -1.0f;
+        if (s.isBot && (want == static_cast<uint8_t>(Anim::Jump) || want == static_cast<uint8_t>(Anim::JumpSlash) || (royale::IsDodge(want) && want != static_cast<uint8_t>(Anim::Roll)))) m.jumpT = 0.0f;
+        m.anim = want;
+    }
+
+    // Walking and running at the speed they really go, so the feet don't slide.
+    const bool walking = want == static_cast<uint8_t>(Anim::Walk) || want == static_cast<uint8_t>(Anim::Run) || want == static_cast<uint8_t>(Anim::SideL) ||
+                         want == static_cast<uint8_t>(Anim::SideR) || want == static_cast<uint8_t>(Anim::Back);
+    if (walking) {
+        const float stride = want == static_cast<uint8_t>(Anim::Run) ? 5.5f : want == static_cast<uint8_t>(Anim::Walk) ? 2.4f : 3.0f;   // units per frame at normal speed
+        player->skelAnime.playSpeed = std::clamp(m.speed / stride, 0.55f, 1.8f);
+    }
+    const bool finished = LinkAnimation_Update(play, &player->skelAnime);
+    if (finished && !m.seq.step[m.step].loop && m.step + 1 < m.seq.count) {
+        StartStep(play, player, m, m.step + 1, 0.0f);
+        // Feet back on the ground after a hop, a flip or a jump; the jump slash coming down.
+        if (s.alive && (royale::IsDodge(m.anim) || m.anim == static_cast<uint8_t>(Anim::Jump)) && m.anim != static_cast<uint8_t>(Anim::Roll) && m.step == 1)
+            PuppetSfx(actor, PuppetFloorSfx(player, NA_SE_PL_LAND));
+        if (s.alive && m.anim == static_cast<uint8_t>(Anim::JumpSlash) && m.step == 1) PuppetSfx(actor, NA_SE_IT_SWORD_SWING_HARD);
+        if (s.alive && m.anim == static_cast<uint8_t>(Anim::Drink) && m.step == 1) PuppetVoice(player, NA_SE_VO_LI_DRINK);
+    }
+    // Footsteps: twice a stride, where the game puts them, sounding like the ground underfoot.
+    if (walking && m.jumpT < 0.0f) {
+        const float cycle = static_cast<float>(Animation_GetLastFrame(m.seq.step[m.step].anim)) + 1.0f;
+        const float cur = player->skelAnime.curFrame;
+        for (float at : { cycle * 10.0f / 29.0f, cycle * 24.0f / 29.0f }) {
+            const bool crossed = cur >= m.prevFrame ? (m.prevFrame < at && cur >= at) : (at > m.prevFrame || at <= cur);
+            if (crossed) PuppetStep(player, m.speed);
+        }
+        m.prevFrame = cur;
+    }
+    // Bots move on flat ground: their jumps, hops and jump slashes are lifted into the air here.
+    if (m.jumpT >= 0.0f) {
+        const bool big = m.anim == static_cast<uint8_t>(Anim::Jump);
+        const float seconds = big ? 0.55f : 0.4f, height = big ? 48.0f : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
+        m.jumpT += 1.0f / (seconds * royale::kTickHz);
+        if (m.jumpT >= 1.0f) {
+            m.jumpT = -1.0f;
+            if (big && s.alive) PuppetSfx(actor, PuppetFloorSfx(player, NA_SE_PL_LAND));
+        } else {
+            actor->world.pos.y += 4.0f * height * m.jumpT * (1.0f - m.jumpT);
+        }
+    }
     if (s.anim == static_cast<uint8_t>(royale::Anim::Emote5)) {
         const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
         ApplyChickenDance(player, t);
@@ -824,6 +1201,7 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
         gPuppetOf.erase(it);
     }
     gPlaying.erase(actor);
+    gMotion.erase(actor);
     gPlate.erase(actor);
     ForgetCorpse(actor);
 }
@@ -4629,14 +5007,51 @@ royale::Anim PoseForWeapon(royale::ItemId weapon) {
     return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
 }
 
+// Whether Link is playing a particular animation of the game's. The animation names are compared, not their addresses: every source file
+// has its own copy of each name.
+bool AnimIs(const void* playing, const char* name) {
+    if (playing == nullptr) return false;
+    const char* p = static_cast<const char*>(playing);
+    return std::strncmp(p, "__OTR__", 7) == 0 && std::strcmp(p, name) == 0;
+}
+
+// What everybody else should see you doing. Your own Link runs the real game, so its moves are read straight off it: the Z-target side hops,
+// back flips, jump slashes and spin attacks, the shield, the sword, jumps and the lock-on footwork.
 uint8_t ClassifyAnim(Player* player) {
+    using royale::Anim;
+    static float lastX = 0, lastZ = 0;
+    const float dx = player->actor.world.pos.x - lastX, dz = player->actor.world.pos.z - lastZ;
+    lastX = player->actor.world.pos.x; lastZ = player->actor.world.pos.z;
     if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
+    if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(Anim::Dead);
+    const void* a = player->skelAnime.animation;
+    auto is = [&](const char* name) { return AnimIs(a, name); };
+    if (is(gPlayerAnim_link_fighter_Lside_jump) || is(gPlayerAnim_link_fighter_Lside_jump_end)) return static_cast<uint8_t>(Anim::HopL);
+    if (is(gPlayerAnim_link_fighter_Rside_jump) || is(gPlayerAnim_link_fighter_Rside_jump_end)) return static_cast<uint8_t>(Anim::HopR);
+    if (is(gPlayerAnim_link_fighter_backturn_jump) || is(gPlayerAnim_link_fighter_backturn_jump_end)) return static_cast<uint8_t>(Anim::Backflip);
+    if (is(gPlayerAnim_link_fighter_Lpower_jump_kiru) || is(gPlayerAnim_link_fighter_Lpower_jump_kiru_hit) || is(gPlayerAnim_link_fighter_jump_rollkiru) ||
+        is(gPlayerAnim_link_fighter_jump_kiru_finsh))
+        return static_cast<uint8_t>(Anim::JumpSlash);
+    if (is(gPlayerAnim_link_fighter_rolling_kiru) || is(gPlayerAnim_link_fighter_Lrolling_kiru) || is(gPlayerAnim_link_fighter_Wrolling_kiru))
+        return static_cast<uint8_t>(Anim::SpinAttack);
     if (gActionFrames > 0) return static_cast<uint8_t>(gActionAnim);
-    if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
-    float v = std::fabs(player->linearVelocity);
-    if (v > 7.5f && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
-    if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
-    return static_cast<uint8_t>(v < 4.0f ? royale::Anim::Walk : royale::Anim::Run);
+    if (player->stateFlags1 & PLAYER_STATE1_SHIELDING) return static_cast<uint8_t>(Anim::Guard);
+    if (player->meleeWeaponState != 0) return static_cast<uint8_t>(Anim::Attack);   // swinging the real sword
+    const bool ground = (player->actor.bgCheckFlags & 1) != 0;
+    if (!ground && !gSkydiving && !(player->stateFlags1 & (PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER | PLAYER_STATE1_IN_WATER | PLAYER_STATE1_CLIMBING_LEDGE)))
+        return static_cast<uint8_t>(Anim::Jump);
+    const float v = std::fabs(player->linearVelocity);
+    if (is(gPlayerAnim_link_normal_landing_roll) || is(gPlayerAnim_link_normal_landing_roll_free) || (v > 7.5f && ground)) return static_cast<uint8_t>(Anim::Roll);   // a roll is faster than any run
+    if (player->stateFlags1 & (PLAYER_STATE1_HOSTILE_LOCK_ON | PLAYER_STATE1_PARALLEL)) {
+        // Z-targeting: the footwork depends on which way you move relative to where you face.
+        if (dx * dx + dz * dz < 0.25f) return static_cast<uint8_t>(Anim::Stance);
+        const float yaw = player->actor.shape.rot.y * (3.14159265f / 32768.0f);
+        const float fwd = dx * std::sin(yaw) + dz * std::cos(yaw), right = -dx * std::cos(yaw) + dz * std::sin(yaw);
+        if (std::fabs(fwd) >= std::fabs(right)) return static_cast<uint8_t>(fwd > 0 ? Anim::Run : Anim::Back);
+        return static_cast<uint8_t>(right > 0 ? Anim::SideR : Anim::SideL);
+    }
+    if (v < 0.5f) return static_cast<uint8_t>(Anim::Idle);
+    return static_cast<uint8_t>(v < 4.0f ? Anim::Walk : Anim::Run);
 }
 
 uint8_t gLastEpoch = 0;
@@ -4903,7 +5318,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
                         : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
-            UseBurst(player, AbilityColour(ab), NA_SE_PL_MAGIC_SOUL_NORMAL);
+            UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
+            if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
     }
 
@@ -5209,12 +5625,14 @@ void ReportEvents(const royale::HudState& hud) {
                         gHitMarkerKill = e.health <= 0.001f;
                         if (known || target != gActorOf.end()) gFloatingNumbers.push_back({ tx, ty, tz, e.amount, now, false });
                         if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
                         Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
                         swing(e.other);
                         if (target != gActorOf.end()) {
                             Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
+                            if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
                             if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
                         }
                     }
@@ -5258,6 +5676,18 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::PropBroken: {
+                if (e.id != hud.selfId && InGame() && gSession.Client() && e.index < gSession.Client()->Props().size()) {
+                    // somebody else cut a bush or broke a rock near you: you see and hear it go
+                    const auto& pr = gSession.Client()->Props()[e.index];
+                    Player* me = GET_PLAYER(gPlayState);
+                    float py = me->actor.world.pos.y;
+                    if (std::hypot(pr.pos.x - me->actor.world.pos.x, pr.pos.z - me->actor.world.pos.z) < kPuppetHearing && FloorAt(pr.pos.x, pr.pos.z, &py)) {
+                        const bool bush = pr.kind == royale::PropKind::Bush;
+                        SparkBurst(gPlayState, pr.pos.x, py + 20.0f, pr.pos.z, bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
+                        Vec3f at = { pr.pos.x, py + 20.0f, pr.pos.z };
+                        Audio_PlaySoundGeneral(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    }
+                }
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
                 const auto& props = gSession.Client()->Props();
                 float py = GET_PLAYER(gPlayState)->actor.world.pos.y, px = GET_PLAYER(gPlayState)->actor.world.pos.x, pz = GET_PLAYER(gPlayState)->actor.world.pos.z;
@@ -5320,6 +5750,7 @@ void ReportEvents(const royale::HudState& hud) {
                 gPickupLog.clear();
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
+                if (e.item < royale::kItemCount) AbilityFx(e.id, static_cast<royale::ItemId>(e.item), e.id == hud.selfId, e.x, e.z);
                 if (e.item == royale::net::kRevivedItem) {
                     Say(e.id == hud.selfId ? "A Fairy saved you!" : nameOf(e.id) + " was revived by a Fairy");
                 } else if (e.item < royale::kItemCount) {
@@ -5330,6 +5761,10 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
+                if (InGame()) {   // Link's cry as he goes down
+                    auto victim = gActorOf.find(e.id);
+                    if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
+                }
                 const std::string victim = me ? std::string("You") : nameOf(e.id);
                 std::string line;
                 if (e.other == royale::net::kNoPlayer16) line = victim + (me ? " were" : " was") + " caught by the storm";
@@ -6783,6 +7218,7 @@ void OnGameFrameUpdate() {
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
+    UpdateSongMelody();
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
@@ -6865,6 +7301,7 @@ void OnSceneInit(int16_t) {
     gPuppetOf.clear();
     gActorOf.clear();
     gPlaying.clear();
+    gMotion.clear();
     gPlate.clear();
     gCorpses.clear();
     gCorpseOf.clear();
