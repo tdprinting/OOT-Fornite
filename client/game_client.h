@@ -414,7 +414,7 @@ class GameClient {
                 net::EvStrike m;
                 if (!net::Decode(data, m)) break;
                 ClientEvent e{ClientEvent::Type::Strike};
-                e.id = m.by; e.x = m.x; e.z = m.z; e.amount = m.radius; e.health = m.delay;
+                e.id = m.by; e.x = m.x; e.z = m.z; e.amount = m.radius; e.health = m.delay; e.item = m.style;
                 events.push_back(e);
                 break;
             }

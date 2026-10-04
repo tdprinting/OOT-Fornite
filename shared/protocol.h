@@ -318,15 +318,16 @@ struct BossNet {
     uint8_t hp = 255;        // health as a fraction of its maximum, 0..255
     bool smashing = false;   // just swung (for the animation)
     int16_t y = 0;           // height above the ground: the dragon flies
-    uint8_t mode = 0;        // DragonMode, for the dragon
+    uint8_t mode = 0;        // DragonMode: what it is doing (every boss, not just the dragon)
+    uint8_t aux = 0;         // which variant of that: the hand that slams, fire or ice, which swing
     uint32_t Id() const { return kBossIdBase + index; }
-    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U8(smashing ? 1 : 0); w.I16(y); w.U8(mode); }
+    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U8(smashing ? 1 : 0); w.I16(y); w.U8(mode); w.U8(aux); }
     bool Read(ByteReader& r) {
         index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8();
         const uint8_t f = r.U8();
         smashing = f != 0;
-        y = r.I16(); mode = r.U8();
-        return r.ok && index < kMaxBosses && kind < kBossKindCount && Finite(x) && Finite(z) && f <= 1 && mode <= static_cast<uint8_t>(DragonMode::Climb);
+        y = r.I16(); mode = r.U8(); aux = r.U8();
+        return r.ok && index < kMaxBosses && kind < kBossKindCount && Finite(x) && Finite(z) && f <= 1 && mode < static_cast<uint8_t>(DragonMode::Count);
     }
 };
 
@@ -489,8 +490,9 @@ struct EvStrike {
     static constexpr MsgType kType = MsgType::EvStrike;
     uint16_t by = 0;
     float x = 0, z = 0, radius = 0, delay = 0;
-    void Write(ByteWriter& w) const { w.U16(by); w.F32(x); w.F32(z); w.F32(radius); w.F32(delay); }
-    bool Read(ByteReader& r) { by = r.U16(); x = r.F32(); z = r.F32(); radius = r.F32(); delay = r.F32(); return r.ok && Finite(x) && Finite(z) && Finite(radius) && Finite(delay) && radius >= 0 && delay >= 0; }
+    uint8_t style = 0;   // StrikeStyle: how it looks when it lands
+    void Write(ByteWriter& w) const { w.U16(by); w.F32(x); w.F32(z); w.F32(radius); w.F32(delay); w.U8(style); }
+    bool Read(ByteReader& r) { by = r.U16(); x = r.F32(); z = r.F32(); radius = r.F32(); delay = r.F32(); style = r.U8(); return r.ok && Finite(x) && Finite(z) && Finite(radius) && Finite(delay) && radius >= 0 && delay >= 0 && style < static_cast<uint8_t>(StrikeStyle::Count); }
 };
 
 // The map's dragon has arrived.
