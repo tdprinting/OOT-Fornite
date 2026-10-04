@@ -17,7 +17,7 @@ jobs:
       - name: Fetch ENet only
         run: git submodule update --init --depth 1 third_party/enet
       - name: Configure (MSVC)
-        run: cmake -S server -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S server -B build -A x64
       - name: Build
         run: cmake --build build --config Release
       - name: Test
