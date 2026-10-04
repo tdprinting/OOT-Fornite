@@ -8,6 +8,12 @@ namespace royale {
 constexpr int kMaxPlayers = 32;
 constexpr int kTickHz = 20;
 
+// World units are OoT units. Link runs about 100 units/s.
+constexpr float kRunSpeed = 100.0f;
+constexpr float kPickupRange = 50.0f;
+constexpr float kMaxHealth = 3.0f; // hearts
+constexpr int kMaxPotions = 3;
+
 enum class Rarity : uint8_t { Common, Uncommon, Rare, Epic, Legendary, Count };
 constexpr int kRarityCount = static_cast<int>(Rarity::Count);
 

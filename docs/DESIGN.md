@@ -160,6 +160,28 @@ Zero Build replaces building with movement and cover that is already in the map.
 Rupees picked up in the field can buy tiered items from Great Fairy and Happy Mask shop stalls, a stand-in for
 Fortnite's gold bars and vending machines. Not in v1.
 
+### 4.8 Bot AI (implemented in `server/bot.h`)
+Bots are server-side entities driven through the same `Match` calls a human's messages produce (`PickUp`, `Attack`,
+`UsePotion`), so they obey the same range, cooldown and pickup rules. Each tick, per bot, first match wins:
+
+1. **Heal:** drink a potion when at 1 heart or less, or at 2 or less with no enemy within 250 units.
+2. **Storm:** if the safe zone 15 s from now (shrunk to 90%) won't contain the bot, run to its centre. It still
+   shoots at enemies in range while running, but never chases.
+3. **Fight or flee:** engage the nearest enemy within 900 units if it is within 300, or if the bot's weapon does at
+   least 1.0 damage per second. Melee closes in; ranged weapons hold about 60% of max range and back off when
+   closer than 30%. At 0.8 hearts or less with no potion and a weaker weapon, the bot backs away instead.
+4. **Loot:** walk to the best upgrade within 700 units and pick it up. Value is the improvement over the current
+   weapon or shield, or a potion if carrying fewer than 3, divided by distance. Downgrades and unsupported
+   items (Hookshot, Longshot, Farore's Wind, Nayru's Love) are ignored.
+5. **Wander:** drift to random spots inside the safe zone.
+
+Each bot gets a fixed accuracy between 55% and 90%, dropping with distance for ranged weapons. Picking up a weapon
+or shield swaps it, and the old one drops on the ground. Eliminated players drop their kit.
+
+Known gaps: bots don't use cover, mobility items (Hookshot, Hover Boots, Epona), explosives' area damage, or the
+utility spells. They move in straight lines on a flat plane, so the client side will need a real navigation or
+collision layer for Hyrule Field's terrain. Difficulty levels are not implemented. All numbers are placeholders.
+
 ## 5. Architecture
 
 ```
@@ -294,7 +316,7 @@ Android is pulled forward as a feasibility spike because it could change the who
 | 0 | This document | Reviewed |
 | 1 | Android fork as submodule (done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
 | 1b | **Android spike**: the unmodified fork APK running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
-| 2 | `server/` library plus 32 bot clients on loopback, puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
+| 2 | `server/` library (done: storm, loot, match, bot AI, 20+ tests) plus puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
 | 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
 | 4 | Loot, weapons and pickups | Players can arm themselves and fight |
 | 5 | Lobby, HUD, minimap, spectator | Playable end to end with friends |

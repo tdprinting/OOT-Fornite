@@ -9,6 +9,8 @@ struct Vec2 {
     float x = 0, z = 0;
 };
 
+inline float Distance(Vec2 a, Vec2 b) { return std::hypot(a.x - b.x, a.z - b.z); }
+
 struct Circle {
     Vec2 center;
     float radius = 0;
