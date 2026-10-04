@@ -1,5 +1,6 @@
 #pragma once
 #include "../shared/balance.h"
+#include "../shared/boss.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/storm.h"
@@ -59,6 +60,7 @@ struct PlayerState {
     int kills = 0;
     float damageDealt = 0;  // hearts of damage done to other players (storm and burn-out excluded)
     int chestsOpened = 0;
+    int bossKills = 0;
     int placement = 0;      // 1 = winner; set when eliminated (number alive at that moment) or when the match ends
     bool dirty = true; // inventory or status changed since it was last sent to the owner
 };
@@ -67,7 +69,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -75,12 +77,25 @@ struct MatchEvent {
     size_t index = 0;       // LootTaken / LootAdded
     MatchState state = MatchState::Lobby; // StateChanged
     uint8_t item = 0;       // AbilityUsed: which ability
-    float x = 0, z = 0;     // AbilityUsed: where the user stood
+    float x = 0, z = 0;     // AbilityUsed: where the user stood | BossDown: where it fell (a = boss id, b = who landed the last hit)
 };
 
 struct LootEntry {
     LootSpawn spawn;
     bool taken = false;
+};
+
+struct MiniBoss {
+    uint32_t id = 0;
+    BossKind kind = BossKind::Stone;
+    Vec2 home, pos;
+    int16_t rot = 0;           // OoT binary angle, 0 = +z
+    float health = 0, maxHealth = 0;
+    bool alive = true;
+    float attackReadyAt = 0;
+    float lastSmashAt = -10;   // for the animation
+    uint32_t target = 0xFFFFFFFFu;
+    float lostTargetAt = 0;
 };
 
 struct AttackResult {
@@ -156,6 +171,7 @@ class Match {
         while (players.size() < kMaxPlayers) players.push_back(MakePlayer(nextId++, true));
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
+        SpawnBosses();
         Enter(MatchState::Countdown);
         return true;
     }
@@ -182,6 +198,7 @@ class Match {
                     if (clock < p.regenUntil && p.health < p.maxHealth) p.health = (std::min)(p.maxHealth, p.health + p.regenRate * dt);
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
+                TickBosses(dt);
                 if (Alive() <= 1) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
@@ -250,6 +267,7 @@ class Match {
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
+        if (IsBossId(targetId)) return AttackBoss(attackerId, targetId, hit);
         PlayerState* a = Find(attackerId);
         PlayerState* t = Find(targetId);
         if (!a || !t || a == t || !a->alive || !t->alive) return r;
@@ -484,7 +502,7 @@ class Match {
         return n;
     }
     // Only meaningful once the match is Ending.
-    int Score(const PlayerState& p) const { return ScorePoints(p.damageDealt, p.kills, p.chestsOpened, p.placement); }
+    int Score(const PlayerState& p) const { return ScorePoints(p.damageDealt, p.kills, p.chestsOpened, p.placement) + p.bossKills * kPointsPerBossKill; }
 
     struct Standing { uint32_t id; bool isBot; int placement, kills, chests, score; float damage; };
     // Everyone's results, best score first (ties broken by placement).
@@ -496,6 +514,150 @@ class Match {
             return (a.placement ? a.placement : 99) < (b.placement ? b.placement : 99);
         });
         return out;
+    }
+
+    // ---- mini bosses --------------------------------------------------------------------------------------------------
+
+    // Where bosses may stand guard (the caves of the points of interest). Any shortfall is filled with spots on open ground.
+    void SetBossSpots(std::vector<Vec2> spots) { bossSpots = std::move(spots); }
+    void SetBossCount(int n) { bossCount = (std::max)(0, (std::min)(n, kMaxBosses)); }
+    const std::vector<MiniBoss>& Bosses() const { return bosses; }
+    const MiniBoss* FindBoss(uint32_t id) const {
+        for (const auto& b : bosses) if (b.id == id) return &b;
+        return nullptr;
+    }
+    static const char* BossName(const MiniBoss& b) { return BossOf(b.kind).name; }
+
+    void SpawnBosses() {
+        bosses.clear();
+        Rng rng(seed ^ 0x626F7373ull); // "boss"
+        std::vector<Vec2> spots = bossSpots;
+        for (size_t i = spots.size(); i > 1; i--) std::swap(spots[i - 1], spots[rng.Below(static_cast<uint32_t>(i))]);
+        while (static_cast<int>(bosses.size()) < bossCount) {
+            Vec2 at = {};
+            bool found = false;
+            if (!spots.empty()) {
+                at = spots.back();
+                spots.pop_back();
+                found = true;
+            } else {
+                for (int attempt = 0; attempt < 60 && !found; attempt++) {
+                    at = RandomPointIn(rng, map, placement, 0.8f);
+                    found = !placement || placement(at);
+                    for (const auto& other : bosses) if (Distance(other.home, at) < 1200.0f) found = false;
+                }
+            }
+            if (!found) break;
+            MiniBoss b;
+            b.id = kBossIdBase + static_cast<uint32_t>(bosses.size());
+            b.kind = static_cast<BossKind>(rng.Below(kBossKindCount));
+            b.home = b.pos = at;
+            b.maxHealth = b.health = BossOf(b.kind).health;
+            bosses.push_back(b);
+        }
+    }
+
+    AttackResult AttackBoss(uint32_t attackerId, uint32_t bossId, bool hit) {
+        AttackResult r;
+        PlayerState* a = Find(attackerId);
+        MiniBoss* b = nullptr;
+        for (auto& x : bosses) if (x.id == bossId) b = &x;
+        if (!a || !b || !a->alive || !b->alive) return r;
+        const WeaponStats w = WeaponOf(a->weapon.item);
+        if (w.damage <= 0 || clock < a->attackReadyAt || clock < a->stunUntil || clock < a->frozenUntil) return r;
+        if (Distance(a->pos, b->pos) > w.range * 1.1f + kBossBodyRadius) return r; // it is big: you can hit it from further off
+        a->attackReadyAt = clock + w.cooldown;
+        r.ok = true;
+        if (!hit) return r;
+        const GearTotals ag = TotalsOf(*a);
+        r.damage = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);
+        r.hit = true;
+        const float dealt = (std::min)(r.damage, b->health);
+        b->health -= r.damage;
+        a->damageDealt += dealt;
+        b->target = attackerId; // whoever hurts it is who it comes for
+        b->lostTargetAt = clock;
+        MatchEvent e{MatchEvent::Type::Damaged};
+        e.a = bossId; e.b = attackerId; e.amount = r.damage; e.health = (std::max)(0.0f, b->health);
+        events.push_back(e);
+        if (b->health <= 0) {
+            r.killed = true;
+            KillBoss(*b, *a);
+        }
+        return r;
+    }
+
+    void KillBoss(MiniBoss& b, PlayerState& killer) {
+        b.alive = false;
+        b.health = 0;
+        killer.bossKills++;
+        killer.dirty = true;
+        // Several chests on the best tiers, in a ring around where it fell.
+        Rng rng(seed ^ (static_cast<uint64_t>(b.id) * 0x9E3779B97F4A7C15ull) ^ static_cast<uint64_t>(clock * 1000.0f));
+        const int drops = BossOf(b.kind).drops;
+        for (int i = 0; i < drops; i++) {
+            const Rarity tier = rng.Unit() < 0.4 ? Rarity::Legendary : Rarity::Epic;
+            ItemId item;
+            if (!PickItem(rng, tier, &item)) item = ItemId::MasterSword;
+            Rarity t = tier;
+            if (t < DefOf(item).minRarity) t = DefOf(item).minRarity;
+            if (t > DefOf(item).maxRarity) t = DefOf(item).maxRarity;
+            const float angle = 6.2831853f * i / drops + static_cast<float>(rng.Unit()) * 0.5f;
+            Vec2 at = {b.pos.x + std::cos(angle) * 130.0f, b.pos.z + std::sin(angle) * 130.0f};
+            if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = b.pos;
+            AddLoot({at, item, t, true, true});
+        }
+        MatchEvent e{MatchEvent::Type::BossDown};
+        e.a = b.id; e.b = killer.id; e.x = b.pos.x; e.z = b.pos.z;
+        events.push_back(e);
+    }
+
+    void TickBosses(float dt) {
+        for (auto& b : bosses) {
+            if (!b.alive) continue;
+            const BossDef def = BossOf(b.kind);
+            // Notice the nearest player in range (the current target is kept while it stays in reach).
+            PlayerState* target = Find(b.target);
+            if (target && (!target->alive || Distance(target->pos, b.home) > kBossLeash + kBossAggroRange)) target = nullptr;
+            if (!target) {
+                float best = kBossAggroRange;
+                for (auto& p : players) {
+                    if (!p.alive || clock < p.invulnUntil) continue;
+                    const float d = Distance(p.pos, b.pos);
+                    if (d < best) { best = d; target = &p; }
+                }
+            }
+            if (target) { b.target = target->id; b.lostTargetAt = clock; }
+            else if (clock - b.lostTargetAt > 4.0f) b.target = kNoPlayer;
+
+            if (target && Distance(b.pos, b.home) <= kBossLeash + 200.0f) {
+                const float dx = target->pos.x - b.pos.x, dz = target->pos.z - b.pos.z;
+                const float d = std::hypot(dx, dz);
+                b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(dx, dz) * (32768.0f / 3.14159265358979f)));
+                if (d > kBossReach * 0.75f) {
+                    const float step = (std::min)(d, def.speed * dt);
+                    b.pos.x += dx / d * step;
+                    b.pos.z += dz / d * step;
+                }
+                if (d <= kBossReach + 20.0f && clock >= b.attackReadyAt) {
+                    b.attackReadyAt = clock + def.cooldown;
+                    b.lastSmashAt = clock;
+                    Damage(target->id, def.damage, b.id);
+                }
+            } else {
+                // Lost them (or they ran too far): walk home and recover.
+                b.target = kNoPlayer;
+                const float dx = b.home.x - b.pos.x, dz = b.home.z - b.pos.z;
+                const float d = std::hypot(dx, dz);
+                if (d > 8.0f) {
+                    const float step = (std::min)(d, def.speed * 0.8f * dt);
+                    b.pos.x += dx / d * step;
+                    b.pos.z += dz / d * step;
+                    b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(dx, dz) * (32768.0f / 3.14159265358979f)));
+                }
+                b.health = (std::min)(b.maxHealth, b.health + 1.2f * dt);
+            }
+        }
     }
 
     const PlayerState* Winner() const {
@@ -785,6 +947,9 @@ class Match {
     std::vector<MatchEvent> events;
     PlacementFn placement;
     std::vector<Vec2> lootSpots;
+    std::vector<Vec2> bossSpots;
+    std::vector<MiniBoss> bosses;
+    int bossCount = 0; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };
 
 } // namespace royale

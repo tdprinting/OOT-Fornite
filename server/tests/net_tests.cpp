@@ -112,6 +112,11 @@ static void MessagesRoundTrip() {
     { EvPlayerJoined a, b; a.id = 5; a.flags = kRosterHost | kRosterReady; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi" && b.flags == 3); }
     { Hello a, b; a.name = "X"; a.tunic = PackRgb(10, 200, 255); CHECK(RoundTrips(a, b) && b.tunic == PackRgb(10, 200, 255)); }
     { EvPlayerJoined a, b; a.id = 4; a.name = "Y"; a.tunic = PackRgb(1, 2, 3); CHECK(RoundTrips(a, b) && b.tunic == PackRgb(1, 2, 3)); }
+    { EvBossDown a, b; a.boss = kBossIdBase + 2; a.killer = 7; a.x = 5; a.z = -9; CHECK(RoundTrips(a, b) && b.boss == kBossIdBase + 2 && b.killer == 7 && b.z == -9); }
+    { EvBossDown bad, out; bad.boss = 12; CHECK(!RoundTrips(bad, out)); }                    // not a boss id
+    { Snapshot a, b; BossNet n; n.index = 3; n.kind = 2; n.x = 10; n.z = -4; n.rot = -123; n.hp = 77; n.smashing = true; a.bosses = {n};
+      CHECK(RoundTrips(a, b) && b.bosses.size() == 1 && b.bosses[0].Id() == kBossIdBase + 3 && b.bosses[0].kind == 2 && b.bosses[0].rot == -123 && b.bosses[0].hp == 77 && b.bosses[0].smashing); }
+    { Snapshot bad, out; BossNet n; n.index = 9; bad.bosses = {n}; CHECK(!RoundTrips(bad, out)); }   // index out of range
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
     { SelectWeaponRequest a, b; a.slot = 2; CHECK(RoundTrips(a, b) && b.slot == 2); }
     { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
@@ -581,6 +586,51 @@ static void SkinsTravelToEveryone() {
     for (uint32_t id = 1001; id < 1032; id++) varied |= BotTunic(id) != BotTunic(1000);
     CHECK(varied);
     CHECK(SkinRgb(0) == PackRgb(30, 105, 27) && SkinRgb(-1) == SkinRgb(0) && SkinRgb(kSkinCount + 5) == SkinRgb(0));
+}
+
+static void BossesOverTheWire() {
+    Rig rig(31, 20);
+    rig.server.SetBossCount(2);
+    GameClient& a = rig.Add("Hero");
+    GameClient& b = rig.Add("Far");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    CHECK(rig.M().Bosses().size() == 2);
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    // Put the hero next to the first boss and the other player far from both.
+    const MiniBoss boss = rig.M().Bosses()[0];
+    rig.M().Find(1)->pos = {boss.pos.x + 70, boss.pos.z};
+    rig.M().Find(2)->pos = {boss.pos.x + 1900, boss.pos.z + 1900};
+    rig.M().Find(1)->weapon = {ItemId::MasterSword, Rarity::Legendary};
+    rig.Run(1.0f);
+    // The hero sees the boss near them; its fields come through.
+    bool seen = false;
+    for (const auto& n : a.Bosses()) seen |= n.Id() == boss.id && n.kind == static_cast<uint8_t>(boss.kind) && n.hp > 200;
+    CHECK(seen);
+    // Hit it over the wire, then finish it: everyone is told, and its chests appear on every client.
+    const size_t lootBefore = a.Loot().size();
+    a.ReportAttack(static_cast<uint16_t>(boss.id), true);
+    rig.Run(0.4f);
+    CHECK(rig.M().FindBoss(boss.id)->health < boss.maxHealth);
+    MiniBoss* live = const_cast<MiniBoss*>(rig.M().FindBoss(boss.id));
+    live->health = 0.1f;
+    rig.M().Find(1)->health = rig.M().Find(1)->maxHealth;
+    rig.Run(0.8f);
+    a.ReportAttack(static_cast<uint16_t>(boss.id), true);
+    rig.Run(0.6f);
+    CHECK(!rig.M().FindBoss(boss.id)->alive);
+    bool downA = false, downB = false;
+    for (auto& e : a.DrainEvents()) downA |= e.type == ClientEvent::Type::BossDown && e.id == boss.id && e.other == 1;
+    for (auto& e : b.DrainEvents()) downB |= e.type == ClientEvent::Type::BossDown && e.id == boss.id;
+    CHECK(downA && downB);
+    CHECK(a.Loot().size() > lootBefore && b.Loot().size() == a.Loot().size());
+    bool gone = true;
+    for (const auto& n : a.Bosses()) gone &= n.Id() != boss.id;                                   // dead bosses are not sent
+    CHECK(gone);
+    // The player who is far away is not sent the bosses that are out of reach.
+    bool farSees = false;
+    for (const auto& n : b.Bosses()) farSees |= Distance({n.x, n.z}, {rig.M().Find(2)->pos.x, rig.M().Find(2)->pos.z}) > 4500.0f;
+    CHECK(!farSees);
 }
 
 static void DisconnectHandling() {
@@ -1059,7 +1109,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

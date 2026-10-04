@@ -1324,6 +1324,149 @@ static void CustomMeshes() {
     CHECK(PropRadius(PropKind::Roof) == 0.0f);                                                       // bots walk under it
 }
 
+// A started match with one human and `bosses` mini bosses at the given spots; everyone else is out of the way.
+static Simulation BossArena(std::vector<Vec2> spots, int bosses, Vec2 human) {
+    Simulation sim(5, MapCircle(), 0);
+    sim.match.AddHuman(1);
+    sim.match.SetBossSpots(std::move(spots));
+    sim.match.SetBossCount(bosses);
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
+    sim.match.Find(1000)->pos = {-1950, -1950}; // one bot far away, so the match doesn't end for lack of opponents
+    sim.match.Find(1)->pos = human;
+    return sim;
+}
+
+static void MiniBosses() {
+    // They stand where the caves are, with ids above every player.
+    {
+        Simulation sim = BossArena({{0, 0}, {900, 0}, {-900, 0}}, 3, {1900, 0});
+        const auto& b = sim.match.Bosses();
+        CHECK(b.size() == 3);
+        std::set<uint32_t> ids;
+        bool atSpots = true, valid = true;
+        for (const auto& x : b) {
+            ids.insert(x.id);
+            atSpots &= (Distance(x.home, {0, 0}) < 1 || Distance(x.home, {900, 0}) < 1 || Distance(x.home, {-900, 0}) < 1);
+            valid &= IsBossId(x.id) && x.alive && x.health == BossOf(x.kind).health && static_cast<int>(x.kind) < kBossKindCount;
+        }
+        CHECK(ids.size() == 3 && atSpots && valid);
+        // Without spots they find open ground, apart from each other.
+        Simulation open = BossArena({}, 4, {1900, 0});
+        CHECK(open.match.Bosses().size() == 4);
+        bool apart = true;
+        for (size_t i = 0; i < 4; i++) for (size_t j = i + 1; j < 4; j++) apart &= Distance(open.match.Bosses()[i].home, open.match.Bosses()[j].home) >= 1199.0f;
+        CHECK(apart);
+        // A plain match has none.
+        Simulation plain = Duel(5, {0, 0}, {100, 0});
+        CHECK(plain.match.Bosses().empty());
+    }
+    // It notices you, comes at you and smashes, no faster than its cooldown.
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {300, 0});
+        const MiniBoss& boss = sim.match.Bosses()[0];
+        PlayerState* h = sim.match.Find(1);
+        h->health = 3.0f;
+        const float before = Distance(boss.pos, h->pos);
+        Run(sim, 1.0f);
+        CHECK(Distance(boss.pos, h->pos) < before - 30.0f);                       // it is coming
+        Run(sim, 6.0f);
+        const float lost = 3.0f - h->health;
+        CHECK(lost > 0.7f);                                                       // it hit at least once
+        const BossDef def = BossOf(boss.kind);
+        CHECK(lost <= def.damage * (7.0f / def.cooldown + 1.5f));                 // ...but not faster than it can swing
+    }
+    // Out of range it ignores you; if you run away it gives up and walks home, healing.
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {1500, 0});
+        Run(sim, 3.0f);
+        CHECK(Distance(sim.match.Bosses()[0].pos, {0, 0}) < 1.0f);               // never moved
+        sim.match.Find(1)->pos = {400, 0};
+        Run(sim, 2.5f);
+        CHECK(Distance(sim.match.Bosses()[0].pos, {0, 0}) > 50.0f);               // chasing
+        sim.match.Bosses();
+        MiniBoss* mb = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        mb->health = mb->maxHealth * 0.5f;
+        for (int i = 0; i < 30 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->pos = {1900, 1000}; }
+        CHECK(Distance(sim.match.Bosses()[0].pos, sim.match.Bosses()[0].home) < 20.0f);
+        CHECK(sim.match.Bosses()[0].health > sim.match.Bosses()[0].maxHealth * 0.5f + 5.0f);
+    }
+    // Hitting it, killing it, and what drops.
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {60, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        h->health = 3.0f; h->maxHealth = 10.0f;
+        const uint32_t id = m.Bosses()[0].id;
+        const size_t lootBefore = m.Loot().size();
+        CHECK(!m.Attack(1, kBossIdBase + 7).ok);                                  // no such boss
+        h->pos = {600, 0};
+        CHECK(!m.Attack(1, id).ok);                                               // too far
+        h->pos = {60, 0};
+        float last = m.Bosses()[0].health;
+        const AttackResult first = m.Attack(1, id, true);
+        CHECK(first.ok && first.hit && m.Bosses()[0].health < last && h->damageDealt > 0);
+        CHECK(m.Bosses()[0].target == 1);
+        // Keep swinging (and keep the player alive) until it falls.
+        int swings = 0;
+        while (m.Bosses()[0].alive && swings < 200) {
+            h->health = h->maxHealth;
+            sim.Tick(0.7f);
+            m.Attack(1, id, true);
+            swings++;
+        }
+        CHECK(!m.Bosses()[0].alive && m.Bosses()[0].health == 0);
+        CHECK(h->bossKills == 1 && m.Score(*h) >= kPointsPerBossKill);
+        const int drops = BossOf(m.Bosses()[0].kind).drops;
+        CHECK(m.Loot().size() == lootBefore + static_cast<size_t>(drops));
+        bool good = true;
+        for (size_t i = lootBefore; i < m.Loot().size(); i++) good &= m.Loot()[i].spawn.container && m.Loot()[i].spawn.rarity >= Rarity::Rare && !m.Loot()[i].taken;
+        CHECK(good);
+        bool down = false;
+        for (const auto& e : m.DrainEvents()) down |= e.type == MatchEvent::Type::BossDown && e.a == id && e.b == 1;
+        CHECK(down);
+        const float hp = h->health;
+        Run(sim, 4.0f);
+        CHECK(h->health >= hp);                                                   // a dead boss stops smashing
+        CHECK(!m.Attack(1, id).ok);
+    }
+    // It can kill: the elimination names the boss and nobody gets a kill for it.
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {80, 0});
+        PlayerState* h = sim.match.Find(1);
+        h->health = 0.5f;
+        sim.match.DrainEvents();
+        Run(sim, 3.0f);
+        CHECK(!h->alive);
+        bool named = false;
+        for (const auto& e : sim.match.DrainEvents()) named |= e.type == MatchEvent::Type::Eliminated && e.a == 1 && IsBossId(e.b);
+        CHECK(named && h->kills == 0);
+    }
+    // Bots: a strong one takes a boss on, a weak one keeps away.
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {1900, 100});
+        PlayerState* b = sim.match.Find(1000);
+        b->pos = {420, 0};
+        b->weapon = {ItemId::MasterSword, Rarity::Epic};
+        b->health = b->maxHealth = 6.0f;
+        const float start = sim.match.Bosses()[0].health;
+        for (int i = 0; i < 25 * kTickHz; i++) { sim.Tick(kDt); b->health = b->maxHealth; }
+        CHECK(sim.match.Bosses()[0].health < start - 3.0f || !sim.match.Bosses()[0].alive);
+    }
+    {
+        Simulation sim = BossArena({{0, 0}}, 1, {1900, 100});
+        PlayerState* b = sim.match.Find(1000);
+        b->pos = {250, 0};
+        b->weapon = {ItemId::DekuStick, Rarity::Common};
+        b->health = 1.0f;
+        const float before = Distance(b->pos, {0, 0});
+        Run(sim, 2.0f);
+        CHECK(!b->alive || Distance(b->pos, sim.match.Bosses()[0].pos) > before - 40.0f);   // it did not walk up and trade blows
+    }
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1332,7 +1475,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

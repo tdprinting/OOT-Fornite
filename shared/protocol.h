@@ -2,6 +2,7 @@
 #include "balance.h"
 #include "bytes.h"
 #include "loot.h"
+#include "boss.h"
 #include "poi.h"
 #include "skins.h"
 #include "storm.h"
@@ -19,7 +20,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 7; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 8; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -30,7 +31,7 @@ enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -267,6 +268,24 @@ struct PlayerNet {
     }
 };
 
+// A mini boss as clients see it. The id is kBossIdBase + index.
+struct BossNet {
+    uint8_t index = 0;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    int16_t rot = 0;
+    uint8_t hp = 255;        // health as a fraction of its maximum, 0..255
+    bool smashing = false;   // just swung (for the animation)
+    uint32_t Id() const { return kBossIdBase + index; }
+    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U8(smashing ? 1 : 0); }
+    bool Read(ByteReader& r) {
+        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8();
+        const uint8_t f = r.U8();
+        smashing = f != 0;
+        return r.ok && index < kMaxBosses && kind < kBossKindCount && Finite(x) && Finite(z) && f <= 1;
+    }
+};
+
 struct Snapshot {
     static constexpr MsgType kType = MsgType::Snapshot;
     uint32_t tick = 0;       // server tick counter, kTickHz per second
@@ -275,10 +294,13 @@ struct Snapshot {
     uint8_t alive = 0;
     uint8_t epoch = 0;       // bumped whenever the server teleports this client (match start); inputs with an old epoch are ignored
     std::vector<PlayerNet> players; // first entry is always the receiving client
+    std::vector<BossNet> bosses;    // the mini bosses near this client
     void Write(ByteWriter& w) const {
         w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch);
         w.U8(static_cast<uint8_t>(players.size()));
         for (const auto& p : players) p.Write(w);
+        w.U8(static_cast<uint8_t>(bosses.size()));
+        for (const auto& b : bosses) b.Write(w);
     }
     bool Read(ByteReader& r) {
         tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8();
@@ -286,8 +308,20 @@ struct Snapshot {
         if (n > static_cast<size_t>(kMaxPlayers) || state > 4 || !Finite(stormTime)) return false; // up to everyone, while revealing
         players.assign(n, {});
         for (auto& p : players) if (!p.Read(r)) return false;
+        const size_t nb = r.U8();
+        if (nb > static_cast<size_t>(kMaxBosses)) return false;
+        bosses.assign(nb, {});
+        for (auto& b : bosses) if (!b.Read(r)) return false;
         return r.ok;
     }
+};
+
+struct EvBossDown {
+    static constexpr MsgType kType = MsgType::EvBossDown;
+    uint16_t boss = 0, killer = kNoPlayer16;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.U16(boss); w.U16(killer); w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) { boss = r.U16(); killer = r.U16(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && Finite(x) && Finite(z); }
 };
 
 struct EvDamaged {

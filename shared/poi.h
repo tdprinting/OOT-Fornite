@@ -25,6 +25,7 @@ struct PoiLayout {
     std::vector<Poi> pois;
     std::vector<Prop> props;     // walls, cave rocks and ruins
     std::vector<Vec2> lootSpots; // where the chests go
+    std::vector<Vec2> bossSpots; // the caves: where a mini boss may stand guard
 };
 
 namespace poi_detail {
@@ -65,6 +66,7 @@ inline void AddCave(PoiLayout& out, Rng& rng, Vec2 at, float angle, const Placem
         const Vec2 p = poi_detail::Rotated({side * 120.0f, r * 0.95f}, angle, at);
         if (!valid || valid(p)) out.props.push_back({p, PropKind::Pillar, static_cast<uint16_t>(rng.Below(0x10000))});
     }
+    out.bossSpots.push_back(poi_detail::Rotated({0, -10}, angle, at));
     out.lootSpots.push_back(poi_detail::Rotated({-45, -85}, angle, at));
     out.lootSpots.push_back(poi_detail::Rotated({50, -60}, angle, at));
 }

@@ -28,6 +28,8 @@ class GameServer {
 
     GameServer(net::Transport& transport, uint64_t seed, Circle map, int lootCount = 400)
         : link(transport), sim(seed, map, lootCount), mapCircle(map) {}
+    // How many mini bosses a match has (0 to 8). Survives Reconfigure.
+    void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(n); }
 
     // The hosting process generates a random token and gives it both to the server (here) and to its own client's Hello, so
     // the server can tell which connected player is the host without trusting addresses or join order.
@@ -62,6 +64,8 @@ class GameServer {
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings and caves are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
         sim.match.SetLootSpots(layout.lootSpots);
+        sim.match.SetBossSpots(layout.bossSpots);
+        sim.match.SetBossCount(bossCount);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
@@ -438,6 +442,14 @@ class GameServer {
                     Broadcast(a);
                     break;
                 }
+                case MatchEvent::Type::BossDown: {
+                    net::EvBossDown d;
+                    d.boss = static_cast<uint16_t>(e.a);
+                    d.killer = static_cast<uint16_t>(e.b);
+                    d.x = e.x; d.z = e.z;
+                    Broadcast(d);
+                    break;
+                }
                 case MatchEvent::Type::Revived: {
                     net::EvAbility a;
                     a.user = static_cast<uint16_t>(e.a);
@@ -536,6 +548,16 @@ class GameServer {
             std::partial_sort(nearby.begin(), nearby.begin() + static_cast<long>(keep), nearby.end(),
                               [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second->id < b.second->id); });
             for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*nearby[i].second));
+            for (const MiniBoss& b : sim.match.Bosses()) {
+                if (!b.alive || Distance(self->pos, b.pos) > 4500.0f) continue; // only the ones that could matter to this player
+                net::BossNet n;
+                n.index = static_cast<uint8_t>(b.id - kBossIdBase);
+                n.kind = static_cast<uint8_t>(b.kind);
+                n.x = b.pos.x; n.z = b.pos.z; n.rot = b.rot;
+                n.hp = static_cast<uint8_t>((std::max)(0.0f, (std::min)(255.0f, b.health / b.maxHealth * 255.0f + 0.5f)));
+                n.smashing = sim.match.Clock() - b.lastSmashAt < 0.4f;
+                s.bosses.push_back(n);
+            }
             SendTo(c, s, false);
         }
     }
@@ -547,6 +569,7 @@ class GameServer {
     std::vector<Poi> pois;
     int propCount = 350;
     int poiCount = 12;
+    int bossCount = 0;
     PlacementFn lastValid;
     int lastLootCount = 150;
     Circle mapCircle;

@@ -158,6 +158,17 @@ class BotController {
         return h;
     }
 
+    static const MiniBoss* NearestBoss(const Match& m, const PlayerState& p, float range) {
+        const MiniBoss* best = nullptr;
+        float bestD = range;
+        for (const MiniBoss& b : m.Bosses()) {
+            if (!b.alive) continue;
+            const float d = Distance(p.pos, b.pos);
+            if (d < bestD) { bestD = d; best = &b; }
+        }
+        return best;
+    }
+
     static bool HasFairy(const PlayerState& p) {
         for (const Equipped& e : p.potions) if (PotionOf(e.item).revive) return true;
         return false;
@@ -509,6 +520,26 @@ class BotController {
             Steer(m, p, mem, soon.center, dt);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
             return;
+        }
+
+        // Mini bosses: a weak bot keeps well away from them; a strong, healthy one goes after them for the loot (unless a player is on top of it).
+        if (const MiniBoss* boss = NearestBoss(m, p, 650.0f)) {
+            const float bd = Distance(p.pos, boss->pos);
+            const bool strong = p.health >= 2.4f && EffectiveDps(p.weapon) * TotalsOf(p).melee >= 1.8f && mem.aggression > 0.35f && tune.hunt;
+            if (!strong || p.health < 1.3f) {
+                if (bd < 420.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 500.0f), dt, 1.0f); return; }
+            } else if (!foe || dist > 300.0f) {
+                const WeaponStats w = WeaponOf(p.weapon.item);
+                const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
+                if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
+                else { p.rot = FaceAngle(p.pos, boss->pos); }
+                if (bd <= w.range * 1.1f + kBossBodyRadius && m.Clock() >= p.attackReadyAt) m.Attack(p.id, boss->id, rng.Unit() < mem.skill);
+                // Back away just before it smashes, then return.
+                if (bd < kBossReach + 30.0f && boss->attackReadyAt - m.Clock() < 0.35f) {
+                    Advance(m, p, p.pos.x - boss->pos.x, p.pos.z - boss->pos.z, kRunSpeed * dt * 1.2f);
+                }
+                return;
+            }
         }
 
         // 2. Flee: run away from the foe, preferring the way toward the zone centre, and shoot back if we can.

@@ -102,6 +102,7 @@ class RoyaleSession {
         uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         server = std::make_unique<GameServer>(*hostTransport, seed, kHyruleFieldMap);
         server->SetBotDifficulty(botDifficulty);
+        server->SetBossCount(5);
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;

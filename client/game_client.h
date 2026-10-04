@@ -14,7 +14,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -106,6 +106,8 @@ class GameClient {
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
+    // The mini bosses in the latest snapshot (the ones near you).
+    const std::vector<net::BossNet>& Bosses() const { return bosses; }
     const std::vector<Prop>& Props() const { return props; }
     const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
@@ -316,6 +318,14 @@ class GameClient {
                 results = m.rows;
                 break;
             }
+            case net::MsgType::EvBossDown: {
+                net::EvBossDown m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::BossDown};
+                e.id = m.boss; e.other = m.killer; e.x = m.x; e.z = m.z;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvAbility: {
                 net::EvAbility m;
                 if (!net::Decode(data, m)) break;
@@ -383,6 +393,8 @@ class GameClient {
         alive = s.alive;
         epoch = s.epoch;
 
+        bosses = s.bosses;
+        bossesAt = localClock;
         for (auto& [id, p] : players) p.visible = false;
         for (const auto& pn : s.players) {
             Remote& r = players[pn.id];
@@ -406,6 +418,8 @@ class GameClient {
     std::map<uint16_t, RosterInfo> roster;
     uint32_t tunic = SkinRgb(0);
     InventoryInfo inventory;
+    std::vector<net::BossNet> bosses;
+    float bossesAt = 0;
     std::vector<Prop> props;
     std::vector<Poi> pois;
     std::vector<net::ResultRow> results;
