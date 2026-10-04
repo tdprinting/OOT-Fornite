@@ -48,6 +48,11 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - The window says "Host runs a different version": everyone must install the same build.
 - Crashes or odd behavior: tell me what you were doing. This build has never been run, so those reports are exactly what I need.
 
+## How a match starts
+1. **Splash screen:** each match opens with a title card (Triforce, gold lettering, "Made by Tevin Dahl") for the first 5 seconds of the countdown while everyone is moved to Hyrule Field.
+2. **Hanging in the sky:** you spawn high above your spawn point and wait for the countdown to end.
+3. **Skydive:** when the drop starts you fall from the sky. The stick steers, hold **Z** to dive faster. You are protected from damage until the drop ends (18 seconds), and anyone still in the air then plummets to the ground. Bots land at the same time you do.
+
 ## Controls in a match
 - **Walk over items** to pick them up. Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
 - **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target. It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.

@@ -44,6 +44,8 @@ class BotController {
         if (m.State() != MatchState::Drop && m.State() != MatchState::InMatch) return;
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
         repathBudget = 8;
+        // Bots are "in the air" for most of the drop, so they land and start looting when the humans do, not before.
+        if (m.State() == MatchState::Drop && m.StateTime() < kDropSec * 0.65f) return;
         for (auto& p : m.Players()) {
             if (p.isBot && p.alive) Act(m, p, soon, dt);
         }

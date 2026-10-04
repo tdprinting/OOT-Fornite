@@ -126,7 +126,7 @@ static void SpawnProtection() {
     CHECK(m.State() == MatchState::Drop);
     CHECK(!m.Damage(1, 100));
     CHECK(m.Find(1)->alive);
-    for (int i = 0; i < kTickHz * 5 + 1; i++) m.Tick(1.0f / kTickHz);
+    for (int i = 0; i < static_cast<int>(kDropSec * kTickHz) + 1; i++) m.Tick(1.0f / kTickHz);
     CHECK(m.State() == MatchState::InMatch);
     CHECK(m.Damage(1, 100));
     CHECK(!m.Find(1)->alive);

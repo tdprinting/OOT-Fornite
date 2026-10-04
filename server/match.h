@@ -440,6 +440,7 @@ class Match {
     MatchState State() const { return state; }
     int Humans() const { return humans; }
     float StormTime() const { return stormTime; }
+    float StateTime() const { return stateTime; }
     const Storm& GetStorm() const { return storm; }
     const Circle& MapCircle() const { return map; }
     const std::vector<PlayerState>& Players() const { return players; }

@@ -10,7 +10,7 @@ constexpr int kTickHz = 20;
 
 // Match timing, shared so clients can show the same countdown the server runs.
 constexpr float kCountdownSec = 10.0f; // from Start to the drop
-constexpr float kDropSec = 5.0f;       // spawn protection
+constexpr float kDropSec = 18.0f;      // the skydive: spawn protection while everyone falls from the sky
 constexpr float kEndingSec = 10.0f;
 
 // World units are OoT units. Link runs about 100 units/s.

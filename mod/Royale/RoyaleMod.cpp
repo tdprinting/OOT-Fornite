@@ -494,6 +494,78 @@ std::string ClockText(float seconds) {
 
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
+bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+
+// The splash shown at the start of every match's countdown, in the look of OoT's title and file-select screens: deep blue-green
+// night, gold lettering with a dark drop shadow, a gold Triforce and a double gold border. It covers the screen for the first
+// kSplashSeconds of the countdown (fading in and out), which is also when everyone is being moved to Hyrule Field.
+constexpr float kSplashSeconds = 5.0f;
+
+void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float secondsIn) {
+    const float fadeIn = std::clamp(secondsIn / 0.6f, 0.0f, 1.0f);
+    const float fadeOut = std::clamp((kSplashSeconds - secondsIn) / 0.6f, 0.0f, 1.0f);
+    const float a = std::min(fadeIn, fadeOut);
+    if (a <= 0.0f) return;
+    auto A = [&](int v) { return static_cast<int>(v * a); };
+    const ImU32 gold = IM_COL32(255, 214, 90, A(255)), goldDark = IM_COL32(176, 118, 24, A(255)), shadow = IM_COL32(8, 14, 10, A(235)),
+                cream = IM_COL32(236, 228, 190, A(255));
+
+    // Night sky: top and bottom of a vertical gradient, with a vignette.
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(6, 22, 38, A(255)), IM_COL32(6, 22, 38, A(255)), IM_COL32(14, 54, 46, A(255)), IM_COL32(14, 54, 46, A(255)));
+    for (int i = 0; i < 40; i++) { // a few stars, fixed positions
+        const float sx = std::fmod(i * 197.0f + 41.0f, 1000.0f) / 1000.0f * ds.x, sy = std::fmod(i * 331.0f + 17.0f, 1000.0f) / 1000.0f * ds.y * 0.6f;
+        dl->AddCircleFilled(ImVec2(sx, sy), (1.0f + (i % 3)) * scale * 0.8f, IM_COL32(255, 255, 230, A(60 + (i * 37) % 140)));
+    }
+
+    // Double gold border with diamond corners.
+    const float m = 26 * scale;
+    dl->AddRect(ImVec2(m, m), ImVec2(ds.x - m, ds.y - m), gold, 0, 0, 3.0f * scale);
+    dl->AddRect(ImVec2(m + 9 * scale, m + 9 * scale), ImVec2(ds.x - m - 9 * scale, ds.y - m - 9 * scale), goldDark, 0, 0, 1.5f * scale);
+    const ImVec2 corners[4] = { ImVec2(m, m), ImVec2(ds.x - m, m), ImVec2(m, ds.y - m), ImVec2(ds.x - m, ds.y - m) };
+    for (const ImVec2& c : corners) {
+        const float r = 9 * scale;
+        dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), gold);
+    }
+
+    auto lettered = [&](float y, float size, ImU32 col, const char* text) {
+        ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+        const float x = (ds.x - sz.x) * 0.5f;
+        const float o = std::max(2.0f, size * 0.05f);
+        for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
+            if (dx || dy) dl->AddText(font, size, ImVec2(x + dx * o, y + dy * o), shadow, text);
+        }
+        dl->AddText(font, size, ImVec2(x + o * 1.6f, y + o * 1.6f), shadow, text);
+        dl->AddText(font, size, ImVec2(x, y), col, text);
+        return sz.y;
+    };
+
+    // The Triforce, three gold triangles with a dark gap in the middle, floating gently.
+    const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
+    const ImVec2 c(ds.x * 0.5f, ds.y * 0.27f + bob);
+    const float t = 62 * scale; // half the width of the whole mark
+    auto tri = [&](ImVec2 top, ImVec2 left, ImVec2 right) {
+        dl->AddTriangleFilled(ImVec2(top.x + 3 * scale, top.y + 3 * scale), ImVec2(left.x + 3 * scale, left.y + 3 * scale), ImVec2(right.x + 3 * scale, right.y + 3 * scale), shadow);
+        dl->AddTriangleFilled(top, left, right, gold);
+        dl->AddTriangle(top, left, right, goldDark, 2.0f * scale);
+    };
+    const float h = t * 1.732f;                    // height of the whole mark
+    const float half = t * 0.5f, hh = h * 0.5f;
+    const ImVec2 apex(c.x, c.y - hh), bl(c.x - t, c.y + hh), br(c.x + t, c.y + hh), midL(c.x - half, c.y), midR(c.x + half, c.y), midB(c.x, c.y + hh);
+    tri(apex, midL, midR);
+    tri(midL, bl, midB);
+    tri(midR, midB, br);
+
+    float y = ds.y * 0.27f + hh + 28 * scale;
+    y += lettered(y, 58 * scale, gold, "OOT ROYALE") + 10 * scale;
+    // A thin gold rule with a diamond in the middle under the title.
+    dl->AddLine(ImVec2(ds.x * 0.34f, y), ImVec2(ds.x * 0.66f, y), goldDark, 2.0f * scale);
+    dl->AddQuadFilled(ImVec2(ds.x * 0.5f, y - 6 * scale), ImVec2(ds.x * 0.5f + 6 * scale, y), ImVec2(ds.x * 0.5f, y + 6 * scale), ImVec2(ds.x * 0.5f - 6 * scale, y), gold);
+    y += 22 * scale;
+    y += lettered(y, 34 * scale, cream, "Made by Tevin Dahl") + 26 * scale;
+    y += lettered(y, 21 * scale, cream, "Thank you to my wife Cynthia for supporting my wildest dreams and hobbies :)");
+}
+
+
 void DrawOverlay() {
     if (!gSession.Joined()) return;
     royale::HudState h = gSession.Hud();
@@ -514,7 +586,10 @@ void DrawOverlay() {
 
     bool live = h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
 
-    if (h.state == royale::MatchState::Countdown) {
+    const bool splashing = h.state == royale::MatchState::Countdown && h.countdownLeft > royale::kCountdownSec - kSplashSeconds;
+    if (splashing) {
+        DrawSplash(dl, font, ds, scale, royale::kCountdownSec - h.countdownLeft);
+    } else if (h.state == royale::MatchState::Countdown) {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
         if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to Hyrule Field...");
     }
@@ -524,7 +599,10 @@ void DrawOverlay() {
         centered(ds.y * 0.16f + 92 * scale, grey, 20 * scale, "Open the menu and choose Leave to go back");
     }
     if (live && h.haveSelf && !h.selfAlive) centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED - spectating");
-    if (live && h.state == royale::MatchState::Drop) centered(ds.y * 0.2f, green, 30 * scale, "DROP - you are protected for a moment");
+    if (live && h.state == royale::MatchState::Drop) {
+        centered(ds.y * 0.2f, green, 30 * scale, gSkydiving ? "SKYDIVE - stick steers, hold Z to dive faster" : "DROP - you are protected for a moment");
+    }
+    if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
 
     if (!live || !h.haveSelf) return;
 
@@ -688,6 +766,48 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (bestDist < 1e8f) gSession.ReportAttack(best, true);
 }
 
+// The match-start skydive, as in Fortnite: you spawn high above your spawn point, hang there during the countdown, then fall
+// during the drop. The stick steers, holding Z dives faster, and the ground ends it (anyone still airborne when the drop ends
+// plummets). The server only knows x and z, and protects everyone for the whole drop, so this is all done on the client.
+constexpr float kSkyHeight = 3000.0f;   // units above the ground you start
+constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (the drop lasts 18 s)
+constexpr float kDiveSpeed = 380.0f;    // holding Z
+constexpr float kAirSpeed = 130.0f;     // steering speed
+void UpdateSkydive(Player* player, const royale::HudState& hud) {
+    if (!gSkydiving) return;
+    const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
+    if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; return; }
+    constexpr float dt = 1.0f / royale::kTickHz;
+    const Input& in = gPlayState->state.input[0];
+
+    // Steer relative to the camera, the way Link's stick normally works.
+    const float sx = in.cur.stick_x, sy = in.cur.stick_y;
+    const float mag = std::min(1.0f, std::sqrt(sx * sx + sy * sy) / 60.0f);
+    if (mag > 0.1f) {
+        const float yaw = static_cast<float>(Camera_GetInputDirYaw(GET_ACTIVE_CAM(gPlayState))) * (3.14159265f / 32768.0f);
+        const float a = yaw + std::atan2(-sx, sy);
+        player->actor.world.pos.x += std::sin(a) * kAirSpeed * mag * dt;
+        player->actor.world.pos.z += std::cos(a) * kAirSpeed * mag * dt;
+        player->actor.shape.rot.y = static_cast<s16>(a * (32768.0f / 3.14159265f));
+        player->actor.world.rot.y = player->actor.shape.rot.y;
+    }
+
+    float fall = 0.0f;                                                          // hold in the sky during the countdown
+    if (hud.state == royale::MatchState::Drop) fall = (in.cur.button & BTN_Z) ? kDiveSpeed : kGlideSpeed;
+    else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
+    const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
+    float y = player->actor.world.pos.y - fall * dt;
+    if (ground > -1.0e5f && y <= ground + 8.0f) {
+        y = ground + 8.0f;
+        gSkydiving = false;                                                       // touched down; normal gravity takes over
+    }
+    player->actor.world.pos.y = y;
+    player->actor.prevPos = player->actor.world.pos;
+    player->actor.velocity.y = 0.0f;
+    player->actor.speedXZ = 0.0f;
+    player->fallDistance = 0;                                                     // no landing damage or hard-landing stun
+}
+
 // Boots, Epona's Song and friends: the server allows a faster run and the game applies it by stretching the step Link just took.
 // (Teleports and the drop to spawn move far more than a step, so those are left alone.)
 royale::Vec2 gLastPos = {};
@@ -718,7 +838,10 @@ void OnPlayerUpdate() {
         if (const royale::net::PlayerNet* self = client->Self()) {
             player->actor.world.pos.x = self->x;
             player->actor.world.pos.z = self->z;
-            player->actor.world.pos.y = GroundY(gPlayState, self->x, self->z, 1500.0f) + 20.0f;
+            const float ground = GroundY(gPlayState, self->x, self->z, 1500.0f);
+            // At the start of a match you spawn high in the sky and fall in; any other teleport (Hookshot, songs) is a plain move.
+            gSkydiving = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop;
+            player->actor.world.pos.y = gSkydiving ? ground + kSkyHeight : ground + 20.0f;
             player->actor.prevPos = player->actor.world.pos;
             player->actor.home.pos = player->actor.world.pos;
         }
@@ -732,6 +855,7 @@ void OnPlayerUpdate() {
                                player->actor.shape.rot.y, ClassifyAnim(player), static_cast<uint8_t>(gPlayState->sceneNum));
     }
 
+    UpdateSkydive(player, hud);
     HandleCombatInput(player, hud);
     ApplySpeedBuffs(player, hud);
 
@@ -807,7 +931,7 @@ void ReportEvents(const royale::HudState& hud) {
                 else if (e.other == hud.selfId) Say("You eliminated " + nameOf(e.id));
                 break;
             case royale::ClientEvent::Type::StateChanged:
-                if (e.state == royale::MatchState::Drop) Say("Drop! Spawn protection for a few seconds");
+                if (e.state == royale::MatchState::Drop) Say("Drop! Skydive to the ground. Z dives faster");
                 else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone!");
                 else if (e.state == royale::MatchState::Ending) {
                     if (hud.winnerId == hud.selfId) Say("VICTORY ROYALE! You won!");
