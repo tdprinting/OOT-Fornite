@@ -150,9 +150,10 @@ class RoyaleSession {
     // Lobby only.
     void SetReady(bool ready) { if (Joined()) client->SetReady(ready); }
     void ReportAttack(uint16_t target, bool hit) { if (Joined()) client->ReportAttack(target, hit); }
-    void RequestPickup(uint32_t lootIndex) { if (Joined()) client->RequestPickup(lootIndex); }
+    void RequestPickup(uint32_t lootIndex, bool force = false) { if (Joined()) client->RequestPickup(lootIndex, force); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
+    void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
 
     // Server to game.
     std::vector<PuppetState> Puppets() const {

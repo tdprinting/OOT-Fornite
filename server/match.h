@@ -34,6 +34,7 @@ struct PlayerState {
     bool hasShield = false;
     Equipped shield = {ItemId::DekuShield, Rarity::Common};
     std::vector<Equipped> potions;                         // consumables bag, at most kMaxPotions
+    std::vector<Equipped> reserve;                         // backup weapons for the hotbar, at most kMaxReserveWeapons
     std::array<Equipped, kGearSlots> gear = {};            // one passive item per slot
     uint8_t gearMask = 0;                                  // bit n set when gear[n] is filled
     Equipped ability = {ItemId::DinsFire, Rarity::Common};
@@ -290,17 +291,66 @@ class Match {
     // Pick up loot entry `index`. Weapons, shields, abilities and gear swap with what the player already has in that slot (the old
     // one drops on the ground). Consumables need room in the bag. Instant items are used on the spot and stay on the ground when they
     // would do nothing (a heart at full health).
-    bool PickUp(uint32_t id, size_t index) {
+    // Would taking this be an improvement? Walking over loot only picks up what passes this; anything else needs the player to ask
+    // (force), so a Common stick doesn't replace your Epic sword just because you walked past it.
+    static bool WorthTaking(const PlayerState& p, const LootSpawn& s) {
+        switch (KindOf(s.item)) {
+            case ItemKind::Weapon: {
+                if (WeaponDps(s.item, s.rarity) > WeaponDps(p.weapon.item, p.weapon.rarity) * 1.05f) return true; // an upgrade
+                if (static_cast<int>(p.reserve.size()) >= kMaxReserveWeapons) return false;                  // no room for a spare
+                if (s.item == p.weapon.item && s.rarity == p.weapon.rarity) return false;
+                for (const Equipped& e : p.reserve) if (e.item == s.item && e.rarity == s.rarity) return false;
+                return true;                                                                                 // fills an empty hotbar slot
+            }
+            case ItemKind::Shield: return !p.hasShield || ShieldReduction(s.item, s.rarity) > ShieldReduction(p.shield.item, p.shield.rarity) + 0.01f;
+            case ItemKind::Consumable:
+                if (PotionOf(s.item).revive) { for (const Equipped& e : p.potions) if (PotionOf(e.item).revive) return false; }
+                return static_cast<int>(p.potions.size()) < kMaxPotions;
+            case ItemKind::Instant: return true; // refused by UseInstant when it would do nothing
+            case ItemKind::Ability: return !p.hasAbility;
+            case ItemKind::Gear: {
+                const int slot = static_cast<int>(GearOf(s.item).slot);
+                return slot >= 0 && slot < kGearSlots && (!(p.gearMask & (1 << slot)) || static_cast<int>(s.rarity) > static_cast<int>(p.gear[slot].rarity));
+            }
+        }
+        return false;
+    }
+
+    // `force` = the player asked for this item (or it is a bot, which already decided); false = they just walked over it.
+    // Swap the weapon in hand with backup slot 1..kMaxReserveWeapons. Costs a short delay before the next swing.
+    bool SelectWeapon(uint32_t id, int slot) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (slot < 1 || slot > static_cast<int>(p->reserve.size())) return false;
+        std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
+        p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
+        p->dirty = true;
+        return true;
+    }
+
+    bool PickUp(uint32_t id, size_t index, bool force = true) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (index >= loot.size() || loot[index].taken) return false;
         const LootSpawn s = loot[index].spawn;
         if (Distance(p->pos, s.pos) > kPickupRange * 1.5f) return false;
+        if (s.container && !force) return false; // chests have to be opened on purpose
+        if (!force && !WorthTaking(*p, s)) return false;
         switch (KindOf(s.item)) {
-            case ItemKind::Weapon:
-                DropEquipment(*p, p->weapon);
-                p->weapon = {s.item, s.rarity};
+            case ItemKind::Weapon: {
+                const bool upgrade = WeaponDps(s.item, s.rarity) > WeaponDps(p->weapon.item, p->weapon.rarity) * 1.05f;
+                const bool room = static_cast<int>(p->reserve.size()) < kMaxReserveWeapons;
+                if (upgrade) {                       // the better weapon goes in hand; the old one becomes a backup if there is room
+                    if (room && !IsStarter(p->weapon)) p->reserve.push_back(p->weapon); else DropEquipment(*p, p->weapon);
+                    p->weapon = {s.item, s.rarity};
+                } else if (room) {                   // not better, but there is a free hotbar slot
+                    p->reserve.push_back({s.item, s.rarity});
+                } else {                             // hotbar full: replace the weapon in hand
+                    DropEquipment(*p, p->weapon);
+                    p->weapon = {s.item, s.rarity};
+                }
                 break;
+            }
             case ItemKind::Shield:
                 if (p->hasShield) DropEquipment(*p, p->shield);
                 p->shield = {s.item, s.rarity};
@@ -466,7 +516,11 @@ class Match {
 
     static bool IsStarter(const Equipped& e) { return e.item == ItemId::DekuStick && e.rarity == Rarity::Common; }
     void DropEquipment(const PlayerState& p, const Equipped& e) {
-        if (!IsStarter(e)) AddLoot({p.pos, e.item, e.rarity, false});
+        // Put it down a step in front of the player, so it isn't underfoot (and re-grabbed) the instant it lands.
+        const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
+        Vec2 at = {p.pos.x + std::sin(facing) * 90.0f, p.pos.z + std::cos(facing) * 90.0f};
+        if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = p.pos;
+        if (!IsStarter(e)) AddLoot({at, e.item, e.rarity, false});
     }
 
     // Eliminated players leave everything they carry behind for others (the Skulltula pile in the design doc).
@@ -483,6 +537,7 @@ class Match {
     }
     void DropKit(const PlayerState& p) {
         DropEquipment(p, p.weapon);
+        for (const Equipped& spare : p.reserve) DropEquipment(p, spare);
         if (p.hasShield) DropEquipment(p, p.shield);
         if (p.hasAbility) DropEquipment(p, p.ability);
         for (int slot = 0; slot < kGearSlots; slot++) {

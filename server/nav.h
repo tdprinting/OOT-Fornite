@@ -30,6 +30,19 @@ class NavGrid {
         }
     }
 
+    // Mark a circular area (a rock, a pillar) as impassable.
+    void Block(Vec2 centre, float radius) {
+        const int reach = static_cast<int>(std::ceil(radius / kCell)) + 1;
+        int cx, cz;
+        ToCellClamped(centre, cx, cz);
+        for (int z = cz - reach; z <= cz + reach; z++) {
+            for (int x = cx - reach; x <= cx + reach; x++) {
+                if (x < 0 || z < 0 || x >= w || z >= h) continue;
+                if (Distance(CellCentre(x, z), centre) <= radius) cells[Index(x, z)] = 0;
+            }
+        }
+    }
+
     bool Walkable(Vec2 p) const {
         int cx, cz;
         return ToCell(p, cx, cz) && cells[Index(cx, cz)];

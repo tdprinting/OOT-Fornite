@@ -54,7 +54,8 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 3. **Skydive:** when the drop starts you fall from the sky. The stick steers, hold **Z** to dive faster. You are protected from damage until the drop ends (18 seconds), and anyone still in the air then plummets to the ground. Bots land at the same time you do.
 
 ## Controls in a match
-- **Walk over items** to pick them up. Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
+- **Walk over items** to pick up upgrades automatically (a better weapon, shield or gear, a potion if your bag has room, an ability if you have none). Anything else stays on the ground: stand next to it and press **D-pad Right** to take it, which swaps it for what you hold. A swapped-out item lands a step in front of you.
+- Each item Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
 - **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target. It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.
 - **D-pad Down** drinks a potion (the best one for how hurt you are). A Fairy in your bag is never drunk: it revives you once if you would die.
 - **D-pad Up** uses your ability (Din's Fire, Nayru's Love, Hookshot, Farore's Wind, a song, and more), then it recharges. The HUD shows the countdown.

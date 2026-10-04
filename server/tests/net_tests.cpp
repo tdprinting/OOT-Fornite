@@ -87,7 +87,7 @@ static void MessagesRoundTrip() {
     { Input a, b; a.seq = 65535; a.epoch = 3; a.x = -1.5f; a.y = 2; a.z = 3.25f; a.rot = -1234; a.anim = 9; a.scene = 0x43;
       CHECK(RoundTrips(a, b) && b.seq == 65535 && b.epoch == 3 && b.x == -1.5f && b.z == 3.25f && b.rot == -1234 && b.anim == 9 && b.scene == 0x43); }
     { AttackReport a, b; a.target = 12; a.hit = true; CHECK(RoundTrips(a, b) && b.target == 12 && b.hit); }
-    { PickupRequest a, b; a.index = 123456; CHECK(RoundTrips(a, b) && b.index == 123456); }
+    { PickupRequest a, b; a.index = 123456; a.force = true; CHECK(RoundTrips(a, b) && b.index == 123456 && b.force); }
     { UsePotionRequest a, b; CHECK(RoundTrips(a, b)); }
     { Welcome a = SampleWelcome(), b; CHECK(RoundTrips(a, b));
       CHECK(b.playerId == 7 && b.seed == a.seed && b.map.radius == 3000 && b.loot.size() == 2 && b.roster[1].name == "Zelda");
@@ -111,6 +111,11 @@ static void MessagesRoundTrip() {
     { EvLootAdded a, b; a.index = 400; a.loot = {1, 2, 3, 4, true, false}; CHECK(RoundTrips(a, b) && b.index == 400 && b.loot.item == 3); }
     { EvPlayerJoined a, b; a.id = 5; a.flags = kRosterHost | kRosterReady; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi" && b.flags == 3); }
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
+    { SelectWeaponRequest a, b; a.slot = 2; CHECK(RoundTrips(a, b) && b.slot == 2); }
+    { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
+    { EvMapConfig a, b; a.props = {{{1, 2}, PropKind::Boulder, 123}, {{-3, 4}, PropKind::Bush, 65535}};
+      CHECK(RoundTrips(a, b) && b.props.size() == 2 && b.props[0].kind == PropKind::Boulder && b.props[1].rot == 65535 && b.props[1].pos.x == -3); }
+    { EvInventory a, b; a.reserve = {{5, 1}, {6, 2}}; CHECK(RoundTrips(a, b) && b.reserve.size() == 2 && b.reserve[1].item == 6); }
     { EvAbility a, b; a.user = 7; a.item = 55; a.x = 1.5f; a.z = -2; CHECK(RoundTrips(a, b) && b.user == 7 && b.item == 55 && b.x == 1.5f && b.z == -2); }
     { EvInventory a, b; a.maxHealth = 5; a.heartPieces = 3; a.potions = {{1, 2}, {3, 4}}; a.hasAbility = true; a.hasMark = true; a.ability = {40, 3};
       a.abilityReadyIn = 12.5f; a.gearMask = 0x05; a.gear[0] = {60, 1}; a.gear[2] = {62, 4}; a.speedMult = 1.4f; a.speedLeft = 6; a.shieldLeft = 2;

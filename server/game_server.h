@@ -52,8 +52,14 @@ class GameServer {
         for (const auto& p : sim.match.Players()) humans.push_back(p.id);
         sim = Simulation(seed, map, 0);
         sim.bots.SetDifficulty(botDifficulty);
-        if (valid) sim.bots.SetNav(std::make_shared<NavGrid>(map, valid)); // bots path around whatever the validator rejects
         sim.match.SetPlacementValidator(valid);
+        // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
+        props = GenerateProps(seed, map, propCount, valid);
+        if (valid) {
+            auto grid = std::make_shared<NavGrid>(map, valid);
+            for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
+            sim.bots.SetNav(grid);
+        }
         sim.match.RegenerateLoot(lootCount);
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
@@ -62,6 +68,7 @@ class GameServer {
         cfg.map = map;
         cfg.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) cfg.loot.push_back(ToNet(l));
+        cfg.props = props;
         Broadcast(cfg);
         return true;
     }
@@ -210,7 +217,13 @@ class GameServer {
             case net::MsgType::PickupRequest: {
                 net::PickupRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.PickUp(c->playerId, m.index)) stats.rejectedActions++;
+                if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
+                break;
+            }
+            case net::MsgType::SelectWeaponRequest: {
+                net::SelectWeaponRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.SelectWeapon(c->playerId, m.slot)) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::UseAbilityRequest: {
@@ -280,6 +293,7 @@ class GameServer {
         w.map = mapCircle;
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
+        w.props = props;
         for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), RosterFlags(o), o.name});
         SendTo(c, w);
 
@@ -324,7 +338,7 @@ class GameServer {
         n.x = l.spawn.pos.x; n.z = l.spawn.pos.z;
         n.item = static_cast<uint8_t>(l.spawn.item);
         n.rarity = static_cast<uint8_t>(l.spawn.rarity);
-        n.chest = l.spawn.fromChest;
+        n.chest = l.spawn.container; // the client draws these as treasure chests
         n.taken = l.taken;
         return n;
     }
@@ -488,6 +502,8 @@ class GameServer {
     net::Transport& link;
     Simulation sim;
     BotDifficulty botDifficulty = BotDifficulty::Normal;
+    std::vector<Prop> props;
+    int propCount = 500;
     Circle mapCircle;
     std::vector<Client> clients;
     Stats stats;

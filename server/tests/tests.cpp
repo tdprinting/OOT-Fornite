@@ -1,6 +1,7 @@
 #include "../match.h"
 #include "../sim.h"
 #include "../nav.h"
+#include "../../shared/props.h"
 #include <set>
 #include <string>
 #include "../../shared/anim.h"
@@ -203,11 +204,19 @@ static void PickUpRulesAndSwap() {
     CHECK(m.Find(1000)->weapon.item == ItemId::MasterSword);
     size_t n = m.Loot().size();
     size_t k = m.AddLoot({{0, 0}, ItemId::BiggoronSword, Rarity::Rare, false});
-    CHECK(m.PickUp(1000, k));                      // swap
-    CHECK(m.Loot().size() == n + 2);               // the loot we added, plus the Master Sword we dropped
-    bool master = false;
-    for (auto& e : m.Loot()) if (!e.taken && e.spawn.item == ItemId::MasterSword) master = true;
-    CHECK(master);                                 // old weapon is on the ground again
+    CHECK(m.PickUp(1000, k));                      // not better than the Master Sword in hand, so it goes in a free hotbar slot
+    CHECK(m.Find(1000)->weapon.item == ItemId::MasterSword && m.Find(1000)->reserve.size() == 1);
+    CHECK(m.Loot().size() == n + 1);
+    CHECK(m.SelectWeapon(1000, 1) && m.Find(1000)->weapon.item == ItemId::BiggoronSword && m.Find(1000)->reserve[0].item == ItemId::MasterSword);
+    CHECK(!m.SelectWeapon(1000, 2) && !m.SelectWeapon(1000, 0));   // no such slot
+    // With the hotbar full, a pickup replaces the weapon in hand and the old one lands on the ground.
+    m.Find(1000)->reserve = {{ItemId::Slingshot, Rarity::Common}, {ItemId::Boomerang, Rarity::Common}};
+    n = m.Loot().size();
+    CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::MegatonHammer, Rarity::Epic, false})));
+    CHECK(m.Loot().size() == n + 2);
+    bool dropped = false;
+    for (auto& e : m.Loot()) if (!e.taken && e.spawn.item == ItemId::BiggoronSword) dropped = true;
+    CHECK(dropped);
     CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::Hookshot, Rarity::Rare, false})));  // abilities go in the ability slot
     CHECK(m.Find(1000)->hasAbility && m.Find(1000)->ability.item == ItemId::Hookshot);
 }
@@ -244,6 +253,7 @@ static void BotFetchesUpgrade() {
 static void BotIgnoresDowngrade() {
     Simulation sim = Duel(5, {1500, 0}, {0, 0});
     sim.match.Find(1000)->weapon = {ItemId::MasterSword, Rarity::Epic};
+    sim.match.Find(1000)->reserve = {{ItemId::Slingshot, Rarity::Common}, {ItemId::Boomerang, Rarity::Common}}; // hotbar full: no use for spares
     sim.match.AddLoot({{100, 0}, ItemId::KokiriSword, Rarity::Common, false});
     sim.match.AddLoot({{120, 0}, ItemId::RecoveryHeart, Rarity::Common, false}); // a heart at full health does nothing: not interesting
     Run(sim, 10);
@@ -932,9 +942,8 @@ static void EliminatedPlayersDropEverythingAndKillsAreCredited() {
     CHECK(m.Loot().size() == 7);                                                       // weapon, shield, ability, 2 gear, 2 potions
     CHECK(m.Find(1)->kills == 1);                                                      // credited exactly once
     // The dead player's loot can be picked up by the winner.
-    m.Find(1)->pos = v->pos;
     int got = 0;
-    for (size_t i = 0; i < m.Loot().size(); i++) got += m.PickUp(1, i);
+    for (size_t i = 0; i < m.Loot().size(); i++) { m.Find(1)->pos = m.Loot()[i].spawn.pos; got += m.PickUp(1, i); }
     CHECK(got >= 6);
 }
 
@@ -1095,6 +1104,74 @@ static void BotsAdvantageMath() {
     CHECK(BotController::Advantage(sim.match, *a, *h) > 3.0f);
 }
 
+static void WalkingOverLootOnlyTakesUpgrades() {
+    Simulation sim = Duel(5, {1900, 0}, {1900, 100});
+    Match& m = sim.match;
+    PlayerState* p = m.Find(1);
+    p->pos = {0, 0};
+    p->weapon = {ItemId::MasterSword, Rarity::Epic};
+    p->reserve = {{ItemId::Slingshot, Rarity::Common}, {ItemId::Boomerang, Rarity::Common}};   // hotbar full
+    const size_t stick = m.AddLoot({{0, 0}, ItemId::DekuStick, Rarity::Common, false});
+    CHECK(!m.PickUp(1, stick, false));                                   // walking over a worse weapon leaves it alone
+    CHECK(p->weapon.item == ItemId::MasterSword && !m.Loot()[stick].taken);
+    const size_t better = m.AddLoot({{0, 0}, ItemId::MasterSword, Rarity::Legendary, false});
+    CHECK(m.PickUp(1, better, false) && p->weapon.rarity == Rarity::Legendary);   // an upgrade is taken on its own
+    // The swapped-out sword lands a step away, not underfoot, so it can't be re-grabbed at once.
+    bool away = false;
+    for (const auto& l : m.Loot()) if (!l.taken && l.spawn.item == ItemId::MasterSword && l.spawn.rarity == Rarity::Epic) away = Distance(l.spawn.pos, p->pos) > kPickupRange;
+    CHECK(away);
+    CHECK(m.PickUp(1, stick, true) && p->weapon.item == ItemId::DekuStick);       // asking for it swaps anyway
+    // Chests have to be opened on purpose: walking over one never opens it.
+    const size_t chest = m.AddLoot({{0, 0}, ItemId::MasterSword, Rarity::Legendary, true, true});
+    CHECK(!m.PickUp(1, chest, false) && !m.Loot()[chest].taken);
+    CHECK(m.PickUp(1, chest, true) && m.Loot()[chest].taken);
+    // Full bag: a potion is refused by walking, and a second Fairy is not worth taking.
+    p->potions = {{ItemId::Fairy, Rarity::Rare}};
+    const size_t fairy = m.AddLoot({{0, 0}, ItemId::Fairy, Rarity::Rare, false});
+    CHECK(!m.PickUp(1, fairy, false));
+}
+
+static void HotbarAndChestsAndProps() {
+    // Bots carry spares and pick the right one for the range.
+    {
+        Simulation sim = Duel(5, {600, 0}, {0, 0});
+        PlayerState* b = sim.match.Find(1000);
+        b->weapon = {ItemId::KokiriSword, Rarity::Common};
+        b->reserve = {{ItemId::FairyBow, Rarity::Rare}};
+        sim.match.Find(1)->weapon = {ItemId::DekuStick, Rarity::Common};
+        bool usedBow = false;
+        for (int i = 0; i < 8 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->pos = {600, 0}; usedBow |= b->weapon.item == ItemId::FairyBow; }
+        CHECK(usedBow);
+    }
+    // Chests: bots walk to a chest and open it on purpose.
+    {
+        Simulation sim = Duel(5, {1900, 0}, {0, 0});
+        const size_t chest = sim.match.AddLoot({{200, 0}, ItemId::MasterSword, Rarity::Legendary, true, true});
+        Run(sim, 12);
+        CHECK(sim.match.Loot()[chest].taken);
+    }
+    // Props: deterministic, on valid ground, and solid ones block the nav grid.
+    {
+        auto valid = [](Vec2 p) { return p.x > -1500; };
+        auto a = GenerateProps(7, MapCircle(), 300, valid), b = GenerateProps(7, MapCircle(), 300, valid), c = GenerateProps(8, MapCircle(), 300, valid);
+        CHECK(a.size() > 250 && a.size() == b.size());
+        bool same = true, ok = true, kinds[4] = {false, false, false, false};
+        for (size_t i = 0; i < a.size(); i++) { same &= a[i].pos.x == b[i].pos.x && a[i].kind == b[i].kind; ok &= valid(a[i].pos); kinds[static_cast<int>(a[i].kind)] = true; }
+        CHECK(same && ok && kinds[0] && kinds[1] && kinds[2] && kinds[3]);
+        CHECK(a[0].pos.x != c[0].pos.x || a[1].pos.x != c[1].pos.x);
+        NavGrid nav(MapCircle(), nullptr);
+        CHECK(nav.Walkable({0, 0}));
+        nav.Block({0, 0}, 80.0f);
+        CHECK(!nav.Walkable({0, 0}) && !nav.Walkable({50, 0}) && nav.Walkable({200, 0}));
+        std::vector<Vec2> path;
+        CHECK(nav.FindPath({-400, 0}, {400, 0}, path) && path.size() >= 1);
+        Vec2 at = {-400, 0};
+        bool clear = true;
+        for (Vec2 w : path) { clear &= nav.LineClear(at, w); at = w; }
+        CHECK(clear);
+    }
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1103,7 +1180,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

@@ -2,6 +2,7 @@
 #include "balance.h"
 #include "bytes.h"
 #include "loot.h"
+#include "props.h"
 #include "storm.h"
 #include <array>
 #include <cmath>
@@ -17,7 +18,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 2; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 4; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -25,7 +26,7 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79,
@@ -84,8 +85,9 @@ struct AttackReport {
 struct PickupRequest {
     static constexpr MsgType kType = MsgType::PickupRequest;
     uint32_t index = 0;
-    void Write(ByteWriter& w) const { w.U32(index); }
-    bool Read(ByteReader& r) { index = r.U32(); return r.ok; }
+    bool force = false; // false: walking over it (the server only takes it if it is an upgrade); true: the player chose to swap
+    void Write(ByteWriter& w) const { w.U32(index); w.U8(force ? 1 : 0); }
+    bool Read(ByteReader& r) { index = r.U32(); const uint8_t f = r.U8(); force = f != 0; return r.ok && f <= 1; }
 };
 
 struct UsePotionRequest {
@@ -95,6 +97,14 @@ struct UsePotionRequest {
 };
 
 // Use the ability slot (spell, song, hookshot...). The server decides whether it worked.
+// Swap the weapon in hand with a backup one: slot 1..kMaxReserveWeapons.
+struct SelectWeaponRequest {
+    static constexpr MsgType kType = MsgType::SelectWeaponRequest;
+    uint8_t slot = 1;
+    void Write(ByteWriter& w) const { w.U8(slot); }
+    bool Read(ByteReader& r) { slot = r.U8(); return r.ok && slot >= 1 && slot <= kMaxReserveWeapons; }
+};
+
 struct UseAbilityRequest {
     static constexpr MsgType kType = MsgType::UseAbilityRequest;
     void Write(ByteWriter&) const {}
@@ -128,6 +138,24 @@ struct RosterEntry {
     std::string name;
 };
 
+inline void WriteProps(ByteWriter& w, const std::vector<Prop>& props) {
+    w.U16(static_cast<uint16_t>(props.size()));
+    for (const Prop& p : props) { w.F32(p.pos.x); w.F32(p.pos.z); w.U8(static_cast<uint8_t>(p.kind)); w.U16(p.rot); }
+}
+inline bool ReadProps(ByteReader& r, std::vector<Prop>& props) {
+    const size_t n = r.U16();
+    if (n > static_cast<size_t>(kMaxProps)) return false;
+    props.assign(n, {});
+    for (Prop& p : props) {
+        p.pos.x = r.F32(); p.pos.z = r.F32();
+        const uint8_t k = r.U8();
+        p.rot = r.U16();
+        if (k >= static_cast<uint8_t>(PropKind::Count) || !Finite(p.pos.x) || !Finite(p.pos.z)) return false;
+        p.kind = static_cast<PropKind>(k);
+    }
+    return r.ok;
+}
+
 struct Welcome {
     static constexpr MsgType kType = MsgType::Welcome;
     uint16_t playerId = 0;
@@ -136,6 +164,7 @@ struct Welcome {
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
+    std::vector<Prop> props;
     std::vector<RosterEntry> roster;
     void Write(ByteWriter& w) const {
         w.U16(playerId); w.U16(version); w.U64(seed);
@@ -143,6 +172,7 @@ struct Welcome {
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
         for (const auto& l : loot) l.Write(w);
+        WriteProps(w, props);
         w.U8(static_cast<uint8_t>(roster.size()));
         for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); }
     }
@@ -154,6 +184,7 @@ struct Welcome {
         if (n > kMaxLoot) return false;
         loot.assign(n, {});
         for (auto& l : loot) if (!l.Read(r)) return false;
+        if (!ReadProps(r, props)) return false;
         size_t m = r.U8();
         roster.assign(m, {});
         for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); if (e.flags > 3) r.ok = false; }
@@ -285,11 +316,13 @@ struct EvMapConfig {
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
+    std::vector<Prop> props;
     void Write(ByteWriter& w) const {
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
         for (const auto& l : loot) l.Write(w);
+        WriteProps(w, props);
     }
     bool Read(ByteReader& r) {
         map = ReadCircle(r);
@@ -298,6 +331,7 @@ struct EvMapConfig {
         if (n > kMaxLoot) return false;
         loot.assign(n, {});
         for (auto& l : loot) if (!l.Read(r)) return false;
+        if (!ReadProps(r, props)) return false;
         return r.ok;
     }
 };
@@ -313,6 +347,7 @@ struct EvInventory {
     float maxHealth = kMaxHealth;
     uint8_t heartPieces = 0;
     std::vector<ItemRef> potions;           // the bag, at most kMaxPotions
+    std::vector<ItemRef> reserve;           // backup weapons, at most kMaxReserveWeapons
     bool hasAbility = false;
     ItemRef ability;
     float abilityReadyIn = 0;
@@ -325,6 +360,8 @@ struct EvInventory {
         w.F32(maxHealth); w.U8(heartPieces);
         w.U8(static_cast<uint8_t>(potions.size()));
         for (const auto& p : potions) { w.U8(p.item); w.U8(p.rarity); }
+        w.U8(static_cast<uint8_t>(reserve.size()));
+        for (const auto& p : reserve) { w.U8(p.item); w.U8(p.rarity); }
         w.U8((hasAbility ? 1 : 0) | (hasMark ? 2 : 0));
         w.U8(ability.item); w.U8(ability.rarity); w.F32(abilityReadyIn);
         w.U8(gearMask);
@@ -338,6 +375,10 @@ struct EvInventory {
         if (n > static_cast<size_t>(kMaxPotions)) return false;
         potions.assign(n, {});
         for (auto& p : potions) { p.item = r.U8(); p.rarity = r.U8(); if (r.ok && !p.Valid()) return false; }
+        size_t rn = r.U8();
+        if (rn > static_cast<size_t>(kMaxReserveWeapons)) return false;
+        reserve.assign(rn, {});
+        for (auto& p : reserve) { p.item = r.U8(); p.rarity = r.U8(); if (r.ok && !p.Valid()) return false; }
         uint8_t flags = r.U8();
         hasAbility = flags & 1; hasMark = flags & 2;
         ability.item = r.U8(); ability.rarity = r.U8(); abilityReadyIn = r.F32();

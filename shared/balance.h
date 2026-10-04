@@ -18,6 +18,8 @@ constexpr float kRunSpeed = 100.0f;
 constexpr float kPickupRange = 50.0f;
 constexpr float kMaxHealth = 3.0f; // hearts
 constexpr int kMaxPotions = 3;
+constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
+constexpr int kMaxProps = 1200;
 
 // Anti-cheat plausibility limit for client-reported movement: rolls, Epona, Hookshot and Longshot pulls are all faster
 // than running, so allow several times run speed. Faster than this in one update is clamped by the server.

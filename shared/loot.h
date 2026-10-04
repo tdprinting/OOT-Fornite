@@ -12,7 +12,8 @@ struct LootSpawn {
     Vec2 pos;
     ItemId item;
     Rarity rarity;
-    bool fromChest;
+    bool fromChest;           // rolled on the higher chest tiers
+    bool container = false;   // shown as a treasure chest that has to be opened; false for items dropped by players
 };
 
 inline Rarity RollRarity(Rng& rng, bool chest) {
@@ -86,7 +87,7 @@ inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count,
         // An item can only exist within its own tier range; clamp so a roll never produces an invalid (item, tier) pair.
         if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
         if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
-        out.push_back({RandomPointIn(rng, map, valid), item, tier, chest});
+        out.push_back({RandomPointIn(rng, map, valid), item, tier, chest, true});
     }
     return out;
 }

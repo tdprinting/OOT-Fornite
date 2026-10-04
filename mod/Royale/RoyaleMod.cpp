@@ -413,8 +413,8 @@ void Loot_Update(Actor* actor, PlayState* play) {
     float dx = player->actor.world.pos.x - actor->world.pos.x, dz = player->actor.world.pos.z - actor->world.pos.z;
     float dy = player->actor.world.pos.y - la.baseY;
     if (dx * dx + dz * dz <= kLootPickupRange * kLootPickupRange && std::fabs(dy) < 100.0f) {
-        gSession.RequestPickup(static_cast<uint32_t>(idx->second));
-        la.pickupCooldown = royale::kTickHz / 2; // ask again in half a second if the server said no
+        gSession.RequestPickup(static_cast<uint32_t>(idx->second), false); // the server only takes upgrades this way
+        la.pickupCooldown = royale::kTickHz; // ask again in a second if the server said no
     }
 }
 
@@ -606,6 +606,24 @@ void DrawOverlay() {
 
     if (!live || !h.haveSelf) return;
 
+    // Bottom centre: what is at your feet. Upgrades are picked up on their own; anything else waits for D-pad Right.
+    if (InField() && h.selfAlive && gSession.Client()) {
+        Player* pl = GET_PLAYER(gPlayState);
+        const auto& loot = gSession.Client()->Loot();
+        float bestD = kLootPickupRange * kLootPickupRange;
+        const royale::net::LootNet* closest = nullptr;
+        for (const auto& [idx, la] : gLoot) {
+            if (idx >= loot.size() || loot[idx].taken) continue;
+            const float dx = la.actor->world.pos.x - pl->actor.world.pos.x, dz = la.actor->world.pos.z - pl->actor.world.pos.z;
+            if (dx * dx + dz * dz < bestD && std::fabs(pl->actor.world.pos.y - la.baseY) < 100.0f) { bestD = dx * dx + dz * dz; closest = &loot[idx]; }
+        }
+        if (closest) {
+            const royale::Rarity r = static_cast<royale::Rarity>(closest->rarity);
+            centered(ds.y * 0.80f, RarityU32(r), 24 * scale, ItemLabel(static_cast<royale::ItemId>(closest->item), r));
+            centered(ds.y * 0.80f + 30 * scale, white, 20 * scale, "D-pad Right: take or swap");
+        }
+    }
+
     // Top left: the numbers.
     float x = 16 * scale, y = 14 * scale, line = 24 * scale;
     text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(royale::kMaxPlayers));
@@ -736,6 +754,17 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (in.press.button & BTN_DDOWN) {
         if (hud.potions > 0) gSession.RequestUsePotion();
         else Say("No potions");
+    }
+
+    // D-pad Right: take (and swap for) the nearest item in reach, even if it is not an upgrade.
+    if (in.press.button & BTN_DRIGHT) {
+        size_t best = SIZE_MAX;
+        float bestD = kLootPickupRange * kLootPickupRange;
+        for (const auto& [idx, la] : gLoot) {
+            const float dx = la.actor->world.pos.x - player->actor.world.pos.x, dz = la.actor->world.pos.z - player->actor.world.pos.z;
+            if (dx * dx + dz * dz < bestD && std::fabs(player->actor.world.pos.y - la.baseY) < 100.0f) { bestD = dx * dx + dz * dz; best = idx; }
+        }
+        if (best != SIZE_MAX) gSession.RequestPickup(static_cast<uint32_t>(best), true);
     }
 
     if (in.press.button & BTN_DUP) {

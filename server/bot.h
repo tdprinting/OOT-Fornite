@@ -100,6 +100,7 @@ class BotController {
         float abilityTryAt = 0;
         int lootIdx = -1;
         float lootEvalAt = 0;
+        float switchAt = 0;
         Vec2 wander = {};
         bool hasWander = false;
         std::vector<Vec2> path;
@@ -303,7 +304,8 @@ class BotController {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
                 const float mine = EffectiveDps(p.weapon), v = EffectiveDps({s.item, s.rarity});
-                return v > mine * 1.1f ? (v - mine) * 1.2f : 0.0f;
+                if (v > mine * 1.1f) return (v - mine) * 1.2f;
+                return static_cast<int>(p.reserve.size()) < kMaxReserveWeapons ? 0.25f + v * 0.1f : 0.0f; // a spare for the hotbar
             }
             case ItemKind::Shield: {
                 const float v = ShieldReduction(s.item, s.rarity);
@@ -591,8 +593,29 @@ class BotController {
         return advantage >= 0.4f + 0.5f * (1.0f - mem.aggression);
     }
 
+    // Pick the weapon that suits the range: a bow when the foe is far, something heavy up close. Swapping costs a moment, so
+    // bots only do it for a clear gain and not more than once every few seconds.
+    void ChooseWeapon(Match& m, PlayerState& p, Memory& mem, float dist) {
+        if (p.reserve.empty() || m.Clock() < mem.switchAt || m.Clock() < p.attackReadyAt) return;
+        auto fit = [&](const Equipped& e) {
+            const WeaponStats w = WeaponOf(e.item);
+            float score = EffectiveDps(e);
+            if (dist > w.range * 1.1f) score *= w.ranged ? 0.55f : 0.15f;      // can't reach from here
+            else if (w.ranged && dist < w.range * 0.25f) score *= 0.8f;        // too close for a bow
+            return score;
+        };
+        int best = 0;
+        float bestScore = fit(p.weapon);
+        for (size_t i = 0; i < p.reserve.size(); i++) {
+            const float sc = fit(p.reserve[i]);
+            if (sc > bestScore * 1.25f) { bestScore = sc; best = static_cast<int>(i) + 1; }
+        }
+        if (best > 0 && m.SelectWeapon(p.id, best)) mem.switchAt = m.Clock() + 3.0f;
+    }
+
     void FightEnemy(Match& m, PlayerState& p, Memory& mem, const PlayerState& foe, float dist, float advantage, float dt, const Tuning& tune) {
         (void)advantage;
+        if (tune.kite) ChooseWeapon(m, p, mem, dist); // Easy bots just use what is in their hand
         const WeaponStats mine = WeaponOf(p.weapon.item);
         const WeaponStats theirs = WeaponOf(foe.weapon.item);
         float want = mine.ranged ? mine.range * 0.65f : mine.range * 0.6f; // strafing swings wide, so melee closes well inside its reach

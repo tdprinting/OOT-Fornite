@@ -31,6 +31,7 @@ struct InventoryInfo {
     float maxHealth = kMaxHealth;
     int heartPieces = 0;
     std::vector<net::ItemRef> potions;
+    std::vector<net::ItemRef> reserve; // backup weapons (hotbar slots 2 and 3)
     bool hasAbility = false;
     net::ItemRef ability;
     float abilityReadyIn = 0;
@@ -96,10 +97,14 @@ class GameClient {
         Send(in, false);
     }
     void ReportAttack(uint16_t target, bool hit) { net::AttackReport m; m.target = target; m.hit = hit; SendIfJoined(m); }
-    void RequestPickup(uint32_t index) { net::PickupRequest m; m.index = index; SendIfJoined(m); }
+    // `force` false = auto-pickup while walking (upgrades only); true = the player pressed the swap button.
+    void RequestPickup(uint32_t index, bool force = false) { net::PickupRequest m; m.index = index; m.force = force; SendIfJoined(m); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
+    // Swap the weapon in hand with backup slot 1 or 2.
+    void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
+    const std::vector<Prop>& Props() const { return props; }
     // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
     void SetReady(bool ready) { net::SetReady m; m.ready = ready; SendIfJoined(m); }
     void Leave() { link.Disconnect(0); }
@@ -285,7 +290,7 @@ class GameClient {
             case net::MsgType::EvInventory: {
                 net::EvInventory m;
                 if (!net::Decode(data, m)) break;
-                inventory.maxHealth = m.maxHealth; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions;
+                inventory.maxHealth = m.maxHealth; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
                 inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
                 inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
                 inventory.invulnLeft = m.invulnLeft; inventory.speedLeft = m.speedLeft; inventory.speedMult = m.speedMult;
@@ -310,6 +315,7 @@ class GameClient {
                 map = m.map;
                 storm = std::make_unique<Storm>(m.map, m.stormEnds);
                 loot = m.loot;
+                props = m.props;
                 ClientEvent e{ClientEvent::Type::MapChanged};
                 events.push_back(e);
                 break;
@@ -336,6 +342,7 @@ class GameClient {
         map = w.map;
         storm = std::make_unique<Storm>(w.map, w.stormEnds);
         loot = w.loot;
+        props = w.props;
         roster.clear();
         for (const auto& r : w.roster) {
             roster[r.id] = RosterInfo{r.name, (r.flags & net::kRosterHost) != 0, (r.flags & net::kRosterReady) != 0};
@@ -380,6 +387,7 @@ class GameClient {
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;
     InventoryInfo inventory;
+    std::vector<Prop> props;
     std::map<uint16_t, Remote> players;
     std::vector<ClientEvent> events;
     MatchState state = MatchState::Lobby;
