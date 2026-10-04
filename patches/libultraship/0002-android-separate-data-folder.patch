@@ -1,0 +1,22 @@
+diff --git a/src/Context.cpp b/src/Context.cpp
+index 84aef37..fb1f1fb 100644
+--- a/src/Context.cpp
++++ b/src/Context.cpp
+@@ -375,7 +375,7 @@ std::string Context::GetShortName() {
+ 
+ std::string Context::GetAppBundlePath() {
+ #if defined(__ANDROID__)
+-    const char* externaldir = "/storage/emulated/0/SOH";//SDL_AndroidGetExternalStoragePath();
++    const char* externaldir = "/storage/emulated/0/TDawgsBattleRoyale";//SDL_AndroidGetExternalStoragePath();
+     if (externaldir != NULL) {
+         return externaldir;
+     }
+@@ -416,7 +416,7 @@ std::string Context::GetAppBundlePath() {
+ 
+ std::string Context::GetAppDirectoryPath(std::string appName) {
+ #if defined(__ANDROID__)
+-    const char* externaldir = "/storage/emulated/0/SOH";//SDL_AndroidGetExternalStoragePath();
++    const char* externaldir = "/storage/emulated/0/TDawgsBattleRoyale";//SDL_AndroidGetExternalStoragePath();
+     if (externaldir != NULL) {
+         return externaldir;
+     }

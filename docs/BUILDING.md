@@ -59,6 +59,8 @@ cd third_party/Shipwright-Android/Android
 The APK lands in `third_party/Shipwright-Android/Android/app/build/outputs/apk/release/` (the release build is arm64-v8a only,
 which is right for the Odin 2 Portal).
 
+The APK installs as **TDawgs Battle Royale** (`com.tdawg.battleroyale`) and keeps its files in `/storage/emulated/0/TDawgsBattleRoyale`, so it never touches a normal Ship of Harkinian install (patches `0007` and `libultraship/0002`; the Java package `com.dishii.soh` stays, since the native code binds to it).
+
 Install it with `adb install` or by copying the APK to the device. Following the fork's own README: open the app, allow the
 file permissions it asks for, answer **Yes** to generating the OTR, **Yes** to looking for a ROM, and pick your ROM file.
 Press the controller's **Back/Select/-** button to open the menu.

@@ -20,11 +20,15 @@ A red cross on a run means that build failed, and there's nothing to download fr
 
 ## Android (Odin 2 Portal)
 
+The app installs as its own app, **TDawgs Battle Royale** (package `com.tdawg.battleroyale`), so it sits next to your normal Ship of Harkinian without touching it. It has its own saves, settings, game data and mods in a separate folder on the device called `TDawgsBattleRoyale` (the normal one uses `SOH`). Because it is a different app it asks for its own permissions and its own ROM the first time.
+
 1. Copy the unzipped `.apk` file to the device (USB cable, or a cloud drive).
 2. Open it from the Files app and allow **Install unknown apps** when asked.
-3. Open the app and **allow all file permissions**.
-4. When asked, answer **Yes** to generating the data file, **Yes** to looking for a ROM, and pick your Ocarina of Time ROM file. Wait for the extraction to finish.
+3. Open **TDawgs Battle Royale** and **allow all file permissions** (this is a separate permission from the other app's).
+4. When asked, answer **Yes** to generating the data file, **Yes** to looking for a ROM, and pick your Ocarina of Time ROM file. Wait for the extraction to finish. (To skip picking it again you can copy `OOT.z64` from the `SOH` folder into `TDawgsBattleRoyale`.)
 5. Press **Back / Select / -** on the controller to open the menu.
+
+Your existing Ship of Harkinian saves are not shared with this app. If you want one, copy the save file from `SOH/Save` into `TDawgsBattleRoyale/Save`, but a throwaway save is safer while this build is untested.
 
 ## Playing a match
 
