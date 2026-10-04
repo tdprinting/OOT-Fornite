@@ -51,17 +51,17 @@ static void HostCanStartAndBotsAppear() {
 
     CHECK(!guest.StartMatch());                       // only the host can start
     CHECK(host.StartMatch());
-    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().state == MatchState::InMatch; }, 15));
-    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().haveSelf && guest.Hud().alive > 20; }));
+    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().state == MatchState::InMatch; }, 60)); // the countdown and the skydive are 28 s of match time
+    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().haveSelf && guest.Hud().alive > 20; }, 20));
 
     // The guest sees the host and nearby bots as puppets, with names for humans and the right flags for bots.
-    CHECK(PumpUntil({&host, &guest}, [&] { return !guest.Puppets().empty(); }));
+    CHECK(PumpUntil({&host, &guest}, [&] { return !guest.Puppets().empty(); }, 20));
     bool sawBot = false;
     for (auto& p : guest.Puppets()) sawBot |= p.isBot;
     CHECK(PumpUntil({&host, &guest}, [&] {
         for (auto& p : guest.Puppets()) if (p.isBot) return true;
         return false;
-    }) || sawBot);
+    }, 20) || sawBot);
     CHECK(guest.Hud().alive == 32 || guest.Hud().alive > 20);
     CHECK(guest.Hud().safeZone.radius > 0 && guest.Hud().map.radius == kHyruleFieldMap.radius);
 
@@ -75,7 +75,7 @@ static void HostCanStartAndBotsAppear() {
         host.SendLocalPose(kHyruleFieldMap.center.x, 0, kHyruleFieldMap.center.z, 0, 0, 0x51);
         for (auto& p : host.Puppets()) if (p.id == guest.Hud().selfId) return std::abs(p.y - 34) < 0.5f && p.rot == 77 && p.anim == 2 && p.scene == 0x51;
         return false;
-    });
+    }, 20);
     CHECK(seen);
 }
 
