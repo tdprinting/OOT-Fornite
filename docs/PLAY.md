@@ -136,3 +136,11 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Cloth physics** has its own on/off tick box; the cap now swings with Link's acceleration and its tip whips.
 - **Music:** the Royale menu shows which folder the .wav songs go in and how many were found, with a Rescan button.
 - **Glider:** Link hangs from the bar with both hands up.
+
+## Controls (streamlined)
+- **B** attack · **A** open / take / hire / talk · **C-Up** jump · **Z** lock on (and dive while skydiving)
+- **D-pad Right / Left** next / previous weapon · **D-pad Down** health potion · **C-Left** shield potion · **D-pad Up** ability · **C-Right** emote
+- Each hotbar slot shows the button that uses it. The game's own C-button icons are hidden during a match; the top right shows the match instead
+  (players alive, the zone, the weather, what is affecting you). Everything you carry also appears in the pause-menu inventory, and your own
+  inventory is put back when the match ends.
+- Options: "Lilo follows me around as a pet" (looks only: no effect on the match, only you see her).
