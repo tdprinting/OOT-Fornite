@@ -2209,6 +2209,48 @@ static void BouldersAndFormations() {
     }
 }
 
+static void OutpostsAreDesigned() {
+    // Every outpost is one connected structure of blocks on the grid (each block touches another edge to edge), whichever way it faces, and its
+    // prize sits on its highest block (or in the arena's pit).
+    for (int k = 0; k < kOutpostCount; k++) {
+        for (int dir = 0; dir < 4; dir++) {
+            PoiLayout one;
+            Rng rng(k * 4 + dir + 1);
+            CHECK(AddOutpost(one, rng, static_cast<Outpost>(k), {300, -200}, dir, nullptr));
+            std::vector<Prop> blocks;
+            for (const Prop& p : one.props) if (IsPlatform(p.kind)) blocks.push_back(p);
+            CHECK(blocks.size() >= 4 && one.sites.size() == 1);
+            for (size_t i = 0; i < blocks.size(); i++) {
+                bool touches = false;
+                for (size_t j = 0; j < blocks.size(); j++)
+                    if (i != j && std::fabs(Distance(blocks[i].pos, blocks[j].pos) - kPlatformHalf * 2.0f) < 0.5f) touches = true;
+                CHECK(touches);
+            }
+            float highest = 0, under = -1;
+            for (const Prop& b : blocks) {
+                highest = (std::max)(highest, PlatformHeight(b.kind));
+                if (Distance(b.pos, one.sites[0].pos) < 1.0f) under = PlatformHeight(b.kind);
+            }
+            CHECK(static_cast<Outpost>(k) == Outpost::Arena ? under < 0 && one.sites[0].bonus == 1 : under == highest && one.sites[0].bonus == 2);
+        }
+        PoiLayout none;
+        Rng rng(1);
+        CHECK(!AddOutpost(none, rng, static_cast<Outpost>(k), {0, 0}, 0, [](Vec2 p) { return p.x < 100.0f; }) && none.props.empty());   // half over a drop: not built
+    }
+    // A map gets several, kept away from the towns.
+    const Circle map = {{0, 0}, 4000};
+    PoiLayout layout = GeneratePois(6, map, 12, nullptr, 1);
+    const size_t before = layout.props.size();
+    GenerateWilds(layout, 6, map, {}, layout.lootSpots, 0, 0, nullptr, 0, 5);
+    int blocks = 0;
+    for (size_t i = before; i < layout.props.size(); i++) {
+        if (!IsPlatform(layout.props[i].kind)) continue;
+        blocks++;
+        for (const Poi& poi : layout.pois) CHECK(Distance(layout.props[i].pos, poi.center) > poi.radius);
+    }
+    CHECK(blocks >= 20);
+}
+
 static void TownsAreDifferentPlaces() {
     // Kinds of town are dealt so that every kind turns up before any repeats, and never the same twice running.
     Rng rng(11);
@@ -2756,7 +2798,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

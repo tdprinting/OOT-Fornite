@@ -1419,6 +1419,8 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     pa.origDestroy = actor->destroy;
     pa.meshKind = meshKind;
     pa.variant = royale::IsPlatform(p.kind) ? static_cast<uint32_t>(p.kind) - static_cast<uint32_t>(royale::PropKind::PlatformLow) : static_cast<uint32_t>(p.rot >> 4);
+    if (royale::IsPlatform(p.kind)) pa.variant += 3u * static_cast<uint32_t>(CurrentMap().theme);   // blocks, posts and roofs in this map's stone and colours too
+    if (p.kind == royale::PropKind::Pillar || p.kind == royale::PropKind::Roof) pa.variant = static_cast<uint32_t>(CurrentMap().theme);
     if (p.kind == royale::PropKind::Rock || p.kind == royale::PropKind::Boulder) {   // its shape, in this map's stone (meshes.h, StoneLook)
         pa.variant = static_cast<uint32_t>(royale::BoulderShape(p.rot) + royale::kBoulderShapes * static_cast<int>(CurrentMap().theme));
         if (p.kind == royale::PropKind::Boulder) pa.scale = royale::BoulderScale(p.rot);
@@ -2007,7 +2009,8 @@ std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
 int gFloraScene = -1;
 int gFloraBudget = 0;
 
-// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket.
+// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket, 5 small scenery
+// (Decor), 6 a town's clutter (cell = the town and the piece).
 // nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
@@ -2026,7 +2029,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
                       std::fabs(y2 - y4) < 14.0f && std::fabs(y3 - y5) < 14.0f && std::fabs(y2 + y4 - 2.0f * y) < 3.0f && std::fabs(y3 + y5 - 2.0f * y) < 3.0f;
             spot.sx = (y2 - y4) / 90.0f;
             spot.sz = (y3 - y5) / 90.0f;
-        } else if (kind == 0 || kind == 1) {   // grass and trees stay off steep ground (and cliff edges)
+        } else if (kind == 0 || kind == 1 || kind == 5 || kind == 6) {   // grass, trees and the small things stay off steep ground (and cliff edges)
             spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
         }
         if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
@@ -2035,21 +2038,60 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
             for (const royale::Poi& poi : gSession.Client()->Pois())
                 if (std::hypot(poi.center.x - x, poi.center.z - z) < poi.radius * 0.7f + 140.0f) { spot.ok = false; break; }
         }
+        if (spot.ok && kind == 6 && gSession.Client()) {   // a town's clutter stands clear of its walls, rocks and climbing blocks
+            for (const royale::Prop& p : gSession.Client()->Props()) {
+                const float clear = royale::IsPlatform(p.kind) ? 120.0f : royale::PropRadius(p.kind) + 35.0f;
+                if (royale::PropRadius(p.kind) > 0 && std::fabs(p.pos.x - x) < clear && std::fabs(p.pos.z - z) < clear) { spot.ok = false; break; }
+            }
+        }
     }
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
-constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f;
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
 
-struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; };
+// Each map's plants: Hyrule Field, Lake Hylia and Kakariko keep the leafy trees and green grass (Kakariko's trees sparser), the desert has
+// golden dry grass and palms gathered in oases, and Death Mountain has no grass, only a few dead, burnt trees.
+int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
+
+struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
-    if (Flora01(cx / 2, cz / 2, 21) < 0.45f - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
-    if (Flora01(cx, cz, 22) > 0.62f) return false;
+    const int theme = FloraTheme();
+    const float grove = theme == 4 ? 0.82f : theme == 3 ? 0.7f : theme == 2 ? 0.55f : 0.45f;   // the desert's oases and the mountain's few trees are rare
+    if (Flora01(cx / 2, cz / 2, 21) < grove - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
+    if (Flora01(cx, cz, 22) > (theme == 3 ? 0.35f : 0.62f)) return false;
     const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kTreeCell;
     const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
     if (spot == nullptr || !spot->ok) return false;
     *out = { x, spot->y, z, 0.8f + 0.5f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+    if (theme == 4) { out->kind = royale::MeshKind::ThemeTree; out->variant = FloraHash(cx, cz, 27) % 4; }          // palms
+    if (theme == 3) { out->kind = royale::MeshKind::ThemeTree; out->variant = 4u + FloraHash(cx, cz, 27) % 4; }     // dead trees
     return true;
+}
+
+// The small things on the ground between the towns (meshes.h, Decor): which of the map's six is in a cell, or -1 for none. The first two of
+// each map are the common ones; the rest turn up now and then, and each kind gathers in drifts (blocks of cells) rather than evenly.
+int DecorIn(int cx, int cz) {
+    if (Flora01(cx, cz, 81) > 0.34f * std::min(1.3f, gFoliage)) return -1;
+    const float r = Flora01(cx / 3, cz / 3, 82) * 0.6f + Flora01(cx, cz, 83) * 0.4f;
+    return r < 0.3f ? 0 : r < 0.55f ? 1 : r < 0.68f ? 2 : r < 0.8f ? 3 : r < 0.9f ? 4 : 5;
+}
+
+// The lived-in clutter round a town (meshes.h, Clutter): a few groups (a cart with hay, crates and barrels, pots by a lantern, a fire pit
+// with its logs, a signpost at the edge), placed from the town's name so everyone sees the same.
+struct ClutterPiece { float x, z, yaw; uint32_t variant; };
+void TownClutter(const royale::Poi& poi, std::vector<ClutterPiece>& out) {
+    static const uint32_t groups[5][3] = {{4, 3, 3}, {0, 1, 0}, {2, 5, 2}, {6, 0, 1}, {7, 1, 2}};
+    const int n = 6;
+    for (int g = 0; g < n; g++) {
+        const float a = (g + 0.6f * Flora01(poi.name, g, 91)) * 6.2831853f / n, d = poi.radius * (0.35f + 0.5f * Flora01(poi.name, g, 92));
+        const float gx = poi.center.x + std::cos(a) * d, gz = poi.center.z + std::sin(a) * d;
+        const uint32_t* set = groups[FloraHash(poi.name, g, 93) % 5];
+        for (int k = 0; k < 3; k++) {
+            const float b = a + k * 2.1f + Flora01(g, k, 94), r = k == 0 ? 0.0f : 46.0f + 14.0f * Flora01(poi.name + k, g, 95);
+            out.push_back({gx + std::cos(b) * r, gz + std::sin(b) * r, Flora01(poi.name, g * 3 + k, 96) * 6.2831853f, set[k]});
+        }
+    }
 }
 
 void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
@@ -2083,6 +2125,15 @@ int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.s
 void DrawFlora(PlayState* play) {
     if (!InField() || gPlayState == nullptr) return;
     if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
+    {   // a new world from the host (new towns and scenery): forget which ground was clear of them
+        static float lastSig = 0.0f;
+        float sig = 0.0f;
+        if (gSession.Client()) {
+            const auto& pois = gSession.Client()->Pois();
+            sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
+        }
+        if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); }
+    }
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     const int season = FloraSeason();
     const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
@@ -2157,16 +2208,19 @@ void DrawFlora(PlayState* play) {
         const int c0x = static_cast<int>(std::floor((px - reach) / kGrassCell)), c1x = static_cast<int>(std::floor((px + reach) / kGrassCell));
         const int c0z = static_cast<int>(std::floor((pz - reach) / kGrassCell)), c1z = static_cast<int>(std::floor((pz + reach) / kGrassCell));
         const float amp = 0.07f + 0.2f * wind, lean = 0.05f + 0.3f * wind;
-        for (int cz = c0z; cz <= c1z; cz++)
+        const int theme = FloraTheme();
+        const uint32_t grassSeason = theme == 4 ? 2u : static_cast<uint32_t>(season);   // the desert's grass is dry and golden whatever the season
+        const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
+        for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < 0.5f) continue;                                   // not a grassy patch
+                if (Flora01(cx / 6, cz / 6, 41) < grassy) continue;                                 // not a grassy patch
                 if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
                 if (d > reach) continue;
                 const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * static_cast<uint32_t>(season));
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float phase = t * (1.6f + 2.4f * wind) + x * 0.011f + z * 0.009f;
                 const float a = lean + std::sin(phase) * amp + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
@@ -2185,11 +2239,55 @@ void DrawFlora(PlayState* play) {
                 if (!TreeIn(cx, cz, season, &tr)) continue;
                 const float d = std::hypot(tr.x - px, tr.z - pz);
                 if (d > treeReach) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Tree, tr.variant);
+                const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
                 DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
             }
+    }
+
+    if (gFoliage > 0.01f) {
+        // the small things on the ground: flowers, ferns and logs in the field, reeds and driftwood by the lake, gourds and old fences in
+        // Kakariko, Bomb Flowers and embers on the mountain, cacti and bones in the desert
+        const int theme = FloraTheme();
+        const float reach = 900.0f + 700.0f * std::min(1.5f, gFoliage);
+        const int c0x = static_cast<int>(std::floor((px - reach) / kDecorCell)), c1x = static_cast<int>(std::floor((px + reach) / kDecorCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kDecorCell)), c1z = static_cast<int>(std::floor((pz + reach) / kDecorCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                const int item = DecorIn(cx, cz);
+                if (item < 0) continue;
+                const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 84)) * kDecorCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 85)) * kDecorCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(5, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Decor, static_cast<uint32_t>(item + 6 * theme));
+                if (m == nullptr || m->dl.empty()) continue;
+                const float k = (0.85f + 0.4f * Flora01(cx, cz, 86)) * fade(d, reach);
+                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 87) * 6.2831853f, 0, 0, k);
+            }
+        // the clutter of the people who live in the towns
+        if (gSession.Client()) {
+            const float townReach = 2200.0f;
+            static std::vector<ClutterPiece> pieces;
+            const auto& pois = gSession.Client()->Pois();
+            for (size_t pi = 0; pi < pois.size(); pi++) {
+                if (std::hypot(pois[pi].center.x - px, pois[pi].center.z - pz) > townReach + pois[pi].radius) continue;
+                pieces.clear();
+                TownClutter(pois[pi], pieces);
+                for (size_t k = 0; k < pieces.size(); k++) {
+                    const ClutterPiece& c = pieces[k];
+                    const float d = std::hypot(c.x - px, c.z - pz);
+                    if (d > townReach) continue;
+                    const FloraSpot* spot = FloraSpotAt(6, static_cast<int>(pi), static_cast<int>(k), c.x, c.z);
+                    if (spot == nullptr || !spot->ok) continue;
+                    const GpuMesh* m = GpuMeshFor(royale::MeshKind::Clutter, c.variant);
+                    if (m == nullptr || m->dl.empty()) continue;
+                    DrawFloraMesh(play, m, c.x, spot->y - 1.0f, c.z, c.yaw, 0, 0, std::max(0.01f, fade(d, townReach)));
+                }
+            }
+        }
     }
 
     if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
