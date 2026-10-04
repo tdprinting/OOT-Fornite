@@ -49,6 +49,8 @@ extern PlayState* gPlayState;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
+void FrameInterpolation_RecordOpenChild(const void* a, int b);
+void FrameInterpolation_RecordCloseChild(void);
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
@@ -68,6 +70,11 @@ extern "C" void Royale_ShowQuestLabel(void) {
 }
 
 namespace {
+
+// OPEN_DISPS and CLOSE_DISPS declare these two functions inside the function that uses them. In an anonymous namespace that makes them
+// *different* functions from the game's, which the linker then can't find. These are the missing definitions: they just call the real ones.
+void FrameInterpolation_RecordOpenChild(const void* a, int b) { ::FrameInterpolation_RecordOpenChild(a, b); }
+void FrameInterpolation_RecordCloseChild(void) { ::FrameInterpolation_RecordCloseChild(); }
 
 royale::RoyaleSession gSession;
 

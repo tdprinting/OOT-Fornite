@@ -18,4 +18,11 @@ if command -v clang++ >/dev/null 2>&1; then
     (cd "$BUILD" && eval "$CMD") 2>&1 | grep -E "error" -A4 && { echo "clang found errors"; exit 1; }
     echo "clang agrees"
 fi
+# A compile check can't see link errors. One kind is easy to catch from the object file: a function the mod calls that was declared inside the
+# anonymous namespace (the OPEN_DISPS macro does this) but is never defined there shows up as an undefined "(anonymous namespace)" symbol.
+OBJ="$BUILD/soh/CMakeFiles/soh.dir/soh/Enhancements/Royale/RoyaleMod.cpp.o"
+if command -v nm >/dev/null 2>&1 && [ -f "$OBJ" ]; then
+    if nm -C -u "$OBJ" | grep -F "(anonymous namespace)"; then echo "undefined symbols in the anonymous namespace (the link would fail)"; exit 1; fi
+    echo "no undefined local symbols"
+fi
 echo "RoyaleMod.cpp compiles against the fork"
