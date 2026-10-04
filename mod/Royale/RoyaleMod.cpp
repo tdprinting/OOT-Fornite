@@ -1686,20 +1686,41 @@ std::string SpectateName() {
     return "yourself";
 }
 
-// The storm: its edge is drawn in the world (StormEdgeFx, below, so hills and buildings hide it like anything else); this part is the
-// dark rainy tint with lightning on the screen while you are standing in it.
+// The storm. There is no wall to see (anything drawn over the world showed through hills and buildings); the edge is on the map and the
+// timer. What you do see is the weather: while you stand outside the safe zone the sky goes dark (DriveTimeOfDay), and this puts a heavy
+// grey-violet haze, driving rain, gusting wind streaks and lightning on the screen. It fades in and out over a few seconds.
+float gStormWeather = 0.0f;
 void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
-    if (!InField() || h.safeZone.radius <= 0) return;
+    const bool in = InField() && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
+    gStormWeather = std::clamp(gStormWeather + (in ? 0.02f : -0.03f), 0.0f, 1.0f);
+    const float w = gStormWeather;
+    if (w <= 0.0f || !InField()) return;
     const double t = ImGui::GetTime();
-    if (h.stormDamagePerSecond > 0) {
-        dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(34, 10, 64, 105));
-        for (int i = 0; i < 110; i++) { // slanting rain
-            const float x = std::fmod(i * 97.3f + static_cast<float>(t) * 260.0f, ds.x + 240.0f) - 120.0f;
-            const float y = std::fmod(i * 61.7f + static_cast<float>(t) * 950.0f * (0.7f + 0.3f * (i % 3)), ds.y + 80.0f) - 40.0f;
-            dl->AddLine(ImVec2(x, y), ImVec2(x - 9 * scale, y + 30 * scale), IM_COL32(205, 195, 255, 120), 1.4f * scale);
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(22, 12, 44, static_cast<int>(150 * w)), IM_COL32(22, 12, 44, static_cast<int>(150 * w)),
+                                IM_COL32(48, 34, 84, static_cast<int>(110 * w)), IM_COL32(48, 34, 84, static_cast<int>(110 * w)));
+    const int drops = static_cast<int>(260 * w);
+    for (int i = 0; i < drops; i++) { // slanting rain, three depths
+        const float depth = 0.6f + 0.4f * (i % 3) / 2.0f;
+        const float x = std::fmod(i * 97.3f + static_cast<float>(t) * 420.0f * depth, ds.x + 320.0f) - 160.0f;
+        const float y = std::fmod(i * 61.7f + static_cast<float>(t) * 1250.0f * depth, ds.y + 120.0f) - 60.0f;
+        dl->AddLine(ImVec2(x, y), ImVec2(x - 16 * scale * depth, y + 40 * scale * depth), IM_COL32(205, 195, 255, static_cast<int>(130 * w * depth)), 1.6f * scale * depth);
+    }
+    for (int i = 0; i < 14; i++) { // long gust streaks racing across
+        const float y = std::fmod(i * 131.1f, ds.y);
+        const float x = std::fmod(static_cast<float>(t) * (900.0f + 70.0f * i) + i * 200.0f, ds.x * 1.6f) - ds.x * 0.3f;
+        dl->AddLine(ImVec2(x, y), ImVec2(x - 150 * scale, y + 14 * scale), IM_COL32(190, 180, 235, static_cast<int>(50 * w)), 2.0f * scale);
+    }
+    const float cycle = std::fmod(static_cast<float>(t), 6.1f); // lightning every few seconds: a double flash, then a fork
+    const float flash = cycle < 0.12f ? 1.0f - cycle / 0.12f : (cycle > 0.25f && cycle < 0.40f ? 0.7f * (1.0f - (cycle - 0.25f) / 0.15f) : 0.0f);
+    if (flash > 0.0f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(235, 225, 255, static_cast<int>(flash * 170.0f * w)));
+    if (cycle < 0.32f) {
+        const int seed = static_cast<int>(t / 6.1f);
+        float x = ds.x * (0.15f + 0.7f * std::fmod(seed * 0.381f, 1.0f)), y = 0;
+        while (y < ds.y * 0.7f) {
+            const float nx = x + (std::fmod((y + seed) * 12.9898f, 1.0f) - 0.5f) * 70.0f * scale, ny = y + 40.0f * scale;
+            dl->AddLine(ImVec2(x, y), ImVec2(nx, ny), IM_COL32(240, 235, 255, static_cast<int>(230 * w)), 3.0f * scale);
+            x = nx; y = ny;
         }
-        const float cycle = std::fmod(static_cast<float>(t), 7.3f); // lightning every few seconds
-        if (cycle < 0.2f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(235, 225, 255, static_cast<int>((0.2f - cycle) / 0.2f * 150.0f)));
     }
 }
 
@@ -3654,9 +3675,10 @@ void DriveTimeOfDay(const royale::HudState& hud) {
         float total = 0;
         for (const auto& ph : royale::kStormPhases) total += ph.waitSec + ph.closeSec;
         const float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
-        const u16 t = static_cast<u16>(0x5000 + static_cast<int>(p * 0x9000)); // about 7:30 in the morning to about 9 at night
-        gSaveContext.dayTime = t;
-        gSaveContext.skyboxTime = t;
+        int t = 0x5000 + static_cast<int>(p * 0x9000); // about 7:30 in the morning to about 9 at night
+        if (t < 0xD400) t += static_cast<int>((0xD400 - t) * gStormWeather * 0.85f); // storm weather: the sky goes to dusk-dark while you are outside the zone
+        gSaveContext.dayTime = static_cast<u16>(t);
+        gSaveContext.skyboxTime = static_cast<u16>(t);
     } else if (gTimeTaken) {
         gSaveContext.dayTime = gSavedDayTime;
         gSaveContext.skyboxTime = gSavedDayTime;
@@ -3704,32 +3726,6 @@ void DriveMinimapSwitch(bool on) {
     } else if (gMinimapSwitched) {
         R_MINIMAP_DISABLED = gSavedMinimapDisabled;
         gMinimapSwitched = false;
-    }
-}
-
-// The edge of the storm as a curtain of purple sparks falling along the safe zone's border near you. They are real game particles, so
-// geometry hides them properly (the old screen-space wall showed through everything).
-void StormEdgeFx(const royale::HudState& hud) {
-    if (!InField() || gPlayState == nullptr || hud.safeZone.radius <= 40.0f) return;
-    Player* player = GET_PLAYER(gPlayState);
-    const royale::Circle z = hud.safeZone;
-    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
-    const float toPlayer = std::atan2(pz - z.center.z, px - z.center.x);
-    const float span = std::min(3.0f, 2600.0f / z.radius); // how much of the circle is near enough to bother with
-    const float dEdge = std::fabs(std::hypot(px - z.center.x, pz - z.center.z) - z.radius);
-    if (dEdge > 2600.0f) return;
-    for (int i = 0; i < 14; i++) {
-        const float a = toPlayer + (Rand_ZeroOne() * 2.0f - 1.0f) * span;
-        const float x = z.center.x + std::cos(a) * z.radius, zz = z.center.z + std::sin(a) * z.radius;
-        if (std::hypot(x - px, zz - pz) > 2700.0f) continue;
-        float ground = player->actor.world.pos.y;
-        FloorAt(x, zz, &ground);
-        Vec3f pos = { x, ground + Rand_ZeroOne() * 650.0f, zz };
-        Vec3f vel = { 0.0f, -4.0f - Rand_ZeroOne() * 3.0f, 0.0f };
-        Vec3f accel = { 0.0f, 0.0f, 0.0f };
-        Color_RGBA8 prim = { static_cast<u8>(150 + Rand_ZeroOne() * 60), 90, 230, 255 };
-        Color_RGBA8 env = { 90, 30, 170, 255 };
-        EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 70, 44);
     }
 }
 
@@ -3822,7 +3818,6 @@ void OnGameFrameUpdate() {
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby);
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
-    if (joined && IsLive(hud) && InGame()) StormEdgeFx(hud);
     UpdateBossWorldFx();
     ReconcileProjectileActor();
     DriveStormAlerts(hud);
