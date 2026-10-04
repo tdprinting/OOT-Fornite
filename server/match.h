@@ -6,8 +6,6 @@
 
 namespace royale {
 
-enum class MatchState : uint8_t { Lobby, Countdown, Drop, InMatch, Ending };
-
 struct Equipped {
     ItemId item;
     Rarity rarity;
@@ -19,12 +17,29 @@ struct PlayerState {
     bool alive = true;
     float health = kMaxHealth; // hearts
     Vec2 pos = {};
+    // Pose data that the server only relays between clients and never simulates.
+    float y = 0;
+    int16_t rot = 0; // OoT binary angle: 0x10000 = 360 degrees
+    uint8_t anim = 0;
     Equipped weapon = {ItemId::DekuStick, Rarity::Common}; // starter weapon, like Fortnite's pickaxe
     bool hasShield = false;
     Equipped shield = {ItemId::DekuShield, Rarity::Common};
     std::vector<Equipped> potions;
     float attackReadyAt = 0;
     int kills = 0;
+};
+
+constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
+
+// Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
+struct MatchEvent {
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged } type;
+    uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker
+    uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
+    float amount = 0;       // Damaged: hearts dealt
+    float health = 0;       // Damaged: target's health afterwards
+    size_t index = 0;       // LootTaken / LootAdded
+    MatchState state = MatchState::Lobby; // StateChanged
 };
 
 struct LootEntry {
@@ -70,8 +85,7 @@ class Match {
             float d = map.radius * 0.9f * std::sqrt(static_cast<float>(spawn.Unit()));
             p.pos = {map.center.x + d * std::cos(a), map.center.z + d * std::sin(a)};
         }
-        state = MatchState::Countdown;
-        stateTime = 0;
+        Enter(MatchState::Countdown);
         return true;
     }
 
@@ -101,17 +115,38 @@ class Match {
     }
 
     // Returns true if the player was eliminated by this damage. Ignored during the drop (spawn protection).
-    bool Damage(uint32_t id, float hearts) {
+    bool Damage(uint32_t id, float hearts, uint32_t attacker = kNoPlayer) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || state == MatchState::Drop || hearts <= 0) return false;
         p->health -= hearts;
-        if (p->health <= 0) {
-            p->health = 0;
-            p->alive = false;
-            DropKit(*p);
-            return true;
+        bool killed = p->health <= 0;
+        if (killed) p->health = 0;
+        // Storm ticks are not announced: health travels in snapshots, only the elimination is an event.
+        if (attacker != kNoPlayer) {
+            MatchEvent e{MatchEvent::Type::Damaged};
+            e.a = id; e.b = attacker; e.amount = hearts; e.health = p->health;
+            events.push_back(e);
         }
-        return false;
+        if (killed) Eliminate(*p, attacker);
+        return killed;
+    }
+
+    // A player left (closed the game, lost connection). In the lobby they just vanish; in a match they are eliminated.
+    void RemovePlayer(uint32_t id) {
+        if (state == MatchState::Lobby) {
+            for (size_t i = 0; i < players.size(); i++) {
+                if (players[i].id == id) { players.erase(players.begin() + static_cast<long>(i)); return; }
+            }
+            return;
+        }
+        PlayerState* p = Find(id);
+        if (p && p->alive) { p->health = 0; Eliminate(*p, kNoPlayer); }
+    }
+
+    std::vector<MatchEvent> DrainEvents() {
+        std::vector<MatchEvent> out;
+        out.swap(events);
+        return out;
     }
 
     // Attack with the attacker's equipped weapon. `hit` is the outcome of the accuracy roll (bots roll it themselves,
@@ -131,7 +166,7 @@ class Match {
         float reduction = t->hasShield ? ShieldReduction(t->shield.item, t->shield.rarity) : 0.0f;
         r.damage = w.damage * static_cast<float>(kRarityMultiplier[static_cast<int>(a->weapon.rarity)]) * (1.0f - reduction);
         r.hit = true;
-        r.killed = Damage(targetId, r.damage);
+        r.killed = Damage(targetId, r.damage, attackerId);
         if (r.killed) a->kills++;
         return r;
     }
@@ -161,6 +196,9 @@ class Match {
                 return false;
         }
         loot[index].taken = true;
+        MatchEvent e{MatchEvent::Type::LootTaken};
+        e.a = id; e.index = index;
+        events.push_back(e);
         return true;
     }
 
@@ -183,7 +221,13 @@ class Match {
     }
 
     const std::vector<LootEntry>& Loot() const { return loot; }
-    size_t AddLoot(const LootSpawn& l) { loot.push_back({l, false}); return loot.size() - 1; }
+    size_t AddLoot(const LootSpawn& l) {
+        loot.push_back({l, false});
+        MatchEvent e{MatchEvent::Type::LootAdded};
+        e.index = loot.size() - 1;
+        events.push_back(e);
+        return loot.size() - 1;
+    }
     void ClearLoot() { loot.clear(); }
     float Clock() const { return clock; }
 
@@ -213,7 +257,13 @@ class Match {
     uint64_t Seed() const { return seed; }
 
   private:
-    void Enter(MatchState s) { state = s; stateTime = 0; }
+    void Enter(MatchState s) {
+        state = s;
+        stateTime = 0;
+        MatchEvent e{MatchEvent::Type::StateChanged};
+        e.state = s;
+        events.push_back(e);
+    }
 
     static PlayerState MakePlayer(uint32_t id, bool isBot) {
         PlayerState p;
@@ -224,9 +274,17 @@ class Match {
 
     static bool IsStarter(const Equipped& e) { return e.item == ItemId::DekuStick && e.rarity == Rarity::Common; }
     void DropEquipment(const PlayerState& p, const Equipped& e) {
-        if (!IsStarter(e)) loot.push_back({{p.pos, e.item, e.rarity, false}, false});
+        if (!IsStarter(e)) AddLoot({p.pos, e.item, e.rarity, false});
     }
     // Eliminated players leave their weapon and shield behind for others (the Skulltula pile in the design doc).
+    void Eliminate(PlayerState& p, uint32_t killer) {
+        p.alive = false;
+        p.health = 0;
+        DropKit(p);
+        MatchEvent e{MatchEvent::Type::Eliminated};
+        e.a = p.id; e.b = killer;
+        events.push_back(e);
+    }
     void DropKit(const PlayerState& p) {
         DropEquipment(p, p.weapon);
         if (p.hasShield) DropEquipment(p, p.shield);
@@ -240,6 +298,7 @@ class Match {
     int humans = 0;
     std::vector<PlayerState> players;
     std::vector<LootEntry> loot;
+    std::vector<MatchEvent> events;
 };
 
 } // namespace royale

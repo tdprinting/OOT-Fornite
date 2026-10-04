@@ -1,6 +1,7 @@
 #pragma once
 #include "balance.h"
 #include "rng.h"
+#include <array>
 #include <cmath>
 
 namespace royale {
@@ -26,11 +27,12 @@ struct Circle {
 // match start (see PhaseEnd) and clients interpolate from those, rather than re-deriving them from the seed.
 class Storm {
   public:
+    // Server: generate the phase circles from the match seed.
     Storm(uint64_t seed, Circle map) {
         Rng rng(seed);
         Circle cur = map;
+        std::array<Circle, kStormPhaseCount> ends;
         for (int i = 0; i < kStormPhaseCount; i++) {
-            start[i] = cur;
             Circle next;
             next.radius = map.radius * kStormPhases[i].endRadiusFrac;
             // Pick a centre such that `next` fits inside `cur`: |c' - c| <= r - r'.
@@ -38,16 +40,16 @@ class Storm {
             float angle = static_cast<float>(rng.Unit() * 6.283185307179586);
             float dist = maxOffset * std::sqrt(static_cast<float>(rng.Unit()));
             next.center = {cur.center.x + dist * std::cos(angle), cur.center.z + dist * std::sin(angle)};
-            end[i] = next;
+            ends[i] = next;
             cur = next;
         }
-        float t = 0;
-        for (int i = 0; i < kStormPhaseCount; i++) {
-            phaseStart[i] = t;
-            t += kStormPhases[i].waitSec + kStormPhases[i].closeSec;
-        }
-        total = t;
+        Init(map, ends);
     }
+
+    // Client: rebuild the storm from the circles the server sent in Welcome.
+    Storm(Circle map, const std::array<Circle, kStormPhaseCount>& phaseEnds) { Init(map, phaseEnds); }
+
+    const std::array<Circle, kStormPhaseCount>& PhaseEnds() const { return end; }
 
     // Index of the phase active at time t (seconds since the storm started), or kStormPhaseCount once finished.
     int PhaseAt(float t) const {
@@ -89,7 +91,20 @@ class Storm {
     const Circle& PhaseEnd(int i) const { return end[i]; }
 
   private:
-    Circle start[kStormPhaseCount], end[kStormPhaseCount];
+    void Init(Circle map, const std::array<Circle, kStormPhaseCount>& ends) {
+        end = ends;
+        Circle cur = map;
+        float t = 0;
+        for (int i = 0; i < kStormPhaseCount; i++) {
+            start[i] = cur;
+            cur = end[i];
+            phaseStart[i] = t;
+            t += kStormPhases[i].waitSec + kStormPhases[i].closeSec;
+        }
+        total = t;
+    }
+
+    std::array<Circle, kStormPhaseCount> start, end;
     float phaseStart[kStormPhaseCount];
     float total;
 };

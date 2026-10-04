@@ -1,7 +1,10 @@
 # OOT Royale: 32-Player Battle Royale on Ship of Harkinian
 
-Status: design draft v2 (milestone 0). No code yet.
+Status: design draft v2. Written and unit-tested so far: match, storm, loot with rarity tiers, bot AI, and the network
+layer (all in plain C++, tested on Linux only). Not yet done: anything inside the game itself (the mod is a logging stub that has
+not been compiled), and nothing has been built or run on Windows or Android.
 
+Platforms: **Windows and Android only**. Linux is not a target; this repo's Linux container is used only to build and run the unit tests.
 Decisions so far: **zero-build** (no Fortnite-style building at all); **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
 Minimum 1 human to start; **bots fill the remaining slots up to 32**. We use our own protocol and do not stay compatible with Shipwright's Anchor.
 Matches are **host-run**: whoever starts a game hosts it (listen server), no dedicated servers required.
@@ -202,8 +205,9 @@ collision layer for Hyrule Field's terrain. Difficulty levels are not implemente
 ### 5.1 Repo layout (planned)
 ```
 docs/                      design, protocol, balance
-server/                    headless match server (C++17, CMake, ENet)
-shared/                    protocol structs, constants, storm math (used by both)
+server/                    match, bots, storm, loot and the host's GameServer (header-only C++17), tests
+client/                    GameClient: connection, world mirror, interpolation (header-only)
+shared/                    balance numbers, storm and loot math, protocol, serialization, transports (ENet, in-memory)
 mod/                       SoH enhancement module (copied/linked into soh/soh/Enhancements/Royale)
 patches/                   minimal patches to vanilla SoH files, kept small and documented
 third_party/Shipwright-Android/    Android-capable Shipwright fork as a submodule, pinned to a commit
@@ -212,15 +216,53 @@ Shipwright is added as a git **submodule** (not a copy), pinned to a commit. We 
 for the places hooks aren't enough. This keeps rebasing on upstream cheap. ROM-derived assets are never committed:
 each player supplies their own OoT ROM, as with stock SoH.
 
-### 5.2 Protocol (binary, versioned)
-- **Client to server, 20 Hz, unreliable:** `InputState` (tick, position, rotation, anim id, held item, velocity).
-  About 30 bytes, quantised.
-- **Server to client, 20 Hz, unreliable:** `Snapshot` containing a delta of up to N nearest players (interest
-  management, nearest ~12 plus storm and loot changes). About 400 bytes at the worst case.
-- **Reliable events:** `Hit`, `Damage`, `Pickup`, `Drop`, `Eliminated`, `StormPhase`, `MatchState`.
-- Animation is sent as an `animId` + frame, **not** the 24-joint table. Remote Link is posed from the local
-  animation data. The Anchor joint table is only a fallback for rare animations.
-- Bandwidth budget: ~10 KB/s down, ~1.5 KB/s up per player. 32 players is well under 1 Mbps for the server.
+### 5.2 Networking (implemented: `shared/`, `server/game_server.h`, `client/game_client.h`)
+
+Layers, bottom to top:
+- `Transport` interface (`shared/transport.h`) with two implementations: `ENetTransport` for real UDP and
+  `LoopbackNetwork` (in memory, simulated latency, jitter and loss) used by tests.
+- Protocol (`shared/protocol.h`): binary, little-endian, versioned (`kProtocolVersion`), every message is
+  `[type byte][fields]`. Decoding rejects wrong types, short or trailing data, NaN/Inf, and out-of-range enums.
+- `GameServer` (host side) and `GameClient` (every player, including the host's own, which joins through 127.0.0.1).
+
+| Message | Direction | Delivery | Notes |
+|---|---|---|---|
+| Hello / Welcome / Reject | both | reliable | Welcome carries seed, map, the 6 storm circles, all loot and the roster (about 4.5 KB with 400 loot) |
+| Input | client to server | unreliable, ~20 Hz | 19 bytes: seq, teleport epoch, x, y, z, rotation, animation id |
+| AttackReport, PickupRequest, UsePotionRequest | client to server | reliable | The server decides whether they succeed |
+| Snapshot | server to client | unreliable, 20 Hz | You plus the nearest 12 living players, 22 bytes each |
+| Damaged | server to the two players involved | reliable | Everyone else sees health in snapshots |
+| Eliminated, LootTaken, LootAdded, MatchState, PlayerJoined/Left | server to all | reliable | Dropped kit arrives as LootAdded |
+
+Server-side validation:
+- **Movement is clamped** to `kMaxPlausibleSpeed` (5x run speed, to allow rolls, Epona and Hookshot pulls) plus slack,
+  and a single update is credited at most 0.5 s of travel. A test found that without that cap a player idle for the
+  15 s countdown could jump 7,000+ units in one update. Faster speed hacks below the cap are not detected.
+- **Teleport epoch:** when the server moves players (match start), it bumps their epoch, and inputs carrying the old
+  epoch are ignored, so a client can't drag itself back to its lobby position.
+- **Sequence numbers:** old or duplicate inputs are dropped, with 16-bit wraparound handled.
+- Attacks need range and cooldown, pickups need proximity, NaN positions and malformed packets are discarded and counted.
+- A peer must send a valid Hello first, and the lobby closes when the match starts (late joiners get a Reject).
+- Not covered: hit validation uses the server's last known positions with no lag compensation, a client can still lie
+  about whether its hit landed (within range and cooldown), and there is no per-peer rate limiting yet.
+
+Client side: remote players are drawn 100 ms behind the newest snapshot and interpolated between two snapshots,
+rotation taking the short way around the 16-bit angle wrap. The local player is not predicted: the game moves Link
+as normal, sends input, and compares with `Self()` (the server's view) to notice a correction.
+
+**Measured bandwidth** (loopback tests, payload bytes only): with 32 humans in a match, each client receives about
+**6 KB/s**. ENet and UDP/IP headers add roughly 40 bytes per packet, so call it 7 KB/s on the wire, about 55 kbps.
+The host uploads that to every human, so **32 humans means about 220 KB/s (about 1.8 Mbps) of host upload**.
+Bots cost nothing, so a typical lobby with a few humans needs far less. This corrects my earlier "well under
+1 Mbps" estimate, which was wrong for a full lobby of 32 humans. A phone host on cellular or weak Wi-Fi should
+host small lobbies only. Cheap savings still available: quantize positions to 16 bits, and send deltas.
+
+Connection details: UDP port 7777 by default (`kDefaultPort`). A host that stops answering is dropped after about 8 s
+and a connection attempt gives up after about 3 s. Android may pause sockets while the app is in the background, so
+a host's game must stay in the foreground (plus a wake lock) or players will time out.
+
+Remaining network work: wire `GameClient` and `GameServer` into the mod (Milestone 3), join codes and STUN
+hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
 
 ### 5.3 Client mod
 - `RoyaleMod` registers hooks: `OnGameFrameUpdate` (network tick), `OnPlayerHealthChange` (route damage through the
@@ -316,7 +358,7 @@ Android is pulled forward as a feasibility spike because it could change the who
 | 0 | This document | Reviewed |
 | 1 | Android fork as submodule (done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
 | 1b | **Android spike**: the unmodified fork APK running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
-| 2 | `server/` library (done: storm, loot, match, bot AI, 20+ tests) plus puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
+| 2 | `server/` library (done: storm, loot, match, bot AI, network layer over loopback and real UDP) plus puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
 | 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
 | 4 | Loot, weapons and pickups | Players can arm themselves and fight |
 | 5 | Lobby, HUD, minimap, spectator | Playable end to end with friends |

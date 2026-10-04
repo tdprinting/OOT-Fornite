@@ -14,6 +14,13 @@ constexpr float kPickupRange = 50.0f;
 constexpr float kMaxHealth = 3.0f; // hearts
 constexpr int kMaxPotions = 3;
 
+// Anti-cheat plausibility limit for client-reported movement: rolls, Epona, Hookshot and Longshot pulls are all faster
+// than running, so allow several times run speed. Faster than this in one update is clamped by the server.
+constexpr float kMaxPlausibleSpeed = kRunSpeed * 5.0f;
+constexpr float kMovementSlack = 100.0f; // units of free movement per update, for network jitter
+
+enum class MatchState : uint8_t { Lobby, Countdown, Drop, InMatch, Ending };
+
 enum class Rarity : uint8_t { Common, Uncommon, Rare, Epic, Legendary, Count };
 constexpr int kRarityCount = static_cast<int>(Rarity::Count);
 

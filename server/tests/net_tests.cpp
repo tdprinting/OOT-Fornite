@@ -1,0 +1,753 @@
+// Network layer tests over the in-memory LoopbackNetwork (no sockets): protocol, join flow, interpolation,
+// validation, events, loss, bandwidth. Real-UDP tests are in enet_tests.cpp.
+#include "game_client.h"
+#include "game_server.h"
+#include "loopback.h"
+#include <cstdio>
+#include <memory>
+
+using namespace royale;
+using namespace royale::net;
+
+static int failures = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+
+static Circle MapCircle() { return {{0, 0}, 2000.0f}; }
+constexpr float kDt = 1.0f / kTickHz;
+
+// A server plus any number of clients on one loopback network.
+struct Rig {
+    LoopbackNetwork network;
+    GameServer server;
+    std::vector<std::unique_ptr<GameClient>> clients;
+
+    explicit Rig(uint64_t seed = 1, int loot = 400) : network(seed), server(network.Server(), seed, MapCircle(), loot) {}
+
+    GameClient& Add(const std::string& name, LoopbackNetwork::Link link = {}) {
+        clients.push_back(std::make_unique<GameClient>(network.NewClient(link), name));
+        return *clients.back();
+    }
+    void Step(float dt = kDt) {
+        network.Advance(dt);
+        server.Update(dt);
+        for (auto& c : clients) c->Update(dt);
+    }
+    void Run(float seconds, float dt = kDt) {
+        for (int i = 0; i < static_cast<int>(seconds / dt + 0.5f); i++) Step(dt);
+    }
+    // Run until the condition holds or `maxSeconds` pass.
+    template <class F>
+    bool RunUntil(F cond, float maxSeconds = 30) {
+        for (float t = 0; t < maxSeconds; t += kDt) {
+            if (cond()) return true;
+            Step();
+        }
+        return cond();
+    }
+    Match& M() { return server.Sim().match; }
+    bool AllJoined() {
+        for (auto& c : clients) if (c->GetStatus() != GameClient::Status::Joined) return false;
+        return true;
+    }
+    // Start the match and run until the match is live (past countdown and drop).
+    void StartAndGoLive() {
+        CHECK(server.StartMatch());
+        CHECK(RunUntil([&] { return M().State() == MatchState::InMatch; }));
+    }
+};
+
+// ---- serialization --------------------------------------------------------------------------------------------
+
+static void ByteReaderBounds() {
+    uint8_t d[3] = {1, 2, 3};
+    ByteReader r(d, 3);
+    CHECK(r.U16() == 0x0201 && r.ok);
+    CHECK(r.U32() == 0 && !r.ok);        // asked for 4, only 1 left
+    CHECK(r.U8() == 0 && !r.ok);         // stays failed
+    ByteWriter w;
+    w.Str(std::string(300, 'x'));
+    CHECK(w.buf.size() == 256);          // truncated to 255 + length byte
+    ByteReader r2(w.buf.data(), w.buf.size());
+    CHECK(r2.Str(10).empty() && !r2.ok); // longer than the allowed max
+}
+
+template <class T> static bool RoundTrips(const T& in, T& out) { return Decode(Encode(in), out); }
+
+static Welcome SampleWelcome() {
+    Welcome w;
+    w.playerId = 7; w.seed = 0x1122334455667788ull; w.map = {{1, 2}, 3000};
+    for (int i = 0; i < kStormPhaseCount; i++) w.stormEnds[i] = {{float(i), float(-i)}, 100.0f - i};
+    w.loot = {{10, 20, 3, 2, true, false}, {-5, 6, 7, 4, false, true}};
+    w.roster = {{1, "Link"}, {7, "Zelda"}};
+    return w;
+}
+
+static void MessagesRoundTrip() {
+    { Hello a, b; a.name = "Link"; CHECK(RoundTrips(a, b) && b.name == "Link" && b.version == kProtocolVersion); }
+    { Input a, b; a.seq = 65535; a.epoch = 3; a.x = -1.5f; a.y = 2; a.z = 3.25f; a.rot = -1234; a.anim = 9;
+      CHECK(RoundTrips(a, b) && b.seq == 65535 && b.epoch == 3 && b.x == -1.5f && b.z == 3.25f && b.rot == -1234 && b.anim == 9); }
+    { AttackReport a, b; a.target = 12; a.hit = true; CHECK(RoundTrips(a, b) && b.target == 12 && b.hit); }
+    { PickupRequest a, b; a.index = 123456; CHECK(RoundTrips(a, b) && b.index == 123456); }
+    { UsePotionRequest a, b; CHECK(RoundTrips(a, b)); }
+    { Welcome a = SampleWelcome(), b; CHECK(RoundTrips(a, b));
+      CHECK(b.playerId == 7 && b.seed == a.seed && b.map.radius == 3000 && b.loot.size() == 2 && b.roster[1].name == "Zelda");
+      CHECK(b.loot[0].chest && !b.loot[0].taken && b.loot[1].taken && b.stormEnds[5].radius == 95.0f); }
+    { Reject a, b; a.reason = RejectReason::LobbyFull; CHECK(RoundTrips(a, b) && b.reason == RejectReason::LobbyFull); }
+    { MatchStateMsg a, b; a.state = 3; a.alive = 17; CHECK(RoundTrips(a, b) && b.state == 3 && b.alive == 17); }
+    { Snapshot a, b; a.tick = 99; a.stormTime = 12.5f; a.state = 3; a.alive = 9; a.epoch = 2;
+      PlayerNet p; p.id = 1031; p.x = 1; p.y = 2; p.z = 3; p.rot = -5; p.health = PlayerNet::QuantizeHealth(1.5f);
+      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7;
+      a.players = {p, p};
+      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2);
+      CHECK(std::abs(b.players[0].Health() - 1.5f) < 0.01f);
+      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 22); } // documented per-player size
+    { EvDamaged a, b; a.target = 1; a.attacker = 2; a.amount = 1.5f; a.health = 0.5f; CHECK(RoundTrips(a, b) && b.amount == 1.5f && b.attacker == 2); }
+    { EvEliminated a, b; a.victim = 3; CHECK(RoundTrips(a, b) && b.victim == 3 && b.killer == kNoPlayer16); }
+    { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
+    { EvLootAdded a, b; a.index = 400; a.loot = {1, 2, 3, 4, true, false}; CHECK(RoundTrips(a, b) && b.index == 400 && b.loot.item == 3); }
+    { EvPlayerJoined a, b; a.id = 5; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi"); }
+    { EvPlayerLeft a, b; a.id = 5; CHECK(RoundTrips(a, b) && b.id == 5); }
+}
+
+// Every strict prefix of a valid message, a message with a trailing byte, and a wrong type byte must all be rejected.
+template <class T>
+static void RejectsMangled(const T& msg) {
+    std::vector<uint8_t> good = Encode(msg);
+    T out;
+    CHECK(Decode(good, out));
+    for (size_t n = 0; n < good.size(); n++) CHECK(!Decode(good.data(), n, out));
+    std::vector<uint8_t> extra = good;
+    extra.push_back(0);
+    CHECK(!Decode(extra, out));
+    std::vector<uint8_t> wrongType = good;
+    wrongType[0] ^= 0x40;
+    CHECK(!Decode(wrongType, out));
+}
+
+static void DecodeRejectsMangled() {
+    Hello h; h.name = "Link"; RejectsMangled(h);
+    Input in; in.x = 1; RejectsMangled(in);
+    AttackReport ar; ar.target = 1; RejectsMangled(ar);
+    PickupRequest pr; RejectsMangled(pr);
+    RejectsMangled(SampleWelcome());
+    Reject rj; rj.reason = RejectReason::LobbyFull; RejectsMangled(rj);
+    MatchStateMsg ms; RejectsMangled(ms);
+    Snapshot s; s.players.resize(2); RejectsMangled(s);
+    EvDamaged ed; RejectsMangled(ed);
+    EvEliminated ee; RejectsMangled(ee);
+    EvLootTaken lt; RejectsMangled(lt);
+    EvLootAdded la; RejectsMangled(la);
+    EvPlayerJoined pj; pj.name = "x"; RejectsMangled(pj);
+    EvPlayerLeft pl; RejectsMangled(pl);
+}
+
+static void DecodeRejectsBadValues() {
+    Input in, out;
+    in.x = std::nanf("");
+    CHECK(!Decode(Encode(in), out));
+    in.x = 0; in.y = INFINITY;
+    CHECK(!Decode(Encode(in), out));
+    AttackReport ar, arOut;
+    std::vector<uint8_t> bytes = Encode(ar);
+    bytes.back() = 2; // hit must be 0 or 1
+    CHECK(!Decode(bytes, arOut));
+    Reject rj, rjOut;
+    bytes = Encode(rj);
+    bytes.back() = 0;
+    CHECK(!Decode(bytes, rjOut));
+    LootNet bad;
+    bad.item = static_cast<uint8_t>(ItemId::Count);
+    ByteWriter w; w.U8(static_cast<uint8_t>(MsgType::EvLootAdded)); w.U32(0); bad.Write(w);
+    EvLootAdded la;
+    CHECK(!Decode(w.buf, la));
+    Snapshot s, sOut;
+    s.players.resize(2);
+    bytes = Encode(s);
+    bytes[1 + 4 + 4 + 1 + 1 + 1] = 200; // player count far above the cap
+    CHECK(!Decode(bytes, sOut));
+    ByteWriter huge; huge.U8(static_cast<uint8_t>(MsgType::Welcome)); huge.U16(1); huge.U16(kProtocolVersion); huge.U64(0);
+    for (int i = 0; i < 3 + 3 * kStormPhaseCount; i++) huge.F32(1);
+    huge.U16(60000); // more loot than kMaxLoot
+    Welcome wo;
+    CHECK(!Decode(huge.buf, wo));
+    CHECK(SanitizeName(std::string("Li\nnk\x01\xff") + std::string(40, 'a')).size() == kMaxNameLen);
+    CHECK(SanitizeName("A\tB") == "AB");
+}
+
+static void FuzzNeverCrashes() {
+    Rng rng(2024);
+    Hello a; Input b; AttackReport c; PickupRequest d; Welcome e; Reject f; MatchStateMsg g; Snapshot h;
+    EvDamaged i; EvEliminated j; EvLootTaken k; EvLootAdded l; EvPlayerJoined m; EvPlayerLeft n;
+    for (int iter = 0; iter < 40000; iter++) {
+        std::vector<uint8_t> buf(rng.Below(80));
+        for (auto& x : buf) x = static_cast<uint8_t>(rng.Below(256));
+        if (!buf.empty() && rng.Below(2)) buf[0] = static_cast<uint8_t>(rng.Below(2) ? 1 + rng.Below(5) : 64 + rng.Below(12));
+        (void)Decode(buf, a); (void)Decode(buf, b); (void)Decode(buf, c); (void)Decode(buf, d); (void)Decode(buf, e);
+        (void)Decode(buf, f); (void)Decode(buf, g); (void)Decode(buf, h); (void)Decode(buf, i); (void)Decode(buf, j);
+        (void)Decode(buf, k); (void)Decode(buf, l); (void)Decode(buf, m); (void)Decode(buf, n);
+    }
+    // Mutate valid messages one byte at a time.
+    std::vector<uint8_t> w = Encode(SampleWelcome());
+    for (size_t pos = 0; pos < w.size(); pos++) {
+        for (int v : {0, 1, 0x7F, 0x80, 0xFF}) {
+            std::vector<uint8_t> x = w;
+            x[pos] = static_cast<uint8_t>(v);
+            Welcome out;
+            (void)Decode(x, out);
+        }
+    }
+}
+
+// ---- transport -----------------------------------------------------------------------------------------------
+
+static void LoopbackLatencyAndLoss() {
+    LoopbackNetwork net(1);
+    Transport& server = net.Server();
+    LoopbackNetwork::Link link;
+    link.latencySec = 0.1f;
+    link.unreliableLoss = 0.5f;
+    Transport& client = net.NewClient(link);
+    NetEvent ev;
+    CHECK(!server.Poll(ev));              // nothing yet: the connect is still in flight
+    net.Advance(0.11f);
+    CHECK(server.Poll(ev) && ev.type == NetEvent::Type::Connected);
+    CHECK(client.Poll(ev) && ev.type == NetEvent::Type::Connected);
+    uint8_t one = 1;
+    for (int i = 0; i < 400; i++) client.Send(0, &one, 1, false);
+    for (int i = 0; i < 20; i++) client.Send(0, &one, 1, true);
+    net.Advance(0.2f);
+    int unreliable = 0, total = 0;
+    while (server.Poll(ev)) { total++; }
+    unreliable = total - 20;
+    CHECK(unreliable > 120 && unreliable < 280);   // about half of 400 lost
+    CHECK(total >= 20);                             // reliable ones all arrived
+}
+
+static void LoopbackKeepsOrderUnderJitter() {
+    LoopbackNetwork net(5);
+    LoopbackNetwork::Link link;
+    link.latencySec = 0.05f;
+    link.jitterSec = 0.2f;
+    Transport& client = net.NewClient(link);
+    NetEvent ev;
+    net.Advance(1);
+    while (net.Server().Poll(ev)) {}
+    while (client.Poll(ev)) {}
+    for (uint8_t i = 0; i < 100; i++) net.Server().Send(1, &i, 1, true);
+    net.Advance(1);
+    int expect = 0;
+    while (client.Poll(ev)) { CHECK(ev.data.size() == 1 && ev.data[0] == expect); expect++; }
+    CHECK(expect == 100);
+}
+
+// ---- join flow -----------------------------------------------------------------------------------------------
+
+static void JoinAndWelcome() {
+    Rig rig(11);
+    GameClient& a = rig.Add("Link");
+    CHECK(a.GetStatus() == GameClient::Status::Connecting);
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(a.PlayerId() == 1);
+    CHECK(a.Seed() == 11 && a.Map().radius == 2000);
+    CHECK(a.Loot().size() == rig.M().Loot().size() && a.Loot().size() == 400);
+    CHECK(a.Roster().size() == 1 && a.Roster().at(1) == "Link");
+    // The client rebuilt the same storm from the 6 circles.
+    for (float t : {0.0f, 100.0f, 150.0f, 300.0f, 500.0f, 660.0f}) {
+        Circle s = rig.M().GetStorm().SafeZoneAt(t), c = Storm(a.Map(), rig.M().GetStorm().PhaseEnds()).SafeZoneAt(t);
+        CHECK(s.center.x == c.center.x && s.radius == c.radius);
+    }
+    GameClient& b = rig.Add("Zelda");
+    CHECK(rig.RunUntil([&] { return b.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(b.PlayerId() == 2 && b.Roster().size() == 2);
+    rig.Run(1);
+    bool sawJoin = false;
+    for (auto& e : a.DrainEvents()) if (e.type == ClientEvent::Type::PlayerJoined && e.id == 2) sawJoin = true;
+    CHECK(sawJoin && a.Roster().size() == 2 && a.Roster().at(2) == "Zelda");
+    CHECK(rig.server.HumanCount() == 2);
+}
+
+static void RejectedJoins() {
+    // Version mismatch (raw Hello with a wrong version).
+    {
+        Rig rig;
+        Transport& raw = rig.network.NewClient();
+        rig.Run(0.5f);
+        Hello h; h.version = 99; h.name = "Old";
+        raw.Send(0, Encode(h), true);
+        rig.Run(0.5f);
+        NetEvent ev; Reject rj; bool got = false;
+        while (raw.Poll(ev)) if (ev.type == NetEvent::Type::Data && Decode(ev.data, rj)) got = rj.reason == RejectReason::VersionMismatch;
+        CHECK(got);
+        CHECK(rig.server.HumanCount() == 0);
+    }
+    // Garbage instead of Hello.
+    {
+        Rig rig;
+        Transport& raw = rig.network.NewClient();
+        rig.Run(0.5f);
+        uint8_t junk[3] = {1, 2, 3};
+        raw.Send(0, junk, 3, true);
+        rig.Run(0.5f);
+        NetEvent ev; Reject rj; bool got = false;
+        while (raw.Poll(ev)) if (ev.type == NetEvent::Type::Data && Decode(ev.data, rj)) got = rj.reason == RejectReason::BadHello;
+        CHECK(got && rig.server.HumanCount() == 0);
+    }
+    // Non-Hello message before joining is dropped, and gives the peer no state.
+    {
+        Rig rig;
+        Transport& raw = rig.network.NewClient();
+        rig.Run(0.5f);
+        Input in; in.x = 5;
+        raw.Send(0, Encode(in), false);
+        PickupRequest pr; raw.Send(0, Encode(pr), true);
+        rig.Run(0.5f);
+        CHECK(rig.server.GetStats().badPackets == 2 && rig.server.HumanCount() == 0);
+        NetEvent ev; int snapshots = 0;
+        while (raw.Poll(ev)) if (ev.type == NetEvent::Type::Data) snapshots++;
+        CHECK(snapshots == 0);
+    }
+    // Lobby full.
+    {
+        Rig rig(1, 10);
+        for (int i = 0; i < kMaxPlayers; i++) rig.Add("P" + std::to_string(i));
+        CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+        GameClient& extra = rig.Add("Late");
+        CHECK(rig.RunUntil([&] { return extra.GetStatus() == GameClient::Status::Rejected; }));
+        CHECK(extra.RejectedBecause() == RejectReason::LobbyFull);
+        CHECK(rig.server.HumanCount() == kMaxPlayers);
+    }
+    // Match already running.
+    {
+        Rig rig;
+        GameClient& a = rig.Add("A");
+        CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+        CHECK(rig.server.StartMatch());
+        GameClient& late = rig.Add("Late");
+        CHECK(rig.RunUntil([&] { return late.GetStatus() == GameClient::Status::Rejected; }));
+        CHECK(late.RejectedBecause() == RejectReason::MatchInProgress);
+    }
+}
+
+static void StartNeedsAHuman() {
+    Rig rig;
+    CHECK(!rig.server.StartMatch());
+    CHECK(rig.M().State() == MatchState::Lobby);
+}
+
+// ---- in-match behaviour -----------------------------------------------------------------------------------------
+
+static void TeleportEpochIgnoresOldInputs() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    a.SendInput(-1500, 0, 1500, 0, 0);        // client wanders around the lobby
+    rig.Run(0.3f);
+    CHECK(a.Epoch() == 0);
+    CHECK(rig.server.StartMatch());
+    Vec2 spawn = rig.M().Find(1)->pos;
+    // An input sent from the lobby position, before the client has seen the new epoch, must not drag the player.
+    a.SendInput(-1500, 0, 1500, 0, 0);
+    rig.Run(0.5f);
+    CHECK(rig.M().Find(1)->pos.x == spawn.x && rig.M().Find(1)->pos.z == spawn.z);
+    CHECK(rig.server.GetStats().staleInputs >= 1);
+    CHECK(a.Epoch() == 1);                    // learned about the teleport from a snapshot
+    CHECK(a.Self() && std::abs(a.Self()->x - spawn.x) < 1 && std::abs(a.Self()->z - spawn.z) < 1);
+    // Now the client sits at the spawn point and its inputs are accepted.
+    a.SendInput(spawn.x + 10, 0, spawn.z, 0, 0);
+    rig.Run(0.3f);
+    CHECK(std::abs(rig.M().Find(1)->pos.x - (spawn.x + 10)) < 0.01f);
+}
+
+static void SpeedClamp() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    rig.StartAndGoLive();
+    rig.Run(0.5f);
+    PlayerState* p = rig.M().Find(1);
+    Vec2 before = p->pos;
+    a.SendInput(before.x + 5000, 0, before.z, 0, 0);       // 5000 units in one update
+    rig.Run(0.3f);
+    float moved = Distance(before, p->pos);
+    CHECK(moved > 0 && moved <= kMaxPlausibleSpeed * GameServer::kMaxInputGap + kMovementSlack);
+    CHECK(rig.server.GetStats().speedClamps == 1);
+    // A normal run is not clamped.
+    before = p->pos;
+    a.SendInput(before.x + 20, 0, before.z, 0, 0);
+    rig.Run(0.3f);
+    CHECK(std::abs(p->pos.x - (before.x + 20)) < 0.01f && rig.server.GetStats().speedClamps == 1);
+}
+
+static void OldAndDuplicateInputsIgnored() {
+    Rig rig(3, 0);
+    Transport& raw = rig.network.NewClient();
+    rig.Run(0.3f);
+    Hello h; h.name = "Raw";
+    raw.Send(0, Encode(h), true);
+    rig.Run(0.3f);
+    CHECK(rig.server.HumanCount() == 1);
+    auto send = [&](uint16_t seq, float x) {
+        Input in; in.seq = seq; in.x = x;
+        raw.Send(0, Encode(in), false);
+        rig.Run(0.15f);
+        return rig.M().Find(1)->pos.x;
+    };
+    CHECK(send(5, 100) == 100);
+    CHECK(send(3, 200) == 100);                    // older than what we have: ignored
+    CHECK(send(5, 300) == 100);                    // duplicate: ignored
+    CHECK(send(6, 400) == 400);
+    CHECK(rig.server.GetStats().staleInputs == 2);
+    CHECK(send(30000, 1) == 1);                    // jumps in seq are fine while they move forward
+    CHECK(send(60000, 2) == 2);
+    CHECK(send(65535, 3) == 3);
+    CHECK(send(0, 4) == 4);                        // wraps around: 0 is newer than 65535
+    CHECK(send(65535, 5) == 4);                    // and 65535 is now old
+}
+
+static void NaNInputNeverAccepted() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    rig.StartAndGoLive();
+    Vec2 before = rig.M().Find(1)->pos;
+    a.SendInput(std::nanf(""), 0, 0, 0, 0);
+    rig.Run(0.3f);
+    CHECK(rig.M().Find(1)->pos.x == before.x && rig.server.GetStats().badPackets >= 1);
+}
+
+static void AttackOverTheWire() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    GameClient& c = rig.Add("Bystander");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    // Park the three humans, everyone else is dead.
+    for (auto& p : rig.M().Players()) if (!p.isBot) {} else p.alive = false;
+    rig.M().Find(1)->pos = {0, 0};  rig.M().Find(2)->pos = {50, 0};  rig.M().Find(3)->pos = {1000, 1000};
+    rig.M().Find(1)->weapon = {ItemId::KokiriSword, Rarity::Common};
+    rig.Run(0.5f);
+    a.DrainEvents(); b.DrainEvents(); c.DrainEvents();
+
+    a.ReportAttack(2, true);
+    rig.Run(0.5f);
+    float hp = rig.M().Find(2)->health;
+    CHECK(hp < kMaxHealth);
+    bool aSaw = false, bSaw = false, cSaw = false;
+    for (auto& e : a.DrainEvents()) aSaw |= e.type == ClientEvent::Type::Damaged && e.id == 2 && e.other == 1;
+    for (auto& e : b.DrainEvents()) bSaw |= e.type == ClientEvent::Type::Damaged && e.id == 2 && e.other == 1;
+    for (auto& e : c.DrainEvents()) cSaw |= e.type == ClientEvent::Type::Damaged;
+    CHECK(aSaw && bSaw && !cSaw);                      // only attacker and target are told
+    CHECK(b.Self() && std::abs(b.Self()->Health() - hp) < 0.02f); // everyone sees health in snapshots
+
+    // Cooldown, range and unknown targets are rejected by the server.
+    uint64_t rejectedBefore = rig.server.GetStats().rejectedActions;
+    a.ReportAttack(2, true);                           // inside the cooldown
+    a.ReportAttack(3, true);                           // out of range
+    a.ReportAttack(500, true);                         // nobody has this id
+    rig.Run(0.3f);
+    CHECK(rig.server.GetStats().rejectedActions == rejectedBefore + 3);
+
+    // Finish B off: Eliminated goes to everyone, and the dropped sword shows up as new loot on every client.
+    size_t lootBefore = a.Loot().size();
+    rig.M().Find(2)->weapon = {ItemId::MasterSword, Rarity::Epic};
+    rig.M().Find(2)->health = 0.1f;
+    rig.Run(1.0f);
+    a.ReportAttack(2, true);
+    rig.Run(0.5f);
+    CHECK(!rig.M().Find(2)->alive);
+    bool aElim = false, cElim = false;
+    for (auto& e : a.DrainEvents()) aElim |= e.type == ClientEvent::Type::Eliminated && e.id == 2 && e.other == 1;
+    for (auto& e : c.DrainEvents()) cElim |= e.type == ClientEvent::Type::Eliminated && e.id == 2;
+    CHECK(aElim && cElim);
+    CHECK(a.Loot().size() == lootBefore + 1 && c.Loot().size() == lootBefore + 1);
+    CHECK(a.Loot().back().item == static_cast<uint8_t>(ItemId::MasterSword) && a.DesyncCount() == 0);
+}
+
+static void PickupAndPotionOverTheWire() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    rig.M().Find(1)->pos = {0, 0};
+    rig.M().Find(2)->pos = {1500, 0};
+    size_t sword = rig.M().AddLoot({{10, 0}, ItemId::MasterSword, Rarity::Epic, false});
+    size_t farPotion = rig.M().AddLoot({{900, 0}, ItemId::RedPotion, Rarity::Common, false});
+    size_t potion = rig.M().AddLoot({{0, 20}, ItemId::RedPotion, Rarity::Rare, false});
+    rig.Run(0.5f);
+    CHECK(a.Loot().size() == 3 && b.Loot().size() == 3);
+
+    a.RequestPickup(static_cast<uint32_t>(farPotion));   // too far
+    a.RequestPickup(9999);                              // doesn't exist
+    a.RequestPickup(static_cast<uint32_t>(sword));
+    a.RequestPickup(static_cast<uint32_t>(potion));
+    rig.Run(0.5f);
+    CHECK(rig.M().Find(1)->weapon.item == ItemId::MasterSword && rig.M().Find(1)->potions.size() == 1);
+    CHECK(a.Loot()[sword].taken && b.Loot()[sword].taken && !b.Loot()[farPotion].taken);
+    CHECK(rig.server.GetStats().rejectedActions == 2);
+    CHECK(a.Self() && a.Self()->weapon == static_cast<uint8_t>(ItemId::MasterSword) && a.Self()->potions == 1);
+
+    rig.M().Find(1)->health = 1.0f;
+    a.RequestUsePotion();
+    rig.Run(0.5f);
+    CHECK(rig.M().Find(1)->health == kMaxHealth && rig.M().Find(1)->potions.empty());
+    uint64_t rejected = rig.server.GetStats().rejectedActions;
+    a.RequestUsePotion();                               // nothing left
+    rig.Run(0.3f);
+    CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
+    CHECK(a.DesyncCount() == 0 && b.DesyncCount() == 0);
+}
+
+static void DisconnectHandling() {
+    {   // In the lobby the player just disappears.
+        Rig rig;
+        GameClient& a = rig.Add("A");
+        GameClient& b = rig.Add("B");
+        CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+        b.Leave();
+        rig.Run(0.5f);
+        CHECK(rig.server.HumanCount() == 1 && rig.M().Players().size() == 1);
+        bool sawLeft = false;
+        for (auto& e : a.DrainEvents()) sawLeft |= e.type == ClientEvent::Type::PlayerLeft && e.id == 2;
+        CHECK(sawLeft && a.Roster().size() == 1);
+        CHECK(b.GetStatus() == GameClient::Status::Disconnected);
+    }
+    {   // Mid-match they are eliminated, dropping their kit.
+        Rig rig(3, 0);
+        GameClient& a = rig.Add("A");
+        GameClient& b = rig.Add("B");
+        CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+        rig.StartAndGoLive();
+        rig.M().Find(2)->weapon = {ItemId::MasterSword, Rarity::Epic};
+        a.DrainEvents();
+        b.Leave();
+        rig.Run(0.5f);
+        CHECK(!rig.M().Find(2)->alive);
+        bool elim = false;
+        for (auto& e : a.DrainEvents()) elim |= e.type == ClientEvent::Type::Eliminated && e.id == 2 && e.other == kNoPlayer16;
+        CHECK(elim && a.Loot().size() == 1);
+    }
+    {   // The server can't be crashed by a peer that leaves before saying Hello.
+        Rig rig;
+        Transport& raw = rig.network.NewClient();
+        rig.Run(0.2f);
+        raw.Disconnect(0);
+        rig.Run(0.2f);
+        CHECK(rig.server.HumanCount() == 0);
+    }
+}
+
+static void InterestManagement() {
+    Rig rig(3, 0);
+    for (int i = 0; i < 20; i++) rig.Add("P" + std::to_string(i));
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    // Humans 1..20 in a line, 100 units apart, bots dead.
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    for (uint32_t id = 1; id <= 20; id++) rig.M().Find(id)->pos = {static_cast<float>(id) * 100.0f, 0};
+    rig.Run(0.5f);
+    GameClient& first = *rig.clients[0];
+    auto visible = first.VisiblePlayers();
+    CHECK(visible.size() == kSnapshotMaxPlayers);              // capped, not all 19 others
+    for (uint16_t id = 2; id <= 13; id++) CHECK(std::find(visible.begin(), visible.end(), id) != visible.end()); // the 12 nearest
+    CHECK(std::find(visible.begin(), visible.end(), uint16_t(20)) == visible.end());
+    CHECK(first.Self() != nullptr);                            // self is always present
+    GameClient& middle = *rig.clients[9];                      // player 10 sees both sides
+    auto mv = middle.VisiblePlayers();
+    CHECK(std::find(mv.begin(), mv.end(), uint16_t(4)) != mv.end() && std::find(mv.begin(), mv.end(), uint16_t(16)) != mv.end());
+}
+
+static void InterpolationIsSmoothUnderJitter() {
+    Rig rig(3, 0);
+    LoopbackNetwork::Link link;
+    link.latencySec = 0.05f; link.jitterSec = 0.03f;
+    GameClient& watcher = rig.Add("Watcher", link);
+    GameClient& runner = rig.Add("Runner", link);
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    rig.M().Find(1)->pos = {0, 0};
+    rig.M().Find(2)->pos = {0, 100};
+    rig.Run(1.0f);
+    // The runner moves along +x at 100 u/s for 6 seconds, the watcher renders at 60 fps. (Both clients then need the new epoch;
+    // the match-start teleport is long done by now.)
+    float runnerX = 0;
+    float last = -1e9f, worstStep = 0, worstLag = 0;
+    int samples = 0;
+    const float frame = 1.0f / 60.0f;
+    float inputTimer = 0;
+    for (float t = 0; t < 6.0f; t += frame) {
+        runnerX += 100.0f * frame;
+        inputTimer += frame;
+        if (inputTimer >= kDt) { inputTimer = 0; runner.SendInput(runnerX, 0, 100, 0, 1); }
+        rig.network.Advance(frame);
+        rig.server.Update(frame);
+        for (auto& c : rig.clients) c->Update(frame);
+        PlayerNet seen;
+        if (t > 2.0f && watcher.Sample(2, seen)) {
+            if (last > -1e8f) {
+                CHECK(seen.x >= last - 0.001f);                              // never goes backwards
+                worstStep = std::max(worstStep, seen.x - last);
+            }
+            worstLag = std::max(worstLag, runnerX - seen.x);
+            last = seen.x;
+            samples++;
+        }
+    }
+    CHECK(samples > 100);
+    CHECK(worstStep <= 100.0f * frame * 2.5f);   // no big jumps between frames
+    CHECK(worstLag < 100.0f * 0.45f);            // lags the truth by well under half a second
+    CHECK(worstLag > 0);
+    std::printf("  interpolation: worst frame step %.2f units (ideal %.2f), worst lag %.1f units\n", worstStep, 100.0f * frame, worstLag);
+}
+
+static void InterpolatesAngleAcrossWrap() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    rig.M().Find(2)->pos = {0, 0};
+    rig.Run(1.0f);
+    b.SendInput(rig.M().Find(2)->pos.x, 0, rig.M().Find(2)->pos.z, 32000, 0);
+    rig.Run(0.4f);
+    b.SendInput(rig.M().Find(2)->pos.x, 0, rig.M().Find(2)->pos.z, -32000, 0);   // 33536 -> through 0x8000 is a +1536 turn
+    // 32000 -> -32000 as binary angles is a short turn through +-32768 (1536 units), not a 64000-unit sweep through zero.
+    // Every interpolated sample while the turn is shown must stay near the wrap point.
+    // Sample at 200 Hz, far finer than the 20 Hz snapshots, so many samples land between the two keyframes.
+    int near = 0, turning = 0;
+    for (int i = 0; i < 200; i++) {
+        rig.Step(0.005f);
+        PlayerNet s;
+        if (a.Sample(2, s)) {
+            CHECK(std::abs(static_cast<int>(s.rot)) >= 31990);
+            near++;
+            if (s.rot != 32000 && s.rot != -32000) turning++;
+        }
+    }
+    CHECK(near >= 150);
+    CHECK(turning >= 5);                       // we actually observed samples mid-turn, not just the end points
+}
+
+static void StormMatchesAcrossTheWire() {
+    Rig rig(8, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    rig.StartAndGoLive();
+    rig.Run(130.0f);                            // into the first shrink
+    for (auto& p : rig.M().Players()) if (p.id != 1) p.alive = false;
+    rig.M().Find(1)->health = kMaxHealth;
+    Circle server = rig.M().GetStorm().SafeZoneAt(rig.M().StormTime());
+    Circle client = a.SafeZone();
+    CHECK(std::abs(server.radius - client.radius) < 20.0f);        // within about a snapshot of latency
+    CHECK(std::abs(a.StormTime() - rig.M().StormTime()) < 0.2f);
+    CHECK(a.StormDamagePerSecond({server.center.x + server.radius + 500, server.center.z}) > 0);
+    CHECK(a.StormDamagePerSecond(server.center) == 0);
+}
+
+static void ReliableEventsSurviveLoss() {
+    Rig rig(4);
+    LoopbackNetwork::Link lossy;
+    lossy.latencySec = 0.08f; lossy.jitterSec = 0.04f; lossy.unreliableLoss = 0.3f;
+    GameClient& a = rig.Add("A", lossy);
+    GameClient& b = rig.Add("B", lossy);
+    GameClient& c = rig.Add("C", lossy);
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    rig.Run(120.0f);                            // bots loot and fight; humans stand still and get hunted
+    rig.network.Advance(2.0f);
+    rig.Run(2.0f);
+    // Every client's loot table must equal the server's, even though 30% of snapshots were lost.
+    for (GameClient* g : {&a, &b, &c}) {
+        CHECK(g->Loot().size() == rig.M().Loot().size());
+        size_t mismatches = 0;
+        for (size_t i = 0; i < g->Loot().size() && i < rig.M().Loot().size(); i++)
+            mismatches += g->Loot()[i].taken != rig.M().Loot()[i].taken;
+        CHECK(mismatches == 0);
+        CHECK(g->DesyncCount() == 0);
+        CHECK(g->GetStatus() == GameClient::Status::Joined);
+    }
+    CHECK(rig.M().Loot().size() > 400);         // eliminations dropped kit
+}
+
+static void FullMatchOverTheNetwork() {
+    Rig rig(77);
+    GameClient& me = rig.Add("Solo");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Ending; }, 1500));
+    rig.Run(1.0f);
+    std::vector<MatchState> seen;
+    for (auto& e : me.DrainEvents()) if (e.type == ClientEvent::Type::StateChanged) seen.push_back(e.state);
+    CHECK(seen.size() == 4 && seen[0] == MatchState::Countdown && seen[1] == MatchState::Drop && seen[2] == MatchState::InMatch && seen[3] == MatchState::Ending);
+    CHECK(me.State() == MatchState::Ending && me.AliveCount() <= 1);
+    CHECK(rig.M().Alive() <= 1);
+    CHECK(me.DesyncCount() == 0 && me.Loot().size() == rig.M().Loot().size());
+    CHECK(rig.server.GetStats().badPackets == 0);
+}
+
+static void BandwidthWith32Players() {
+    Rig rig(5);
+    for (int i = 0; i < kMaxPlayers; i++) rig.Add("P" + std::to_string(i));
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) { // spread out so interest management has real work to do
+        p.pos.x = static_cast<float>(static_cast<int>(p.id % 7) * 40);
+        p.pos.z = static_cast<float>(static_cast<int>(p.id % 5) * 40);
+    }
+    rig.Run(2.0f);
+    uint64_t before = rig.server.GetStats().bytesOut;
+    const float seconds = 10.0f;
+    rig.Run(seconds);
+    double perClientPerSec = static_cast<double>(rig.server.GetStats().bytesOut - before) / seconds / kMaxPlayers;
+    std::printf("  32 players, host upload: %.0f B/s per client (%.1f KB/s total), snapshot budget 10 KB/s per client\n",
+                perClientPerSec, perClientPerSec * kMaxPlayers / 1024.0);
+    CHECK(perClientPerSec < 10 * 1024.0);
+    CHECK(perClientPerSec > 1000.0); // and it really is sending
+}
+
+static void ServerSurvivesHostileClient() {
+    Rig rig(3, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    // A joined peer firing random bytes at the server for a while.
+    Transport& raw = rig.network.NewClient();
+    rig.Run(0.2f);
+    Hello h; h.name = "Evil"; raw.Send(0, Encode(h), true);
+    rig.Run(0.2f);
+    Rng rng(99);
+    for (int i = 0; i < 3000; i++) {
+        std::vector<uint8_t> junk(rng.Below(60));
+        for (auto& x : junk) x = static_cast<uint8_t>(rng.Below(256));
+        if (!junk.empty() && rng.Below(2)) junk[0] = static_cast<uint8_t>(1 + rng.Below(6));
+        raw.Send(0, junk, rng.Below(2) == 0);
+        if (i % 20 == 0) rig.Step();
+    }
+    rig.StartAndGoLive();
+    for (int i = 0; i < 1000; i++) {
+        std::vector<uint8_t> junk(rng.Below(40));
+        for (auto& x : junk) x = static_cast<uint8_t>(rng.Below(256));
+        if (!junk.empty()) junk[0] = static_cast<uint8_t>(1 + rng.Below(6));
+        raw.Send(0, junk, true);
+        if (i % 10 == 0) rig.Step();
+    }
+    rig.Run(2.0f);
+    CHECK(a.GetStatus() == GameClient::Status::Joined);
+    CHECK(rig.M().State() == MatchState::InMatch || rig.M().State() == MatchState::Ending);
+}
+
+int main() {
+    ByteReaderBounds(); MessagesRoundTrip(); DecodeRejectsMangled(); DecodeRejectsBadValues(); FuzzNeverCrashes();
+    LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
+    JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
+    TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
+    AttackOverTheWire(); PickupAndPotionOverTheWire(); DisconnectHandling(); InterestManagement();
+    InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
+    ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
+    if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
+    std::printf("all network tests passed\n");
+    return 0;
+}
