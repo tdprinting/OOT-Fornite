@@ -122,6 +122,9 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 
 ## Known unknowns
 
+- **Android network permission.** The fork's app declared no `INTERNET` permission, so hosting failed with "could not listen on that port". Patch
+  0005 adds it. If you built an APK before that patch, rebuild.
+
 - **Never run in the game.** The window, puppet spawning, animation, health override and spawn teleport are written against
   the engine's headers and modeled on upstream Ship of Harkinian's own multiplayer code, but untested. The first launch is the
   real test.

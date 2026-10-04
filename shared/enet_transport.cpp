@@ -1,6 +1,9 @@
 #include "enet_transport.h"
 #include <enet/enet.h>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
+#include <string>
 
 namespace royale::net {
 
@@ -16,7 +19,17 @@ bool AcquireENet() {
 void ReleaseENet() {
     if (--enetUsers == 0) enet_deinitialize();
 }
-void SetError(std::string* error, const char* msg) {
+// The operating system's reason for the most recent socket failure (ENet does not report one). Captured right after the
+// failing call, before anything else can overwrite it.
+std::string OsReason() {
+#ifdef _WIN32
+    return "Windows error " + std::to_string(WSAGetLastError());
+#else
+    int e = errno;
+    return std::string(std::strerror(e)) + " (errno " + std::to_string(e) + ")";
+#endif
+}
+void SetError(std::string* error, const std::string& msg) {
     if (error) *error = msg;
 }
 // A host that stops answering is dropped after about 8 s; a connection attempt gives up after about 3 s.
@@ -33,8 +46,10 @@ std::unique_ptr<ENetTransport> ENetTransport::Host(uint16_t port, size_t maxClie
     addr.port = port;
     ENetHost* h = enet_host_create(&addr, maxClients, kChannels, 0, 0);
     if (!h) {
+        std::string why = OsReason();
         ReleaseENet();
-        SetError(error, "could not listen on that port (already in use?)");
+        // Common causes: the port is already in use, or (Android) the app lacks the INTERNET permission.
+        SetError(error, "could not listen on port " + std::to_string(port) + ": " + why);
         return nullptr;
     }
     std::unique_ptr<ENetTransport> t(new ENetTransport());
@@ -48,7 +63,12 @@ std::unique_ptr<ENetTransport> ENetTransport::Host(uint16_t port, size_t maxClie
 std::unique_ptr<ENetTransport> ENetTransport::Connect(const std::string& hostName, uint16_t port, std::string* error) {
     if (!AcquireENet()) { SetError(error, "enet_initialize failed"); return nullptr; }
     ENetHost* h = enet_host_create(nullptr, 1, kChannels, 0, 0);
-    if (!h) { ReleaseENet(); SetError(error, "could not create client socket"); return nullptr; }
+    if (!h) {
+        std::string why = OsReason();
+        ReleaseENet();
+        SetError(error, "could not create a network socket: " + why);
+        return nullptr;
+    }
     ENetAddress addr;
     if (enet_address_set_host(&addr, hostName.c_str()) != 0) {
         enet_host_destroy(h);

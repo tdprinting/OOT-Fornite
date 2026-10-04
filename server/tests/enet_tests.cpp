@@ -62,7 +62,8 @@ static void HostingTwiceOnOnePortFails() {
     auto first = ENetTransport::Host(0, 4, &err);
     CHECK(first && first->Port() != 0);
     auto second = ENetTransport::Host(first->Port(), 4, &err);
-    CHECK(!second && !err.empty());
+    CHECK(!second && err.find("could not listen on port") != std::string::npos);
+    CHECK(err.find("errno") != std::string::npos || err.find("Windows error") != std::string::npos); // names the OS reason
     // After the first host goes away the port is free again.
     uint16_t port = first->Port();
     first.reset();

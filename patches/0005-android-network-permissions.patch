@@ -1,0 +1,17 @@
+diff --git a/Android/app/src/main/AndroidManifest.xml b/Android/app/src/main/AndroidManifest.xml
+index 0d3b724..907d70d 100644
+--- a/Android/app/src/main/AndroidManifest.xml
++++ b/Android/app/src/main/AndroidManifest.xml
+@@ -53,6 +53,12 @@
+     <!-- Allow access to the vibrator -->
+     <uses-permission android:name="android.permission.VIBRATE" />
+ 
++    <!-- OOT Royale (patches/0005): multiplayer needs sockets. Without INTERNET Android refuses to open any socket, even to
++         127.0.0.1, so hosting fails with "could not listen on that port". -->
++    <uses-permission android:name="android.permission.INTERNET" />
++    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
++    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
++
+     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
