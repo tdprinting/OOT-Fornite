@@ -92,4 +92,54 @@ inline std::vector<int16_t> BuildChickenTune() {
     return out;
 }
 
+
+// The storm jingle: a short ominous motif in D minor (three rising notes, then a heavy fall) over a low drone and a roll of thunder. Played when the
+// storm changes phase. About 2.6 seconds, mono, kTuneRate.
+constexpr float kStormJingleSeconds = 2.6f;
+inline std::vector<int16_t> BuildStormJingle() {
+    using namespace tune_detail;
+    const int total = static_cast<int>(kStormJingleSeconds * kTuneRate);
+    std::vector<float> mix(static_cast<size_t>(total), 0.0f);
+    Noise noise;
+    struct Note { float start, len; int midi; };
+    static const Note notes[] = { {0.00f, 0.22f, 57}, {0.24f, 0.22f, 62}, {0.48f, 0.22f, 65}, {0.74f, 0.55f, 69}, {1.34f, 0.30f, 65}, {1.66f, 0.80f, 50} };
+    for (const Note& n : notes) {
+        const float hz = NoteHz(n.midi);
+        for (int i = 0; i < static_cast<int>(n.len * kTuneRate); i++) {
+            const size_t at = static_cast<size_t>(n.start * kTuneRate) + static_cast<size_t>(i);
+            if (at >= mix.size()) break;
+            const float t = static_cast<float>(i) / kTuneRate;
+            const float env = (t < 0.01f ? t / 0.01f : 1.0f) * std::pow(1.0f - t / n.len, 0.7f);
+            // two slightly detuned pulse waves make a brassy, uneasy tone
+            mix[at] += 0.20f * env * (Pulse(hz * t, 0.3f) + Pulse(hz * 1.006f * t, 0.4f));
+        }
+    }
+    for (int i = 0; i < total; i++) { // the drone underneath and a rumble of thunder at the start
+        const float t = static_cast<float>(i) / kTuneRate;
+        mix[static_cast<size_t>(i)] += 0.16f * std::sin(6.2831853f * NoteHz(38) * t) * (1.0f - t / kStormJingleSeconds);
+        if (t < 1.1f) mix[static_cast<size_t>(i)] += 0.22f * noise.Next() * std::exp(-t * 3.2f) * (0.6f + 0.4f * std::sin(t * 30.0f));
+    }
+    std::vector<int16_t> out(mix.size());
+    for (size_t i = 0; i < mix.size(); i++) out[i] = static_cast<int16_t>(std::max(-1.0f, std::min(1.0f, mix[i])) * 30000.0f);
+    return out;
+}
+
+// The warning: an urgent two-tone siren, three rounds. About 1.5 seconds.
+constexpr float kStormWarningSeconds = 1.5f;
+inline std::vector<int16_t> BuildStormWarning() {
+    using namespace tune_detail;
+    const int total = static_cast<int>(kStormWarningSeconds * kTuneRate);
+    std::vector<int16_t> out(static_cast<size_t>(total), 0);
+    for (int i = 0; i < total; i++) {
+        const float t = static_cast<float>(i) / kTuneRate;
+        const int step = static_cast<int>(t / 0.125f);            // eighth-second beeps, alternating high and low
+        const float local = std::fmod(t, 0.125f);
+        const float hz = (step % 2 == 0) ? 880.0f : 660.0f;
+        const float env = std::min(1.0f, local / 0.005f) * std::min(1.0f, (0.125f - local) / 0.02f);
+        const float fade = std::min(1.0f, (kStormWarningSeconds - t) / 0.15f);
+        out[static_cast<size_t>(i)] = static_cast<int16_t>(0.45f * env * fade * Triangle(hz * t) * 30000.0f);
+    }
+    return out;
+}
+
 } // namespace royale

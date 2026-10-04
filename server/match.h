@@ -58,6 +58,8 @@ struct PlayerState {
     float dmgTakenUntil = 0, dmgTakenMult = 1;
 
     float attackReadyAt = 0;
+    float rollUntil = 0;     // a dodge roll in progress: attacks aimed at a rolling player miss
+    float rollReadyAt = 0;   // the next roll can start at this time
     int kills = 0;
     float damageDealt = 0;  // hearts of damage done to other players (storm and burn-out excluded)
     int chestsOpened = 0;
@@ -120,6 +122,7 @@ struct AttackResult {
     bool hit = false;
     float damage = 0;
     bool killed = false;
+    bool dodged = false; // the target was rolling: the attack was spent but missed
 };
 
 // What a player's gear adds up to right now.
@@ -300,6 +303,19 @@ class Match {
     // Attack with the attacker's equipped weapon. `hit` is the outcome of the accuracy roll (bots roll it themselves,
     // for humans the client reports it). A miss still spends the cooldown. Range and cooldown are checked here, and a stunned
     // or frozen attacker can't attack at all. The weapon's own effect (burn, freeze, stun, shield piercing, explosion) applies on a hit.
+    // A dodge roll. Bots call this when they decide to roll; for humans the game does the rolling and the server notices the roll animation in
+    // their input (see GameServer). It lasts a third of a second and can't be repeated for a while. Hits that would land while it lasts miss.
+    static constexpr float kRollSeconds = 0.35f, kRollCooldown = 1.1f;
+    bool StartRoll(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || clock < p->rollReadyAt || Stunned(*p)) return false;
+        p->rollUntil = clock + kRollSeconds;
+        p->rollReadyAt = clock + kRollCooldown;
+        return true;
+    }
+    bool Rolling(const PlayerState& p) const { return clock < p.rollUntil; }
+    bool CanRoll(const PlayerState& p) const { return p.alive && clock >= p.rollReadyAt && !Stunned(p); }
+
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
@@ -314,6 +330,7 @@ class Match {
         a->attackReadyAt = clock + w.cooldown;
         r.ok = true;
         if (!hit) return r;
+        if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
         const GearTotals ag = TotalsOf(*a);
         const float base = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);

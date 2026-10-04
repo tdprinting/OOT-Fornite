@@ -3160,6 +3160,78 @@ void StormEdgeFx(const royale::HudState& hud) {
     }
 }
 
+// ---- storm alerts ------------------------------------------------------------------------------------------------------------
+// A jingle (with a banner) whenever the storm changes phase, a siren fifteen and five seconds before the zone starts to close, and a siren every
+// few seconds while you are standing in the storm. The sounds are synthesised in shared/tune.h and played on a small audio stream of their own.
+struct OneShotAudio {
+    SDL_AudioDeviceID device = 0;
+    bool failed = false;
+    std::vector<int16_t> jingle, warning;
+};
+OneShotAudio gOneShot;
+
+void PlayOneShot(bool jingle) {
+    if (gOneShot.failed) return;
+    if (gOneShot.device == 0) {
+        SDL_AudioSpec want = {}, have = {};
+        want.freq = royale::kTuneRate; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 1024; want.callback = nullptr;
+        gOneShot.device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (gOneShot.device == 0) { gOneShot.failed = true; return; }
+        SDL_PauseAudioDevice(gOneShot.device, 0);
+        gOneShot.jingle = royale::BuildStormJingle();
+        gOneShot.warning = royale::BuildStormWarning();
+    }
+    const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f);
+    if (volume < 0.01f) return;
+    const std::vector<int16_t>& src = jingle ? gOneShot.jingle : gOneShot.warning;
+    std::vector<int16_t> out(src.size());
+    for (size_t i = 0; i < src.size(); i++) out[i] = static_cast<int16_t>(src[i] * volume);
+    SDL_ClearQueuedAudio(gOneShot.device);
+    SDL_QueueAudio(gOneShot.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
+}
+
+void DriveStormAlerts(const royale::HudState& hud) {
+    static int lastPhase = -1;
+    static bool lastShrinking = false;
+    static int warned = -1;            // the last countdown warning given for this hold (15 or 5)
+    static double nextOutsideSiren = 0;
+    if (!gSession.Joined() || hud.state != royale::MatchState::InMatch) { lastPhase = -1; warned = -1; return; }
+    const double now = ImGui::GetTime();
+    if (lastPhase < 0) { lastPhase = hud.stormPhase; lastShrinking = hud.stormShrinking; return; }
+    if (hud.stormPhase != lastPhase || hud.stormShrinking != lastShrinking) {
+        if (hud.stormPhase >= royale::kStormPhaseCount) {
+            ShowBanner("THE STORM HAS TAKEN THE MAP", IM_COL32(190, 120, 255, 255), 3.2f);
+        } else if (hud.stormShrinking) {
+            ShowBanner("THE STORM IS CLOSING IN!", IM_COL32(190, 120, 255, 255), 3.4f);
+            Say("The storm is closing in: get inside the white circle on the map");
+        } else {
+            ShowBanner("The storm holds. A new safe zone is marked", IM_COL32(210, 190, 255, 255), 2.8f);
+            Say("Zone " + std::to_string(hud.stormPhase + 1) + ": the storm holds for " + std::to_string(static_cast<int>(hud.stormSecondsLeft)) + " seconds");
+        }
+        PlayOneShot(true);
+        warned = -1;
+        lastPhase = hud.stormPhase;
+        lastShrinking = hud.stormShrinking;
+    }
+    if (!hud.stormShrinking && hud.stormPhase < royale::kStormPhaseCount) {
+        const int left = static_cast<int>(std::ceil(hud.stormSecondsLeft));
+        if (left <= 15 && left > 5 && warned < 15) {
+            warned = 15;
+            ShowBanner("The storm closes in 15 seconds", IM_COL32(255, 200, 90, 255), 2.4f);
+            PlayOneShot(false);
+        } else if (left <= 5 && left > 0 && warned < 5) {
+            warned = 5;
+            ShowBanner("The storm closes in 5 seconds!", IM_COL32(255, 110, 90, 255), 2.2f);
+            PlayOneShot(false);
+        }
+    }
+    if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging
+        nextOutsideSiren = now + 4.0;
+        PlayOneShot(false);
+        Say("You are in the storm! Run for the safe zone");
+    }
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -3179,6 +3251,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     if (joined && IsLive(hud) && InGame()) StormEdgeFx(hud);
     UpdateBossWorldFx();
+    DriveStormAlerts(hud);
     gStateNow = hud.state;
     SealExits(hud);
     DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());

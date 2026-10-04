@@ -418,6 +418,7 @@ class GameServer {
         p->y = in.y;
         p->rot = in.rot;
         p->anim = in.anim;
+        if (in.anim == static_cast<uint8_t>(Anim::Roll) && sim.match.CanRoll(*p)) sim.match.StartRoll(p->id); // a human's roll counts from the moment it starts
         p->scene = in.scene;
     }
 

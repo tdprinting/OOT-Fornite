@@ -81,10 +81,10 @@ class BotController {
     static Tuning TuningFor(BotDifficulty d) {
         switch (d) {
             case BotDifficulty::Easy:   return {0.35f, 0.6f, 0.7f, 1.3f, 650.0f, 0.4f, 0.0f, false, false};
-            case BotDifficulty::Hard:   return {0.75f, 0.97f, 0.08f, 0.25f, 1200.0f, 1.0f, 0.75f, true, true};
+            case BotDifficulty::Hard:   return {0.78f, 0.97f, 0.08f, 0.22f, 1300.0f, 1.0f, 0.9f, true, true};
             case BotDifficulty::Normal: break;
         }
-        return {0.55f, 0.9f, 0.25f, 0.6f, kSight, 0.85f, 0.35f, true, true};
+        return {0.55f, 0.9f, 0.25f, 0.55f, kSight, 0.85f, 0.55f, true, true};
     }
 
     struct Memory {
@@ -111,6 +111,15 @@ class BotController {
         float progressAt = -1;
         float unstickUntil = 0;
         Vec2 unstickDir = {};
+        // combat reflexes
+        float rollUntil = 0;           // mid-roll until this time
+        Vec2 rollDir = {};
+        Vec2 prevFoePos = {};          // where the target was last tick, for its velocity
+        Vec2 foeVel = {};
+        float prevFoeAt = -1;
+        float dodgeCycle = -1;         // the foe's attackReadyAt we last decided about, so each swing gets one decision
+        bool dodgeThisSwing = false;
+        float hazardNoticeAt = -1;     // when the bot will have noticed the blast ring or fire cone it is standing in
     };
 
     Rng rng;
@@ -275,7 +284,66 @@ class BotController {
         const bool moved = Advance(m, p, vx, vz, step);
         if (!moved) mem.strafeDir = -mem.strafeDir;
         p.rot = FaceAngle(p.pos, foe.pos);
-        p.anim = static_cast<uint8_t>(moved ? Anim::Run : Anim::Idle);
+        // The footwork of a Z-targeting player: shuffles sideways round the foe, backs off, or squares up.
+        Anim a = Anim::Stance;
+        if (moved) a = radial > 0.3f ? Anim::Run : radial < -0.3f ? Anim::Back : (mem.strafeDir > 0 ? Anim::SideR : Anim::SideL);
+        p.anim = static_cast<uint8_t>(a);
+    }
+
+    // ---- reflexes: rolling and getting out of the way ----------------------------------------------------------------------------
+
+    // Roll in direction (dx, dz): a fast hop of about 140 units during which hits miss. Returns false if a roll isn't possible right now.
+    bool RollToward(Match& m, PlayerState& p, Memory& mem, float dx, float dz) {
+        const float len = std::hypot(dx, dz);
+        if (len < 1e-4f || !m.StartRoll(p.id)) return false;
+        mem.rollDir = {dx / len, dz / len};
+        mem.rollUntil = m.Clock() + Match::kRollSeconds;
+        return true;
+    }
+
+    // Blast rings and the dragon's fire cone: get out of them. Short-range escapes are walked, close calls are rolled. Easy bots notice late.
+    bool AvoidHazards(Match& m, PlayerState& p, Memory& mem, float dt, const Tuning& tune) {
+        const float now = m.Clock();
+        Vec2 away = {0, 0};
+        float urgency = 1e9f;   // seconds until it goes off
+        bool inDanger = false;
+        for (const Strike& st : m.Strikes()) {
+            if (st.applied || Distance(p.pos, st.at) > st.radius + 70.0f) continue;
+            inDanger = true;
+            urgency = (std::min)(urgency, st.hitAt - now);
+            const float dx = p.pos.x - st.at.x, dz = p.pos.z - st.at.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+            away.x += dx / d; away.z += dz / d;
+            if (d < 2.0f) { away.x += 1.0f; }
+        }
+        for (const MiniBoss& b : m.Bosses()) {
+            if (!b.alive || !IsDragonKind(b.kind) || b.mode != DragonMode::Breath) continue;
+            const float dx = p.pos.x - b.pos.x, dz = p.pos.z - b.pos.z, d = std::hypot(dx, dz);
+            if (d > kDragonBreathRange + 80.0f) continue;
+            const float face = static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
+            float off = std::atan2(dx, dz) - face;
+            while (off > 3.14159265f) off -= 6.2831853f;
+            while (off < -3.14159265f) off += 6.2831853f;
+            if (std::fabs(off) > kDragonBreathHalfAngle + 0.25f) continue;
+            inDanger = true;
+            urgency = (std::min)(urgency, 0.3f);
+            const float side = off >= 0 ? 1.0f : -1.0f;               // leave the cone by the nearer edge
+            away.x += std::cos(face) * side; away.z += -std::sin(face) * side;
+        }
+        if (!inDanger) { mem.hazardNoticeAt = -1; return false; }
+        if (mem.hazardNoticeAt < 0) mem.hazardNoticeAt = now + mem.reaction * 0.6f;
+        if (now < mem.hazardNoticeAt) return false;                   // hasn't noticed yet
+        if (tune.dodge <= 0 && urgency > 0.8f) return false;           // Easy bots only react at the last moment
+        const float len = std::hypot(away.x, away.z);
+        if (len < 1e-3f) return false;
+        if (urgency < 0.5f && m.CanRoll(p) && rng.Unit() < 0.4f + 0.6f * tune.dodge && RollToward(m, p, mem, away.x, away.z)) {
+            p.anim = static_cast<uint8_t>(Anim::Roll);
+            return true;
+        }
+        const float step = kRunSpeed * m.SpeedMultiplier(p) * dt;
+        Advance(m, p, away.x, away.z, step);
+        p.rot = FaceAngle(p.pos, {p.pos.x + away.x, p.pos.z + away.z});
+        p.anim = static_cast<uint8_t>(Anim::Run);
+        return true;
     }
 
     // ---- perception and targeting -----------------------------------------------------------------------------------------
@@ -486,6 +554,12 @@ class BotController {
         const float now = m.Clock();
         p.anim = static_cast<uint8_t>(Anim::Idle); // overridden when the bot moves
         if (m.Stunned(p)) return;                  // frozen in place
+        if (now < mem.rollUntil) {                  // mid-roll: tumble on in the chosen direction
+            Advance(m, p, mem.rollDir.x, mem.rollDir.z, kRunSpeed * 3.4f * dt);
+            p.rot = FaceAngle(p.pos, {p.pos.x + mem.rollDir.x, p.pos.z + mem.rollDir.z});
+            p.anim = static_cast<uint8_t>(Anim::Roll);
+            return;
+        }
 
         // Perceive. Taking damage alerts the bot and widens its senses for a few seconds.
         if (p.health < mem.lastHealth - 0.12f) mem.alertUntil = now + 5.0f;
@@ -495,7 +569,13 @@ class BotController {
 
         PlayerState* foe = ChooseTarget(m, p, mem, sight);
         if (foe) {
-            if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; }
+            if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
+            if (mem.prevFoeAt >= 0 && now > mem.prevFoeAt) { // how it is moving, smoothed (for leading shots and judging its dodges)
+                const float k = 1.0f / (now - mem.prevFoeAt);
+                mem.foeVel = {mem.foeVel.x * 0.6f + (foe->pos.x - mem.prevFoePos.x) * k * 0.4f, mem.foeVel.z * 0.6f + (foe->pos.z - mem.prevFoePos.z) * k * 0.4f};
+            }
+            mem.prevFoePos = foe->pos;
+            mem.prevFoeAt = now;
             mem.lastSeen = foe->pos;
             mem.lastSeenAt = now;
         } else {
@@ -525,6 +605,7 @@ class BotController {
         if (s.fleeing && s.advantage > 1.6f) mem.fleeUntil = 0; // the tables turned
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
+        if (AvoidHazards(m, p, mem, dt, tune)) return;
         if (TryHeal(m, p, s)) return;
         if (TryShield(m, p, s)) return;
         TryAbility(m, p, mem, s);
@@ -537,8 +618,20 @@ class BotController {
         }
 
         // Mini bosses: a weak bot keeps well away from them; a strong, healthy one goes after them for the loot (unless a player is on top of it).
-        if (const MiniBoss* boss = NearestBoss(m, p, 650.0f)) {
+        const MiniBoss* boss = NearestBoss(m, p, 650.0f);
+        for (const MiniBoss& b : m.Bosses()) { // the dragon notices from much further off, so bots watch for it further off too
+            if (!b.alive || !IsDragonKind(b.kind) || Distance(p.pos, b.pos) > 1400.0f) continue;
+            if (!boss || Distance(p.pos, b.pos) < Distance(p.pos, boss->pos)) boss = &b;
+        }
+        if (boss) {
             const float bd = Distance(p.pos, boss->pos);
+            const bool dragon = IsDragonKind(boss->kind);
+            const WeaponStats bw = WeaponOf(p.weapon.item);
+            if (dragon && boss->y > kDragonAirborneAbove && !bw.ranged) { // swords and hammers can't reach it in the air: stay clear
+                if (bd < 800.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
+            } else if (dragon && !(tune.hunt && p.health >= 2.4f && mem.aggression > 0.35f)) {
+                if (bd < 700.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
+            } else {
             const bool strong = p.health >= 2.4f && EffectiveDps(p.weapon) * TotalsOf(p).melee >= 1.8f && mem.aggression > 0.35f && tune.hunt;
             if (!strong || p.health < 1.3f) {
                 if (bd < 420.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 500.0f), dt, 1.0f); return; }
@@ -547,12 +640,13 @@ class BotController {
                 const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
                 if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
                 else { p.rot = FaceAngle(p.pos, boss->pos); }
-                if (bd <= w.range * 1.1f + kBossBodyRadius && m.Clock() >= p.attackReadyAt) m.Attack(p.id, boss->id, rng.Unit() < mem.skill);
+                if (bd <= w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius) && m.Clock() >= p.attackReadyAt) m.Attack(p.id, boss->id, rng.Unit() < mem.skill);
                 // Back away just before it smashes, then return.
                 if (bd < kBossReach + 30.0f && boss->attackReadyAt - m.Clock() < 0.35f) {
                     Advance(m, p, p.pos.x - boss->pos.x, p.pos.z - boss->pos.z, kRunSpeed * dt * 1.2f);
                 }
                 return;
+            }
             }
         }
 
@@ -655,7 +749,7 @@ class BotController {
             const float sc = fit(p.reserve[i]);
             if (sc > bestScore * 1.25f) { bestScore = sc; best = static_cast<int>(i) + 1; }
         }
-        if (best > 0 && m.SelectWeapon(p.id, best)) mem.switchAt = m.Clock() + 3.0f;
+        if (best > 0 && m.SelectWeapon(p.id, best)) mem.switchAt = m.Clock() + 1.6f;
     }
 
     void FightEnemy(Match& m, PlayerState& p, Memory& mem, const PlayerState& foe, float dist, float advantage, float dt, const Tuning& tune) {
@@ -670,8 +764,22 @@ class BotController {
             want = (std::max)(want, theirs.range * 2.0f);
             if (m.Clock() < p.attackReadyAt) want += 60.0f;
         }
-        // Dodge: sidestep right before the foe's attack lands.
-        if (tune.dodge > 0 && foe.attackReadyAt - m.Clock() < 0.25f && dist < theirs.range * 1.15f && rng.Unit() < tune.dodge * 0.3f) {
+        // Dodge: when the foe is about to swing or shoot, roll out of the way (sideways, across its line of attack) if it can, otherwise sidestep.
+        // One decision per attack: whether this swing gets dodged depends on the bot's reflexes.
+        const bool foeWillAttack = !m.Stunned(foe) && foe.attackReadyAt - m.Clock() < 0.24f && dist < theirs.range * 1.2f + 40.0f;
+        if (foeWillAttack && mem.dodgeCycle != foe.attackReadyAt) {
+            mem.dodgeCycle = foe.attackReadyAt;
+            mem.dodgeThisSwing = rng.Unit() < tune.dodge * (0.55f + 0.45f * mem.skill);
+        }
+        if (foeWillAttack && mem.dodgeThisSwing) {
+            mem.dodgeThisSwing = false;
+            const float toX = foe.pos.x - p.pos.x, toZ = foe.pos.z - p.pos.z;
+            if (m.CanRoll(p) && RollToward(m, p, mem, -toZ * mem.strafeDir, toX * mem.strafeDir)) {
+                p.anim = static_cast<uint8_t>(Anim::Roll);
+                p.rot = FaceAngle(p.pos, foe.pos);
+                if (m.Clock() >= p.attackReadyAt && dist <= mine.range) m.Attack(p.id, foe.id, rng.Unit() < mem.skill * 0.8f); // and swing back before rolling off
+                return;
+            }
             mem.strafeDir = -mem.strafeDir;
             mem.strafeFlipAt = m.Clock() + 0.5f;
         }
@@ -685,8 +793,14 @@ class BotController {
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
         if (m.Invulnerable(foe)) return; // don't waste a swing
         float chance = mem.skill * (w.ranged ? 1.0f - 0.35f * (dist / w.range) : 1.0f);
+        // A moving target across the line of fire is harder to hit; a good shot leads it, a poor one doesn't.
+        if (w.ranged && dist > 1.0f) {
+            const float lx = (foe.pos.x - p.pos.x) / dist, lz = (foe.pos.z - p.pos.z) / dist;
+            const float across = std::fabs(mem.foeVel.x * -lz + mem.foeVel.z * lx) / kRunSpeed; // 0 standing or running straight, 1 running across
+            chance -= across * 0.55f * (1.0f - mem.skill) * (0.5f + dist / w.range);
+        }
         if (m.Stunned(foe)) chance = (std::min)(1.0f, chance + 0.25f);
-        m.Attack(p.id, foe.id, rng.Unit() < chance);
+        m.Attack(p.id, foe.id, rng.Unit() < (std::max)(0.05f, chance));
     }
 };
 

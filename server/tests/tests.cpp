@@ -1095,6 +1095,100 @@ static void BotsPickUpFairiesAndHearts() {
     CHECK(b->maxHealth > kMaxHealth);
 }
 
+static void StormJingleAndWarning() {
+    const std::vector<int16_t> jingle = BuildStormJingle(), warning = BuildStormWarning();
+    CHECK(jingle.size() == static_cast<size_t>(kStormJingleSeconds * kTuneRate) && warning.size() == static_cast<size_t>(kStormWarningSeconds * kTuneRate));
+    for (const auto* buf : {&jingle, &warning}) {
+        int peak = 0;
+        double energy = 0;
+        for (int16_t v : *buf) { peak = std::max(peak, std::abs(static_cast<int>(v))); energy += static_cast<double>(v) * v; }
+        CHECK(peak > 6000 && peak < 32000 && energy / buf->size() > 1.0e6);               // audible, and never clipping
+        CHECK(std::abs(static_cast<int>(buf->back())) < 200);                              // ends quietly: no click
+    }
+    CHECK(BuildStormJingle() == jingle && BuildStormWarning() == warning);              // deterministic
+    CHECK(jingle != warning);
+}
+
+static void RollingDodgesHits() {
+    Simulation sim = Duel(31, {0, 0}, {40, 0});
+    Match& m = sim.match;
+    PlayerState* h = m.Find(1);
+    PlayerState* b = m.Find(1000);
+    h->maxHealth = h->health = 50.0f;
+    b->weapon = {ItemId::MasterSword, Rarity::Legendary};
+    b->attackReadyAt = 0;
+    CHECK(m.StartRoll(1));
+    CHECK(!m.StartRoll(1));                                                      // not again straight away
+    const AttackResult dodged = m.Attack(1000, 1, true);
+    CHECK(dodged.ok && !dodged.hit && dodged.dodged && h->health == 50.0f);       // the blow was spent on thin air
+    Run(sim, Match::kRollSeconds + 0.1f);
+    b->attackReadyAt = 0;
+    const AttackResult landed = m.Attack(1000, 1, true);
+    CHECK(landed.hit && h->health < 50.0f);                                        // once the roll is over it lands
+    // Rolling can start again after the cooldown.
+    Run(sim, Match::kRollCooldown);
+    CHECK(m.StartRoll(1));
+    // A blast is too wide to roll out of.
+    h->health = 50.0f;
+    b->weapon = {ItemId::Bombs, Rarity::Legendary};
+    b->attackReadyAt = 0;
+    const AttackResult blast = m.Attack(1000, 1, true);
+    CHECK(blast.hit && !blast.dodged);
+}
+
+static void BotsRollAndLockOn() {
+    // In a long duel the bots use the Z-target footwork and dodge rolls.
+    std::set<int> seen;
+    int rolls = 0;
+    for (uint64_t seed = 40; seed < 46; seed++) {
+        Simulation sim(seed, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* a = sim.match.Find(1000);
+        PlayerState* b = sim.match.Find(1001);
+        a->pos = {-80, 0}; b->pos = {80, 0};
+        a->weapon = b->weapon = {ItemId::MasterSword, Rarity::Rare};
+        a->maxHealth = a->health = b->maxHealth = b->health = 400.0f;
+        for (int i = 0; i < 20 * 20; i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->alive = false;
+            for (uint32_t id : {1000u, 1001u}) {
+                const PlayerState* p = sim.match.Find(id);
+                seen.insert(p->anim);
+                rolls += p->anim == static_cast<uint8_t>(Anim::Roll);
+            }
+        }
+    }
+    CHECK(seen.count(static_cast<int>(Anim::Roll)) && rolls > 5);
+    CHECK(seen.count(static_cast<int>(Anim::SideL)) || seen.count(static_cast<int>(Anim::SideR)));
+}
+
+static void BotsLeaveBlastRings() {
+    // Hard bots standing in a marked blast walk or roll out before it lands; they are not stuck there taking it.
+    int escaped = 0, trials = 0;
+    for (uint64_t seed = 60; seed < 70; seed++) {
+        Simulation sim(seed, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* b = sim.match.Find(1000);
+        sim.match.Find(1001)->pos = {1800, 1800};
+        b->pos = {0, 0};
+        b->maxHealth = b->health = 100.0f;
+        sim.match.Find(1)->alive = false;
+        sim.match.AddStrike({0, 0}, 150.0f, 2.0f, 1.3f, kDragonId);
+        trials++;
+        for (int i = 0; i < static_cast<int>(1.4f * kTickHz); i++) { sim.Tick(kDt); sim.match.Find(1)->alive = false; }
+        if (b->health > 99.0f) escaped++;
+    }
+    CHECK(escaped >= 8 && trials == 10);
+}
+
 static void BotsAdvantageMath() {
     Simulation sim = Duel(5, {100, 0}, {0, 0});
     PlayerState* a = sim.match.Find(1000);
@@ -1796,7 +1890,7 @@ static void ShieldBar() {
 }
 
 int main() {
-    MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
