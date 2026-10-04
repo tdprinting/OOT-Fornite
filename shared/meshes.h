@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, Ripple, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -665,44 +665,13 @@ inline MeshData SnowBlanket(uint32_t variant) {
     return b.mesh;
 }
 
-// A rain puddle, about 200 across and flat on the ground: a rim of wet, dark earth, then water that is deep blue-grey at the edge and pales
-// towards a patch of reflected sky set off to one side (the side the sun comes from). Colours are per vertex and blend smoothly, the way the
-// game's own water is painted; the game layer draws it see-through so the ground shows under the shallow edge.
-inline MeshData Puddle(uint32_t variant) {
-    MeshData m;
-    Lcg rng(1000 + variant);
-    const int n = 14;
-    float jag[n];
-    for (int i = 0; i < n; i++) jag[i] = 0.72f + rng.Next() * 0.45f;
-    // Rings from the rim inwards: radius (share of the outline), how far the centre slides towards the sky patch, and colour.
-    struct RingDef { float r, shift; Rgb c; };
-    const RingDef rings[4] = { {1.00f, 0.00f, {78, 64, 48}}, {0.86f, 0.05f, {46, 58, 72}}, {0.58f, 0.18f, {72, 92, 116}}, {0.26f, 0.34f, {146, 170, 196}} };
-    const V3 sky = {-38.0f, 0, 26.0f};   // where the bright reflection sits (towards the sun, upper left front)
-    auto at = [&](int ring, int i) {
-        const float a = static_cast<float>(i) / n * 6.2831853f;
-        const float r = 100.0f * rings[ring].r * jag[i];
-        return V3{std::cos(a) * r + sky.x * rings[ring].shift, 0.0f, std::sin(a) * r + sky.z * rings[ring].shift};
-    };
-    for (int r = 0; r < 3; r++)
-        for (int i = 0; i < n; i++) {
-            const int k = (i + 1) % n;
-            const V3 a = at(r, i), b = at(r, k), c = at(r + 1, k), d = at(r + 1, i);
-            Put(m, a, rings[r].c); Put(m, b, rings[r].c); Put(m, c, rings[r + 1].c);
-            Put(m, a, rings[r].c); Put(m, c, rings[r + 1].c); Put(m, d, rings[r + 1].c);
-        }
-    const V3 centre = {sky.x * 0.42f, 0.0f, sky.z * 0.42f};
-    const Rgb glint = {178, 198, 220};
-    for (int i = 0; i < n; i++) { Put(m, at(3, i), rings[3].c); Put(m, at(3, (i + 1) % n), rings[3].c); Put(m, centre, glint); }
-    return m;
-}
-
 // One ring of a raindrop's ripple: a thin flat band 40 across, bright at its crest and fading to the water's colour on both sides. The game
 // layer grows and fades it out over a moment, a few at a time on every puddle while it rains.
 inline MeshData Ripple(uint32_t) {
     MeshData m;
     const int n = 12;
     const float rad[3] = {15.0f, 18.0f, 20.0f};
-    const Rgb col[3] = {{120, 140, 162}, {222, 232, 244}, {120, 140, 162}};
+    const Rgb col[3] = {{96, 150, 200}, {222, 236, 248}, {96, 150, 200}};
     for (int r = 0; r < 2; r++)
         for (int i = 0; i < n; i++) {
             const float a0 = static_cast<float>(i) / n * 6.2831853f, a1 = static_cast<float>(i + 1) / n * 6.2831853f;
@@ -847,6 +816,101 @@ inline MeshData CatLeg(uint32_t variant) {   // 0 a front leg, 1 a hind leg (a f
     return m;
 }
 
+
+// ---- ground cover for the weather: puddles, fallen leaves, ash and sand drifts ----------------------------------------------------------------------------
+// The same flat-shaded, chunky look as the rest (and the snow mounds above): low shapes that lie on the ground. They are made once and drawn many times by
+// the game layer, which decides where and how much from how long the weather has lasted.
+
+// A low dome, `rx` by `rz` across and `h` high, in coloured faces: colour(face number) picks each face's colour.
+template <class F>
+inline MeshData Mound(float rx, float rz, float h, uint32_t seed, F colour) {
+    Builder b;
+    b.inside = {0, -20, 0};
+    Lcg rng(seed);
+    const int n = 10;
+    const float rad[3] = {1.0f, 0.72f, 0.38f}, hgt[3] = {0.0f, 0.55f, 0.9f};
+    std::vector<V3> ring[3];
+    for (int r = 0; r < 3; r++)
+        for (int i = 0; i < n; i++) {
+            const float a = static_cast<float>(i) / n * 6.2831853f;
+            const float j = r == 0 ? 0.76f + rng.Next() * 0.48f : 0.88f + rng.Next() * 0.24f;
+            ring[r].push_back({std::cos(a) * rx * rad[r] * j, h * hgt[r] + (r == 0 ? 0.0f : rng.Next() * h * 0.12f), std::sin(a) * rz * rad[r] * j});
+        }
+    int face = 0;
+    for (int r = 0; r < 2; r++)
+        for (int i = 0; i < n; i++) {
+            const int k = (i + 1) % n;
+            b.Tri(ring[r][i], ring[r][k], ring[r + 1][k], colour(face++));
+            b.Tri(ring[r][i], ring[r + 1][k], ring[r + 1][i], colour(face++));
+        }
+    for (int i = 0; i < n; i++) b.Tri(ring[2][i], ring[2][(i + 1) % n], {0, h, 0}, colour(face++));
+    return b.mesh;
+}
+
+// A puddle: a flat irregular pool, dark at the rim and lit towards the middle like the sky in it (water: variant 0-3 are shapes), with a ring of wet
+// earth round it. Variants 4-7 are the same pools frozen over (pale, with cracks).
+inline MeshData Puddle(uint32_t variant) {
+    const bool ice = (variant / 4) % 2 == 1;
+    Lcg rng(1200 + variant % 4);
+    MeshData m;
+    const int n = 12;
+    const float R = 92.0f;
+    std::vector<V3> wet, rim, mid;
+    for (int i = 0; i < n; i++) {
+        const float a = static_cast<float>(i) / n * 6.2831853f;
+        const float stretch = 0.78f + rng.Next() * 0.5f, flat = 0.7f + 0.3f * ((variant % 4) / 3.0f);
+        const float x = std::cos(a) * R * stretch, z = std::sin(a) * R * stretch * flat;
+        wet.push_back({x * 1.3f, 0.15f, z * 1.3f});
+        rim.push_back({x, 0.7f, z});
+        mid.push_back({x * 0.6f, 0.8f, z * 0.6f});
+    }
+    const Rgb earth = ice ? Rgb{205, 214, 226} : Rgb{72, 64, 56}, edge = ice ? Rgb{176, 204, 224} : Rgb{50, 88, 124};
+    const Rgb inner = ice ? Rgb{214, 232, 246} : Rgb{86, 146, 200}, centre = ice ? Rgb{240, 248, 255} : Rgb{136, 192, 232};
+    auto flatLit = [&](Rgb c, float k) { return Rgb{c.r * k, c.g * k, c.b * k}; };
+    for (int i = 0; i < n; i++) {
+        const int k = (i + 1) % n;
+        const float sky = 0.9f + 0.18f * std::cos(static_cast<float>(i) / n * 6.2831853f + 2.4f);   // the upper left of the pool catches more light
+        Put(m, wet[i], earth); Put(m, wet[k], earth); Put(m, rim[k], flatLit(edge, 0.9f));
+        Put(m, wet[i], earth); Put(m, rim[k], flatLit(edge, 0.9f)); Put(m, rim[i], flatLit(edge, 0.9f));
+        Put(m, rim[i], flatLit(edge, 0.9f)); Put(m, rim[k], flatLit(edge, 0.9f)); Put(m, mid[k], flatLit(inner, sky));
+        Put(m, rim[i], flatLit(edge, 0.9f)); Put(m, mid[k], flatLit(inner, sky)); Put(m, mid[i], flatLit(inner, sky));
+        Put(m, mid[i], flatLit(inner, sky)); Put(m, mid[k], flatLit(inner, sky)); Put(m, {0, 0.85f, 0}, flatLit(centre, sky));
+    }
+    if (ice)   // cracks across the ice
+        for (int c = 0; c < 3; c++) {
+            const float a = rng.Next() * 6.2831853f, w = 1.6f;
+            const V3 p0 = {std::cos(a) * R * 0.1f, 0.95f, std::sin(a) * R * 0.1f}, p1 = {std::cos(a + 0.4f) * R * 0.55f, 0.95f, std::sin(a + 0.4f) * R * 0.55f};
+            Put(m, p0, {120, 150, 180}); Put(m, {p1.x + w, 0.95f, p1.z}, {120, 150, 180}); Put(m, {p1.x - w, 0.95f, p1.z + w}, {120, 150, 180});
+        }
+    return m;
+}
+
+// A heap of fallen leaves (red and orange, golden, brown, or a mix) in the autumn.
+inline MeshData LeafPile(uint32_t variant) {
+    static const Rgb pal[4][4] = {{{206, 66, 40}, {226, 120, 44}, {170, 50, 36}, {236, 150, 60}}, {{236, 196, 70}, {214, 160, 50}, {248, 220, 110}, {196, 140, 44}},
+                                  {{140, 96, 52}, {110, 76, 44}, {170, 120, 66}, {96, 66, 40}}, {{206, 66, 40}, {236, 196, 70}, {140, 96, 52}, {120, 150, 60}}};
+    Lcg pick(500 + variant);
+    const Rgb* p = pal[variant % 4];
+    return Mound(62.0f, 54.0f, 15.0f, 520 + variant, [&](int) { return p[static_cast<int>(pick.Next() * 3.99f)]; });
+}
+
+// A drift of ash (the ash weather): grey and black, with a few faces still glowing.
+inline MeshData AshDrift(uint32_t variant) {
+    Lcg pick(600 + variant);
+    return Mound(74.0f, 64.0f, 13.0f, 620 + variant, [&](int) {
+        const float r = pick.Next();
+        if (r < 0.1f) return Rgb{230, 110, 40};
+        if (r < 0.45f) return Rgb{58, 54, 56};
+        return Rgb{112, 108, 110};
+    });
+}
+
+// A ridge of sand (the sandstorm), long and low, lying across the wind.
+inline MeshData SandDrift(uint32_t variant) {
+    Lcg pick(700 + variant);
+    return Mound(120.0f, 48.0f, 17.0f, 720 + variant, [&](int f) { return (f % 3 == 0) ? Rgb{196, 160, 100} : (pick.Next() < 0.5f ? Rgb{222, 190, 126} : Rgb{238, 212, 150}); });
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -861,6 +925,10 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Sign: return mesh_detail::Sign();
         case MeshKind::Ally: return mesh_detail::Ally(variant);
         case MeshKind::Cat: return mesh_detail::Cat();
+        case MeshKind::Puddle: return mesh_detail::Puddle(variant);
+        case MeshKind::LeafPile: return mesh_detail::LeafPile(variant);
+        case MeshKind::AshDrift: return mesh_detail::AshDrift(variant);
+        case MeshKind::SandDrift: return mesh_detail::SandDrift(variant);
         case MeshKind::CatBody: return mesh_detail::CatBody();
         case MeshKind::CatHead: return mesh_detail::CatHead(variant);
         case MeshKind::CatTailSeg: return mesh_detail::CatTailSeg(variant);
@@ -868,7 +936,6 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Grass: return mesh_detail::Grass(variant);
         case MeshKind::Tree: return mesh_detail::Tree(variant);
         case MeshKind::SnowPatch: return mesh_detail::SnowPatch(variant);
-        case MeshKind::Puddle: return mesh_detail::Puddle(variant);
         case MeshKind::Ripple: return mesh_detail::Ripple(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);

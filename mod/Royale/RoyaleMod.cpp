@@ -2183,14 +2183,14 @@ void DrawFlora(PlayState* play) {
                 if (d > reach) continue;
                 const FloraSpot* spot = FloraSpotAt(3, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4);
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4 + (season == 3 ? 4u : 0u));   // frozen over in winter
                 if (m == nullptr || m->dl.empty()) continue;
                 const float size = (0.35f + 0.75f * gPuddleCover) * (0.7f + 0.6f * Flora01(cx, cz, 55));
                 const float f = fade(d, reach);
                 if (f < 0.02f) continue;
                 const float yaw = Flora01(cx, cz, 56) * 6.2831853f;
                 DrawGroundXlu(play, m, x, spot->y + 1.0f, z, spot->sx, spot->sz, yaw, size, static_cast<int>(215.0f * f * std::min(1.0f, gPuddleCover * 3.0f)));
-                if (!raining || ripple == nullptr || ripple->dl.empty() || d > rippleReach) continue;
+                if (!raining || season == 3 || ripple == nullptr || ripple->dl.empty() || d > rippleReach) continue;
                 const int rings = 1 + static_cast<int>(rainNow * 3.0f);
                 for (int j = 0; j < rings; j++) {   // each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle
                     const float phase = t / 0.8f + Flora01(cx, cz, 60 + j);

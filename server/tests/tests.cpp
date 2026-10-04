@@ -2168,7 +2168,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
-            if (static_cast<MeshKind>(k) == MeshKind::Puddle) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 140 && mx[0] - mn[0] < 240);   // lies flat on the ground
+            if (static_cast<MeshKind>(k) == MeshKind::Puddle) CHECK(mx[1] < 2.0f && mx[0] - mn[0] > 140 && mx[0] - mn[0] < 320);   // lies flat on the ground
             if (static_cast<MeshKind>(k) == MeshKind::Ripple) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 35 && mx[0] - mn[0] < 45);
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
