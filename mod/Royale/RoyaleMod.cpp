@@ -71,6 +71,7 @@ extern PlayState* gPlayState;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
+extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 }
@@ -554,6 +555,16 @@ std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
 
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
+// Sprinting, seen on anyone: the run cycle sped up (Link's own follows his real speed) and small puffs of dust from the heels.
+constexpr float kSprintAnimSpeed = 1.45f;
+void SprintDust(PlayState* play, Actor* actor, u32 frame) {
+    if (frame % 3 != 0) return;
+    Vec3f at = actor->world.pos;
+    const float back = actor->shape.rot.y * (3.14159265f / 32768.0f);
+    at.x -= std::sin(back) * 12.0f;
+    at.z -= std::cos(back) * 12.0f;
+    Actor_SpawnFloorDustRing(play, actor, &at, 8.0f, 1, 4.0f, 70, 15, true);
+}
 // Actions are played once, from their first frame, each time one begins (see Puppet_Update); `combo` varies a sword's slash.
 bool OneShotAnim(uint8_t anim) {
     switch (static_cast<royale::Anim>(anim)) {
@@ -597,6 +608,7 @@ LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemI
         case royale::Anim::Emote5: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;      // the chicken dance poses the limbs itself (ApplyChickenDance)
         case royale::Anim::Walk:
         case royale::Anim::Run:
+        case royale::Anim::Sprint:   // the same run, played faster (see Puppet_Update)
             return (LinkAnimationHeader*)&gPlayerAnim_link_normal_run;
         default: // Idle, Attack, Hurt, Dead and anything newer than this build: stand still for now
             return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;
@@ -749,6 +761,12 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         if (OneShotAnim(s.anim) || restart) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
         else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
         gPlaying[actor] = (const void*)want;
+    }
+    if (s.anim == static_cast<uint8_t>(royale::Anim::Sprint)) {   // legs pump faster and dust kicks up, like the local player's sprint
+        player->skelAnime.playSpeed = kSprintAnimSpeed;
+        if (actor->bgCheckFlags & 1) SprintDust(play, actor, play->gameplayFrames);
+    } else if (s.anim == static_cast<uint8_t>(royale::Anim::Run) || s.anim == static_cast<uint8_t>(royale::Anim::Walk)) {
+        player->skelAnime.playSpeed = 1.0f;
     }
     LinkAnimation_Update(play, &player->skelAnime);
     if (s.anim == static_cast<uint8_t>(royale::Anim::Emote5)) {
@@ -1324,12 +1342,14 @@ struct PropActor {
     ActorFunc origDestroy = nullptr;
     int meshKind = -1;     // royale::MeshKind drawn in place of the game's model, or -1 to leave the game's own
     uint32_t variant = 0;
+    float scale = 1.0f;    // boulders come in sizes (royale::BoulderScale)
 };
 std::unordered_map<size_t, PropActor> gProps;        // prop index -> its actor
 std::unordered_map<const Actor*, size_t> gPropOf;
 std::unordered_set<size_t> gBrokenProps;              // rocks and bushes players smashed; they stay gone
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
+constexpr float kTownSpawnRadius = 3400.0f;   // the pieces of a town (and the climbing blocks) show from further off, so you see a place before you reach it
 constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
 
 void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
@@ -1345,6 +1365,7 @@ void Prop_DrawCustom(Actor* actor, PlayState* play) {
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
     Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    if (pa->second.scale != 1.0f) Matrix_Scale(pa->second.scale, pa->second.scale, pa->second.scale, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK); // colours are baked into the vertices; draw both sides of every face
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
@@ -1405,13 +1426,19 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     pa.origDestroy = actor->destroy;
     pa.meshKind = meshKind;
     pa.variant = royale::IsPlatform(p.kind) ? static_cast<uint32_t>(p.kind) - static_cast<uint32_t>(royale::PropKind::PlatformLow) : static_cast<uint32_t>(p.rot >> 4);
+    if (royale::IsPlatform(p.kind)) pa.variant += 3u * static_cast<uint32_t>(CurrentMap().theme);   // blocks, posts and roofs in this map's stone and colours too
+    if (p.kind == royale::PropKind::Pillar || p.kind == royale::PropKind::Roof) pa.variant = static_cast<uint32_t>(CurrentMap().theme);
+    if (p.kind == royale::PropKind::Rock || p.kind == royale::PropKind::Boulder) {   // its shape, in this map's stone (meshes.h, StoneLook)
+        pa.variant = static_cast<uint32_t>(royale::BoulderShape(p.rot) + royale::kBoulderShapes * static_cast<int>(CurrentMap().theme));
+        if (p.kind == royale::PropKind::Boulder) pa.scale = royale::BoulderScale(p.rot);
+    }
     gProps[index] = pa;
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
     if (meshKind >= 0) actor->draw = Prop_DrawCustom; // the game's rock stays as the solid part, unseen; our model is what you see
     switch (p.kind) { // a blob shadow under each, sized to the model
         case royale::PropKind::Rock: actor->shape.shadowScale = 26.0f; break;
-        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f; break;
+        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f * pa.scale; break;
         case royale::PropKind::Pillar: actor->shape.shadowScale = 40.0f; break;
         case royale::PropKind::Roof: actor->shape.shadowScale = 0.0f; break;
         default: if (royale::IsPlatform(p.kind)) actor->shape.shadowScale = 0.0f; break;
@@ -1555,7 +1582,8 @@ std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
 int gFloraScene = -1;
 int gFloraBudget = 0;
 
-// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket.
+// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket, 5 small scenery
+// (Decor), 6 a town's clutter (cell = the town and the piece).
 // nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
@@ -1574,7 +1602,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
                       std::fabs(y2 - y4) < 14.0f && std::fabs(y3 - y5) < 14.0f && std::fabs(y2 + y4 - 2.0f * y) < 3.0f && std::fabs(y3 + y5 - 2.0f * y) < 3.0f;
             spot.sx = (y2 - y4) / 90.0f;
             spot.sz = (y3 - y5) / 90.0f;
-        } else if (kind == 0 || kind == 1) {   // grass and trees stay off steep ground (and cliff edges)
+        } else if (kind == 0 || kind == 1 || kind == 5 || kind == 6) {   // grass, trees and the small things stay off steep ground (and cliff edges)
             spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
         }
         if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
@@ -1583,21 +1611,60 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
             for (const royale::Poi& poi : gSession.Client()->Pois())
                 if (std::hypot(poi.center.x - x, poi.center.z - z) < poi.radius * 0.7f + 140.0f) { spot.ok = false; break; }
         }
+        if (spot.ok && kind == 6 && gSession.Client()) {   // a town's clutter stands clear of its walls, rocks and climbing blocks
+            for (const royale::Prop& p : gSession.Client()->Props()) {
+                const float clear = royale::IsPlatform(p.kind) ? 120.0f : royale::PropRadius(p.kind) + 35.0f;
+                if (royale::PropRadius(p.kind) > 0 && std::fabs(p.pos.x - x) < clear && std::fabs(p.pos.z - z) < clear) { spot.ok = false; break; }
+            }
+        }
     }
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
-constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f;
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
 
-struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; };
+// Each map's plants: Hyrule Field, Lake Hylia and Kakariko keep the leafy trees and green grass (Kakariko's trees sparser), the desert has
+// golden dry grass and palms gathered in oases, and Death Mountain has no grass, only a few dead, burnt trees.
+int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
+
+struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
-    if (Flora01(cx / 2, cz / 2, 21) < 0.45f - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
-    if (Flora01(cx, cz, 22) > 0.62f) return false;
+    const int theme = FloraTheme();
+    const float grove = theme == 4 ? 0.82f : theme == 3 ? 0.7f : theme == 2 ? 0.55f : 0.45f;   // the desert's oases and the mountain's few trees are rare
+    if (Flora01(cx / 2, cz / 2, 21) < grove - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
+    if (Flora01(cx, cz, 22) > (theme == 3 ? 0.35f : 0.62f)) return false;
     const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kTreeCell;
     const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
     if (spot == nullptr || !spot->ok) return false;
     *out = { x, spot->y, z, 0.8f + 0.5f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+    if (theme == 4) { out->kind = royale::MeshKind::ThemeTree; out->variant = FloraHash(cx, cz, 27) % 4; }          // palms
+    if (theme == 3) { out->kind = royale::MeshKind::ThemeTree; out->variant = 4u + FloraHash(cx, cz, 27) % 4; }     // dead trees
     return true;
+}
+
+// The small things on the ground between the towns (meshes.h, Decor): which of the map's six is in a cell, or -1 for none. The first two of
+// each map are the common ones; the rest turn up now and then, and each kind gathers in drifts (blocks of cells) rather than evenly.
+int DecorIn(int cx, int cz) {
+    if (Flora01(cx, cz, 81) > 0.34f * std::min(1.3f, gFoliage)) return -1;
+    const float r = Flora01(cx / 3, cz / 3, 82) * 0.6f + Flora01(cx, cz, 83) * 0.4f;
+    return r < 0.3f ? 0 : r < 0.55f ? 1 : r < 0.68f ? 2 : r < 0.8f ? 3 : r < 0.9f ? 4 : 5;
+}
+
+// The lived-in clutter round a town (meshes.h, Clutter): a few groups (a cart with hay, crates and barrels, pots by a lantern, a fire pit
+// with its logs, a signpost at the edge), placed from the town's name so everyone sees the same.
+struct ClutterPiece { float x, z, yaw; uint32_t variant; };
+void TownClutter(const royale::Poi& poi, std::vector<ClutterPiece>& out) {
+    static const uint32_t groups[5][3] = {{4, 3, 3}, {0, 1, 0}, {2, 5, 2}, {6, 0, 1}, {7, 1, 2}};
+    const int n = 6;
+    for (int g = 0; g < n; g++) {
+        const float a = (g + 0.6f * Flora01(poi.name, g, 91)) * 6.2831853f / n, d = poi.radius * (0.35f + 0.5f * Flora01(poi.name, g, 92));
+        const float gx = poi.center.x + std::cos(a) * d, gz = poi.center.z + std::sin(a) * d;
+        const uint32_t* set = groups[FloraHash(poi.name, g, 93) % 5];
+        for (int k = 0; k < 3; k++) {
+            const float b = a + k * 2.1f + Flora01(g, k, 94), r = k == 0 ? 0.0f : 46.0f + 14.0f * Flora01(poi.name + k, g, 95);
+            out.push_back({gx + std::cos(b) * r, gz + std::sin(b) * r, Flora01(poi.name, g * 3 + k, 96) * 6.2831853f, set[k]});
+        }
+    }
 }
 
 void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
@@ -1631,6 +1698,15 @@ int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.s
 void DrawFlora(PlayState* play) {
     if (!InField() || gPlayState == nullptr) return;
     if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
+    {   // a new world from the host (new towns and scenery): forget which ground was clear of them
+        static float lastSig = 0.0f;
+        float sig = 0.0f;
+        if (gSession.Client()) {
+            const auto& pois = gSession.Client()->Pois();
+            sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
+        }
+        if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); }
+    }
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     const int season = FloraSeason();
     const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
@@ -1705,16 +1781,19 @@ void DrawFlora(PlayState* play) {
         const int c0x = static_cast<int>(std::floor((px - reach) / kGrassCell)), c1x = static_cast<int>(std::floor((px + reach) / kGrassCell));
         const int c0z = static_cast<int>(std::floor((pz - reach) / kGrassCell)), c1z = static_cast<int>(std::floor((pz + reach) / kGrassCell));
         const float amp = 0.07f + 0.2f * wind, lean = 0.05f + 0.3f * wind;
-        for (int cz = c0z; cz <= c1z; cz++)
+        const int theme = FloraTheme();
+        const uint32_t grassSeason = theme == 4 ? 2u : static_cast<uint32_t>(season);   // the desert's grass is dry and golden whatever the season
+        const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
+        for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < 0.5f) continue;                                   // not a grassy patch
+                if (Flora01(cx / 6, cz / 6, 41) < grassy) continue;                                 // not a grassy patch
                 if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
                 if (d > reach) continue;
                 const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * static_cast<uint32_t>(season));
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float phase = t * (1.6f + 2.4f * wind) + x * 0.011f + z * 0.009f;
                 const float a = lean + std::sin(phase) * amp + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
@@ -1733,11 +1812,55 @@ void DrawFlora(PlayState* play) {
                 if (!TreeIn(cx, cz, season, &tr)) continue;
                 const float d = std::hypot(tr.x - px, tr.z - pz);
                 if (d > treeReach) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Tree, tr.variant);
+                const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
                 DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
             }
+    }
+
+    if (gFoliage > 0.01f) {
+        // the small things on the ground: flowers, ferns and logs in the field, reeds and driftwood by the lake, gourds and old fences in
+        // Kakariko, Bomb Flowers and embers on the mountain, cacti and bones in the desert
+        const int theme = FloraTheme();
+        const float reach = 900.0f + 700.0f * std::min(1.5f, gFoliage);
+        const int c0x = static_cast<int>(std::floor((px - reach) / kDecorCell)), c1x = static_cast<int>(std::floor((px + reach) / kDecorCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kDecorCell)), c1z = static_cast<int>(std::floor((pz + reach) / kDecorCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                const int item = DecorIn(cx, cz);
+                if (item < 0) continue;
+                const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 84)) * kDecorCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 85)) * kDecorCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(5, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Decor, static_cast<uint32_t>(item + 6 * theme));
+                if (m == nullptr || m->dl.empty()) continue;
+                const float k = (0.85f + 0.4f * Flora01(cx, cz, 86)) * fade(d, reach);
+                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 87) * 6.2831853f, 0, 0, k);
+            }
+        // the clutter of the people who live in the towns
+        if (gSession.Client()) {
+            const float townReach = 2200.0f;
+            static std::vector<ClutterPiece> pieces;
+            const auto& pois = gSession.Client()->Pois();
+            for (size_t pi = 0; pi < pois.size(); pi++) {
+                if (std::hypot(pois[pi].center.x - px, pois[pi].center.z - pz) > townReach + pois[pi].radius) continue;
+                pieces.clear();
+                TownClutter(pois[pi], pieces);
+                for (size_t k = 0; k < pieces.size(); k++) {
+                    const ClutterPiece& c = pieces[k];
+                    const float d = std::hypot(c.x - px, c.z - pz);
+                    if (d > townReach) continue;
+                    const FloraSpot* spot = FloraSpotAt(6, static_cast<int>(pi), static_cast<int>(k), c.x, c.z);
+                    if (spot == nullptr || !spot->ok) continue;
+                    const GpuMesh* m = GpuMeshFor(royale::MeshKind::Clutter, c.variant);
+                    if (m == nullptr || m->dl.empty()) continue;
+                    DrawFloraMesh(play, m, c.x, spot->y - 1.0f, c.z, c.yaw, 0, 0, std::max(0.01f, fade(d, townReach)));
+                }
+            }
+        }
     }
 
     if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
@@ -2050,7 +2173,27 @@ void ReconcileProjectileActor() {
     }
 }
 
-// Keep a ring of scenery alive around the player, the same for everyone because the list comes from the host.
+// Which props are part of a place (inside a town's radius): they are spawned ahead of loose scenery and from further away.
+std::vector<uint8_t> gPropInTown;
+const royale::Prop* gTownSrc = nullptr;
+size_t gTownSrcCount = 0, gTownPoiCount = 0;
+void RefreshPropTowns(const std::vector<royale::Prop>& props) {
+    const auto& pois = gSession.Client()->Pois();
+    if (props.data() == gTownSrc && props.size() == gTownSrcCount && pois.size() == gTownPoiCount && gPropInTown.size() == props.size()) return;
+    gTownSrc = props.data(); gTownSrcCount = props.size(); gTownPoiCount = pois.size();
+    gPropInTown.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (royale::IsPlatform(props[i].kind) || props[i].kind == royale::PropKind::Roof) { gPropInTown[i] = 1; continue; }
+        for (const royale::Poi& poi : pois)
+            if (std::hypot(props[i].pos.x - poi.center.x, props[i].pos.z - poi.center.z) < poi.radius + 160.0f) { gPropInTown[i] = 1; break; }
+    }
+}
+
+// Keep the nearest scenery alive around the player, the same for everyone because the list comes from the host. The game can only hold so
+// many of our actors (kMaxPropActors), so they go to the props that matter most: the pieces of a town count as much nearer than they are, so a
+// place is always whole (walls, roofs, climbs) before the loose rocks and bushes round it, and when the budget is full the farthest loose
+// prop is put away to make room for a nearer one. (Before, props were taken in list order, and on the smaller maps the loose scenery used up
+// the whole budget, so the towns never appeared at all.)
 void ReconcileProps(const royale::HudState& hud) {
     const bool show = gSession.Joined() && InField() && hud.state != royale::MatchState::Lobby;
     if (!show) { ClearProps(); return; }
@@ -2067,23 +2210,44 @@ void ReconcileProps(const royale::HudState& hud) {
         auto it = gProps.find(broken);
         if (it != gProps.end() && gCulledProps.insert(broken).second) Actor_Kill(it->second.actor);
     }
-    for (auto& [i, pa] : gProps) {
-        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
-        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    RefreshPropTowns(props);
+    // Rank everything in reach: distance squared, a town's pieces counted at about half their distance.
+    struct Want { float key; size_t i; };
+    static std::vector<Want> wants;
+    static std::vector<uint8_t> wanted;
+    wants.clear();
+    wanted.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (gBrokenProps.count(i)) continue;
+        const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz, d2 = dx * dx + dz * dz;
+        const bool town = gPropInTown[i] != 0;
+        const float reach = town ? kTownSpawnRadius : kPropSpawnRadius;
+        if (d2 > reach * reach) continue;
+        wants.push_back({town ? d2 * 0.25f : d2, i});
     }
-    if (gProps.size() >= kMaxPropActors) return;
+    const bool full = wants.size() > kMaxPropActors;
+    if (full) {
+        std::nth_element(wants.begin(), wants.begin() + kMaxPropActors, wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
+        wants.resize(kMaxPropActors);
+    }
+    for (const Want& w : wants) wanted[w.i] = 1;
+    // Put away what is out of reach, and, when there are more wanted than the budget holds, whatever didn't make the cut.
+    for (auto& [i, pa] : gProps) {
+        if (i < wanted.size() && wanted[i]) continue;
+        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
+        const float reach = (i < gPropInTown.size() && gPropInTown[i]) ? kTownSpawnRadius : kPropSpawnRadius;
+        if ((full || dx * dx + dz * dz > reach * reach * 1.4f) && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    }
+    // Spawn the missing ones, nearest (by rank) first, a few a frame.
+    std::sort(wants.begin(), wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
     int spawned = 0;
-    for (int pass = 0; pass < 2; pass++) {              // the climbing blocks first: without them the climbs are just chests in the air
-        for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
-            if (royale::IsPlatform(props[i].kind) != (pass == 0)) continue;
-            if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
-            const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
-            if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
-            float y;
-            if (!RawFloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
-            SpawnProp(i, props[i], y);
-            spawned++;
-        }
+    for (const Want& w : wants) {
+        if (spawned >= 6 || gProps.size() >= kMaxPropActors) break;
+        if (gProps.find(w.i) != gProps.end()) continue;
+        float y;
+        if (!RawFloorAt(props[w.i].pos.x, props[w.i].pos.z, &y)) continue;
+        SpawnProp(w.i, props[w.i], y);
+        spawned++;
     }
 }
 
@@ -2304,9 +2468,9 @@ double gBannerUntil = 0;
 void NotePickup(const std::string& label, royale::Rarity rarity, bool fromChest) {
     gPickupLog.push_front({ (fromChest ? "Chest: " : "") + label, rarity });
     while (gPickupLog.size() > 10) gPickupLog.pop_back();
-    gBannerText = (fromChest ? "CHEST OPENED  " : "GOT  ") + label;
+    gBannerText = label;
     gBannerRarity = rarity;
-    gBannerUntil = ImGui::GetTime() + 3.5;
+    gBannerUntil = ImGui::GetTime() + 2.5;
 }
 
 std::string ShortName(royale::ItemId id) {
@@ -2326,6 +2490,85 @@ std::string ClockText(float seconds) {
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+
+// Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
+// It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
+// click, so it is read from SDL directly. The game's own top run speed is raised (patches/0011), so Link's legs, footsteps and turning
+// keep up with it; others see the Sprint pose (see ClassifyAnim). Purely local: the server trusts your position.
+constexpr float kSprintMult = 1.35f;        // run speed while sprinting
+constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
+constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
+constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
+constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
+float gStamina = 1.0f;
+float gStaminaRestLeft = 0.0f;
+bool gSprinting = false;
+bool gSprintButtonWasDown = false;
+double gStaminaFullAt = 0.0;                // when the bar last filled, so it can fade away
+
+bool SprintButtonDown() {
+    for (int i = 0; i < SDL_NumJoysticks(); i++) {
+        if (!SDL_IsGameController(i)) continue;
+        SDL_GameController* pad = SDL_GameControllerFromInstanceID(SDL_JoystickGetDeviceInstanceID(i));   // only pads the game already opened
+        if (pad != nullptr && SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_LEFTSTICK)) return true;
+    }
+    return false;
+}
+
+void UpdateSprint(Player* player, const royale::HudState& hud) {
+    const float dt = 1.0f / royale::kTickHz;   // the game updates the player 20 times a second
+    const bool down = SprintButtonDown();
+    const bool clicked = down && !gSprintButtonWasDown;
+    gSprintButtonWasDown = down;
+
+    if (!LiveAndAlive(hud)) {   // a fresh bar for every match
+        gStamina = 1.0f; gSprinting = false;
+        return;
+    }
+    const Input& in = gPlayState->state.input[0];
+    const bool stickHeld = std::hypot(static_cast<float>(in.cur.stick_x), static_cast<float>(in.cur.stick_y)) > 30.0f;
+    const bool canSprint = InField() && !gSkydiving && hud.stunLeft <= 0 && (player->actor.bgCheckFlags & 1) &&
+                           !(player->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_ON_HORSE | PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_SHIELDING |
+                                                    PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER));
+    if (clicked) gSprinting = !gSprinting && canSprint && stickHeld && gStamina >= kSprintMinStamina;
+    // Jumping off a ledge mid-sprint keeps it going; only the conditions that really end a run stop it.
+    if (!stickHeld || gStamina <= 0.0f || hud.stunLeft > 0 || (player->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_ON_HORSE | PLAYER_STATE1_IN_CUTSCENE |
+                                                                                          PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER)))
+        gSprinting = false;
+
+    if (gSprinting) {
+        if (std::fabs(player->linearVelocity) > 2.0f) gStamina = std::max(0.0f, gStamina - dt / kSprintSeconds);   // only running costs stamina
+        gStaminaRestLeft = kStaminaRest;
+    } else if (gStaminaRestLeft > 0.0f) {
+        gStaminaRestLeft -= dt;
+    } else if (gStamina < 1.0f) {
+        gStamina = std::min(1.0f, gStamina + dt / kStaminaRefill);
+        if (gStamina >= 1.0f) gStaminaFullAt = ImGui::GetTime();
+    }
+    gRoyaleRunSpeedScale = gSprinting ? kSprintMult : 1.0f;
+    if (gSprinting && (player->actor.bgCheckFlags & 1) && std::fabs(player->linearVelocity) > 4.0f) SprintDust(gPlayState, &player->actor, gPlayState->gameplayFrames);
+}
+
+// A thin bar under the magic meter, the width of the hearts, like the shield and magic bars above it. No text. It only shows while you are using
+// stamina and fades out a moment after it fills, so it stays off the screen the rest of the time.
+void DrawStaminaBar(ImDrawList* dl, ImVec2 ds, const royale::HudState& h) {
+    if (!LiveAndAlive(h) || !InField()) return;
+    const double sinceFull = gStamina >= 1.0f ? ImGui::GetTime() - gStaminaFullAt : 0.0;
+    const float alpha = static_cast<float>(std::clamp(1.0 - (sinceFull - 0.8) / 0.4, 0.0, 1.0));
+    if (alpha <= 0.0f) return;
+    auto a = [&](int v) { return static_cast<int>(v * alpha); };
+    const float unit = ds.y / 240.0f;   // the game's own HUD is laid out on a 240 high screen
+    const float bx = 30.0f * unit, by = 66.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 4.0f * unit;
+    const float fill = std::clamp(gStamina, 0.0f, 1.0f);
+    const bool winded = !gSprinting && fill < kSprintMinStamina;
+    dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, a(170)), 3.0f);
+    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(58, 42, 16, a(200)), 2.0f);   // dark leather brown
+    if (fill > 0.0f) {
+        // Hylian hair gold (#F0DF57) from the art guide; Hylian crest red (#AD3725) while too winded to sprint.
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), winded ? IM_COL32(173, 55, 37, a(255)) : IM_COL32(240, 223, 87, a(255)), 2.0f);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(255, 248, 200, a(150)), 2.0f);
+    }
+}
 
 struct SupplyMark { float x, z; double until; };
 std::vector<SupplyMark> gSupplyMarks;   // announced crates, shown on the minimap until they have landed and been taken
@@ -2979,33 +3222,33 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
-    slots.push_back({ ShortName(h.weapon), h.weapon == royale::ItemId::BasicSword ? std::string("Starter") : std::string(RarityName(h.weaponRarity)), RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
+    slots.push_back({ ShortName(h.weapon), "", RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
     for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
         if (i < static_cast<int>(h.inv.reserve.size())) {
             const auto& r = h.inv.reserve[i];
             const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            slots.push_back({ ShortName(id), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
+            slots.push_back({ "", "", RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
         } else {
             slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
         }
     }
-    if (h.hasShield) slots.push_back({ ShortName(h.shield), RarityName(h.shieldRarity), RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
-    else slots.push_back({ "", "Shield", grey, false, false, 0.0f, 0, none });
+    if (h.hasShield) slots.push_back({ "", "", RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
+    else slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
     if (!h.inv.potions.empty()) {
         const auto& p = h.inv.potions.front();
         const royale::ItemId id = static_cast<royale::ItemId>(p.item);
-        slots.push_back({ ShortName(id), "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
+        slots.push_back({ "", "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
     } else {
-        slots.push_back({ "", "Potions", grey, false, false, 0.0f, 10, none });
+        slots.push_back({ "", "", grey, false, false, 0.0f, 10, none });
     }
     if (h.inv.hasAbility) {
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
         const float cd = royale::AbilityOf(id).cooldown;
         const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
-        slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
+        slots.push_back({ "", h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
                           cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id });
     } else {
-        slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11, none });
+        slots.push_back({ "", "", grey, false, false, 0.0f, 11, none });
     }
 
     const float w = 84.0f * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
@@ -3021,7 +3264,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
-        {   // which button uses the slot
+        if (sl.filled) {   // which button uses the slot
             const int nres = royale::kMaxReserveWeapons;
             const char* hint = i == 0 ? "B" : static_cast<int>(i) <= nres ? "D-pad L/R" : static_cast<int>(i) == nres + 1 ? "C-Left" : static_cast<int>(i) == nres + 2 ? "D-pad Dn" : "D-pad Up";
             const float hs = 12.5f * scale;
@@ -3418,7 +3661,7 @@ std::vector<Banner> gBanners;
 void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
     const double now = ImGui::GetTime();
     gBanners.push_back({ text, colour, now + seconds, now });
-    if (gBanners.size() > 3) gBanners.erase(gBanners.begin());
+    if (gBanners.size() > 2) gBanners.erase(gBanners.begin());
 }
 
 // Small "+5 Rupees" lines that float up on the right when something drops out of a rock or bush.
@@ -3427,15 +3670,15 @@ struct FeedLine { std::string text; ImU32 colour; double at; };
 std::vector<FeedLine> gFeed;
 void AddFeed(const std::string& text, ImU32 colour) {
     gFeed.push_back({ text, colour, ImGui::GetTime() });
-    if (gFeed.size() > 6) gFeed.erase(gFeed.begin());
+    if (gFeed.size() > 4) gFeed.erase(gFeed.begin());
 }
 void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
     float y = 14.0f * scale;
     for (const FeedLine& f : gFeed) {
         const double age = now - f.at;
-        if (age > 7.0) continue;
-        const float a = static_cast<float>(std::min(1.0, (7.0 - age) / 1.0));
+        if (age > 5.0) continue;
+        const float a = static_cast<float>(std::min(1.0, (5.0 - age) / 1.0));
         const float size = 17.0f * scale;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, f.text.c_str());
         const ImVec2 pos(ds.x - sz.x - 18.0f * scale, y);
@@ -3443,7 +3686,7 @@ void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddText(font, size, pos, (f.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), f.text.c_str());
         y += sz.y + 7.0f * scale;
     }
-    gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 7.0; }), gFeed.end());
+    gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 5.0; }), gFeed.end());
 }
 
 struct Gain { std::string text; ImU32 colour; double at; };
@@ -3644,10 +3887,7 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop) {
-        centered(ds.y * 0.2f, green, 30 * scale, gSkydiving ? "SKYDIVE - stick steers, hold Z to dive faster" : "DROP - you are protected for a moment");
-    }
-    if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
+    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive");
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
@@ -3660,31 +3900,34 @@ void DrawOverlay() {
     if (!live || !h.haveSelf) return;
 
     // What is at your feet: chests say how rare they are (not what is inside); items on the ground say what they are.
+    // One line: a green A button, then what pressing it does.
+    auto prompt = [&](ImU32 col, const std::string& t) {
+        const float size = 24 * scale, btn = 13 * scale, gap = 8 * scale, y = ds.y * 0.66f;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
+        const float x = (ds.x - sz.x - btn * 2 - gap) * 0.5f;
+        const ImVec2 c(x + btn, y + sz.y * 0.5f);
+        dl->AddCircleFilled(ImVec2(c.x + 1.5f, c.y + 1.5f), btn, IM_COL32(0, 0, 0, 200), 20);
+        dl->AddCircleFilled(c, btn, IM_COL32(70, 200, 90, 255), 20);
+        const ImVec2 asz = font->CalcTextSizeA(btn * 1.4f, FLT_MAX, 0.0f, "A");
+        dl->AddText(font, btn * 1.4f, ImVec2(c.x - asz.x * 0.5f, c.y - asz.y * 0.5f), white, "A");
+        text(x + btn * 2 + gap, y, col, size, t);
+    };
     if (InField() && h.selfAlive && gSession.Client()) {
         const size_t near = NearestLootIndex();
         const auto& loot = gSession.Client()->Loot();
         if (near != kNoLoot && near < loot.size()) {
             const royale::Rarity r = static_cast<royale::Rarity>(loot[near].rarity);
-            if (loot[near].chest) {
-                centered(ds.y * 0.66f, loot[near].special ? IM_COL32(255, 130, 190, 255) : RarityU32(r), 26 * scale, loot[near].special ? std::string("Heart Container Chest") : std::string(RarityName(r)) + " Chest");
-                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: open");
-            } else {
-                centered(ds.y * 0.66f, RarityU32(r), 26 * scale, ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
-                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: take or swap");
-            }
+            if (loot[near].chest) prompt(loot[near].special ? IM_COL32(255, 130, 190, 255) : RarityU32(r), loot[near].special ? std::string("Heart Container Chest") : std::string(RarityName(r)) + " Chest");
+            else prompt(RarityU32(r), ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
         }
         else if (const int ally = NearbyFreeAlly(); ally >= 0) {
             const royale::AllyDef& def = royale::kAllyDefs[ally];
             const bool afford = h.rupees >= def.price;
-            centered(ds.y * 0.66f, IM_COL32(255, 222, 110, 255), 26 * scale, std::string(def.name) + " " + def.title);
-            centered(ds.y * 0.66f + 31 * scale, afford ? white : IM_COL32(255, 130, 120, 255), 20 * scale,
-                     afford ? "A: hire for " + std::to_string(def.price) + " rupees" : "Needs " + std::to_string(def.price) + " rupees (you have " + std::to_string(h.rupees) + ")");
+            prompt(afford ? IM_COL32(255, 222, 110, 255) : IM_COL32(255, 130, 120, 255), "Hire " + std::string(def.name) + " (" + std::to_string(def.price) + " rupees)");
         } else if (MayaNear()) {
-            centered(ds.y * 0.66f, IM_COL32(255, 170, 215, 255), 26 * scale, "Maya");
-            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk");
+            prompt(IM_COL32(255, 170, 215, 255), "Talk to Maya");
         } else if (LiloNear()) {
-            centered(ds.y * 0.66f, IM_COL32(235, 235, 230, 255), 26 * scale, "Lilo");
-            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk to the cat");
+            prompt(IM_COL32(235, 235, 230, 255), "Pet Lilo");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -3734,9 +3977,10 @@ void DrawOverlay() {
         }
         if (need > 0.0f) dl->AddLine(ImVec2(bx + bw * need, by - 1), ImVec2(bx + bw * need, by + bh + 1), IM_COL32(255, 255, 255, 200), 1.5f);   // what your ability costs
     }
+    DrawStaminaBar(dl, ds, h);
 
     // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
-    // under the safe-zone compass: how many are left, the zone, the weather and anything that is affecting you.
+    // under the safe-zone compass: how many are left, the zone timer and anything that is affecting you.
     {
         const float rx = ds.x - 16 * scale, line = 24 * scale;
         float y = 150 * scale;
@@ -3745,30 +3989,19 @@ void DrawOverlay() {
             text(rx - sz.x, y, col, size, t);
             y += size + 4 * scale;
         };
-        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
-        if (h.stormPhase >= royale::kStormPhaseCount) {
-            textR(red, 20 * scale, "FINAL ZONE");
-        } else {
-            textR(h.stormShrinking ? red : white, 20 * scale, "Zone " + std::to_string(h.stormPhase + 1) + "/" + std::to_string(royale::kStormPhaseCount) + (h.stormShrinking ? "  CLOSING " : "  holds ") + ClockText(h.stormSecondsLeft));
-        }
-        if (h.stormDamagePerSecond > 0) textR(red, 22 * scale, "IN THE STORM!");
-        static const char* kSeasonName[4] = { "Spring", "Summer", "Autumn", "Winter" };
-        static const char* kSkyName[7] = { "Clear", "Rain", "Thunder", "Fog", "Snow", "Ash", "Sandstorm" };
-        textR(grey, 17 * scale, std::string(CurrentMap().name) + "  -  " + kSeasonName[static_cast<int>(h.weather.season) & 3] + ", " + kSkyName[static_cast<int>(h.weather.sky) % 7]);
+        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive));
+        if (h.stormPhase >= royale::kStormPhaseCount) textR(red, 20 * scale, "Final zone");
+        else textR(h.stormShrinking || h.stormSecondsLeft <= 5.0f ? red : h.stormSecondsLeft <= 15.0f ? gold : white, 20 * scale, (h.stormShrinking ? "Closing " : "Zone ") + ClockText(h.stormSecondsLeft));
+        // Only what is happening to you right now, short. Gear is already shown as icons above the item bar, the weather is on the screen itself.
         if (h.selfAlive) {
-            if (h.adultLeft > 0.0f) textR(gold, 20 * scale, "ADULT POWER  " + ClockText(h.adultLeft));
-            if (h.inv.hasMark) textR(green, 17 * scale, "Farore's Wind marked");
-            if (h.invulnLeft > 0) textR(gold, 18 * scale, "INVULNERABLE " + ClockText(h.invulnLeft));
-            if (h.speedLeft > 0) textR(green, 18 * scale, "SPEED UP " + ClockText(h.speedLeft));
-            if (h.revealLeft > 0) textR(green, 18 * scale, "REVEALING " + ClockText(h.revealLeft));
-            if (h.burnLeft > 0) textR(red, 18 * scale, "BURNING");
-            if (h.stunLeft > 0) textR(red, 18 * scale, "STUNNED");
-            if (h.shieldLeft > 0) textR(green, 18 * scale, "DAMAGE REDUCED " + ClockText(h.shieldLeft));
-            for (int slot = 0; slot < royale::kGearSlots; slot++) {   // what you are wearing
-                if (!(h.inv.gearMask & (1 << slot))) continue;
-                const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
-                textR(RarityU32(gr), 16 * scale, ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr));
-            }
+            if (h.adultLeft > 0.0f) textR(gold, 18 * scale, "Adult " + ClockText(h.adultLeft));
+            if (h.invulnLeft > 0) textR(gold, 18 * scale, "Invulnerable " + ClockText(h.invulnLeft));
+            if (h.speedLeft > 0) textR(green, 18 * scale, "Speed " + ClockText(h.speedLeft));
+            if (h.revealLeft > 0) textR(green, 18 * scale, "Reveal " + ClockText(h.revealLeft));
+            if (h.shieldLeft > 0) textR(green, 18 * scale, "Guard " + ClockText(h.shieldLeft));
+            if (h.burnLeft > 0) textR(red, 18 * scale, "Burning");
+            if (h.stunLeft > 0) textR(red, 18 * scale, "Stunned");
+            if (h.inv.hasMark) textR(green, 16 * scale, "Farore's Wind set");
         }
     }
 
@@ -3783,8 +4016,10 @@ void DrawOverlay() {
         auto pt = [&](float angle, float len) { return ImVec2(c.x + std::sin(angle) * len, c.y - std::cos(angle) * len); };
         dl->AddCircleFilled(c, r + 10 * scale, IM_COL32(0, 0, 0, 120));
         dl->AddTriangleFilled(pt(rel, r), pt(rel + 2.5f, r * 0.75f), pt(rel - 2.5f, r * 0.75f), outside ? red : green);
-        ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, outside ? "SAFE ZONE" : "inside");
-        text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, outside ? red : green, 16 * scale, outside ? "SAFE ZONE" : "inside");
+        if (outside) {
+            ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, "SAFE ZONE");
+            text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, red, 16 * scale, "SAFE ZONE");
+        }
     }
 }
 
@@ -4024,8 +4259,10 @@ uint8_t ClassifyAnim(Player* player) {
     if (gActionFrames > 0) return static_cast<uint8_t>(gActionAnim);
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
     float v = std::fabs(player->linearVelocity);
-    if (v > 7.5f && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
+    const float runTop = gSprinting ? 7.5f * kSprintMult : 7.5f;
+    if (v > runTop && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
     if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
+    if (gSprinting && v >= 4.0f) return static_cast<uint8_t>(royale::Anim::Sprint);
     return static_cast<uint8_t>(v < 4.0f ? royale::Anim::Walk : royale::Anim::Run);
 }
 
@@ -4176,12 +4413,13 @@ void ApplyRocks(Player* player) {
         const royale::Prop& p = props[i];
         if (p.kind != royale::PropKind::Rock && p.kind != royale::PropKind::Boulder && p.kind != royale::PropKind::Pillar) continue;
         const float dx = px - p.pos.x, dz = pz - p.pos.z;
-        const float radius = royale::PropRadius(p.kind);
+        const bool boulder = p.kind == royale::PropKind::Boulder;
+        const float radius = royale::PropRadius(p.kind) * (boulder ? royale::BoulderScale(p.rot) : 1.0f);
         if (std::fabs(dx) > radius + 40.0f || std::fabs(dz) > radius + 40.0f) continue;
         const float d = std::hypot(dx, dz);
         const float base = PlatformBase(i);
         if (base < -1.0e8f) continue;
-        const float height = p.kind == royale::PropKind::Rock ? 24.0f : p.kind == royale::PropKind::Boulder ? 60.0f : 200.0f;
+        const float height = p.kind == royale::PropKind::Rock ? 24.0f : boulder ? royale::BoulderTop(royale::BoulderShape(p.rot)) * royale::BoulderScale(p.rot) : 200.0f;
         const float top = base + height;
         const float standR = radius * 0.62f;
         if (p.kind != royale::PropKind::Pillar && d <= standR && py >= top - reach && player->actor.velocity.y <= 0.5f) {   // on top
@@ -4396,11 +4634,12 @@ royale::Vec2 gLastPos = {};
 bool gHaveLastPos = false;
 void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     const bool active = LiveAndAlive(hud) && InField();
-    if (active && gHaveLastPos && std::fabs(hud.speedMult - 1.0f) > 0.01f) {
+    const float mult = hud.speedMult;
+    if (active && gHaveLastPos && std::fabs(mult - 1.0f) > 0.01f) {
         const float dx = player->actor.world.pos.x - gLastPos.x, dz = player->actor.world.pos.z - gLastPos.z;
         if (dx * dx + dz * dz < 40.0f * 40.0f) {
-            player->actor.world.pos.x += dx * (hud.speedMult - 1.0f);
-            player->actor.world.pos.z += dz * (hud.speedMult - 1.0f);
+            player->actor.world.pos.x += dx * (mult - 1.0f);
+            player->actor.world.pos.z += dz * (mult - 1.0f);
         }
     }
     gLastPos = { player->actor.world.pos.x, player->actor.world.pos.z };
@@ -4433,6 +4672,7 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
 }
 
 void OnPlayerUpdate() {
+    gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     if (!gSession.Joined() || !InGame()) return;
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
@@ -4484,6 +4724,7 @@ void OnPlayerUpdate() {
     ApplyRocks(player);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
+    UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
@@ -4616,13 +4857,11 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
                     const std::string label = LootLabel(l);
-                    Say((l.chest ? "Opened a chest: " : "Picked up ") + label);
                     NotePickup(label, got, l.chest);
                     const royale::ItemId itemId = static_cast<royale::ItemId>(l.item);
                     float py = 0;
                     if (!FloorAt(l.x, l.z, &py)) py = GET_PLAYER(gPlayState)->actor.world.pos.y;
                     gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
-                    ShowBanner((l.chest ? "You got: " : "Picked up: ") + label, RarityU32(got), got >= royale::Rarity::Epic ? 3.2f : 2.2f);
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
                         Vec3f at = { l.x, py + 30.0f, l.z };
@@ -4637,12 +4876,11 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::BossDown: {
                 const int kind = gBossKindSeen.count(e.id) ? gBossKindSeen[e.id] : 0;
                 const std::string killer = e.other == hud.selfId ? std::string("You") : nameOf(e.other);
-                Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
+                AddFeed(killer + " defeated the " + royale::kBossDefs[kind].name, IM_COL32(255, 200, 120, 255));
                 break;
             }
             case royale::ClientEvent::Type::SupplyDrop: {
-                ShowBanner("SUPPLY DROP INCOMING!  Marked on your map", IM_COL32(255, 150, 60, 255), 3.6f);
-                Say("A supply drop is coming down: a crate of Legendary loot. It is marked on the map");
+                ShowBanner("Supply drop incoming", IM_COL32(255, 150, 60, 255), 3.0f);
                 gSupplyMarks.push_back({ e.x, e.z, ImGui::GetTime() + 60.0 });
                 Audio_PlaySoundGeneral(NA_SE_EV_FIRE_PILLAR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
@@ -4663,8 +4901,7 @@ void ReportEvents(const royale::HudState& hud) {
             }
             case royale::ClientEvent::Type::BossSpawned: {
                 const char* name = royale::kBossDefs[std::min<int>(e.item, royale::kBossKindCount - 1)].name;
-                Say(std::string(name) + " has arrived! " + BossArrivalTip(e.item));
-                ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 4.0f);
+                ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 3.4f);
                 Audio_PlaySoundGeneral(BossArrivalSound(e.item), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
@@ -4674,12 +4911,8 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::AllyChanged: {
                 const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
                 if (e.item == 0) {
-                    if (e.id == hud.selfId) { ShowBanner(std::string("The ") + name + " joins you!", IM_COL32(130, 255, 150, 255), 2.8f); Say(std::string("You hired the ") + name + ": they follow you and fight for you"); }
-                    else Say(std::string("Somebody hired the ") + name);
-                } else if (e.item == 1) {
-                    Say(std::string("The ") + name + " is free to hire again");
-                } else {
-                    Say(std::string("The ") + name + " has fallen");
+                    if (e.id == hud.selfId) ShowBanner(std::string("The ") + name + " joins you!", IM_COL32(130, 255, 150, 255), 2.4f);
+                } else if (e.item != 1) {
                     auto it = gAllies.find(static_cast<uint8_t>(e.index));
                     if (it != gAllies.end() && it->second.actor != nullptr && gPlayState != nullptr)
                         SparkBurst(gPlayState, it->second.x, it->second.actor->world.pos.y + 60.0f, it->second.z, { 220, 220, 255, 255 }, 24, 5.0f);
@@ -4700,8 +4933,6 @@ void ReportEvents(const royale::HudState& hud) {
                 } else {
                     ShowBanner("The sky clears", IM_COL32(255, 235, 170, 255), 2.4f);
                 }
-                if (sky == royale::Sky::Fog || sky == royale::Sky::Sandstorm) Say(std::string(royale::SkyName(sky)) + ": bots (and you) see less far");
-                if (sky == royale::Sky::Thunder) Say("Thunderstorm: watch the marked circles, lightning is about to strike");
                 break;
             }
             case royale::ClientEvent::Type::MapChanged:
@@ -4711,11 +4942,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
                 if (e.item == royale::net::kRevivedItem) {
-                    Say(e.id == hud.selfId ? "A Fairy saved you!" : nameOf(e.id) + " was revived by a Fairy");
-                } else if (e.item < royale::kItemCount) {
-                    const std::string what = ItemName(static_cast<royale::ItemId>(e.item));
-                    if (e.id == hud.selfId) Say("You used " + what);
-                    else if (hud.haveSelf && std::hypot(e.x - hud.selfX, e.z - hud.selfZ) < 700.0f) Say(nameOf(e.id) + " used " + what);
+                    if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
                 break;
             case royale::ClientEvent::Type::Eliminated: {
@@ -4727,24 +4954,14 @@ void ReportEvents(const royale::HudState& hud) {
                 else line = (mine ? std::string("You") : nameOf(e.other)) + " eliminated " + victim;
                 AddFeed(line, me ? IM_COL32(255, 110, 110, 255) : mine ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 235, 255));
                 if (me) {
-                    Say("You were eliminated. Spectating until the match ends");
                     ShowBanner("ELIMINATED  -  #" + std::to_string(std::max(1, hud.alive)), IM_COL32(255, 110, 110, 255), 4.0f);
                     gSpectateTarget = kSpectateSelf;
                     for (const auto& st : gSession.Puppets()) if (st.alive && st.id == e.other) gSpectateTarget = st.id;   // watch whoever got you
-                } else if (mine) {
-                    Say("You eliminated " + victim);
                 }
                 break;
             }
             case royale::ClientEvent::Type::StateChanged:
-                if (e.state == royale::MatchState::Drop) Say("Drop! Skydive to the ground. Z dives faster");
-                else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone! Mini bosses guard the caves and drop Legendary loot");
-                else if (e.state == royale::MatchState::Ending) {
-                    if (hud.winnerId == hud.selfId) Say("VICTORY ROYALE! You won!");
-                    else if (!hud.winnerName.empty()) Say("Match over. Winner: " + hud.winnerName);
-                    else Say("Match over");
-                }
-                break;
+                break;   // the big centre text already says what happened (see DrawOverlay)
             default:
                 break;
         }
@@ -4762,9 +4979,6 @@ void DriveStart(const royale::HudState& hud) {
     royale::Circle measured;
     if (MeasureField(&measured)) {
         gSession.ConfigureMap(measured, WalkableAt);
-        Say("Map measured: radius " + std::to_string(static_cast<int>(measured.radius)));
-    } else {
-        Say("Could not measure the map, using the default size");
     }
     gSession.StartMatch();
     gPendingStart = false;
@@ -4925,11 +5139,9 @@ void DriveStormAlerts(const royale::HudState& hud) {
         if (hud.stormPhase >= royale::kStormPhaseCount) {
             ShowBanner("THE STORM HAS TAKEN THE MAP", IM_COL32(190, 120, 255, 255), 3.2f);
         } else if (hud.stormShrinking) {
-            ShowBanner("THE STORM IS CLOSING IN!", IM_COL32(190, 120, 255, 255), 3.4f);
-            Say("The storm is closing in: get inside the white circle on the map");
+            ShowBanner("The storm is closing in!", IM_COL32(190, 120, 255, 255), 3.0f);
         } else {
-            ShowBanner("The storm holds. A new safe zone is marked", IM_COL32(210, 190, 255, 255), 2.8f);
-            Say("Zone " + std::to_string(hud.stormPhase + 1) + ": the storm holds for " + std::to_string(static_cast<int>(hud.stormSecondsLeft)) + " seconds");
+            ShowBanner("New safe zone marked", IM_COL32(210, 190, 255, 255), 2.4f);
         }
         PlayOneShot(1);
         warned = -1;
@@ -4940,18 +5152,16 @@ void DriveStormAlerts(const royale::HudState& hud) {
         const int left = static_cast<int>(std::ceil(hud.stormSecondsLeft));
         if (left <= 15 && left > 5 && warned < 15) {
             warned = 15;
-            ShowBanner("The storm closes in 15 seconds", IM_COL32(255, 200, 90, 255), 2.4f);
-            PlayOneShot(0);
+            PlayOneShot(0);   // the zone timer (top right) shows the seconds; the sound is the warning
         } else if (left <= 5 && left > 0 && warned < 5) {
             warned = 5;
             ShowBanner("The storm closes in 5 seconds!", IM_COL32(255, 110, 90, 255), 2.2f);
             PlayOneShot(0);
         }
     }
-    if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging
+    if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging (the haze and the red compass say where; no text)
         nextOutsideSiren = now + 4.0;
         PlayOneShot(0);
-        Say("You are in the storm! Run for the safe zone");
     }
 }
 
@@ -5047,7 +5257,6 @@ bool MayaNear() {
 
 void TalkToMaya() {
     gMayaTalkStart = ImGui::GetTime();
-    Say(std::string(royale::kMayaName) + ": " + royale::kMayaGreeting);
     if (gPlayState != nullptr && gMayaActor != nullptr)
         SparkBurst(gPlayState, gMayaPos.x, gMayaActor->world.pos.y + 90.0f, gMayaPos.z, { 255, 190, 220, 255 }, 16, 3.0f);
     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
@@ -5454,7 +5663,6 @@ bool LiloNear() {
 void TalkToLilo() {
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
-    Say(std::string(royale::kLiloName) + ": " + royale::kLiloLine);
     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
@@ -5883,7 +6091,6 @@ void ForgetOldHats() {
 // A wooden sign stands at the centre of every map (on the nearest bit of open, walkable ground), and reads out its message when you walk up.
 Actor* gSignActor = nullptr;
 double gSignReadAt = -100.0;
-bool gSignRead = false;
 
 void Sign_Update(Actor* actor, PlayState*) { actor->focus.pos = actor->world.pos; }
 void Sign_Draw(Actor* actor, PlayState* play) {
@@ -5954,15 +6161,14 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z);
     ImVec2 at;
-    if (d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {
-        const char* label = d < 260.0f ? "Sign" : "Sign (walk up to read)";
+    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close the board below says it
+        const char* label = "Sign";
         const float size = std::clamp(26.0f * scale * (1800.0f / (d + 900.0f)), 14.0f * scale, 30.0f * scale);
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 12, 4, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 232, 160, 255), label);
     }
     if (d < 260.0f) {
-        if (!gSignRead) { gSignRead = true; Say(std::string("The sign reads: ") + royale::kMapSignText); }
         const float wrap = ds.x * 0.62f, size = 27.0f * scale;
         const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, royale::kMapSignText);
         const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 22.0f * scale, ds.y * 0.70f - 12.0f * scale);
@@ -5971,8 +6177,6 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddRect(box, end, IM_COL32(222, 178, 100, 255), 10.0f * scale, 0, 3.0f * scale);
         dl->AddText(font, 18.0f * scale, ImVec2(box.x + 22.0f * scale, box.y + 8.0f * scale), IM_COL32(222, 178, 100, 255), "Sign");
         dl->AddText(font, size, ImVec2(box.x + 22.0f * scale, box.y + 34.0f * scale), IM_COL32(255, 246, 224, 255), royale::kMapSignText, nullptr, wrap);
-    } else if (d > 420.0f) {
-        gSignRead = false;   // walk away and it can be read (and announced) again
     }
 }
 

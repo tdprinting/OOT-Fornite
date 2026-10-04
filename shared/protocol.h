@@ -22,7 +22,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 19; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 20; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;

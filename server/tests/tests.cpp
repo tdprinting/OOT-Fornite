@@ -2039,7 +2039,7 @@ static void PointsOfInterest() {
     for (const Prop& p : a.props) grounded &= valid(p.pos);
     for (const Vec2& sp : a.lootSpots) grounded &= valid(sp);
     CHECK(grounded);
-    CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 6);       // a building, a cave and ruins at each
+    CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 3);       // every place is built up and has chests
     for (int i = 0; i < kPoiNameTotal; i++) CHECK(kPoiNames[i] != nullptr && kPoiNames[i][0] != 0);
 
     // The chests: every spot gets one, always on the better tiers, in a container, on top of the scattered ones.
@@ -2142,6 +2142,147 @@ static void CustomObjModels() {
     CHECK(neg.ok && neg.triangles == 1);
 }
 
+static void BouldersAndFormations() {
+    // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
+    // budget, and each map's stone a different colour.
+    std::set<int> looks;
+    for (uint32_t theme = 0; theme < 5; theme++) {
+        for (int shape = 0; shape < kBoulderShapes; shape++) {
+            const MeshData m = BuildMesh(MeshKind::Boulder, static_cast<uint32_t>(shape) + kBoulderShapes * theme);
+            float mn[3], mx[3];
+            m.Bounds(mn, mx);
+            CHECK(m.Triangles() >= 100 && m.Triangles() <= 420 && mn[1] >= -0.01f);
+            CHECK(std::fabs(mx[1] - BoulderHeight(shape)) < 1.0f && BoulderTop(shape) < mx[1] && mx[0] - mn[0] < 260 && mx[2] - mn[2] < 260);
+            if (shape == 0) {
+                long r = 0, g = 0, b = 0;
+                for (const auto& v : m.v) { r += v.r; g += v.g; b += v.b; }
+                const long n = static_cast<long>(m.v.size());
+                looks.insert(static_cast<int>(r / n / 8) * 10000 + static_cast<int>(g / n / 8) * 100 + static_cast<int>(b / n / 8));
+            }
+        }
+        const MeshData rock = BuildMesh(MeshKind::Rock, kBoulderShapes * theme);
+        float mn[3], mx[3];
+        rock.Bounds(mn, mx);
+        CHECK(rock.Triangles() <= 420 && mx[1] < 60 && mx[0] - mn[0] < 120);
+    }
+    CHECK(looks.size() == 5);
+    CHECK(BoulderHeight(1) > 150 && BoulderTop(2) < 64);                                          // a slab you can't climb, a table rock you can
+    // The shape and size come from the rotation, and a formation can ask for the shape it wants.
+    Rng rng(4);
+    for (int shape = 0; shape < kBoulderShapes; shape++)
+        for (int i = 0; i < 50; i++) CHECK(BoulderShape(RotForShape(rng, shape)) == shape);
+    std::set<int> shapes;
+    for (uint32_t r = 0; r < 0x10000; r += 97) {
+        shapes.insert(BoulderShape(static_cast<uint16_t>(r)));
+        CHECK(BoulderScale(static_cast<uint16_t>(r)) >= 0.85f && BoulderScale(static_cast<uint16_t>(r)) <= 1.15f);
+    }
+    CHECK(static_cast<int>(shapes.size()) == kBoulderShapes);
+
+    // Formations: boulders of several shapes in a group, the ring with a chest in the middle, all kept off the towns.
+    const Circle map = {{0, 0}, 4000};
+    for (int f = 0; f < kFormationCount; f++) {
+        PoiLayout one;
+        Rng frng(9 + f);
+        AddFormation(one, frng, static_cast<Formation>(f), {0, 0}, 0.4f, nullptr);
+        int boulders = 0;
+        std::set<int> kinds;
+        for (const Prop& p : one.props) if (p.kind == PropKind::Boulder) { boulders++; kinds.insert(BoulderShape(p.rot)); }
+        CHECK(boulders >= 4);
+        CHECK(static_cast<Formation>(f) == Formation::Ring ? kinds.size() == 1 && one.sites.size() == 1 && Distance(one.sites[0].pos, {0, 0}) < 1.0f : kinds.size() >= 2);
+        for (const Prop& p : one.props) CHECK(Distance(p.pos, {0, 0}) < 700.0f);
+    }
+    for (uint64_t seed = 1; seed < 5; seed++) {
+        PoiLayout layout = GeneratePois(seed, map, 12, nullptr, 1);
+        const size_t before = layout.props.size();
+        GenerateWilds(layout, seed, map, {}, layout.lootSpots, 4, 0, nullptr, 8);
+        int formationBoulders = 0;
+        for (size_t i = before; i < layout.props.size(); i++) {
+            if (layout.props[i].kind != PropKind::Boulder) continue;
+            formationBoulders++;
+            for (const Poi& poi : layout.pois) CHECK(Distance(layout.props[i].pos, poi.center) > poi.radius);
+        }
+        CHECK(formationBoulders >= 25);
+        // Loose scenery stays off the towns' streets.
+        const std::vector<Circle> clear = PoiClearings(layout.pois);
+        for (const Prop& p : GenerateProps(seed, map, 600, nullptr, &clear))
+            for (const Circle& c : clear) CHECK(Distance(p.pos, c.center) >= c.radius);
+    }
+}
+
+static void OutpostsAreDesigned() {
+    // Every outpost is one connected structure of blocks on the grid (each block touches another edge to edge), whichever way it faces, and its
+    // prize sits on its highest block (or in the arena's pit).
+    for (int k = 0; k < kOutpostCount; k++) {
+        for (int dir = 0; dir < 4; dir++) {
+            PoiLayout one;
+            Rng rng(k * 4 + dir + 1);
+            CHECK(AddOutpost(one, rng, static_cast<Outpost>(k), {300, -200}, dir, nullptr));
+            std::vector<Prop> blocks;
+            for (const Prop& p : one.props) if (IsPlatform(p.kind)) blocks.push_back(p);
+            CHECK(blocks.size() >= 4 && one.sites.size() == 1);
+            for (size_t i = 0; i < blocks.size(); i++) {
+                bool touches = false;
+                for (size_t j = 0; j < blocks.size(); j++)
+                    if (i != j && std::fabs(Distance(blocks[i].pos, blocks[j].pos) - kPlatformHalf * 2.0f) < 0.5f) touches = true;
+                CHECK(touches);
+            }
+            float highest = 0, under = -1;
+            for (const Prop& b : blocks) {
+                highest = (std::max)(highest, PlatformHeight(b.kind));
+                if (Distance(b.pos, one.sites[0].pos) < 1.0f) under = PlatformHeight(b.kind);
+            }
+            CHECK(static_cast<Outpost>(k) == Outpost::Arena ? under < 0 && one.sites[0].bonus == 1 : under == highest && one.sites[0].bonus == 2);
+        }
+        PoiLayout none;
+        Rng rng(1);
+        CHECK(!AddOutpost(none, rng, static_cast<Outpost>(k), {0, 0}, 0, [](Vec2 p) { return p.x < 100.0f; }) && none.props.empty());   // half over a drop: not built
+    }
+    // A map gets several, kept away from the towns.
+    const Circle map = {{0, 0}, 4000};
+    PoiLayout layout = GeneratePois(6, map, 12, nullptr, 1);
+    const size_t before = layout.props.size();
+    GenerateWilds(layout, 6, map, {}, layout.lootSpots, 0, 0, nullptr, 0, 5);
+    int blocks = 0;
+    for (size_t i = before; i < layout.props.size(); i++) {
+        if (!IsPlatform(layout.props[i].kind)) continue;
+        blocks++;
+        for (const Poi& poi : layout.pois) CHECK(Distance(layout.props[i].pos, poi.center) > poi.radius);
+    }
+    CHECK(blocks >= 20);
+}
+
+static void TownsAreDifferentPlaces() {
+    // Kinds of town are dealt so that every kind turns up before any repeats, and never the same twice running.
+    Rng rng(11);
+    const std::vector<TownKind> kinds = DealTownKinds(rng, 20);
+    std::set<int> firstDeck;
+    for (int i = 0; i < kTownKindCount; i++) firstDeck.insert(static_cast<int>(kinds[i]));
+    CHECK(static_cast<int>(firstDeck.size()) == kTownKindCount);
+    for (size_t i = 1; i < kinds.size(); i++) CHECK(kinds[i] != kinds[i - 1]);
+    // Every kind of town has chests and a prize up high, and stands on its own ground.
+    for (int k = 0; k < kTownKindCount; k++) {
+        PoiLayout one;
+        Rng trng(k + 1);
+        BuildTown(one, trng, static_cast<TownKind>(k), {1000, -500}, 0.3f * k, nullptr);
+        int tops = 0;
+        for (const ChestSite& st : one.sites) tops += st.bonus == 2;
+        CHECK(tops >= 1 && one.lootSpots.size() + one.sites.size() >= 3 && one.props.size() >= 10);
+        for (const Prop& p : one.props) CHECK(Distance(p.pos, {1000, -500}) < kTownRadius + 300.0f);
+        // Nothing solid stands on a chest.
+        for (const Vec2& sp : one.lootSpots) for (const Prop& p : one.props) CHECK(PropRadius(p.kind) == 0.0f || IsPlatform(p.kind) || Distance(sp, p.pos) > PropRadius(p.kind) * 0.8f);
+    }
+    // A small map gets fewer, whole towns rather than a heap of overlapping ones; a big one gets the full set.
+    const PoiLayout small = GeneratePois(3, {{0, 0}, 1900}, 12, nullptr, 2), big = GeneratePois(3, {{0, 0}, 4000}, 12, nullptr, 2);
+    CHECK(small.pois.size() >= 4 && small.pois.size() <= 7 && big.pois.size() >= 10);
+    for (size_t i = 0; i < small.pois.size(); i++)
+        for (size_t j = i + 1; j < small.pois.size(); j++) CHECK(Distance(small.pois[i].center, small.pois[j].center) >= 1050.0f);
+    for (size_t i = 0; i < big.pois.size(); i++)
+        for (size_t j = i + 1; j < big.pois.size(); j++) CHECK(Distance(big.pois[i].center, big.pois[j].center) >= 1250.0f);
+    std::set<int> names;
+    for (const Poi& p : big.pois) names.insert(p.name);
+    CHECK(names.size() == big.pois.size());
+}
+
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
@@ -2161,7 +2302,7 @@ static void CustomMeshes() {
             for (const auto& p : m.v) { lo = (std::min)(lo, static_cast<int>(p.g)); hi = (std::max)(hi, static_cast<int>(p.g)); }
             CHECK(hi > lo + 15 && hi > 60);
             if (static_cast<MeshKind>(k) == MeshKind::Rock) CHECK(mx[0] - mn[0] < 120 && mx[1] < 60);
-            if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && mx[1] < 150);
+            if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && std::fabs(mx[1] - BoulderHeight(static_cast<int>(variant) % kBoulderShapes)) < 1.0f);
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
@@ -2840,7 +2981,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

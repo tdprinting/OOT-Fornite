@@ -1,0 +1,28 @@
+diff --git a/soh/src/overlays/actors/ovl_player_actor/z_player.c b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+index 6638893..2324dc4 100644
+--- a/soh/src/overlays/actors/ovl_player_actor/z_player.c
++++ b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+@@ -7112,11 +7112,15 @@ void func_8083DF68(Player* this, f32 arg1, s16 arg2) {
+     Math_ScaledStepToS(&this->yaw, arg2, REG(27));
+ }
+ 
++// OOT Royale: run speed multiplier set by the mod while sprinting (1 = normal).
++f32 gRoyaleRunSpeedScale = 1.0f;
++
+ void func_8083DFE0(Player* this, f32* arg1, s16* arg2) {
+     s16 yawDiff = this->yaw - *arg2;
+ 
+     if (this->meleeWeaponState == 0) {
+         float maxSpeed = R_RUN_SPEED_LIMIT / 100.0f;
++        maxSpeed *= gRoyaleRunSpeedScale; // OOT Royale: sprinting raises the top speed
+ 
+         int32_t giSpeedModifier = GameInteractor_RunSpeedModifier();
+         if (giSpeedModifier != 0) {
+@@ -8896,6 +8900,7 @@ void Player_Action_80842180(Player* this, PlayState* play) {
+         Player_GetMovementSpeedAndYaw(this, &sp2C, &sp2A, SPEED_MODE_CURVED, play);
+ 
+         if (!func_8083C484(this, &sp2C, &sp2A)) {
++            sp2C *= gRoyaleRunSpeedScale; // OOT Royale: sprinting (Link's legs keep up, since the run cycle follows his speed)
+             int32_t giSpeedModifier = GameInteractor_RunSpeedModifier();
+             if (giSpeedModifier != 0) {
+                 if (giSpeedModifier > 0) {

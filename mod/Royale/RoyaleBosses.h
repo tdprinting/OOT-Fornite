@@ -1544,16 +1544,7 @@ void UpdateBossWorldFx() {
     UpdateBossBodyFx(gPlayState);
 }
 
-// What to tell everyone when a major boss arrives: how to fight it.
-const char* BossArrivalTip(int kind) {
-    switch (static_cast<BK>(kind)) {
-        case BK::DragonWater: return "It moves under the water and rises beside you. When its tentacle collapses, hit the core";
-        case BK::DragonForest: return "He vanishes into portals and charges out of them. Ranged weapons reach him in the air";
-        case BK::DragonShadow: return "He turns invisible and slams down with his hands. Hit him while he is stunned";
-        case BK::DragonSand: return "Fire and ice from above. Ranged weapons reach her, and she falls when she is stunned";
-        default: return "It burrows through the ground and bursts out of it. Ranged weapons reach it in the air; it lands after a dive";
-    }
-}
+// The sound everyone hears when a major boss arrives.
 u16 BossArrivalSound(int kind) {
     switch (static_cast<BK>(kind)) {
         case BK::DragonWater: return NA_SE_EN_MOFER_APPEAR;

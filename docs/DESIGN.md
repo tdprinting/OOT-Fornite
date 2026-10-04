@@ -418,7 +418,7 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
     (remembered between runs), Host and Join, a lobby screen with the player list, host marker, ready toggles, the host's
     addresses with Copy buttons, and Start; countdown, in-match and results screens; and a "show Link position" developer tool.
   - A waiting room: after joining, players are taken to the Temple of Time (optional), can see each other there, and are
-    moved to Hyrule Field automatically when the countdown starts. Notifications announce joins, the countdown, the drop, eliminations and the winner.
+    moved to Hyrule Field automatically when the countdown starts. Notifications announce joins and the countdown; the drop, eliminations and the winner are shown in the centre of the screen.
   - `OnPlayerUpdate`: sends Link's position, rotation and a coarse animation state; on the match-start teleport it
     drops Link onto the ground at the server's spawn point; while a match is live it overwrites health with the server's
     (and restores the player's real hearts afterwards).
@@ -562,4 +562,4 @@ Everything below is implemented, covered by the server tests, and described for 
 | Logo everywhere (launcher icons, title screen, menus) | `assets/logo.png`, `scripts/make_logo_assets.py`, `scripts/apply_logo.sh` |
 | The sign in the middle of every map, and Maya the Kokiri | `RoyaleMod.cpp` (sign, Maya), `shared/map.h` |
 
-Balance is tuned with a headless simulator (`royale_balance [matches] [easy|normal|hard] [map] [players]`): the targets are the first kill within about 20 seconds, 20+ players alive at one minute, matches of roughly four to six minutes (longer on the big maps), few storm deaths, and the dragon a threat rather than the main killer. The protocol version is 19.
+Balance is tuned with a headless simulator (`royale_balance [matches] [easy|normal|hard] [map] [players]`): the targets are the first kill within about 20 seconds, 20+ players alive at one minute, matches of roughly four to six minutes (longer on the big maps), few storm deaths, and the major boss a threat rather than the main killer. The protocol version is 20.
