@@ -2,7 +2,7 @@
 #include "balance.h"
 #include "bytes.h"
 #include "loot.h"
-#include "props.h"
+#include "poi.h"
 #include "storm.h"
 #include <array>
 #include <cmath>
@@ -18,7 +18,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 5; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 6; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -145,6 +145,21 @@ struct RosterEntry {
     std::string name;
 };
 
+inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
+    w.U8(static_cast<uint8_t>(pois.size()));
+    for (const Poi& p : pois) { w.U8(p.name); w.F32(p.center.x); w.F32(p.center.z); w.F32(p.radius); }
+}
+inline bool ReadPois(ByteReader& r, std::vector<Poi>& pois) {
+    const size_t n = r.U8();
+    if (n > static_cast<size_t>(kPoiNameCount)) return false;
+    pois.assign(n, {});
+    for (Poi& p : pois) {
+        p.name = r.U8(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
+        if (p.name >= kPoiNameCount || !Finite(p.center.x) || !Finite(p.center.z) || !Finite(p.radius) || p.radius < 0) return false;
+    }
+    return r.ok;
+}
+
 inline void WriteProps(ByteWriter& w, const std::vector<Prop>& props) {
     w.U16(static_cast<uint16_t>(props.size()));
     for (const Prop& p : props) { w.F32(p.pos.x); w.F32(p.pos.z); w.U8(static_cast<uint8_t>(p.kind)); w.U16(p.rot); }
@@ -172,6 +187,7 @@ struct Welcome {
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
     std::vector<Prop> props;
+    std::vector<Poi> pois;
     std::vector<RosterEntry> roster;
     void Write(ByteWriter& w) const {
         w.U16(playerId); w.U16(version); w.U64(seed);
@@ -180,6 +196,7 @@ struct Welcome {
         w.U16(static_cast<uint16_t>(loot.size()));
         for (const auto& l : loot) l.Write(w);
         WriteProps(w, props);
+        WritePois(w, pois);
         w.U8(static_cast<uint8_t>(roster.size()));
         for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); }
     }
@@ -192,6 +209,7 @@ struct Welcome {
         loot.assign(n, {});
         for (auto& l : loot) if (!l.Read(r)) return false;
         if (!ReadProps(r, props)) return false;
+        if (!ReadPois(r, pois)) return false;
         size_t m = r.U8();
         roster.assign(m, {});
         for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); if (e.flags > 3) r.ok = false; }
@@ -324,12 +342,14 @@ struct EvMapConfig {
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
     std::vector<Prop> props;
+    std::vector<Poi> pois;
     void Write(ByteWriter& w) const {
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
         for (const auto& l : loot) l.Write(w);
         WriteProps(w, props);
+        WritePois(w, pois);
     }
     bool Read(ByteReader& r) {
         map = ReadCircle(r);
@@ -339,6 +359,7 @@ struct EvMapConfig {
         loot.assign(n, {});
         for (auto& l : loot) if (!l.Read(r)) return false;
         if (!ReadProps(r, props)) return false;
+        if (!ReadPois(r, pois)) return false;
         return r.ok;
     }
 };

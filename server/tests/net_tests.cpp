@@ -115,6 +115,8 @@ static void MessagesRoundTrip() {
     { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
     { EvMapConfig a, b; a.props = {{{1, 2}, PropKind::Boulder, 123}, {{-3, 4}, PropKind::Bush, 65535}};
       CHECK(RoundTrips(a, b) && b.props.size() == 2 && b.props[0].kind == PropKind::Boulder && b.props[1].rot == 65535 && b.props[1].pos.x == -3); }
+    { EvMapConfig a, b; a.pois = {{3, {10, 20}, 480}, {15, {-5, 7}, 480}}; CHECK(RoundTrips(a, b) && b.pois.size() == 2 && b.pois[1].name == 15 && b.pois[0].center.z == 20 && b.pois[0].radius == 480); }
+    { EvMapConfig a, b; a.pois = {{99, {0, 0}, 1}}; CHECK(!RoundTrips(a, b)); }           // not a name we have
     { EvInventory a, b; a.reserve = {{5, 1}, {6, 2}}; CHECK(RoundTrips(a, b) && b.reserve.size() == 2 && b.reserve[1].item == 6); }
     { EvAbility a, b; a.user = 7; a.item = 55; a.x = 1.5f; a.z = -2; CHECK(RoundTrips(a, b) && b.user == 7 && b.item == 55 && b.x == 1.5f && b.z == -2); }
     { EvInventory a, b; a.maxHealth = 5; a.heartPieces = 3; a.potions = {{1, 2}, {3, 4}}; a.hasAbility = true; a.hasMark = true; a.ability = {40, 3};
@@ -975,7 +977,9 @@ static void ReconfigureRebuildsTheLobbyWorld() {
 
     for (GameClient* g : {&a, &b}) {
         CHECK(g->Map().radius == 800 && g->Map().center.x == 500);
-        CHECK(g->Loot().size() == 120);
+        CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 120);   // 120 scattered, plus a chest for each spot in the buildings
+        CHECK(!g->Pois().empty() && g->Props().size() > 100 && g->Pois().size() == rig.server.Pois().size());
+        for (const Poi& poi : g->Pois()) CHECK(Distance(poi.center, real.center) <= 800.01f && poi.name < kPoiNameCount);
         bool eventSeen = false;
         for (auto& e : g->DrainEvents()) eventSeen |= e.type == ClientEvent::Type::MapChanged;
         CHECK(eventSeen);
@@ -992,7 +996,7 @@ static void ReconfigureRebuildsTheLobbyWorld() {
     // A later joiner gets the new world in Welcome.
     GameClient& c = rig.Add("Late");
     CHECK(rig.RunUntil([&] { return c.GetStatus() == GameClient::Status::Joined; }));
-    CHECK(c.Map().radius == 800 && c.Loot().size() == 120);
+    CHECK(c.Map().radius == 800 && c.Loot().size() == rig.M().Loot().size() && c.Pois().size() == rig.server.Pois().size() && !c.Props().empty());
     // Match start puts everyone on walkable ground.
     CHECK(rig.server.StartMatch());
     for (auto& p : rig.M().Players()) CHECK(walkable(p.pos));

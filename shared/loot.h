@@ -92,4 +92,19 @@ inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count,
     return out;
 }
 
+// One chest per spot (the buildings and caves of the points of interest), always on the better chest tiers.
+inline std::vector<LootSpawn> GenerateSpotLoot(uint64_t seed, const std::vector<Vec2>& spots) {
+    Rng rng(seed ^ 0x73706F74ull); // "spot"
+    std::vector<LootSpawn> out;
+    for (const Vec2& at : spots) {
+        Rarity tier = RollRarity(rng, true);
+        ItemId item;
+        if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kItemCount));
+        if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
+        if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
+        out.push_back({at, item, tier, true, true});
+    }
+    return out;
+}
+
 } // namespace royale

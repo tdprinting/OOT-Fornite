@@ -133,9 +133,12 @@ class Match {
     // Reject positions that can't be walked at (set by the host once it has measured the real map). Used for spawn points
     // and for loot placed by RegenerateLoot.
     void SetPlacementValidator(PlacementFn fn) { placement = std::move(fn); }
+    // Chests for the buildings and caves (see shared/poi.h), on top of the scattered ones.
+    void SetLootSpots(std::vector<Vec2> spots) { lootSpots = std::move(spots); }
     void RegenerateLoot(int count, float chestFraction = 0.15f) {
         loot.clear();
         for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement)) loot.push_back({l, false});
+        for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
     }
 
     // Add a human. Returns false if the lobby is full or the match already started.
@@ -781,6 +784,7 @@ class Match {
     std::vector<LootEntry> loot;
     std::vector<MatchEvent> events;
     PlacementFn placement;
+    std::vector<Vec2> lootSpots;
 };
 
 } // namespace royale

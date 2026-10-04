@@ -36,7 +36,7 @@ class GameServer {
     // The host measured the real playable area and wants the lobby's world rebuilt on it: new map circle, loot and storm placed only
     // on positions `valid` accepts (e.g. "there is floor here"). Lobby only; players, ready flags and connections are kept.
     // Everyone is sent the new map, storm circles and loot in one reliable message.
-    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 400, uint64_t seedOffset = 0) {
+    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 150, uint64_t seedOffset = 0) {
         if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
         lastValid = valid;
         lastLootCount = lootCount;
@@ -56,7 +56,12 @@ class GameServer {
         sim.bots.SetDifficulty(botDifficulty);
         sim.match.SetPlacementValidator(valid);
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
+        const PoiLayout layout = GeneratePois(seed, map, poiCount, valid);
+        pois = layout.pois;
         props = GenerateProps(seed, map, propCount, valid);
+        props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings and caves are scenery too
+        if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
+        sim.match.SetLootSpots(layout.lootSpots);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
@@ -71,6 +76,7 @@ class GameServer {
         cfg.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) cfg.loot.push_back(ToNet(l));
         cfg.props = props;
+        cfg.pois = pois;
         Broadcast(cfg);
         return true;
     }
@@ -108,6 +114,7 @@ class GameServer {
     }
 
     Simulation& Sim() { return sim; }
+    const std::vector<Poi>& Pois() const { return pois; }
     // How well bots play. Survives Reconfigure (which rebuilds the simulation).
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; sim.bots.SetDifficulty(d); }
     BotDifficulty GetBotDifficulty() const { return botDifficulty; }
@@ -310,6 +317,7 @@ class GameServer {
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
         w.props = props;
+        w.pois = pois;
         for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), RosterFlags(o), o.name});
         SendTo(c, w);
 
@@ -533,9 +541,11 @@ class GameServer {
     Simulation sim;
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     std::vector<Prop> props;
-    int propCount = 500;
+    std::vector<Poi> pois;
+    int propCount = 350;
+    int poiCount = 12;
     PlacementFn lastValid;
-    int lastLootCount = 400;
+    int lastLootCount = 150;
     Circle mapCircle;
     std::vector<Client> clients;
     Stats stats;

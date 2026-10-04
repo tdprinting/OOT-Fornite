@@ -1,6 +1,7 @@
 #include "../match.h"
 #include "../sim.h"
 #include "../nav.h"
+#include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include <set>
 #include <string>
@@ -1207,6 +1208,69 @@ static void ScoringAndStandings() {
     CHECK(h->chestsOpened == 0 || m.Score(*h) == scoreBefore + kPointsPerChest);
 }
 
+static void PointsOfInterest() {
+    const Circle map = {{0, 0}, 4000.0f};
+    auto valid = [](Vec2 p) { return p.x > -3000.0f; };
+    const PoiLayout a = GeneratePois(9, map, 12, valid), b = GeneratePois(9, map, 12, valid), c = GeneratePois(10, map, 12, valid);
+    CHECK(a.pois.size() >= 8 && a.pois.size() <= 12);
+    CHECK(a.pois.size() == b.pois.size() && a.props.size() == b.props.size() && a.lootSpots.size() == b.lootSpots.size());
+    CHECK(a.pois[1].center.x != c.pois[1].center.x || a.pois[1].name != c.pois[1].name);          // a new seed gives a new layout
+    CHECK(Distance(a.pois[0].center, map.center) < map.radius * 0.1f && std::string(kPoiNames[a.pois[0].name]) == "Hylian Billion Pavilion");   // the landmark in the middle
+    int inner = 0, outer = 0;
+    for (size_t i = 1; i < a.pois.size(); i++) { const float d = Distance(a.pois[i].center, map.center) / map.radius; inner += d > 0.4f && d < 0.62f; outer += d > 0.7f; }
+    CHECK(inner >= 3 && outer >= 3);                                                              // a ring of towns, then a wider one
+    std::set<int> names;
+    bool apart = true, inMap = true, grounded = true;
+    for (size_t i = 0; i < a.pois.size(); i++) {
+        names.insert(a.pois[i].name);
+        inMap &= Distance(a.pois[i].center, map.center) <= map.radius;
+        for (size_t j = i + 1; j < a.pois.size(); j++) apart &= Distance(a.pois[i].center, a.pois[j].center) >= a.pois[i].radius * 2.0f;
+    }
+    CHECK(names.size() == a.pois.size() && apart && inMap);                                      // every place has its own name and room
+    for (const Prop& p : a.props) grounded &= valid(p.pos);
+    for (const Vec2& sp : a.lootSpots) grounded &= valid(sp);
+    CHECK(grounded);
+    CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 6);       // a building, a cave and ruins at each
+    for (int i = 0; i < kPoiNameCount; i++) CHECK(kPoiNames[i] != nullptr && kPoiNames[i][0] != 0);
+
+    // The chests: every spot gets one, always on the better tiers, in a container, on top of the scattered ones.
+    Simulation sim(9, map, 0);
+    sim.match.SetLootSpots(a.lootSpots);
+    sim.match.RegenerateLoot(50);
+    CHECK(sim.match.Loot().size() == 50 + a.lootSpots.size());
+    int atSpots = 0;
+    for (const auto& l : sim.match.Loot()) {
+        for (const Vec2& sp : a.lootSpots) if (Distance(l.spawn.pos, sp) < 0.01f && l.spawn.container) { atSpots++; break; }
+    }
+    CHECK(atSpots >= static_cast<int>(a.lootSpots.size()));
+
+    // Walls are solid for the bots but the door is open: a path leads from outside a building to a chest inside it.
+    PoiLayout one;
+    Rng rng(3);
+    AddHouse(one, rng, {0, 0}, 0.0f, nullptr);
+    NavGrid nav(map, nullptr);
+    for (const Prop& p : one.props) if (PropRadius(p.kind) > 0) nav.Block(p.pos, PropRadius(p.kind) + 20.0f);
+    CHECK(!nav.Walkable({-180, 140}));                                                           // inside a wall
+    std::vector<Vec2> path;
+    CHECK(nav.FindPath({0, 600}, one.lootSpots[0], path));                                       // door is at +z with angle 0
+    bool clear = true;
+    Vec2 at = {0, 600};
+    for (Vec2 w : path) { clear &= nav.LineClear(at, w); at = w; }
+    CHECK(clear && Distance(at, one.lootSpots[0]) < 80.0f);
+    CHECK(path.size() >= 2);                                                                     // it bends through the doorway rather than cutting the wall
+
+    // A bot goes into the building, through the door, and opens a chest.
+    {
+        Simulation duel = Duel(5, {1900, 0}, {0, 700});
+        auto grid = std::make_shared<NavGrid>(MapCircle(), nullptr);
+        for (const Prop& p : one.props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
+        duel.bots.SetNav(grid);
+        const size_t chest = duel.match.AddLoot({one.lootSpots[0], ItemId::MasterSword, Rarity::Epic, true, true});
+        Run(duel, 40);
+        CHECK(duel.match.Loot()[chest].taken);
+    }
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1215,7 +1279,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

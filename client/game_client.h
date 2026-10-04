@@ -105,6 +105,7 @@ class GameClient {
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
     const std::vector<Prop>& Props() const { return props; }
+    const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
     const std::vector<net::ResultRow>& Results() const { return results; }
@@ -326,6 +327,7 @@ class GameClient {
                 storm = std::make_unique<Storm>(m.map, m.stormEnds);
                 loot = m.loot;
                 props = m.props;
+                pois = m.pois;
                 results.clear();
                 ClientEvent e{ClientEvent::Type::MapChanged};
                 events.push_back(e);
@@ -354,6 +356,7 @@ class GameClient {
         storm = std::make_unique<Storm>(w.map, w.stormEnds);
         loot = w.loot;
         props = w.props;
+        pois = w.pois;
         roster.clear();
         for (const auto& r : w.roster) {
             roster[r.id] = RosterInfo{r.name, (r.flags & net::kRosterHost) != 0, (r.flags & net::kRosterReady) != 0};
@@ -399,6 +402,7 @@ class GameClient {
     std::map<uint16_t, RosterInfo> roster;
     InventoryInfo inventory;
     std::vector<Prop> props;
+    std::vector<Poi> pois;
     std::vector<net::ResultRow> results;
     std::map<uint16_t, Remote> players;
     std::vector<ClientEvent> events;
