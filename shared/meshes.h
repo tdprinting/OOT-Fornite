@@ -47,14 +47,17 @@ struct Builder {
     V3 inside = {0, 0, 0}; // a point inside the (roughly convex) shape, so each face can be turned to face outward
 
     // Add a triangle. Its brightness comes from the way it faces (sun from the upper left front), so the winding order given doesn't matter.
+    // Lit like Ocarina of Time's painted scenes: faces towards the sun take a warm, golden key light and faces away fall into a cool blue fill,
+    // rather than just going darker.
     void Tri(V3 a, V3 b, V3 c, Rgb col) {
         V3 n = Norm(Cross(Sub(b, a), Sub(c, a)));
         const V3 centre = {(a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3, (a.z + b.z + c.z) / 3};
         if (Dot(n, Sub(centre, inside)) < 0) { std::swap(b, c); n = {-n.x, -n.y, -n.z}; }
         static const V3 sun = Norm({-0.45f, 0.8f, 0.4f});
-        const float shade = 0.52f + 0.48f * (std::max)(0.0f, Dot(n, sun));
-        auto byte = [&](float f) { return static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, f * shade))); };
-        for (V3 p : {a, b, c}) mesh.v.push_back({p.x, p.y, p.z, byte(col.r), byte(col.g), byte(col.b)});
+        const float lit = (std::max)(0.0f, Dot(n, sun)), shade = 0.54f + 0.46f * lit;
+        const Rgb tint = {0.84f + 0.22f * lit, 0.88f + 0.13f * lit, 1.04f - 0.12f * lit}; // cool fill -> warm key
+        auto byte = [&](float f, float k) { return static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, f * shade * k))); };
+        for (V3 p : {a, b, c}) mesh.v.push_back({p.x, p.y, p.z, byte(col.r, tint.r), byte(col.g, tint.g), byte(col.b, tint.b)});
     }
     void Quad(V3 a, V3 b, V3 c, V3 d, Rgb col) { Tri(a, b, c, col); Tri(a, c, d, col); }
 };
@@ -65,30 +68,53 @@ struct Lcg {
     float Next() { s = s * 1664525u + 1013904223u; return static_cast<float>(s >> 8) / 16777216.0f; } // 0..1
 };
 
-// Rock or boulder: a squashed, lumpy icosahedron resting on the ground. Boulders are bigger and mossy on top.
+// Rock or boulder: a lumpy, once-subdivided icosahedron (80 faces) resting on the ground, so it reads as a chunky, faceted lump of stone
+// like the field rocks in Ocarina of Time rather than a regular gem. Faces are painted in three tones of olive grey stone with a dark band
+// where it meets the ground; boulders are bigger and carry a cap of bright moss on top.
 inline MeshData Lump(float radius, float squash, bool mossy, uint32_t seed) {
     const float t = 1.6180339887f;
-    V3 base[12] = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    std::vector<V3> base = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
     static const int faces[20][3] = {{0, 11, 5}, {0, 5, 1}, {0, 1, 7}, {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
                                      {3, 9, 4}, {3, 4, 2}, {3, 2, 6}, {3, 6, 8}, {3, 8, 9}, {4, 9, 5}, {2, 4, 11}, {6, 2, 10}, {8, 6, 7}, {9, 8, 1}};
+    // Split every face in four, sharing the new edge midpoints so neighbouring faces still meet.
+    std::vector<int> tris;
+    auto mid = [&](int a, int b) {
+        const V3 m = {(base[a].x + base[b].x) * 0.5f, (base[a].y + base[b].y) * 0.5f, (base[a].z + base[b].z) * 0.5f};
+        for (size_t i = 12; i < base.size(); i++)
+            if (std::fabs(base[i].x - m.x) + std::fabs(base[i].y - m.y) + std::fabs(base[i].z - m.z) < 1e-4f) return static_cast<int>(i);
+        base.push_back(m);
+        return static_cast<int>(base.size() - 1);
+    };
+    for (const auto& f : faces) {
+        const int ab = mid(f[0], f[1]), bc = mid(f[1], f[2]), ca = mid(f[2], f[0]);
+        for (int k : {f[0], ab, ca, ab, f[1], bc, ca, bc, f[2], ab, bc, ca}) tris.push_back(k);
+    }
     Lcg rng(seed);
-    V3 p[12];
-    for (int i = 0; i < 12; i++) {
+    std::vector<V3> p(base.size());
+    const float stretch = 0.85f + 0.3f * rng.Next(); // a little longer one way than the other
+    for (size_t i = 0; i < base.size(); i++) {
         const V3 u = Norm(base[i]);
-        const float lump = 0.82f + 0.36f * rng.Next();
-        p[i] = {u.x * radius * lump, u.y * radius * lump * squash, u.z * radius * lump};
+        const float lump = (i < 12 ? 0.84f + 0.3f * rng.Next() : 0.9f + 0.18f * rng.Next()); // the big corners wander more than the midpoints
+        p[i] = {u.x * radius * lump * stretch, u.y * radius * lump * squash, u.z * radius * lump / stretch};
     }
     float lowest = 1e30f;
     for (const V3& q : p) lowest = (std::min)(lowest, q.y);
     for (V3& q : p) q.y = (std::max)(0.0f, q.y - lowest * 0.55f); // sits on the ground with the bottom flattened
+    float top = 0.0f;
+    for (const V3& q : p) top = (std::max)(top, q.y);
+    static const Rgb stone[3] = {{152, 146, 124}, {126, 122, 106}, {104, 100, 90}}, moss[2] = {{92, 150, 60}, {68, 124, 50}};
+    const Rgb foot = {78, 72, 64};
     Builder b;
     b.inside = {0, radius * squash * 0.35f, 0};
-    for (const auto& f : faces) {
-        const V3 n = Norm(Cross(Sub(p[f[1]], p[f[0]]), Sub(p[f[2]], p[f[0]])));
-        const bool up = std::fabs(n.y) > 0.55f && (p[f[0]].y + p[f[1]].y + p[f[2]].y) > radius * squash * 0.9f;
-        const float v = 0.9f + 0.2f * rng.Next();
-        Rgb col = mossy && up ? Rgb{86 * v, 122 * v, 66 * v} : Rgb{136 * v, 128 * v, 116 * v};
-        b.Tri(p[f[0]], p[f[1]], p[f[2]], col);
+    for (size_t k = 0; k < tris.size(); k += 3) {
+        const V3 a = p[tris[k]], c1 = p[tris[k + 1]], c2 = p[tris[k + 2]];
+        const V3 n = Norm(Cross(Sub(c1, a), Sub(c2, a)));
+        const float cy = (a.y + c1.y + c2.y) / 3;
+        const float r = rng.Next();
+        Rgb col = stone[r < 0.4f ? 0 : r < 0.8f ? 1 : 2];
+        if (cy < top * 0.16f) col = foot;                                                        // damp, dark where it meets the ground
+        else if (mossy && std::fabs(n.y) > 0.5f && cy > top * (0.62f + 0.12f * rng.Next())) col = moss[r < 0.6f ? 0 : 1]; // a ragged cap of moss
+        b.Tri(a, c1, c2, col);
     }
     return b.mesh;
 }
@@ -97,8 +123,8 @@ inline MeshData Lump(float radius, float squash, bool mossy, uint32_t seed) {
 // which lets a row of them stand as a wall.
 inline MeshData Post() {
     struct Ring { float r, y; Rgb col; };
-    const Ring rings[] = {{40, 0, {96, 90, 82}},    {40, 26, {120, 112, 100}}, {33, 26, {116, 108, 98}}, {33, 62, {96, 124, 80}},
-                          {33, 74, {140, 130, 116}}, {33, 170, {146, 136, 122}}, {42, 170, {160, 150, 134}}, {42, 200, {170, 160, 142}}};
+    const Ring rings[] = {{40, 0, {84, 80, 70}},     {40, 26, {116, 112, 96}},  {33, 26, {110, 106, 92}},  {33, 62, {80, 132, 58}},
+                          {33, 74, {138, 132, 112}}, {33, 170, {148, 142, 120}}, {42, 170, {166, 158, 132}}, {42, 200, {180, 170, 140}}};
     const int n = 8;
     Builder b;
     b.inside = {0, 100, 0};
@@ -110,7 +136,7 @@ inline MeshData Post() {
         for (int i = 0; i < n; i++) b.Quad(at(rings[k], i), at(rings[k], (i + 1) % n), at(rings[k + 1], (i + 1) % n), at(rings[k + 1], i), rings[k + 1].col);
     }
     const Ring top = rings[sizeof(rings) / sizeof(rings[0]) - 1];
-    for (int i = 0; i < n; i++) b.Tri({0, top.y, 0}, at(top, i), at(top, (i + 1) % n), {176, 166, 148});
+    for (int i = 0; i < n; i++) b.Tri({0, top.y, 0}, at(top, i), at(top, (i + 1) % n), {188, 178, 146});
     return b.mesh;
 }
 
@@ -303,7 +329,7 @@ inline MeshData Dragon(uint32_t variant) {
 // stripes around the sides, so it reads as a stone step from far off.
 inline MeshData Platform(uint32_t variant) {
     const float h = 60.0f * static_cast<float>(variant % 3 + 1), half = 75.0f;
-    const Rgb body = {156, 150, 138}, dark = {112, 106, 98}, top = {196, 190, 172}, panel = {170, 160, 140};
+    const Rgb body = {150, 144, 122}, dark = {82, 78, 68}, top = {192, 182, 148}, panel = {164, 154, 124}; // olive stone, dark mortar
     Builder b;
     auto box = [&](float x0, float y0, float z0, float x1, float y1, float z1, Rgb col) {
         b.inside = {(x0 + x1) * 0.5f, (y0 + y1) * 0.5f, (z0 + z1) * 0.5f};
