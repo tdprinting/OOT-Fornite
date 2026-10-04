@@ -37,8 +37,17 @@ jobs:
           cmake --version
       - name: Configure (the fork bootstraps vcpkg itself)
         run: cmake -S third_party/Shipwright-Android -B build/x64 -A x64
-      - name: Build the game
-        run: cmake --build build/x64 --target soh --config Release --parallel
+      - name: Generate soh.otr (the game's own data file; no ROM involved)
+        run: cmake --build build/x64 --target GenerateSohOtr --config Release --parallel
+      - name: Build the game and its ROM extractor
+        run: cmake --build build/x64 --config Release --parallel
+      - name: Package (the fork's own CPack ZIP: game, soh.otr, extractor files)
+        working-directory: build/x64
+        run: cpack -G ZIP -C Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: royale-windows
+          path: build/x64/*.zip
 
   android:
     runs-on: ubuntu-latest
