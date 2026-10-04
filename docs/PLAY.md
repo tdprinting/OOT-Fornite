@@ -26,33 +26,45 @@ The app installs as its own app, **TDawgs Battle Royale** (package `com.tdawg.ba
 2. Open it from the Files app and allow **Install unknown apps** when asked.
 3. Open **TDawgs Battle Royale** and **allow all file permissions** (this is a separate permission from the other app's).
 4. When asked, answer **Yes** to generating the data file, **Yes** to looking for a ROM, and pick your Ocarina of Time ROM file. Wait for the extraction to finish. (To skip picking it again you can copy `OOT.z64` from the `SOH` folder into `TDawgsBattleRoyale`.)
-5. Press **Back / Select / -** on the controller to open the menu.
+5. Press **Start** on the title screen. The Battle Royale menu opens (see below).
 
 Your existing Ship of Harkinian saves are not shared with this app. If you want one, copy the save file from `SOH/Save` into `TDawgsBattleRoyale/Save`, but a throwaway save is safer while this build is untested.
 
-## Starting from the file select
-When you make a new save, the quest picker (the screen where you choose between the normal game, Master Quest, Randomizer and Boss Rush) now has a fifth option, **Battle Royale**. Pick it and finish creating the save as usual. It is a normal save underneath, and the game remembers which saves were made this way. A few seconds after you load one, the game's menu opens on the **Battle Royale** page so you can host a lobby or join one straight away. You can always open that page yourself from the menu (Back / Select / -).
+## The Battle Royale menu
+The game is Battle Royale only. There is no file select and no quest to pick: press **Start** on the title screen and the Battle Royale menu opens over it. Behind the scenes the game makes one save of its own the first time (in an empty save slot) and loads it every time, straight into the Temple of Time.
+
+- **Play**: **Play solo** (you against bots), **Host a match** (friends join you) or **Join a match**. Solo and Host first show the match settings: the map (with a picture of each), players, bot difficulty, the dragon boss, season and weather.
+- **Locker**: your name and tunic colour.
+- **Options**: graphics (weather, grass and trees, cloth physics, custom rocks), sound and music, what the minimap shows, weapon glow, Lilo, map pictures, and a link to the Ship of Harkinian settings for resolution and button mapping.
+- **Controls**: every button in one list.
+
+In the game, **Start** opens the same menu instead of the pause screen. It does not pause (the match is online). It shows what fits: the lobby (start, settings, invite friends, ready), the match (back, item screen, options, leave), or the results (play again). The game's own pause screen is still there as **Item screen** in the match menu.
+
+Use the **D-pad or stick** to move, **A** to choose, **B** to go back, or tap with a finger. Names and addresses are typed on an on-screen letter grid like the game's name entry (a keyboard works too).
+
+**Map pictures.** The map chooser shows a picture of each map, taken in your own game: the first time you are on a map, from the sky as you skydive in, or all at once with **Options, Take map pictures now** (it visits each map and comes back). They are saved in the `royale-previews` folder next to the game.
+
+If all three save slots already hold story saves, the normal file select shows instead with a note: erase one, or load any save. To get the normal file select back on purpose, open the Ship of Harkinian menu (**Back / Select / -**), **Battle Royale**, and tick "Use the game's normal file select".
 
 ## Playing a match
 
-**Important: the game plays exactly like normal Ocarina of Time until you Host or Join from the menu.** Walking around Hyrule Field
-does nothing by itself. Nothing is added to the world until a lobby is open.
+**Important: nothing is added to the world until you play solo, host or join.** Walking around the Temple of Time does nothing by itself.
 
-1. Start the game and load any save file (use a throwaway one).
-2. Open the menu (**Back / Select / -**) and choose **Battle Royale**.
-3. **To host:** type a name and press **Host a lobby**. The lobby screen shows your address (for example `192.168.1.23:7777`) with a **Copy** button. Tell your friends the numbers before the colon.
+1. Start the game and press **Start** on the title screen.
+2. Choose **Play**.
+3. **To host:** choose **Host a match**, set the match up and choose **Open the lobby**. In the lobby, **Invite friends** shows your address (for example `192.168.1.23`) with a copy button. Tell your friends those numbers.
    - Same Wi-Fi: that address works as shown.
    - Over the internet: use a free VPN like Tailscale on every device (easiest), or forward UDP port 7777 on your router.
-4. **To join:** type the host's address and press **Join lobby**.
+4. **To join:** choose **Join a match**, type the host's address and choose **Join**.
 5. You land in the lobby: a player list with the host marked, a **ready** button for everyone but the host, and (if you left the option on) you are taken to the Temple of Time to wait together.
-6. In the lobby the host can set the **number of players** with a slider from 2 to 32 (bots fill whatever the people don't; smaller matches also get fewer towns and mini bosses). A timer counts down from 2 minutes and the match **starts by itself** when it reaches zero (the host can turn that off with a checkbox). Everyone sees the countdown.
-8. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match** (or waits for the timer). Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
+6. In the lobby the host's **Match settings** set the **number of players** from 2 to 32 (bots fill whatever the people don't; smaller matches also get fewer towns and mini bosses). A timer counts down from 2 minutes and the match **starts by itself** when it reaches zero (the host can turn that off). Everyone sees the countdown.
+8. The host picks **Bot difficulty** (Easy, Normal or Hard) and chooses **Start the match** (or waits for the timer). Empty spots fill with bots. After a 10 second countdown everyone is moved to the map automatically.
 
-You can play alone: press **Host a lobby**, then **Start match**, and you will face bots.
+You can play alone: **Play solo** starts a match against bots straight away.
 
 ### If something goes wrong
 - Nothing happens on Join: check both devices are on the same network or VPN, the address is right, and the firewall allows the game.
-- The game looks completely normal: you have not hosted or joined yet. Open the **Battle Royale** menu.
+- The game looks completely normal: you have not played, hosted or joined yet. Press **Start** for the menu.
 - The window says "Host runs a different version": everyone must install the same build.
 - Crashes or odd behavior: tell me what you were doing. This build has never been run, so those reports are exactly what I need.
 
@@ -80,13 +92,13 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - **Sprinting.** Click the **left stick** while running to sprint, like Fortnite. Link really runs faster, so his legs pump quicker, his footsteps speed up and dust kicks up from his heels; other players see you sprint the same way. A thin gold stamina bar appears under the magic meter and drains while you sprint (a full bar lasts about six seconds). Letting go of the stick, clicking again or running dry stops it; the bar refills after a second's rest and fades away when full. It turns red while you are too winded to start again. No sprinting while skydiving, swimming, stunned or shielding.
 - **Jumping.** **C-Up** jumps. If there is a ledge about knee to chest high right in front of you, the jump pulls you up onto it.
 - **Glints.** Chests and dropped items throw off sparkles in their rarity colour, more often the rarer they are.
-- **Minimap options.** In the Battle Royale menu, **Minimap options** lets you show or hide other players, bots, mini bosses and chests.
+- **Minimap options.** In the menu, **Options** lets you show or hide other players, bots, mini bosses and chests.
 - **Time of day.** The game's own day and night lighting runs through the match: it starts in the morning and the last circles are at dusk and in the dark.
-- **Custom models.** The stone posts, boulders, rocks and cottage roofs are drawn from low-poly models made for this mod, in the flat chunky Ocarina of Time style, instead of the game's own rock models. There is a checkbox in the Battle Royale menu ("Custom rocks and buildings"). If the game ever crashes or the scenery looks wrong when a match starts, turn it off and tell me.
+- **Custom models.** The stone posts, boulders, rocks and cottage roofs are drawn from low-poly models made for this mod, in the flat chunky Ocarina of Time style, instead of the game's own rock models. There is a switch in **Options** ("Custom rocks and buildings"). If the game ever crashes or the scenery looks wrong when a match starts, turn it off and tell me.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
 
 ## Customize character
-In the Battle Royale menu press **Customize character**. Pick one of ten preset skins (Hero of Time, Hero of the Winds, Goron Red, Zora Blue, Gerudo Gold, Shadow, Sheikah Crimson, Moblin Magenta, Snowhead Frost, Midnight) or choose **Custom colour** and mix your own. It sets the colour of Link's tunic. Everyone in the match sees you in your colour, and bots wear presets. Your choice is sent when you connect, so change it before hosting or joining. It is saved between sessions.
+In the menu choose **Locker**. Pick one of ten preset skins (Hero of Time, Hero of the Winds, Goron Red, Zora Blue, Gerudo Gold, Shadow, Sheikah Crimson, Moblin Magenta, Snowhead Frost, Midnight) or choose **Custom colour** and mix your own. It sets the colour of Link's tunic. Everyone in the match sees you in your colour, and bots wear presets. Your choice is sent when you connect, so change it before hosting or joining. It is saved between sessions.
 
 Skins are colours on the game's own Link model, not new models. If you install a Link model pack in Ship of Harkinian on your own device, that changes how *you* see every player (they are all drawn with the same Link model), but other players don't see your model, because only your colour and name are sent over the network. For everyone to see the same model, everyone installs the same pack. Whether a pack's tunic follows the colour depends on the pack.
 
@@ -105,7 +117,7 @@ Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It li
 
 ## Weapon glow and lobby music
 
-- **Weapon glow:** whatever weapon a player holds gives off glints in its rarity colour (grey, green, blue, purple, gold), more of them the rarer it is. It is on for other players by default; "Glow on your own weapon too" is off by default. Both are checkboxes under "Minimap and game options" in the Royale menu.
+- **Weapon glow:** whatever weapon a player holds gives off glints in its rarity colour (grey, green, blue, purple, gold), more of them the rarer it is. It is on for other players by default; "Glow on your own weapon too" is off by default. Both are switches in **Options**.
 - **Lobby music:** put `.wav` files in the `music` folder inside the game's data folder (it is created the first time you reach a lobby). They play shuffled while you wait in the lobby and stop when the countdown starts. Only WAV files work (the game has no MP3/OGG decoder). Turn it off with "Play songs from the music folder in the lobby".
 
 
@@ -125,7 +137,7 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Match replay.** When a match ends, a top-down replay of it plays beside the results.
 - **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
 - **Controls added:** **C-Left** drinks a shield potion, **C-Up** jumps, **C-Right** emotes, **A** also hires allies and talks.
-- **Lilo the cat.** An Easter egg: a grey and white cat called Lilo sits at a random spot on the map. Press **A** next to her to talk. It can be switched off with "Lilo the cat" under "Minimap and game options" in the Royale menu.
+- **Lilo the cat.** An Easter egg: a grey and white cat called Lilo sits at a random spot on the map. Press **A** next to her to talk. It can be switched off in **Options**.
 
 ## Latest changes (real assets, weather, scenery)
 - **Hotbar and loot icons** are the game's own item icons wherever the game has one (swords, bow, bombs, bottles, tunics, masks...). Songs, rupee piles and a few others keep a drawn fallback.
@@ -135,7 +147,7 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Grass, trees and flowers** are scattered over the field (sway in the wind, change with the season); trunks are solid. Option: "Grass and trees (%)".
 - **Rocks and boulders** are solid and you can walk up onto them; the climbing blocks now step up automatically.
 - **Cloth physics** has its own on/off tick box; the cap now swings with Link's acceleration and its tip whips.
-- **Music:** the Royale menu shows which folder the .wav songs go in and how many were found, with a Rescan button.
+- **Music:** **Options** shows which folder the .wav songs go in and how many were found, with a button to look for new songs.
 - **Glider:** Link hangs from the bar with both hands up.
 
 ## Controls (streamlined)
