@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGO = os.path.join(ROOT, "assets", "logo.png")
 RES = os.path.join(ROOT, "assets", "generated", "res")
 HEADER = os.path.join(ROOT, "mod", "Royale", "logo_data.h")
-BACKGROUND = (16, 24, 38)     # the launcher icon's backdrop: deep blue-black, so the red and gold of the logo stand out
+BACKGROUND = (246, 241, 229)  # the launcher icon's backdrop: warm off-white (the logo's lettering is black, so it needs a light backdrop)
 
 
 def placeholder():

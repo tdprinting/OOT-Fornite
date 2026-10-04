@@ -2635,11 +2635,15 @@ ImTextureID LogoTexture(ImVec2* size = nullptr) {
 }
 
 // The logo `width` wide with its top edge at `top`, centred on `cx`. Returns the height drawn (0 if there is no logo).
-float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255) {
+float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255, bool plaque = false) {
     ImVec2 sz;
     ImTextureID tex = LogoTexture(&sz);
     if (tex == nullptr || sz.x <= 0) return 0.0f;
     const float height = width * sz.y / sz.x;
+    if (plaque) {   // the logo has black lettering: on a dark screen it sits on a pale rounded plaque
+        const float pad = width * 0.04f;
+        dl->AddRectFilled(ImVec2(cx - width * 0.5f - pad, top - pad), ImVec2(cx + width * 0.5f + pad, top + height + pad), IM_COL32(246, 241, 229, alpha * 235 / 255), pad * 1.6f);
+    }
     dl->AddImage(tex, ImVec2(cx - width * 0.5f, top), ImVec2(cx + width * 0.5f, top + height), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
     return height;
 }
@@ -2657,13 +2661,13 @@ void DrawTitleLogo() {
     const float aspect = sz.x / sz.y;
     if (mode == GAMEMODE_TITLE_SCREEN) {
         const double t = ImGui::GetTime();
-        dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(8, 16, 30, 255), IM_COL32(8, 16, 30, 255), IM_COL32(26, 14, 18, 255), IM_COL32(26, 14, 18, 255));
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(250, 247, 238, 255), IM_COL32(250, 247, 238, 255), IM_COL32(222, 214, 198, 255), IM_COL32(222, 214, 198, 255));
         const float width = std::min(ds.x * 0.78f, ds.y * 0.86f * aspect);
         const float height = width / aspect;
         DrawLogo(dl, ds.x * 0.5f, (ds.y - height) * 0.5f + static_cast<float>(std::sin(t * 1.4)) * ds.y * 0.006f, width);
     } else {
         const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
-        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.01f, width, 235);
+        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245, true);
     }
 }
 
@@ -2711,7 +2715,7 @@ void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float seco
         const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
         const float width = std::min(ds.x * 0.5f, ds.y * 0.5f * logoSize.x / logoSize.y);
         const float top = ds.y * 0.06f + bob;
-        y = top + DrawLogo(dl, ds.x * 0.5f, top, width, A(255)) + 14 * scale;
+        y = top + DrawLogo(dl, ds.x * 0.5f, top, width, A(255), true) + 24 * scale;
     } else {
         // The Triforce, three gold triangles with a dark gap in the middle, floating gently.
         const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
@@ -5341,6 +5345,8 @@ void DrawRoyaleUi() {
         if (ImTextureID tex = LogoTexture(&sz)) {
             const float width = std::min(ImGui::GetContentRegionAvail().x, 360.0f), height = width * sz.y / sz.x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - width) * 0.5f);
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(at.x - 8, at.y - 4), ImVec2(at.x + width + 8, at.y + height + 4), IM_COL32(246, 241, 229, 235), 12.0f);
             ImGui::Image(tex, ImVec2(width, height));
             ImGui::Spacing();
         }
