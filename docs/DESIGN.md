@@ -281,8 +281,9 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
   potion requests, a real HUD (alive count, kill feed, storm ring on the minimap), spectating, a lobby scene (for now the
   lobby is Hyrule Field itself), and disabling cheats and warps during a match.
 - Patches to the fork (`patches/`): 0001 `ShouldActorInit` hook, 0002 CMake hook, 0003 window and menu entry, and
-  `patches/libultraship/0001`, a one-character fix for a missing semicolon in the fork's libultraship that stops it
-  compiling on every non-Android platform.
+  `patches/0004` (MSVC rejects arithmetic on `void*` in the fork's `z_message_PAL.c`) and `patches/libultraship/0001`, a
+  one-character fix for a missing semicolon in the fork's libultraship that stops it compiling on every non-Android platform.
+  The fork is Android-first and had not been built on Windows at this commit, so more such fixes may turn up.
 
 ### 5.4 Server
 - Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
