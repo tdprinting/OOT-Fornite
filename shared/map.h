@@ -82,6 +82,10 @@ inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cy
 inline constexpr const char* kMayaName = "Maya";
 inline constexpr const char* kMayaGreeting = "Hi Daddy I'm a Goo goo!";
 
+// Lilo, a cat who may be sitting somewhere on the map (an option): talk to her and she says this, then there is an accident.
+inline constexpr const char* kLiloName = "Lilo";
+inline constexpr const char* kLiloLine = "meoooww I smell a fart nearby";
+
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;

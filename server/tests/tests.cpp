@@ -1195,6 +1195,16 @@ static void ClothAndWind() {
 
 static void TheSignInTheMiddle() {
     CHECK(std::string(kMapSignText) == "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!");
+    CHECK(std::string(kLiloName) == "Lilo" && std::string(kLiloLine) == "meoooww I smell a fart nearby");
+    const MeshData lilo = BuildMesh(MeshKind::Cat, 0);
+    float cmn[3], cmx[3];
+    lilo.Bounds(cmn, cmx);
+    CHECK(lilo.Triangles() >= 200 && cmx[1] > 70 && cmx[1] < 90 && cmx[0] - cmn[0] < 50 && cmx[2] - cmn[2] > 60);
+    const std::vector<int16_t> fart = BuildFart();
+    CHECK(fart.size() == static_cast<size_t>(kFartSeconds * kTuneRate) && BuildFart() == fart);
+    int peak = 0; double energy = 0;
+    for (int16_t v : fart) { peak = std::max(peak, std::abs(static_cast<int>(v))); energy += static_cast<double>(v) * v; }
+    CHECK(peak > 6000 && peak < 32000 && energy / fart.size() > 1.0e6 && std::abs(static_cast<int>(fart.back())) < 300);   // audible, never clipping, ends quietly
     CHECK(std::string(kMayaName) == "Maya" && std::string(kMayaGreeting) == "Hi Daddy I'm a Goo goo!");
     const MeshData sign = BuildMesh(MeshKind::Sign, 0);
     float mn[3], mx[3];

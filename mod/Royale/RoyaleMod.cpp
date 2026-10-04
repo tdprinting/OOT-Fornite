@@ -961,6 +961,10 @@ bool LiveAndAlive(const royale::HudState& h) {
 
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
+void PlayOneShot(int kind);
+void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+bool LiloNear();
+void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 bool MayaNear();
 void TalkToMaya();
@@ -3187,6 +3191,9 @@ void DrawOverlay() {
         } else if (MayaNear()) {
             centered(ds.y * 0.66f, IM_COL32(255, 170, 215, 255), 26 * scale, "Maya");
             centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk");
+        } else if (LiloNear()) {
+            centered(ds.y * 0.66f, IM_COL32(235, 235, 230, 255), 26 * scale, "Lilo");
+            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk to the cat");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -3201,6 +3208,7 @@ void DrawOverlay() {
     DrawPoiLabels(dl, font, ds, scale, h);
     DrawSign(dl, font, ds, scale);
     DrawMaya(dl, font, ds, scale);
+    DrawLilo(dl, font, ds, scale);
     DrawAllyLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
@@ -3724,6 +3732,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 else gSession.HireAlly(ally);
             } else if (MayaNear()) {
                 TalkToMaya();
+            } else if (LiloNear()) {
+                TalkToLilo();
             }
         }
     }
@@ -4337,11 +4347,11 @@ void DriveMinimapSwitch(bool on) {
 struct OneShotAudio {
     SDL_AudioDeviceID device = 0;
     bool failed = false;
-    std::vector<int16_t> jingle, warning;
+    std::vector<int16_t> jingle, warning, fart;
 };
 OneShotAudio gOneShot;
 
-void PlayOneShot(bool jingle) {
+void PlayOneShot(int kind) {   // 0 the storm warning, 1 the storm jingle, 2 Lilo's accident
     if (gOneShot.failed) return;
     if (gOneShot.device == 0) {
         SDL_AudioSpec want = {}, have = {};
@@ -4351,10 +4361,11 @@ void PlayOneShot(bool jingle) {
         SDL_PauseAudioDevice(gOneShot.device, 0);
         gOneShot.jingle = royale::BuildStormJingle();
         gOneShot.warning = royale::BuildStormWarning();
+        gOneShot.fart = royale::BuildFart();
     }
     const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f);
     if (volume < 0.01f) return;
-    const std::vector<int16_t>& src = jingle ? gOneShot.jingle : gOneShot.warning;
+    const std::vector<int16_t>& src = kind == 1 ? gOneShot.jingle : kind == 2 ? gOneShot.fart : gOneShot.warning;
     std::vector<int16_t> out(src.size());
     for (size_t i = 0; i < src.size(); i++) out[i] = static_cast<int16_t>(src[i] * volume);
     SDL_ClearQueuedAudio(gOneShot.device);
@@ -4379,7 +4390,7 @@ void DriveStormAlerts(const royale::HudState& hud) {
             ShowBanner("The storm holds. A new safe zone is marked", IM_COL32(210, 190, 255, 255), 2.8f);
             Say("Zone " + std::to_string(hud.stormPhase + 1) + ": the storm holds for " + std::to_string(static_cast<int>(hud.stormSecondsLeft)) + " seconds");
         }
-        PlayOneShot(true);
+        PlayOneShot(1);
         warned = -1;
         lastPhase = hud.stormPhase;
         lastShrinking = hud.stormShrinking;
@@ -4389,16 +4400,16 @@ void DriveStormAlerts(const royale::HudState& hud) {
         if (left <= 15 && left > 5 && warned < 15) {
             warned = 15;
             ShowBanner("The storm closes in 15 seconds", IM_COL32(255, 200, 90, 255), 2.4f);
-            PlayOneShot(false);
+            PlayOneShot(0);
         } else if (left <= 5 && left > 0 && warned < 5) {
             warned = 5;
             ShowBanner("The storm closes in 5 seconds!", IM_COL32(255, 110, 90, 255), 2.2f);
-            PlayOneShot(false);
+            PlayOneShot(0);
         }
     }
     if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging
         nextOutsideSiren = now + 4.0;
-        PlayOneShot(false);
+        PlayOneShot(0);
         Say("You are in the storm! Run for the safe zone");
     }
 }
@@ -4527,6 +4538,157 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddRect(box, end, IM_COL32(255, 170, 215, 255), 12.0f * scale, 0, 3.0f * scale);
         dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(255, 170, 215, 255), royale::kMayaName);
         dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 248, 252, 255), text.c_str(), nullptr, wrap);
+    }
+}
+
+// ---- Lilo -------------------------------------------------------------------------------------------------------------------------
+// An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): a grey and white cat called Lilo sits at a random spot on the
+// map. Talk to her with A: she says her line, and a moment later there is a noise and a greenish cloud.
+Actor* gLiloActor = nullptr;
+royale::Vec2 gLiloPos = {};
+bool gLiloKnown = false;
+double gLiloTalkStart = -100.0;
+bool gLiloFarted = true;
+double gFartCloudUntil = 0;
+constexpr double kLiloTalkSeconds = 5.0, kLiloFartAt = 1.7;
+
+void Lilo_Update(Actor* actor, PlayState* play) {
+    Player* pl = GET_PLAYER(play);
+    const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
+    if (dx * dx + dz * dz < 600.0f * 600.0f) {   // she watches you come
+        const s16 want = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.1f);
+    }
+    actor->focus.pos = actor->world.pos;
+}
+void Lilo_Draw(Actor* actor, PlayState* play) {
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Cat, 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const double since = ImGui::GetTime() - gLiloTalkStart;
+    const bool talking = since >= 0.0 && since < kLiloTalkSeconds;
+    const float wiggle = talking ? std::sin(t * 12.0f) * 0.08f : std::sin(t * 1.3f) * 0.025f;   // the whole cat sways a little, more when she "speaks"
+    const float lift = talking && since < kLiloFartAt ? 6.0f * std::sin(t * 8.0f) : 0.0f;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + std::fabs(lift), actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f) + wiggle, MTXMODE_APPLY);
+    Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+void Lilo_Destroy(Actor* actor, PlayState*) { if (gLiloActor == actor) gLiloActor = nullptr; }
+
+bool FindLiloSpot(const royale::Circle& map, royale::Vec2* out) {
+    if (!gSession.Client()) return false;
+    const auto& props = gSession.Client()->Props();
+    royale::Rng rng(gSession.Client()->Seed() ^ 0x4C696C6Full);   // "Lilo"
+    auto clear = [&](royale::Vec2 p) {
+        if (!WalkableAt(p)) return false;
+        if (gSignKnown && royale::Distance(p, gSignPos) < 500.0f) return false;
+        if (gMayaKnown && royale::Distance(p, gMayaPos) < 500.0f) return false;
+        for (const royale::Prop& pr : props) {
+            const float r = royale::PropRadius(pr.kind);
+            if (r > 0.0f && royale::Distance(pr.pos, p) < r + 100.0f) return false;
+        }
+        return true;
+    };
+    for (int attempt = 0; attempt < 400; attempt++) {
+        const float a = static_cast<float>(rng.Unit() * 6.2831853), d = map.radius * (0.15f + 0.7f * static_cast<float>(rng.Unit()));
+        const royale::Vec2 p = { map.center.x + std::cos(a) * d, map.center.z + std::sin(a) * d };
+        if (clear(p)) { *out = p; return true; }
+    }
+    return false;
+}
+
+void ReconcileLilo(const royale::HudState& hud) {
+    const bool want = MapOption("LiloCat", true) && gSession.Joined() && InField() && hud.map.radius > 0 &&
+                      (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch);
+    if (!want) {
+        if (gLiloActor != nullptr) { Actor_Kill(gLiloActor); gLiloActor = nullptr; }
+        gLiloKnown = false;
+        return;
+    }
+    if (gLiloActor != nullptr) return;
+    if (!gLiloKnown) { if (!FindLiloSpot(hud.map, &gLiloPos)) return; gLiloKnown = true; }
+    float y = 0;
+    if (!FloorAt(gLiloPos.x, gLiloPos.z, &y)) return;
+    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, gLiloPos.x, y, gLiloPos.z, 0, 0x6000, 0, 0, false);
+    if (a == nullptr) return;
+    a->update = Lilo_Update;
+    a->draw = Lilo_Draw;
+    a->destroy = Lilo_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
+    a->shape.shadowScale = 28.0f;
+    gLiloActor = a;
+}
+
+bool LiloNear() {
+    if (gLiloActor == nullptr || !InField()) return false;
+    Player* pl = GET_PLAYER(gPlayState);
+    return std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z) < royale::kHireRange;
+}
+
+void TalkToLilo() {
+    gLiloTalkStart = ImGui::GetTime();
+    gLiloFarted = false;
+    Say(std::string(royale::kLiloName) + ": " + royale::kLiloLine);
+    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+
+// The accident: the noise, and a cloud of greenish-brown puffs behind the cat that drifts up and thins out.
+void UpdateLiloFx() {
+    if (gLiloActor == nullptr || gPlayState == nullptr || !InField()) return;
+    const double now = ImGui::GetTime();
+    if (!gLiloFarted && now - gLiloTalkStart >= kLiloFartAt) {
+        gLiloFarted = true;
+        gFartCloudUntil = now + 2.6;
+        PlayOneShot(2);
+    }
+    if (now < gFartCloudUntil) {
+        const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
+        const float bx = gLiloPos.x - std::sin(yaw) * 48.0f, bz = gLiloPos.z - std::cos(yaw) * 48.0f;   // behind her
+        for (int i = 0; i < 3; i++) {
+            Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, gLiloActor->world.pos.y + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
+            Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
+            const bool brown = Rand_ZeroOne() < 0.35f;
+            Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
+            Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
+            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 260 + static_cast<int>(Rand_ZeroOne() * 160.0f), 40);
+        }
+    }
+}
+
+// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    if (gLiloActor == nullptr || !InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float d = std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z);
+    ImVec2 at;
+    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 125.0f, gLiloPos.z, &at)) {
+        const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
+        const char* label = royale::kLiloName;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 20, 20, 230), label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(235, 235, 230, 255), label);
+    }
+    const double since = ImGui::GetTime() - gLiloTalkStart;
+    if (since >= 0.0 && since < kLiloTalkSeconds) {
+        const std::string full = royale::kLiloLine;
+        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 22.0));
+        const std::string text = full.substr(0, shown);
+        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
+        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
+        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
+        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
+        dl->AddRectFilled(box, end, IM_COL32(30, 30, 36, 228), 12.0f * scale);
+        dl->AddRect(box, end, IM_COL32(220, 220, 225, 255), 12.0f * scale, 0, 3.0f * scale);
+        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(200, 200, 210, 255), royale::kLiloName);
+        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
     }
 }
 
@@ -4877,6 +5039,8 @@ void OnGameFrameUpdate() {
     UpdateBossWorldFx();
     ReconcileSign(hud);
     ReconcileMaya(hud);
+    ReconcileLilo(hud);
+    UpdateLiloFx();
     ReconcileAllies(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     ReconcileProjectileActor();
@@ -5117,6 +5281,7 @@ void DrawMinimapOptions() {
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
+        { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
     };
     if (!ImGui::CollapsingHeader("Minimap and game options")) return;
     for (const Opt& o : opts) {

@@ -124,3 +124,4 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Match replay.** When a match ends, a top-down replay of it plays beside the results.
 - **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
 - **Controls added:** **C-Left** drinks a shield potion, **C-Up** jumps, **C-Right** emotes, **A** also hires allies and talks.
+- **Lilo the cat.** An Easter egg: a grey and white cat called Lilo sits at a random spot on the map. Press **A** next to her to talk. It can be switched off with "Lilo the cat" under "Minimap and game options" in the Royale menu.

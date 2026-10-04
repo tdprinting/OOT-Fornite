@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -435,6 +435,42 @@ inline MeshData Ally(uint32_t variant) {
     return b.mesh;
 }
 
+// Lilo: a grey tabby with a white chest, belly, socks and a white blaze down her face, sitting up, about 70 tall, nose towards +z.
+inline MeshData Cat() {
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    const Rgb grey = {128, 122, 118}, dark = {72, 66, 64}, white = {238, 236, 232}, pink = {236, 150, 150}, eye = {30, 26, 20};
+    box(0, 30, -4, 14, 16, 22, grey);                 // body, sitting up
+    box(0, 28, 14, 10, 14, 8, white);                 // white chest
+    box(0, 12, 4, 11, 4, 16, white);                  // belly
+    box(-13, 14, -14, 6, 14, 10, grey); box(13, 14, -14, 6, 14, 10, grey);   // haunches
+    box(-12, 3, -6, 5, 3, 9, white); box(12, 3, -6, 5, 3, 9, white);          // hind paws
+    box(-7, 20, 20, 4, 20, 4, white); box(7, 20, 20, 4, 20, 4, white);        // front legs, white
+    box(-7, 3, 24, 5, 3, 6, white); box(7, 3, 24, 5, 3, 6, white);            // front paws
+    for (int i = 0; i < 4; i++) box(0, 46.5f, -14.0f + i * 7.0f, 10, 0.8f, 2.2f, dark);   // tabby stripes down the back
+    box(-14.5f, 36, -6, 0.8f, 6, 2.2f, dark); box(14.5f, 36, -6, 0.8f, 6, 2.2f, dark);
+    box(0, 58, 14, 14, 12, 11, grey);                 // head
+    box(0, 58, 25.2f, 5, 10, 1.5f, white);            // the white blaze down the face
+    box(0, 52, 25, 9, 5, 2, white);                   // white muzzle
+    box(0, 55.5f, 27, 2.6f, 1.6f, 1.2f, pink);        // nose
+    box(-7.5f, 61, 25.4f, 3.8f, 4.6f, 1, eye); box(7.5f, 61, 25.4f, 3.8f, 4.6f, 1, eye);   // big dark eyes
+    box(-6.8f, 62.6f, 26.4f, 1.1f, 1.1f, 0.5f, white); box(8.2f, 62.6f, 26.4f, 1.1f, 1.1f, 0.5f, white);   // glints
+    box(-9, 74, 10, 3.6f, 7, 2.4f, grey); box(9, 74, 10, 3.6f, 7, 2.4f, grey);   // pointed ears
+    box(-9, 73, 12.4f, 2, 5, 0.6f, pink); box(9, 73, 12.4f, 2, 5, 0.6f, pink);   // pink insides
+    box(0, 12, -30, 3.2f, 3.2f, 9, grey);             // the tail, curling up behind in stripes
+    box(0, 14, -40, 3.2f, 3.2f, 7, dark);
+    box(0, 22, -46, 3.2f, 7, 3.2f, grey);
+    box(0, 34, -46, 3.2f, 6, 3.2f, dark);
+    box(0, 44, -46, 3.2f, 5, 3.2f, grey);
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -448,6 +484,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::GliderFrame: return mesh_detail::Glider(0, false);
         case MeshKind::Sign: return mesh_detail::Sign();
         case MeshKind::Ally: return mesh_detail::Ally(variant);
+        case MeshKind::Cat: return mesh_detail::Cat();
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);

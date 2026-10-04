@@ -142,4 +142,30 @@ inline std::vector<int16_t> BuildStormWarning() {
     return out;
 }
 
+// A cat's little accident: a wobbly low buzz with flutter, three toots with gaps between, from synthesised noise and a sawtooth (nothing recorded).
+constexpr float kFartSeconds = 1.15f;
+inline std::vector<int16_t> BuildFart() {
+    using namespace tune_detail;
+    const int total = static_cast<int>(kFartSeconds * kTuneRate);
+    std::vector<int16_t> out(static_cast<size_t>(total), 0);
+    Noise noise;
+    float phase = 0.0f;
+    const float kPi2 = 6.2831853f;
+    for (int i = 0; i < total; i++) {
+        const float t = static_cast<float>(i) / kTuneRate;
+        // three toots: 0.00-0.42, 0.50-0.76, 0.84-1.15
+        float gate = 0.0f;
+        if (t < 0.42f) gate = std::min(1.0f, t / 0.03f) * std::min(1.0f, (0.42f - t) / 0.08f);
+        else if (t >= 0.50f && t < 0.76f) gate = std::min(1.0f, (t - 0.50f) / 0.02f) * std::min(1.0f, (0.76f - t) / 0.06f);
+        else if (t >= 0.84f) gate = std::min(1.0f, (t - 0.84f) / 0.02f) * std::min(1.0f, (kFartSeconds - t) / 0.2f);
+        const float hz = 105.0f - 38.0f * (t / kFartSeconds) + 14.0f * std::sin(kPi2 * 4.1f * t) + (t > 0.5f ? 22.0f : 0.0f);
+        phase += hz / kTuneRate;
+        const float saw = 2.0f * (phase - std::floor(phase)) - 1.0f;
+        const float flutter = 0.55f + 0.45f * std::sin(kPi2 * (26.0f + 6.0f * std::sin(kPi2 * 3.0f * t)) * t);   // the rapid putter
+        const float buzz = std::tanh(2.6f * saw) * flutter + 0.28f * noise.Next() * flutter;
+        out[static_cast<size_t>(i)] = static_cast<int16_t>(0.55f * gate * buzz * 30000.0f);
+    }
+    return out;
+}
+
 } // namespace royale
