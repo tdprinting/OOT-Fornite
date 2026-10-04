@@ -418,7 +418,7 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
     (remembered between runs), Host and Join, a lobby screen with the player list, host marker, ready toggles, the host's
     addresses with Copy buttons, and Start; countdown, in-match and results screens; and a "show Link position" developer tool.
   - A waiting room: after joining, players are taken to the Temple of Time (optional), can see each other there, and are
-    moved to Hyrule Field automatically when the countdown starts. Notifications announce joins, the countdown, the drop, eliminations and the winner.
+    moved to Hyrule Field automatically when the countdown starts. Notifications announce joins and the countdown; the drop, eliminations and the winner are shown in the centre of the screen.
   - `OnPlayerUpdate`: sends Link's position, rotation and a coarse animation state; on the match-start teleport it
     drops Link onto the ground at the server's spawn point; while a match is live it overwrites health with the server's
     (and restores the player's real hearts afterwards).

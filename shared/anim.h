@@ -10,15 +10,16 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         Roll = 11, SideL = 12, SideR = 13, Back = 14, Stance = 15,
                         Shoot = 16, Throw = 17, Drink = 18, Play = 19, Cast = 20,   // the item-use poses: loose an arrow or seed, throw a bomb, drink a potion, play an ocarina song, cast a spell
                         // Roll: a dodge roll; SideL/SideR/Back/Stance: the lock-on (Z-target) footwork
-                        JumpSlash = 21,   // the leaping overhead strike (A while Z-targeting)
-                        SpinAttack = 22,  // the spin attack (hold and release B)
-                        Guard = 23,       // shield up (R)
-                        HopL = 24,        // the Z-target side hops and back flip: the game's other dodges
-                        HopR = 25,
-                        Backflip = 26,
-                        ItemGet = 27,     // holds a new find up over his head
-                        OpenChest = 28,   // kicks a chest open
-                        Jump = 29,        // a jump (C-Up)
+                        Sprint = 21,      // running with the left stick clicked
+                        JumpSlash = 22,   // the leaping overhead strike (A while Z-targeting)
+                        SpinAttack = 23,  // the spin attack (hold and release B)
+                        Guard = 24,       // shield up (R)
+                        HopL = 25,        // the Z-target side hops and back flip: the game's other dodges
+                        HopR = 26,
+                        Backflip = 27,
+                        ItemGet = 28,     // holds a new find up over his head
+                        OpenChest = 29,   // kicks a chest open
+                        Jump = 30,        // a jump (C-Up)
                         Count };
 
 // The moves that dodge like a roll does: the server gives them the same moment of safety.

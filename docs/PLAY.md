@@ -64,7 +64,7 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 ## Controls in a match
 - **Treasure chests.** All the loot is in glowing chests, coloured by rarity (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary). Walk up and press **A** to open one. You see how rare a chest is, not what is inside. Epic and Legendary chests are the big kind with golden light. A beam and glow mark chests on your screen, and the map shows them.
 - **Items dropped by players** (when someone is eliminated or swaps a weapon) lie on the ground as coloured rupees with their name. Walking over one picks it up only if it is an upgrade (a better weapon, a spare weapon for an empty slot, a shield or gear that beats yours, a potion if your bag has room, an ability if you have none). For anything else stand next to it and press **A** or **D-pad Right**, which swaps it for what you hold.
-- **The item bar** at the bottom works like Fortnite's hotbar: three weapon slots (the one in your hand is highlighted), then shield, potions and ability. **D-pad Left** switches to the next weapon. On a touch screen you can tap a slot. A big coloured banner shows each pickup, and the menu keeps a colour-coded list of recent pickups.
+- **The item bar** at the bottom works like Fortnite's hotbar: three weapon slots (the one in your hand is highlighted), then shield, potions and ability. **D-pad Left** switches to the next weapon. On a touch screen you can tap a slot. Slots are icons edged in their rarity colour; only the weapon in hand is named. One short line above the bar names each pickup, and the menu keeps a colour-coded list of recent pickups.
 - **B** attacks with the weapon in hand (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target.
 - **D-pad Down** drinks a potion (the best one for how hurt you are). A Fairy in your bag is never drunk: it revives you once if you would die.
 - **D-pad Up** uses your ability, then it recharges. The slot shows the countdown.
@@ -77,6 +77,7 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - **Falling limp.** When a player is eliminated their body is thrown back, bounces, slides and settles in Link's knocked-down pose, then fades after a while. Yours too.
 - **Emotes.** The **EMOTE** button (bottom right, tap it) opens a list, and **C-Right** plays them in turn: Wow!, Admire your hands, Look to the sky, Admire your sword, and the **Chicken dance**, a custom routine (beak, wings, tail shake, clap) with its own little polka tune. Everyone near you sees it, and hears the tune when you do the dance, quieter the further away they are. Moving, attacking or using an item stops it. The emotes are performed by a copy of your character while the real one is hidden.
 - **Shockwave Grenade.** A new ability item (Uncommon to Legendary): blasts everyone within a few body-lengths straight away from you, no damage, and leaves them dazed for under a second. Use it to escape or to knock someone off a ledge toward the storm.
+- **Sprinting.** Click the **left stick** while running to sprint, like Fortnite. Link really runs faster, so his legs pump quicker, his footsteps speed up and dust kicks up from his heels; other players see you sprint the same way. A thin gold stamina bar appears under the magic meter and drains while you sprint (a full bar lasts about six seconds). Letting go of the stick, clicking again or running dry stops it; the bar refills after a second's rest and fades away when full. It turns red while you are too winded to start again. No sprinting while skydiving, swimming, stunned or shielding.
 - **Jumping.** **C-Up** jumps. If there is a ledge about knee to chest high right in front of you, the jump pulls you up onto it.
 - **Glints.** Chests and dropped items throw off sparkles in their rarity colour, more often the rarer they are.
 - **Minimap options.** In the Battle Royale menu, **Minimap options** lets you show or hide other players, bots, mini bosses and chests.
@@ -141,9 +142,10 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Glider:** Link hangs from the bar with both hands up.
 
 ## Controls (streamlined)
-- **B** attack · **A** open / take / hire / talk · **C-Up** jump · **Z** lock on (and dive while skydiving)
+- **B** attack · **A** open / take / hire / talk · **C-Up** jump · **Left stick click** sprint · **Z** lock on (and dive while skydiving)
 - **D-pad Right / Left** next / previous weapon · **D-pad Down** health potion · **C-Left** shield potion · **D-pad Up** ability · **C-Right** emote
-- Each hotbar slot shows the button that uses it. The game's own C-button icons are hidden during a match; the top right shows the match instead
-  (players alive, the zone, the weather, what is affecting you). Everything you carry also appears in the pause-menu inventory, and your own
+- Each filled hotbar slot shows the button that uses it. The game's own C-button icons are hidden during a match; the top right shows the match instead
+  (players alive, the zone timer, and short timers for whatever is affecting you). The screen is kept quiet on purpose: sounds, the storm haze and the
+  red safe-zone arrow do the warning, and the corner pop-ups are kept for things you need to act on. Everything you carry also appears in the pause-menu inventory, and your own
   inventory is put back when the match ends.
 - Options: "Lilo follows me around as a pet" (looks only: no effect on the match, only you see her).
