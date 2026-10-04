@@ -9,9 +9,11 @@
 #include "anim.h"
 #include "map.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -92,6 +94,106 @@ bool MustBeInField(royale::MatchState state) {
     return state == royale::MatchState::Countdown || state == royale::MatchState::Drop || state == royale::MatchState::InMatch;
 }
 
+// ---- rarity presentation ------------------------------------------------------------------------------------------------
+
+struct Rgb { u8 r, g, b; };
+constexpr Rgb kRarityRgb[royale::kRarityCount] = { { 190, 190, 190 }, { 80, 220, 100 }, { 80, 150, 255 }, { 190, 100, 255 }, { 255, 200, 60 } };
+
+const char* RarityName(royale::Rarity r) {
+    static const char* names[royale::kRarityCount] = { "Common", "Uncommon", "Rare", "Epic", "Legendary" };
+    return names[static_cast<int>(r)];
+}
+Color_RGBA8 RarityColor(royale::Rarity r) {
+    const Rgb& c = kRarityRgb[static_cast<int>(r)];
+    return Color_RGBA8{ c.r, c.g, c.b, 255 };
+}
+ImVec4 RarityIm(royale::Rarity r) {
+    const Rgb& c = kRarityRgb[static_cast<int>(r)];
+    return ImVec4(c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, 1.0f);
+}
+ImU32 RarityU32(royale::Rarity r) {
+    const Rgb& c = kRarityRgb[static_cast<int>(r)];
+    return IM_COL32(c.r, c.g, c.b, 255);
+}
+// Loot is drawn with the game's own rupee models, whose colours happen to line up with the tiers.
+s16 RarityDropType(royale::Rarity r) {
+    switch (r) {
+        case royale::Rarity::Common: return ITEM00_RUPEE_GREEN;
+        case royale::Rarity::Uncommon: return ITEM00_RUPEE_BLUE;
+        case royale::Rarity::Rare: return ITEM00_RUPEE_RED;
+        case royale::Rarity::Epic: return ITEM00_RUPEE_PURPLE;
+        default: return ITEM00_RUPEE_ORANGE;
+    }
+}
+const char* ItemName(royale::ItemId id) {
+    return royale::kItems[static_cast<int>(id)].name;
+}
+std::string ItemLabel(royale::ItemId id, royale::Rarity r) {
+    return std::string(ItemName(id)) + " [" + RarityName(r) + "]";
+}
+
+// ---- the real map -----------------------------------------------------------------------------------------------------------
+
+// Is there floor under (x, z)? Used to measure Hyrule Field and to keep loot, spawns and storm centres on ground.
+bool FloorAt(float x, float z, float* outY = nullptr) {
+    if (!InField()) return false;
+    CollisionPoly poly;
+    Vec3f pos = { x, 4000.0f, z };
+    float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
+    if (y <= BGCHECK_Y_MIN + 1.0f) return false;
+    if (outY) *outY = y;
+    return true;
+}
+
+float gMedianFloorY = 0;   // heights far from this are cliffs or rooftops, not ground to place things on
+bool gMapMeasured = false;
+float gMeasuredRadius = 0;
+
+bool WalkableAt(royale::Vec2 p) {
+    float y;
+    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f;
+}
+
+// Probe the floor on a grid across the whole scene and fit a circle around the part that has ground. Takes a few thousand
+// raycasts (a few milliseconds), once per match.
+bool MeasureField(royale::Circle* out) {
+    if (!InField()) return false;
+    std::vector<royale::Vec2> points;
+    std::vector<float> heights;
+    for (float x = -9000.0f; x <= 9000.0f; x += 300.0f) {
+        for (float z = -9000.0f; z <= 9000.0f; z += 300.0f) {
+            float y;
+            if (FloorAt(x, z, &y)) { points.push_back({ x, z }); heights.push_back(y); }
+        }
+    }
+    if (points.size() < 100) return false;
+
+    std::vector<float> sorted = heights;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    gMedianFloorY = sorted[sorted.size() / 2];
+
+    royale::Vec2 centre = { 0, 0 };
+    std::vector<royale::Vec2> kept;
+    for (size_t i = 0; i < points.size(); i++) {
+        if (std::fabs(heights[i] - gMedianFloorY) > 1200.0f) continue;
+        kept.push_back(points[i]);
+        centre.x += points[i].x;
+        centre.z += points[i].z;
+    }
+    if (kept.size() < 100) return false;
+    centre.x /= kept.size();
+    centre.z /= kept.size();
+    std::vector<float> dist;
+    for (const auto& p : kept) dist.push_back(royale::Distance(p, centre));
+    std::sort(dist.begin(), dist.end());
+    float radius = dist[static_cast<size_t>(dist.size() * 0.95f)] * 0.95f; // ignore stragglers, keep a margin
+    radius = std::clamp(radius, 1500.0f, 8000.0f);
+    *out = { centre, radius };
+    gMapMeasured = true;
+    gMeasuredRadius = radius;
+    return true;
+}
+
 // ---- puppets (other players drawn as Link) ---------------------------------------------------------------------------
 
 uint16_t gSpawningPuppet = 0;                              // player id being spawned right now, 0 when none
@@ -106,6 +208,33 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
     Vec3f pos = { x, 4000.0f, z };
     float y = BgCheck_AnyRaycastFloor1(&play->colCtx, &poly, &pos);
     return y > BGCHECK_Y_MIN + 1.0f ? y : fallback;
+}
+
+// How a puppet holds the weapon the server says it has. Player_SetModelGroup and Player_Draw read the *local* equipped sword,
+// so the matching item is swapped in around those calls.
+struct Look {
+    s32 modelGroup;
+    s8 itemAction;
+    u8 buttonItem;
+};
+Look LookFor(royale::ItemId weapon) {
+    using royale::ItemId;
+    switch (weapon) {
+        case ItemId::KokiriSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_KOKIRI, ITEM_SWORD_KOKIRI };
+        case ItemId::MasterSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };
+        case ItemId::BiggoronSword: return { PLAYER_MODELGROUP_BGS, PLAYER_IA_SWORD_BIGGORON, ITEM_SWORD_BGS };
+        case ItemId::MegatonHammer: return { PLAYER_MODELGROUP_HAMMER, PLAYER_IA_HAMMER, ITEM_HAMMER };
+        case ItemId::FairyBow: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };
+        case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
+        case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
+        default: return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE }; // sticks, bombs, spells: empty-handed for now
+    }
+}
+const royale::PuppetState* StateOf(const Actor* actor) {
+    auto id = gPuppetOf.find(actor);
+    if (id == gPuppetOf.end()) return nullptr;
+    auto st = gState.find(id->second);
+    return st == gState.end() ? nullptr : &st->second;
 }
 
 LinkAnimationHeader* AnimFor(uint8_t anim) {
@@ -134,6 +263,9 @@ void Puppet_Init(Actor* actor, PlayState* play) {
 
     play->func_11D54(player, play);
 
+    // Other players can be Z-targeted like an enemy, which is how duels work.
+    actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE;
+
     auto it = gPuppetOf.find(actor);
     if (it != gPuppetOf.end()) {
         auto st = gState.find(it->second);
@@ -160,6 +292,18 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.y = s.rot;
     actor->world.rot.y = s.rot;
     actor->shape.shadowAlpha = 255;
+    actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 50.0f;
+
+    // Hold what the server says this player holds.
+    Look look = LookFor(s.weapon);
+    if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction) {
+        u8 original = gSaveContext.equips.buttonItems[0];
+        gSaveContext.equips.buttonItems[0] = look.buttonItem;
+        player->itemAction = player->heldItemAction = look.itemAction;
+        Player_SetModelGroup(player, look.modelGroup);
+        gSaveContext.equips.buttonItems[0] = original;
+    }
 
     LinkAnimationHeader* want = AnimFor(s.anim);
     auto playing = gPlaying.find(actor);
@@ -174,9 +318,10 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 }
 
 void Puppet_Draw(Actor* actor, PlayState* play) {
-    // Player_Draw reads the local player's equipped item to pick the held model; draw puppets empty-handed for now.
+    // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
+    const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
-    gSaveContext.equips.buttonItems[0] = ITEM_NONE;
+    gSaveContext.equips.buttonItems[0] = st ? LookFor(st->weapon).buttonItem : ITEM_NONE;
     Player_Draw(actor, play);
     gSaveContext.equips.buttonItems[0] = original;
 }
@@ -233,6 +378,214 @@ void KillAllEnemies() {
     for (Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ENEMY].head; a != nullptr; a = a->next) Actor_Kill(a);
 }
 
+// ---- loot on the ground ---------------------------------------------------------------------------------------------------
+
+struct LootActor {
+    Actor* actor = nullptr;
+    float baseY = 0;
+    int pickupCooldown = 0;
+};
+std::unordered_map<size_t, LootActor> gLoot;        // loot index -> its actor
+std::unordered_map<const Actor*, size_t> gLootOf;   // actor -> loot index
+constexpr float kLootSpawnRadius = 1500.0f;          // only draw what is near you
+constexpr size_t kMaxLootActors = 48;
+constexpr float kLootPickupRange = 55.0f;            // the server allows 75
+
+bool LiveAndAlive(const royale::HudState& h) {
+    return gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch) && h.haveSelf && h.selfAlive;
+}
+
+void Loot_Update(Actor* actor, PlayState* play) {
+    auto idx = gLootOf.find(actor);
+    if (idx == gLootOf.end()) {
+        Actor_Kill(actor);
+        return;
+    }
+    LootActor& la = gLoot[idx->second];
+    // Spin and bob so it reads as something to grab.
+    actor->shape.rot.y += 0x300;
+    actor->world.pos.y = la.baseY + 22.0f + 5.0f * std::sin(static_cast<float>(play->gameplayFrames) * 0.1f);
+    if (la.pickupCooldown > 0) la.pickupCooldown--;
+
+    Player* player = GET_PLAYER(play);
+    royale::HudState h = gSession.Hud();
+    if (player == nullptr || la.pickupCooldown > 0 || !LiveAndAlive(h)) return;
+    float dx = player->actor.world.pos.x - actor->world.pos.x, dz = player->actor.world.pos.z - actor->world.pos.z;
+    float dy = player->actor.world.pos.y - la.baseY;
+    if (dx * dx + dz * dz <= kLootPickupRange * kLootPickupRange && std::fabs(dy) < 100.0f) {
+        gSession.RequestPickup(static_cast<uint32_t>(idx->second));
+        la.pickupCooldown = royale::kTickHz / 2; // ask again in half a second if the server said no
+    }
+}
+
+void Loot_Destroy(Actor* actor, PlayState* play) {
+    NameTag_RemoveAllForActor(actor);
+    auto idx = gLootOf.find(actor);
+    if (idx != gLootOf.end()) {
+        auto la = gLoot.find(idx->second);
+        if (la != gLoot.end() && la->second.actor == actor) gLoot.erase(la);
+        gLootOf.erase(idx);
+    }
+}
+
+void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
+    royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ITEM00, l.x, groundY + 22.0f, l.z, 0, 0, 0, RarityDropType(rarity), false);
+    if (actor == nullptr) return;
+    // Keep the game's rupee model and drawing, but replace its behaviour: no vanilla pickup, our own spin and server-checked grab.
+    actor->update = Loot_Update;
+    actor->destroy = Loot_Destroy;
+    gLoot[index] = { actor, groundY, 0 };
+    gLootOf[actor] = index;
+    std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), rarity);
+    NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", 26, RarityColor(rarity) });
+}
+
+void ClearLoot() {
+    for (auto& [idx, la] : gLoot) Actor_Kill(la.actor);
+}
+
+// Keep a handful of actors alive for the loot near the player, and none for loot that is taken or far away.
+void ReconcileLoot(const royale::HudState& hud) {
+    bool show = gSession.Joined() && InField() &&
+                (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch);
+    if (!show) {
+        ClearLoot();
+        return;
+    }
+    const auto& loot = gSession.Client()->Loot();
+    Player* player = GET_PLAYER(gPlayState);
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+
+    for (auto it = gLoot.begin(); it != gLoot.end();) {
+        size_t idx = it->first;
+        bool gone = idx >= loot.size() || loot[idx].taken;
+        float dx = loot.size() > idx ? loot[idx].x - px : 1e9f, dz = loot.size() > idx ? loot[idx].z - pz : 1e9f;
+        if (gone || dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius * 1.5f) {
+            Actor_Kill(it->second.actor);
+            gLootOf.erase(it->second.actor);
+            it = gLoot.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if (gLoot.size() >= kMaxLootActors) return;
+    int spawnedThisFrame = 0;
+    for (size_t i = 0; i < loot.size() && spawnedThisFrame < 4 && gLoot.size() < kMaxLootActors; i++) {
+        if (loot[i].taken || gLoot.find(i) != gLoot.end()) continue;
+        float dx = loot[i].x - px, dz = loot[i].z - pz;
+        if (dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius) continue;
+        float y;
+        if (!FloorAt(loot[i].x, loot[i].z, &y)) continue; // nothing to stand on there
+        SpawnLoot(i, loot[i], y);
+        spawnedThisFrame++;
+    }
+}
+
+// ---- the always-on HUD ------------------------------------------------------------------------------------------------------
+
+std::string ClockText(float seconds) {
+    int s = static_cast<int>(std::ceil(std::max(0.0f, seconds)));
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d:%02d", s / 60, s % 60);
+    return buf;
+}
+
+// Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
+// safe zone, what you hold, and the big banners for countdown, elimination and results.
+void DrawOverlay() {
+    if (!gSession.Joined()) return;
+    royale::HudState h = gSession.Hud();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
+    const ImU32 white = IM_COL32(255, 255, 255, 255), gold = IM_COL32(255, 210, 70, 255), red = IM_COL32(255, 90, 90, 255),
+                green = IM_COL32(110, 230, 130, 255), grey = IM_COL32(190, 190, 190, 255);
+    auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {
+        dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
+        dl->AddText(font, size, ImVec2(x, y), col, t.c_str());
+    };
+    auto centered = [&](float y, ImU32 col, float size, const std::string& t) {
+        ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
+        text((ds.x - sz.x) * 0.5f, y, col, size, t);
+    };
+
+    bool live = h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
+
+    if (h.state == royale::MatchState::Countdown) {
+        centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
+        if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to Hyrule Field...");
+    }
+    if (h.state == royale::MatchState::Ending) {
+        centered(ds.y * 0.16f, gold, 46 * scale, h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16 ? "VICTORY ROYALE!" : "MATCH OVER");
+        if (!h.winnerName.empty() && h.winnerId != h.selfId) centered(ds.y * 0.16f + 56 * scale, white, 26 * scale, "Winner: " + h.winnerName);
+        centered(ds.y * 0.16f + 92 * scale, grey, 20 * scale, "Open the menu and choose Leave to go back");
+    }
+    if (live && h.haveSelf && !h.selfAlive) centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED - spectating");
+    if (live && h.state == royale::MatchState::Drop) centered(ds.y * 0.2f, green, 30 * scale, "DROP - you are protected for a moment");
+
+    if (!live || !h.haveSelf) return;
+
+    // Top left: the numbers.
+    float x = 16 * scale, y = 14 * scale, line = 24 * scale;
+    text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(royale::kMaxPlayers));
+    y += line;
+    if (h.stormPhase >= royale::kStormPhaseCount) {
+        text(x, y, red, 20 * scale, "FINAL ZONE");
+    } else {
+        std::string phase = "Zone " + std::to_string(h.stormPhase + 1) + "/" + std::to_string(royale::kStormPhaseCount);
+        text(x, y, h.stormShrinking ? red : white, 20 * scale,
+             phase + (h.stormShrinking ? "  CLOSING " : "  holds ") + ClockText(h.stormSecondsLeft));
+    }
+    y += line;
+    if (h.stormDamagePerSecond > 0) { text(x, y, red, 22 * scale, "IN THE STORM!"); y += line; }
+    if (h.selfAlive) {
+        text(x, y, RarityU32(h.weaponRarity), 20 * scale, "B  " + ItemLabel(h.weapon, h.weaponRarity));
+        y += line;
+        if (h.hasShield) text(x, y, RarityU32(h.shieldRarity), 20 * scale, "Shield  " + ItemLabel(h.shield, h.shieldRarity));
+        else text(x, y, grey, 20 * scale, "Shield  none");
+        y += line;
+        text(x, y, h.potions > 0 ? white : grey, 20 * scale, "D-pad Down  Potion x" + std::to_string(h.potions));
+    }
+
+    // Top right: which way is the safe zone, relative to the way Link is facing.
+    if (InField() && h.selfAlive) {
+        Player* p = GET_PLAYER(gPlayState);
+        float dx = h.safeZone.center.x - p->actor.world.pos.x, dz = h.safeZone.center.z - p->actor.world.pos.z;
+        bool outside = std::sqrt(dx * dx + dz * dz) > h.safeZone.radius;
+        float rel = std::atan2(dx, dz) - p->actor.shape.rot.y * (3.14159265f / 32768.0f);
+        ImVec2 c(ds.x - 74 * scale, 84 * scale);
+        float r = 34 * scale;
+        auto pt = [&](float angle, float len) { return ImVec2(c.x + std::sin(angle) * len, c.y - std::cos(angle) * len); };
+        dl->AddCircleFilled(c, r + 10 * scale, IM_COL32(0, 0, 0, 120));
+        dl->AddTriangleFilled(pt(rel, r), pt(rel + 2.5f, r * 0.75f), pt(rel - 2.5f, r * 0.75f), outside ? red : green);
+        ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, outside ? "SAFE ZONE" : "inside");
+        text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, outside ? red : green, 16 * scale, outside ? "SAFE ZONE" : "inside");
+    }
+}
+
+class RoyaleHudWindow : public Ship::GuiWindow {
+  public:
+    using GuiWindow::GuiWindow;
+    void InitElement() override {}
+    void UpdateElement() override {}
+    void DrawElement() override {}
+    void Draw() override {
+        if (IsVisible()) DrawOverlay();
+    }
+};
+
+// The overlay is a window with no frame of its own: it registers once, the first time the game loop runs (the GUI exists by then).
+void EnsureHudWindow() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+    gui->AddGuiWindow(std::make_shared<RoyaleHudWindow>(CVAR_WINDOW("RoyaleHud"), true, "Royale HUD", ImVec2(0, 0)));
+}
+
 // ---- local player <-> session ----------------------------------------------------------------------------------------
 
 uint8_t ClassifyAnim(Player* player) {
@@ -246,6 +599,10 @@ uint8_t gLastEpoch = 0;
 royale::MatchState gLastState = royale::MatchState::Lobby;
 bool gWasJoined = false;
 int gLastCountdownShown = -1;
+int gAttackCooldown = 0;     // game frames until B may attack again
+bool gPendingStart = false;  // the host pressed Start; waiting to be in Hyrule Field, measure the map, then begin
+int gInFieldFrames = 0;      // frames spent in the field without a transition, so the scene's collision is ready
+bool gSpectating = false;
 
 // While a match is live the server's health replaces the save's. Keep the real values so leaving a match, or the match
 // ending, doesn't leave the player's save file with 3 hearts.
@@ -266,6 +623,40 @@ void RestoreHealth() {
 
 void Say(const std::string& text) {
     Notification::Emit({ .message = text });
+}
+
+// B attacks with the weapon the server says you hold; D-pad Down drinks a potion. Damage, range, cooldown and healing are
+// decided by the server, so this only chooses a target: the nearest living player in front of Link and within weapon range.
+void HandleCombatInput(Player* player, const royale::HudState& hud) {
+    if (gAttackCooldown > 0) gAttackCooldown--;
+    if (!LiveAndAlive(hud) || !InField()) return;
+    const Input& in = gPlayState->state.input[0];
+
+    if (in.press.button & BTN_DDOWN) {
+        if (hud.potions > 0) gSession.RequestUsePotion();
+        else Say("No potions");
+    }
+
+    if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
+    royale::WeaponStats w = royale::WeaponOf(hud.weapon);
+    if (w.damage <= 0) return;
+    gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
+
+    uint16_t best = 0;
+    float bestDist = 1e9f;
+    for (const auto& [id, actor] : gActorOf) {
+        auto st = gState.find(id);
+        if (st == gState.end() || !st->second.alive) continue;
+        float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
+        float d = std::sqrt(dx * dx + dz * dz);
+        if (d > w.range * 1.05f) continue;
+        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
+        if (d < bestDist) { bestDist = d; best = id; }
+    }
+    if (bestDist < 1e8f) gSession.ReportAttack(best, true);
 }
 
 void OnPlayerUpdate() {
@@ -295,8 +686,11 @@ void OnPlayerUpdate() {
                                player->actor.shape.rot.y, ClassifyAnim(player), static_cast<uint8_t>(gPlayState->sceneNum));
     }
 
+    HandleCombatInput(player, hud);
+
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
+    bool dead = hud.haveSelf && !hud.selfAlive && (IsLive(hud) || hud.state == royale::MatchState::Ending);
     if (IsLive(hud) && hud.haveSelf) {
         if (!gHealthOverridden) {
             // Remember the player's real values so they can be put back afterwards (see RestoreHealth).
@@ -305,7 +699,16 @@ void OnPlayerUpdate() {
             gHealthOverridden = true;
         }
         gSaveContext.healthCapacity = static_cast<s16>(royale::kMaxHealth * 16);
-        gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : 0;
+        // An eliminated player does not die in the game (that would end in the game-over screen). They become an invisible,
+        // invulnerable spectator who can still walk around and watch the rest of the match.
+        gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : gSaveContext.healthCapacity;
+    }
+    if (dead && gHealthOverridden) {
+        player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
+        player->invincibilityTimer = 20;
+        gSpectating = true;
+    } else if (gSpectating) {
+        gSpectating = false; // the flag is per-frame, so it clears itself
     }
 }
 
@@ -326,8 +729,25 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::PlayerLeft:
                 Say("A player left the lobby");
                 break;
+            case royale::ClientEvent::Type::Damaged:
+                if (e.id == hud.selfId && InGame()) {
+                    Player* p = GET_PLAYER(gPlayState);
+                    Actor_SetColorFilter(&p->actor, 0x4000, 0xFF, 0, 8); // red flash
+                    Player_PlaySfx(&p->actor, NA_SE_VO_LI_DAMAGE_S);
+                } else if (e.other == hud.selfId) {
+                    auto target = gActorOf.find(e.id);
+                    if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 12); // hit marker
+                }
+                break;
+            case royale::ClientEvent::Type::LootTaken:
+                if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
+                    const auto& l = gSession.Client()->Loot()[e.index];
+                    Say("Picked up " + ItemLabel(static_cast<royale::ItemId>(l.item), static_cast<royale::Rarity>(l.rarity)));
+                    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                }
+                break;
             case royale::ClientEvent::Type::Eliminated:
-                if (e.id == hud.selfId) Say("You were eliminated");
+                if (e.id == hud.selfId) Say("You were eliminated. Spectating until the match ends");
                 else if (e.other == hud.selfId) Say("You eliminated " + nameOf(e.id));
                 break;
             case royale::ClientEvent::Type::StateChanged:
@@ -345,7 +765,27 @@ void ReportEvents(const royale::HudState& hud) {
     }
 }
 
+// The host's Start does three things in order: get to Hyrule Field, measure the real playable area and rebuild the world on it
+// (loot, spawns and storm on ground that exists), then begin.
+void DriveStart(const royale::HudState& hud) {
+    if (!gPendingStart) return;
+    if (!gSession.Joined() || !hud.isHost || hud.state != royale::MatchState::Lobby) { gPendingStart = false; return; }
+    if (!InGame()) return;
+    if (!InField()) { WantsWaitingRoom = false; GoToField(); gInFieldFrames = 0; return; }
+    if (gPlayState->transitionTrigger != TRANS_TRIGGER_OFF || ++gInFieldFrames < royale::kTickHz) return; // let the scene settle
+    royale::Circle measured;
+    if (MeasureField(&measured)) {
+        gSession.ConfigureMap(measured, WalkableAt);
+        Say("Map measured: radius " + std::to_string(static_cast<int>(measured.radius)));
+    } else {
+        Say("Could not measure the map, using the default size");
+    }
+    gSession.StartMatch();
+    gPendingStart = false;
+}
+
 void OnGameFrameUpdate() {
+    EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
@@ -394,8 +834,10 @@ void OnGameFrameUpdate() {
         gLastCountdownShown = left;
     }
 
+    DriveStart(hud);
     ReportEvents(hud);
     ReconcilePuppets(hud.state);
+    ReconcileLoot(hud);
 }
 
 void OnSceneInit(int16_t) {
@@ -404,6 +846,9 @@ void OnSceneInit(int16_t) {
     gActorOf.clear();
     gPlaying.clear();
     gSpawningPuppet = 0;
+    gLoot.clear();
+    gLootOf.clear();
+    gInFieldFrames = 0;
 }
 
 void RegisterRoyaleMod() {
@@ -599,9 +1044,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (h.isHost) {
         if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
         else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
-        ImGui::BeginDisabled(!InGame());
-        if (ImGui::Button("Start match", ImVec2(220, 0))) gSession.StartMatch();
+        ImGui::BeginDisabled(!InGame() || gPendingStart);
+        if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
         ImGui::EndDisabled();
+        if (gPendingStart) ImGui::TextColored(kGrey, "Heading to Hyrule Field and measuring the map before the countdown...");
+        else ImGui::TextColored(kGrey, "Starting takes you to Hyrule Field first, so the real map can be measured.");
         if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
     } else {
         if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
@@ -642,7 +1089,11 @@ void DrawInMatch(const royale::HudState& h) {
         if (h.stormDamagePerSecond > 0) ImGui::TextColored(kRed, "You are in the storm! %.1f hearts per second", h.stormDamagePerSecond);
         else ImGui::TextColored(kGreen, "You are inside the safe zone.");
         ImGui::Text("Potions: %d", h.potions);
+        ImGui::TextColored(RarityIm(h.weaponRarity), "Weapon: %s", ItemLabel(h.weapon, h.weaponRarity).c_str());
+        if (h.hasShield) ImGui::TextColored(RarityIm(h.shieldRarity), "Shield: %s", ItemLabel(h.shield, h.shieldRarity).c_str());
+        else ImGui::TextColored(kGrey, "Shield: none");
     }
+    ImGui::TextColored(kGrey, "B: attack with your weapon    D-pad Down: drink a potion    Walk over items to pick them up");
     ImGui::Spacing();
     if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
 }

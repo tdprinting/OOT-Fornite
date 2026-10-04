@@ -56,7 +56,14 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - The window says "Host runs a different version": everyone must install the same build.
 - Crashes or odd behavior: tell me what you were doing. This build has never been run, so those reports are exactly what I need.
 
+## Controls in a match
+- **Walk over items** to pick them up. Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
+- **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.
+- **D-pad Down** drinks a potion.
+- The top-left of the screen shows how many are alive, the storm timer, and what you are holding. An arrow points to the safe zone.
+- If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
+
 ## What works in this build, and what doesn't yet
-- Works (compiled and unit-tested, but not played): hosting, joining, up to 32 players with bots, a storm that shrinks, server-controlled health, other players shown as Link models.
-- Not in yet: attacking other players, picking up loot, weapons shown in hands, a proper scoreboard, watching after you are eliminated.
-- The size of Hyrule Field is a guess. The window has a checkbox to show your position so we can measure it.
+- Everything above is written and compiled, and the server side is unit-tested, but **none of it has been played**. Expect rough edges.
+- The map size is measured automatically when the host presses Start (the host is taken to Hyrule Field first), and loot, spawn points and the storm are kept on ground that exists. Bots walk in straight lines, so they can walk through walls and water.
+- Not in yet: bombs, bombchus and Din's Fire do nothing special (they act like ranged attacks), shields are not drawn on other players, there is no minimap, and Farore's Wind, Nayru's Love, Hookshot and Longshot items are not in the loot.

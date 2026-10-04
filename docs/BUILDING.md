@@ -128,12 +128,13 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 - **Never run in the game.** The window, puppet spawning, animation, health override and spawn teleport are written against
   the engine's headers and modeled on upstream Ship of Harkinian's own multiplayer code, but untested. The first launch is the
   real test.
-- **Hyrule Field's size is a placeholder** (`shared/map.h`: centre 0,0 and radius 4000). Use the window's "Show Link position"
-  checkbox to walk to the edges and set the real numbers. Storm, loot and spawns all scale from it.
-- **Puppets are drawn empty-handed** and only distinguish idle and running. No weapon models, attacks or hurt/death poses yet.
-- **Combat, loot pickup and potions are server-side only.** The protocol and server support them and they are tested, but nothing in
-  the game sends attack, pickup or potion requests yet, and ground loot is not drawn. (Milestone 4.)
-- **Eliminated players hit the vanilla game-over screen.** Spectating is not built.
+- **Hyrule Field's size is measured at match start**, by probing the floor under a grid of points (`MeasureField` in `mod/Royale/RoyaleMod.cpp`). The
+  result is only as good as that probe; if the circle looks wrong, the "Show Link position" developer tool helps debug it. `shared/map.h` holds
+  the fallback used when measuring fails.
+- **Attacks are simple.** B attacks with the server-side weapon at the nearest player in a 90 degree cone in front of you, within weapon range. Hit
+  detection is therefore generous. Ranged weapons do not fire visible projectiles yet.
+- **Loot looks like rupees.** The game's own rupee models in five colors, plus a name label. No custom models.
+- **Bots do not know the terrain.** They move in straight lines on a flat plane and are drawn on the real floor, so they can pass through walls.
 - **Health is overridden during a live match.** The mod saves your real hearts when the match goes live and restores them when
   you leave or it ends, but if the game crashes or you save mid-match your save file could keep the 3-heart value. Use a
   throwaway save for testing.

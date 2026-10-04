@@ -230,9 +230,9 @@ Layers, bottom to top:
 | Hello / Welcome / Reject | both | reliable | Welcome carries seed, map, the 6 storm circles, all loot and the roster (about 4.5 KB with 400 loot) |
 | Input | client to server | unreliable, ~20 Hz | 20 bytes: seq, teleport epoch, x, y, z, rotation, animation id, scene id |
 | AttackReport, PickupRequest, UsePotionRequest | client to server | reliable | The server decides whether they succeed |
-| Snapshot | server to client | unreliable, 20 Hz | You plus the nearest 12 living players, 23 bytes each |
+| Snapshot | server to client | unreliable, 20 Hz | You plus the nearest 12 living players, 25 bytes each |
 | Damaged | server to the two players involved | reliable | Everyone else sees health in snapshots |
-| Eliminated, LootTaken, LootAdded, MatchState, PlayerJoined/Left | server to all | reliable | Dropped kit arrives as LootAdded |
+| Eliminated, LootTaken, LootAdded, MatchState, PlayerJoined/Left, Ready, MapConfig | server to all | reliable | Dropped kit arrives as LootAdded; MapConfig rebuilds the lobby's map, storm and loot once the host has measured the field |
 
 Server-side validation:
 - **Movement is clamped** to `kMaxPlausibleSpeed` (5x run speed, to allow rolls, Epona and Hookshot pulls) plus slack,
@@ -251,7 +251,7 @@ rotation taking the short way around the 16-bit angle wrap. The local player is 
 as normal, sends input, and compares with `Self()` (the server's view) to notice a correction.
 
 **Measured bandwidth** (loopback tests, payload bytes only): with 32 humans in a match, each client receives about
-**6 KB/s**. ENet and UDP/IP headers add roughly 40 bytes per packet, so call it 7 KB/s on the wire, about 55 kbps.
+**6.8 KB/s**. ENet and UDP/IP headers add roughly 40 bytes per packet, so call it 7 KB/s on the wire, about 55 kbps.
 The host uploads that to every human, so **32 humans means about 220 KB/s (about 1.8 Mbps) of host upload**.
 Bots cost nothing, so a typical lobby with a few humans needs far less. This corrects my earlier "well under
 1 Mbps" estimate, which was wrong for a full lobby of 32 humans. A phone host on cellular or weak Wi-Fi should
@@ -280,9 +280,19 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
     they don't count as the real player, drawn with Link's own model and the matching idle or run animation. Bots are put
     on the real floor with a raycast. Names use the engine's name tag system.
   - Enemies are not allowed to spawn during a match, and existing ones are removed at countdown.
-- **Not yet built:** weapon models on puppets, attack/hurt/death poses, drawing ground loot and sending pickup, attack and
-  potion requests, a real HUD (alive count, kill feed, storm ring on the minimap), spectating, a lobby scene (for now the
-  lobby is Hyrule Field itself), and disabling cheats and warps during a match.
+- **Gameplay in the game (written and compiled, not yet played):**
+  - Loot actors for the loot near you, using the game's rupee model in the tier's color with a rarity-colored name label, grabbed by
+    walking over them (the server checks range).
+  - B attacks with the server-side weapon at the nearest player in a cone in front of you; D-pad Down drinks a potion; hits flash red.
+  - Other players hold the weapon the server says they have (swords, hammer, bow, slingshot, boomerang) and can be Z-targeted.
+  - An always-on HUD: alive count, storm phase and timer, a pointer to the safe zone, weapon, shield and potions, plus banners for
+    countdown, elimination and results.
+  - Eliminated players become invisible, invulnerable spectators instead of dying to the game-over screen.
+  - When the host presses Start the game takes them to Hyrule Field, measures the playable area by probing the floor, rebuilds the
+    world on it (`GameServer::Reconfigure`, broadcast as `EvMapConfig`) so loot, spawn points and storm centres are on ground that
+    exists, then starts.
+- **Not yet built:** shields drawn on other players, visible projectiles and bomb/spell effects, a minimap, Hookshot/Longshot/Farore's Wind/
+  Nayru's Love items, terrain-aware bots, and disabling cheats and warps during a match.
 - Patches to the fork (`patches/`): 0001 `ShouldActorInit` hook, 0002 CMake hook, 0004 MSVC void* fix, 0005 Android network permission, and
   `patches/0004` (MSVC rejects arithmetic on `void*` in the fork's `z_message_PAL.c`), `patches/libultraship/0001`, a
   one-character fix for a missing semicolon in the fork's libultraship that stops it compiling on every non-Android platform.
