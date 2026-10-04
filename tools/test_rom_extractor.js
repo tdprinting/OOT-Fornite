@@ -65,6 +65,7 @@ put16(rm + 0x300, [0, 0, 0, 0, 0, 0, 0xFF00, 0, 0, 0, 100, 0, 0, 0, 0, 0xFF00, 0
 // make the vertex colours land in bytes 12..14: re-write explicitly
 for (let v = 0; v < 3; v++) { const b = rm + 0x300 + v * 16; rom.fill(0, b, b + 16); w16(rom, b, v === 1 ? 100 : 0); w16(rom, b + 4, v === 2 ? 100 : 0); rom[b + 12] = 255; rom[b + 13] = 128; rom[b + 14] = 0; rom[b + 15] = 255; }
 
+if (process.env.WRITE_FAKE_ROM) fs.writeFileSync(process.env.WRITE_FAKE_ROM, rom);
 // 1. header and byte orders
 const n1 = R.normalizeRom(rom); ok(n1.isZelda && n1.title.startsWith('ZELDA'), 'z64 detected, title read');
 const v64 = new Uint8Array(rom.length); for (let i = 0; i < rom.length; i += 2) { v64[i] = rom[i + 1]; v64[i + 1] = rom[i]; }

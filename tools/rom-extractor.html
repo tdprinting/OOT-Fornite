@@ -572,22 +572,30 @@ if (typeof document !== 'undefined') (function () {
     }
     const sceneInfo = i => { const n = NAMES.scenes[i]; return { id: i, spec: n ? n[1] : 'scene' + i, name: n ? n[2] : 'Scene ' + i }; };
     const objName = i => NAMES.objects[i] || 'object_' + i;
-    function save(name, data, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: type || 'text/plain' })); a.download = name; a.click(); }
-    $('bObj').onclick = () => save(cur.info.name.replace(/\W+/g, '_') + '.obj', ROMLIB.toObj(cur.rooms, cur.info.name));
-    $('bPly').onclick = () => save(cur.info.name.replace(/\W+/g, '_') + '.ply', ROMLIB.toPly(cur.rooms));
-    $('bJson').onclick = () => save(cur.info.spec + '_analysis.json', JSON.stringify(ROMLIB.analyzeScene(cur.info, cur.scene, NAMES), null, 1));
-    $('bPng').onclick = () => { const c = cur.scene.collision; if (!c) return; const S = 1024, cv = document.createElement('canvas'); cv.width = cv.height = S; const g = cv.getContext('2d');
+    // The link must be in the page when it is clicked, or some browsers (phones especially) just navigate to the file and show a blank screen.
+    function save(name, data, type) {
+        const url = URL.createObjectURL(new Blob([data], { type: type || 'text/plain' }));
+        const a = document.createElement('a'); a.href = url; a.download = name; a.target = '_self'; a.style.display = 'none';
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 60000);
+        log('Saved ' + name + ' (' + Math.round((data.size || data.length || 0) / 1024) + ' KB). Check your Downloads folder.');
+    }
+    const safe = f => ev => { ev.preventDefault(); try { f(); } catch (err) { log('ERROR: ' + (err && err.message || err)); } return false; };
+    $('bObj').onclick = safe(() => save(cur.info.name.replace(/\W+/g, '_') + '.obj', ROMLIB.toObj(cur.rooms, cur.info.name)));
+    $('bPly').onclick = safe(() => save(cur.info.name.replace(/\W+/g, '_') + '.ply', ROMLIB.toPly(cur.rooms)));
+    $('bJson').onclick = safe(() => save(cur.info.spec + '_analysis.json', JSON.stringify(ROMLIB.analyzeScene(cur.info, cur.scene, NAMES), null, 1)));
+    $('bPng').onclick = safe(() => { const c = cur.scene.collision; if (!c) return; const S = 1024, cv = document.createElement('canvas'); cv.width = cv.height = S; const g = cv.getContext('2d');
         g.fillStyle = '#000'; g.fillRect(0, 0, S, S); const w = c.max[0] - c.min[0], d = c.max[2] - c.min[2], sc = (S - 20) / Math.max(w, d), V = c.verts;
         const ys = c.tris.map(t => V[t[0] * 3 + 1]); const lo = Math.min(...ys), hi = Math.max(...ys);
         c.tris.slice().sort((p, q) => V[p[0] * 3 + 1] - V[q[0] * 3 + 1]).forEach(t => { if (t[7] < 0.5) return; const y = (V[t[0] * 3 + 1] - lo) / Math.max(1, hi - lo);
             g.fillStyle = t[3] ? '#e33' : 'hsl(' + (120 - y * 90) + ',50%,' + (25 + y * 30) + '%)'; g.beginPath();
             for (let k = 0; k < 3; k++) { const x = 10 + (V[t[k] * 3] - c.min[0]) * sc, z = 10 + (V[t[k] * 3 + 2] - c.min[2]) * sc; k ? g.lineTo(x, z) : g.moveTo(x, z); } g.fill(); });
-        cv.toBlob(b => save(cur.info.spec + '_top.png', b, 'image/png')); };
-    $('bAll').onclick = () => { const all = []; log('Analysing every map... (a minute or two)');
+        cv.toBlob(b => save(cur.info.spec + '_top.png', b, 'image/png')); });
+    $('bAll').onclick = safe(() => { const all = []; log('Analysing every map... (a minute or two)');
         sceneTab.scenes.forEach((s, i) => { try { const e = dma.entries.find(x => x.vs === s.sceneStart); const sb = e && ROMLIB.fileBytes(rom, e); if (!sb) return;
             const sc = ROMLIB.parseScene(sb, (vs) => { const r = dma.entries.find(x => x.vs === vs); return r ? ROMLIB.fileBytes(rom, r) : null; });
             for (const r of sc.rooms) r.mesh = ROMLIB.buildRoomMesh(r, sb); all.push(ROMLIB.analyzeScene(sceneInfo(i), sc, NAMES)); } catch (err) { all.push({ id: i, error: String(err) }); } });
-        save('oot_maps_analysis.json', JSON.stringify({ rom: $('title').textContent, scenes: all })); log('Done: ' + all.length + ' maps. Send me that file.'); };
+        save('oot_maps_analysis.json', JSON.stringify({ rom: $('title').textContent, scenes: all })); log('Done: ' + all.length + ' maps. Send me that file.'); });
 
     async function load(file) {
         try {
