@@ -3,6 +3,7 @@
 Status: design draft v2 (milestone 0). No code yet.
 
 Decisions so far: **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
+Minimum 1 human to start; **bots fill the remaining slots up to 32**. We use our own protocol and do not stay compatible with Shipwright's Anchor.
 Matches are **host-run**: whoever starts a game hosts it (listen server), no dedicated servers required.
 Base: [HarbourMasters/Shipwright](https://github.com/HarbourMasters/Shipwright) (Ship of Harkinian, "SoH").
 
@@ -53,7 +54,7 @@ Farore's Wind), and Hyrule Field's large open map.
 ## 4. Game design
 
 ### 4.1 Match flow
-1. **Lobby** (Temple of Time scene): up to 32 players, ready-up, 2 minute timer, minimum 8 to start (bots fill later).
+1. **Lobby** (Temple of Time scene): up to 32 players, ready-up, 2 minute timer. 1 human is enough to start; empty slots are filled with server-run bots (bots count as players for the storm and loot balance).
 2. **Drop**: in v1, players spawn spread across the map with 5 s of invulnerability. A skydive drop (gliding in
    from the sky, Kaepora Gaebora style) is a stretch goal.
 3. **Looting**: weapons and items spawn as chests, pots and ground items at server-chosen points.
@@ -150,7 +151,7 @@ each player supplies their own OoT ROM, as with stock SoH.
 - Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
 - State machine: `Lobby -> Countdown -> Drop -> InMatch -> Ending`.
 - Deterministic storm: seeded circle centres derived from the match seed and published at match start.
-- Simple bots (path to storm centre, melee nearest) for filling lobbies and for load testing.
+- Server-run bots fill every empty slot at match start (a solo player gets 31 bots). Bots are server entities with simple AI (loot, path to storm centre, fight nearest), sent to clients as ordinary puppets, which also makes them the load test for puppet rendering.
 
 ## 6. Risks
 
@@ -172,7 +173,9 @@ about 32 x 10 KB/s = ~320 KB/s up and a trivial amount of CPU, since no game log
 |---|---|---|
 | LAN / direct IP + port | Same network, or host forwards a port | v1, simplest |
 | UPnP / NAT-PMP port mapping | Home routers | Try automatically on host start |
-| **Join codes + relay (recommended v2)** | Always, including phones on cellular (CGNAT) | A tiny rendezvous/relay service maps a 5-letter code to the host. Hole punching first, relay fallback. Needs one small hosted service. |
+| **Join codes + STUN hole punching (recommended v2)** | Most networks, including phones on cellular | Both sides discover their public address via free public STUN servers and connect directly. A join code maps to the host's address through a tiny serverless lookup (free tier, e.g. Cloudflare Workers). No game traffic passes through it. |
+| Paid relay fallback | When hole punching fails (~10-20% of connections) | Small VPS, deferred until needed. A phone cannot serve as a relay: it is unreachable behind carrier NAT. |
+| IPv6 direct | Both sides have IPv6 | Skips NAT entirely, try automatically. |
 | Tailscale / ZeroTier | Friends who set it up | Zero code, works today as a workaround |
 
 Mobile hosts on cellular data will usually be behind carrier NAT, so only the relay path works for them. Cellular
@@ -221,6 +224,5 @@ Android is pulled forward as a feasibility spike because it could change the who
 
 ## 10. Open questions
 1. Android: build on a community fork, or port from upstream? (Needs the spike in 1b.)
-2. Hosting v2: are you OK running one small relay/rendezvous service for join codes?
-3. Minimum players to start, and should bots fill empty slots?
-4. Is Anchor compatibility wanted, or are we free to diverge?
+2. Bot AI scope for v1 (walk to the storm circle and fight nearby players vs. looting too)?
+3. Join-code lookup: OK with a free-tier serverless function?
