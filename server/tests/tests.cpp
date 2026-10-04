@@ -1172,6 +1172,41 @@ static void HotbarAndChestsAndProps() {
     }
 }
 
+static void ScoringAndStandings() {
+    CHECK(ScorePoints(0, 0, 0, 0) == 0);
+    CHECK(ScorePoints(2.5f, 1, 2, 5) == 250 + 500 + 50 + (kMaxPlayers - 5) * kPointsPerPlacementStep);
+    CHECK(ScorePoints(0, 0, 0, 1) > ScorePoints(0, 0, 0, 2) + kPointsForWinning - 1);
+    Simulation sim = Duel(5, {50, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* h = m.Find(1);
+    PlayerState* b = m.Find(1000);
+    h->weapon = {ItemId::MasterSword, Rarity::Epic};
+    b->health = 3.0f;
+    h->pos = {0, 0};
+    const float before = h->damageDealt;
+    const AttackResult r = m.Attack(1, 1000, true);
+    CHECK(r.hit && h->damageDealt > before + 0.5f);                    // damage is credited to the attacker
+    CHECK(b->damageDealt == 0);                                        // and not to the one hit
+    m.Damage(1, 0.5f, kNoPlayer, DamageKind::Storm);
+    CHECK(h->damageDealt < before + 5.0f && m.Find(1000)->damageDealt == 0);
+    // Overkill only counts the health that was there.
+    b->health = 0.25f;
+    const float dealt = h->damageDealt;
+    m.Damage(1000, 50.0f, 1);
+    CHECK(std::fabs(h->damageDealt - dealt - 0.25f) < 0.001f && h->kills == 1);
+    sim.Tick(kDt);
+    CHECK(m.State() == MatchState::Ending);                           // only the human is left
+    CHECK(h->placement == 1 && b->placement == 2);                    // the loser died with two alive; the winner placed first
+    const auto st = m.Standings();
+    CHECK(st.size() >= 2 && st[0].id == 1 && st[0].score == m.Score(*h) && st[0].score > st[1].score);
+    // Opening chests is worth a little.
+    const size_t chest = m.AddLoot({{0, 0}, ItemId::GreenPotion, Rarity::Common, true, true});
+    h->pos = {0, 0};
+    const int scoreBefore = m.Score(*h);
+    m.PickUp(1, chest, true);
+    CHECK(h->chestsOpened == 0 || m.Score(*h) == scoreBefore + kPointsPerChest);
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1180,7 +1215,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

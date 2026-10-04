@@ -3,6 +3,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/storm.h"
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -56,6 +57,9 @@ struct PlayerState {
 
     float attackReadyAt = 0;
     int kills = 0;
+    float damageDealt = 0;  // hearts of damage done to other players (storm and burn-out excluded)
+    int chestsOpened = 0;
+    int placement = 0;      // 1 = winner; set when eliminated (number alive at that moment) or when the match ends
     bool dirty = true; // inventory or status changed since it was last sent to the owner
 };
 
@@ -201,10 +205,14 @@ class Match {
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
         hearts *= mult;
 
+        const float dealt = (std::min)(hearts, p->health);
         p->health -= hearts;
         bool killed = p->health <= 0;
         if (killed && TryFairy(*p)) killed = false;
         if (killed) p->health = 0;
+        if (attacker != kNoPlayer && attacker != id && kind != DamageKind::Storm) {
+            if (PlayerState* a = Find(attacker)) a->damageDealt += dealt;
+        }
         // Storm ticks are not announced: health travels in snapshots, only the elimination is an event.
         if (attacker != kNoPlayer && announce) {
             MatchEvent e{MatchEvent::Type::Damaged};
@@ -380,6 +388,7 @@ class Match {
             }
         }
         p->dirty = true;
+        if (s.container) p->chestsOpened++;
         loot[index].taken = true;
         MatchEvent e{MatchEvent::Type::LootTaken};
         e.a = id; e.index = index;
@@ -472,6 +481,20 @@ class Match {
         return n;
     }
     // Only meaningful once the match is Ending.
+    int Score(const PlayerState& p) const { return ScorePoints(p.damageDealt, p.kills, p.chestsOpened, p.placement); }
+
+    struct Standing { uint32_t id; bool isBot; int placement, kills, chests, score; float damage; };
+    // Everyone's results, best score first (ties broken by placement).
+    std::vector<Standing> Standings() const {
+        std::vector<Standing> out;
+        for (const auto& p : players) out.push_back({p.id, p.isBot, p.placement, p.kills, p.chestsOpened, Score(p), p.damageDealt});
+        std::sort(out.begin(), out.end(), [](const Standing& a, const Standing& b) {
+            if (a.score != b.score) return a.score > b.score;
+            return (a.placement ? a.placement : 99) < (b.placement ? b.placement : 99);
+        });
+        return out;
+    }
+
     const PlayerState* Winner() const {
         if (state != MatchState::Ending) return nullptr;
         for (const auto& p : players) if (p.alive) return &p;
@@ -499,6 +522,9 @@ class Match {
 
   private:
     void Enter(MatchState s) {
+        if (s == MatchState::Ending) {
+            for (auto& p : players) if (p.alive) p.placement = 1;
+        }
         state = s;
         stateTime = 0;
         MatchEvent e{MatchEvent::Type::StateChanged};
@@ -525,6 +551,7 @@ class Match {
 
     // Eliminated players leave everything they carry behind for others (the Skulltula pile in the design doc).
     void Eliminate(PlayerState& p, uint32_t killer) {
+        p.placement = Alive(); // counted while this player still is
         p.alive = false;
         p.health = 0;
         DropKit(p);

@@ -36,9 +36,11 @@ class GameServer {
     // The host measured the real playable area and wants the lobby's world rebuilt on it: new map circle, loot and storm placed only
     // on positions `valid` accepts (e.g. "there is floor here"). Lobby only; players, ready flags and connections are kept.
     // Everyone is sent the new map, storm circles and loot in one reliable message.
-    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 400) {
-        if (sim.match.State() != MatchState::Lobby || map.radius <= 0) return false;
-        const uint64_t baseSeed = sim.match.Seed();
+    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 400, uint64_t seedOffset = 0) {
+        if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
+        lastValid = valid;
+        lastLootCount = lootCount;
+        const uint64_t baseSeed = sim.match.Seed() + seedOffset;
         // Prefer a storm whose six circle centres are all on walkable ground; give up after 200 tries and take the last one.
         uint64_t seed = baseSeed;
         for (uint64_t k = 0; k < 200; k++) {
@@ -71,6 +73,14 @@ class GameServer {
         cfg.props = props;
         Broadcast(cfg);
         return true;
+    }
+
+    // Results screen: everyone still connected plays again on the same map with fresh loot, scenery and storm, with no trip back to
+    // the lobby. Only meaningful once the match has ended.
+    bool PlayAgain() {
+        if (sim.match.State() != MatchState::Ending) return false;
+        if (!Reconfigure(mapCircle, lastValid, lastLootCount, 0x9E3779B97F4A7C15ull)) return false;
+        return StartMatch();
     }
 
     // Host presses "Start". Needs at least one human in the lobby; the remaining slots fill with bots.
@@ -220,6 +230,12 @@ class GameServer {
                 if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::RematchRequest: {
+                net::RematchRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!c->isHost || !PlayAgain()) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::SelectWeaponRequest: {
                 net::SelectWeaponRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -361,6 +377,20 @@ class GameServer {
                     m.alive = static_cast<uint8_t>(sim.match.Alive());
                     if (const PlayerState* w = sim.match.Winner()) m.winner = static_cast<uint16_t>(w->id);
                     Broadcast(m);
+                    if (e.state == MatchState::Ending) {
+                        net::EvResults res;
+                        for (const auto& s : sim.match.Standings()) {
+                            net::ResultRow row;
+                            row.id = static_cast<uint16_t>(s.id);
+                            row.placement = static_cast<uint8_t>(s.placement);
+                            row.kills = static_cast<uint8_t>((std::min)(s.kills, 255));
+                            row.chests = static_cast<uint8_t>((std::min)(s.chests, 255));
+                            row.damageTenths = static_cast<uint16_t>((std::min)(s.damage * 10.0f, 65535.0f));
+                            row.score = static_cast<uint32_t>(s.score);
+                            res.rows.push_back(row);
+                        }
+                        Broadcast(res);
+                    }
                     break;
                 }
                 case MatchEvent::Type::Damaged: {
@@ -504,6 +534,8 @@ class GameServer {
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     std::vector<Prop> props;
     int propCount = 500;
+    PlacementFn lastValid;
+    int lastLootCount = 400;
     Circle mapCircle;
     std::vector<Client> clients;
     Stats stats;

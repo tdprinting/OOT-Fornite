@@ -18,7 +18,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 4; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 5; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -26,10 +26,10 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -103,6 +103,13 @@ struct SelectWeaponRequest {
     uint8_t slot = 1;
     void Write(ByteWriter& w) const { w.U8(slot); }
     bool Read(ByteReader& r) { slot = r.U8(); return r.ok && slot >= 1 && slot <= kMaxReserveWeapons; }
+};
+
+// The host asks for another match with everyone who is still connected, straight from the results screen.
+struct RematchRequest {
+    static constexpr MsgType kType = MsgType::RematchRequest;
+    void Write(ByteWriter&) const {}
+    bool Read(ByteReader& r) { return r.ok; }
 };
 
 struct UseAbilityRequest {
@@ -340,6 +347,29 @@ struct EvMapConfig {
 struct ItemRef {
     uint8_t item = 0, rarity = 0;
     bool Valid() const { return item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount; }
+};
+
+// Final standings, sent to everyone when the match ends. Best score first.
+struct ResultRow {
+    uint16_t id = 0;
+    uint8_t placement = 0, kills = 0, chests = 0;
+    uint16_t damageTenths = 0; // hearts of damage dealt, in tenths
+    uint32_t score = 0;
+};
+struct EvResults {
+    static constexpr MsgType kType = MsgType::EvResults;
+    std::vector<ResultRow> rows;
+    void Write(ByteWriter& w) const {
+        w.U8(static_cast<uint8_t>(rows.size()));
+        for (const auto& r : rows) { w.U16(r.id); w.U8(r.placement); w.U8(r.kills); w.U8(r.chests); w.U16(r.damageTenths); w.U32(r.score); }
+    }
+    bool Read(ByteReader& r) {
+        const size_t n = r.U8();
+        if (n > static_cast<size_t>(kMaxPlayers)) return false;
+        rows.assign(n, {});
+        for (auto& row : rows) { row.id = r.U16(); row.placement = r.U8(); row.kills = r.U8(); row.chests = r.U8(); row.damageTenths = r.U16(); row.score = r.U32(); }
+        return r.ok;
+    }
 };
 
 struct EvInventory {

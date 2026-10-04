@@ -523,6 +523,42 @@ static void PickupAndPotionOverTheWire() {
     CHECK(a.DesyncCount() == 0 && b.DesyncCount() == 0);
 }
 
+static void ResultsAndRematchOverTheWire() {
+    Rig rig(11, 40);
+    rig.server.SetHostToken(0xABCDEF12ull);
+    rig.clients.push_back(std::make_unique<GameClient>(rig.network.NewClient(), "Host", 0xABCDEF12ull));
+    GameClient& host = *rig.clients.back();
+    GameClient& guest = rig.Add("Guest");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    auto run = [&](float seconds) { rig.Run(seconds); };
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    rig.M().Find(1)->pos = {0, 0};
+    rig.M().Find(2)->pos = {40, 0};
+    rig.M().Find(1)->weapon = {ItemId::MasterSword, Rarity::Legendary};
+    rig.M().Damage(2, 100.0f, 1);
+    run(1.0f);
+    CHECK(rig.M().State() == MatchState::Ending);
+    // Everyone received the standings, best first, with the winner on top.
+    CHECK(!host.Results().empty() && host.Results().size() == guest.Results().size());
+    CHECK(host.Results()[0].id == 1 && host.Results()[0].placement == 1 && host.Results()[0].score > host.Results()[1].score);
+    // Only the host can start another match.
+    const uint64_t rejected = rig.server.GetStats().rejectedActions;
+    guest.RequestRematch();
+    run(0.3f);
+    CHECK(rig.M().State() == MatchState::Ending && rig.server.GetStats().rejectedActions == rejected + 1);
+    const uint64_t oldSeed = rig.M().Seed();
+    host.RequestRematch();
+    run(0.5f);
+    CHECK(rig.M().State() == MatchState::Countdown);                  // straight into the countdown, no lobby
+    CHECK(rig.M().Seed() != oldSeed);                                 // fresh loot and storm
+    CHECK(host.GetStatus() == GameClient::Status::Joined && guest.GetStatus() == GameClient::Status::Joined);
+    CHECK(rig.M().Find(1) && rig.M().Find(2) && rig.M().Find(1)->alive && rig.M().Find(2)->alive);   // the same people, back at full health
+    CHECK(rig.M().Find(1)->kills == 0 && rig.M().Find(1)->damageDealt == 0 && rig.M().Find(1)->placement == 0);
+    CHECK(host.Results().empty() && host.Loot().size() == rig.M().Loot().size());
+    CHECK(rig.M().Players().size() == static_cast<size_t>(kMaxPlayers));                // bots refilled to 32
+}
+
 static void DisconnectHandling() {
     {   // In the lobby the player just disappears.
         Rig rig;
@@ -997,7 +1033,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    AttackOverTheWire(); PickupAndPotionOverTheWire(); DisconnectHandling(); InterestManagement();
+    AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

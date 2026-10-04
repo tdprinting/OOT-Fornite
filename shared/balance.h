@@ -21,6 +21,19 @@ constexpr int kMaxPotions = 3;
 constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
 constexpr int kMaxProps = 1200;
 
+// Match points: damage is the main thing, kills and surviving longer add to it, a win is a big bonus.
+constexpr int kPointsPerHeartOfDamage = 100;
+constexpr int kPointsPerKill = 500;
+constexpr int kPointsPerChest = 25;
+constexpr int kPointsPerPlacementStep = 20; // (kMaxPlayers - placement) steps
+constexpr int kPointsForWinning = 1000;
+inline int ScorePoints(float damage, int kills, int chests, int placement) {
+    int points = static_cast<int>(damage * kPointsPerHeartOfDamage + 0.5f) + kills * kPointsPerKill + chests * kPointsPerChest;
+    if (placement > 0) points += (kMaxPlayers - placement) * kPointsPerPlacementStep;
+    if (placement == 1) points += kPointsForWinning;
+    return points;
+}
+
 // Anti-cheat plausibility limit for client-reported movement: rolls, Epona, Hookshot and Longshot pulls are all faster
 // than running, so allow several times run speed. Faster than this in one update is clamped by the server.
 constexpr float kMaxPlausibleSpeed = kRunSpeed * 5.0f;
