@@ -30,6 +30,9 @@ The app installs as its own app, **TDawgs Battle Royale** (package `com.tdawg.ba
 
 Your existing Ship of Harkinian saves are not shared with this app. If you want one, copy the save file from `SOH/Save` into `TDawgsBattleRoyale/Save`, but a throwaway save is safer while this build is untested.
 
+## Starting from the file select
+When you make a new save, the quest picker (the screen where you choose between the normal game, Master Quest, Randomizer and Boss Rush) now has a fifth option, **Battle Royale**. Pick it and finish creating the save as usual. It is a normal save underneath, and the game remembers which saves were made this way. A few seconds after you load one, the game's menu opens on the **Battle Royale** page so you can host a lobby or join one straight away. You can always open that page yourself from the menu (Back / Select / -).
+
 ## Playing a match
 
 **Important: the game plays exactly like normal Ocarina of Time until you Host or Join from the menu.** Walking around Hyrule Field
@@ -42,7 +45,8 @@ does nothing by itself. Nothing is added to the world until a lobby is open.
    - Over the internet: use a free VPN like Tailscale on every device (easiest), or forward UDP port 7777 on your router.
 4. **To join:** type the host's address and press **Join lobby**.
 5. You land in the lobby: a player list with the host marked, a **ready** button for everyone but the host, and (if you left the option on) you are taken to the Temple of Time to wait together.
-6. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match**. Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
+6. In the lobby the host can set the **number of players** with a slider from 2 to 32 (bots fill whatever the people don't; smaller matches also get fewer towns and mini bosses). A timer counts down from 2 minutes and the match **starts by itself** when it reaches zero (the host can turn that off with a checkbox). Everyone sees the countdown.
+8. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match** (or waits for the timer). Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
 
 You can play alone: press **Host a lobby**, then **Start match**, and you will face bots.
 
@@ -69,6 +73,10 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - **The storm** is a wall of purple rain standing on the edge of the safe zone. Outside it the screen goes dark and rainy with lightning, and it hurts. The map shows it in purple. An arrow top right points to the safe zone.
 - **Towns.** The field has up to twelve named points of interest with silly rhyming names (Deku Dew Zoo, Goron Groove Lagoon, Zora Snore Shore, Navi Gravy Bay and more), laid out like a battle royale map: a big landmark in the middle (Hylian Billion Pavilion), a ring of towns around it and a wider ring near the edge. Each has a walled stone building with a roof and a door, a small cave (a horseshoe of boulders) and some ruins, and most of the chests are inside them. A few are scattered between towns. Town names float over each place (big enough to read while you skydive), show on the map, and a message tells you when you walk in.
 - The open ground between towns has rocks, boulders and bushes to hide behind. The same ones appear for everyone, and bots path around the solid ones and through the doors.
+- **Mini bosses.** Up to five golems (Stone Moan, Lava Java, Frost Lost) guard the caves, bigger and tougher in that order. They notice you at a distance, chase you slower than you run, smash you for a heart or more and give up if you get far away. Hit them with **B** like any player (you can hit them from a little further off, because they are big). A health bar floats over each, and they show as purple diamonds on the map. When one falls it drops three to five Epic and Legendary chests around it, you score 400 points for the last hit, and bots go after them too if they are strong enough (weak ones keep away).
+- **Falling limp.** When a player is eliminated their body is thrown back, bounces, slides and settles in Link's knocked-down pose, then fades after a while. Yours too.
+- **Jumping.** **C-Up** jumps. If there is a ledge about knee to chest high right in front of you, the jump pulls you up onto it.
+- **Time of day.** The game's own day and night lighting runs through the match: it starts in the morning and the last circles are at dusk and in the dark.
 - **Custom models.** The stone posts, boulders, rocks and cottage roofs are drawn from low-poly models made for this mod, in the flat chunky Ocarina of Time style, instead of the game's own rock models. There is a checkbox in the Battle Royale menu ("Custom rocks and buildings"). If the game ever crashes or the scenery looks wrong when a match starts, turn it off and tell me.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
 

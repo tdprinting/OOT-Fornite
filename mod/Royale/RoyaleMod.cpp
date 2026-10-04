@@ -54,6 +54,12 @@ namespace SohGui {
 extern std::shared_ptr<SohMenu> mSohMenu;
 }
 
+// Set by the game's file select (patches/0008) every frame the "Battle Royale" quest option is on screen; our overlay then writes its subtitle.
+int gRoyaleQuestLabel = 0;
+extern "C" void Royale_ShowQuestLabel(void) {
+    gRoyaleQuestLabel = 8;
+}
+
 namespace {
 
 royale::RoyaleSession gSession;
@@ -394,6 +400,8 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
     }
     gPlaying.erase(actor);
     gPlate.erase(actor);
+    auto corpse = gCorpseOf.find(actor);
+    if (corpse != gCorpseOf.end()) { gCorpses.erase(corpse->second); gCorpseOf.erase(corpse); }
 }
 
 void SpawnPuppet(const royale::PuppetState& s) {
@@ -401,6 +409,99 @@ void SpawnPuppet(const royale::PuppetState& s) {
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
     if (actor != nullptr) gActorOf[s.id] = actor;
+}
+
+// ---- falling limp: what is left of a player who was eliminated -------------------------------------------------------------------
+
+// A body that tumbles and slides to a stop with simple physics (gravity, bounces off the ground, friction, a spin that dies away), then lies
+// in Link's own knocked-down pose. It is a puppet actor that runs its own physics instead of following the network.
+constexpr uint16_t kCorpseIdBase = 0xF000;
+struct Corpse {
+    Actor* actor = nullptr;
+    royale::Vec2 vel = {};       // horizontal speed, units per second
+    float vy = 0;                // vertical speed
+    float spin = 0;              // radians per second around the vertical axis
+    float roll = 0, rollVel = 0; // a floppy wobble (binary angle units)
+    float age = 0;
+    royale::ItemId weapon = royale::ItemId::DekuStick;
+    uint32_t tunic = royale::SkinRgb(0);
+    bool animStarted = false;
+};
+std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
+std::unordered_map<const Actor*, uint16_t> gCorpseOf;
+uint16_t gNextCorpse = kCorpseIdBase;
+std::unordered_map<uint16_t, royale::PuppetState> gLastSeen; // the last state of each living puppet, to see who just died
+
+void Corpse_Update(Actor* actor, PlayState* play) {
+    auto of = gCorpseOf.find(actor);
+    if (of == gCorpseOf.end()) { Actor_Kill(actor); return; }
+    Corpse& c = gCorpses[of->second];
+    Player* player = reinterpret_cast<Player*>(actor);
+    const float dt = 1.0f / royale::kTickHz;
+    c.age += dt;
+    if (c.age > 25.0f) { Actor_Kill(actor); return; }
+
+    c.vy -= 900.0f * dt;
+    actor->world.pos.x += c.vel.x * dt;
+    actor->world.pos.z += c.vel.z * dt;
+    actor->world.pos.y += c.vy * dt;
+    const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
+    if (actor->world.pos.y <= ground) {
+        actor->world.pos.y = ground;
+        if (c.vy < -140.0f) { c.vy = -c.vy * 0.3f; c.rollVel += (c.vel.x > 0 ? 1.0f : -1.0f) * 3000.0f; } // a bounce, and the body flops
+        else c.vy = 0;
+        c.vel.x *= 0.82f; c.vel.z *= 0.82f;      // sliding on the ground
+        c.spin *= 0.85f;
+    }
+    actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
+    actor->world.rot.y = actor->shape.rot.y;
+    // A loose roll that wobbles and settles.
+    c.rollVel += -c.roll * 30.0f * dt;
+    c.rollVel *= 0.93f;
+    c.roll += c.rollVel * dt;
+    actor->shape.rot.z = static_cast<s16>(std::clamp(c.roll, -2500.0f, 2500.0f));
+    actor->shape.shadowAlpha = 255;
+
+    if (!c.animStarted) {
+        LinkAnimation_PlayOnce(play, &player->skelAnime, (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA); // knocked flat on the back
+        c.animStarted = true;
+    }
+    LinkAnimation_Update(play, &player->skelAnime);
+    Vec3f ignored;
+    SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
+}
+
+void Corpse_Draw(Actor* actor, PlayState* play) {
+    auto of = gCorpseOf.find(actor);
+    if (of == gCorpseOf.end()) return;
+    const Corpse& c = gCorpses[of->second];
+    const u8 original = gSaveContext.equips.buttonItems[0];
+    gSaveContext.equips.buttonItems[0] = LookFor(c.weapon).buttonItem;
+    if (gTunicApplied) SetTunicCosmetics(c.tunic);
+    Player_Draw(actor, play);
+    if (gTunicApplied) SetTunicCosmetics(gLocalTunic);
+    gSaveContext.equips.buttonItems[0] = original;
+}
+
+void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
+    if (gCorpses.size() >= 12 || gPlayState == nullptr) return;
+    const uint16_t id = gNextCorpse++;
+    if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
+    gSpawningPuppet = id;
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
+    gSpawningPuppet = 0;
+    if (actor == nullptr) return;
+    Corpse c;
+    c.actor = actor;
+    const float len = std::max(1.0f, std::hypot(pushX, pushZ));
+    c.vel = { pushX / len * 190.0f, pushZ / len * 190.0f };   // thrown back by the blow
+    c.vy = 260.0f;
+    c.spin = (id & 1 ? 1.0f : -1.0f) * 4.5f;
+    c.rollVel = (id & 1 ? 1.0f : -1.0f) * 4000.0f;
+    c.weapon = s.weapon;
+    c.tunic = s.tunic;
+    gCorpses[id] = c;
+    gCorpseOf[actor] = id;
 }
 
 // Make the world match the session: spawn missing puppets, drop ones that left, died, are out of range, or are in another scene.
@@ -413,6 +514,13 @@ void ReconcilePuppets(royale::MatchState state) {
     std::vector<royale::PuppetState> desired = gSession.Puppets();
     std::unordered_map<uint16_t, bool> wanted;
     for (const auto& s : desired) {
+        // Somebody who was standing a moment ago and is now eliminated falls over where they stood (pushed along the way they were facing back).
+        auto last = gLastSeen.find(s.id);
+        if (!s.alive && last != gLastSeen.end() && last->second.alive && s.scene == gPlayState->sceneNum) {
+            const float a = last->second.rot * (3.14159265f / 32768.0f);
+            SpawnCorpse(last->second, -std::sin(a), -std::cos(a));
+        }
+        gLastSeen[s.id] = s;
         if (!s.alive || s.scene != gPlayState->sceneNum) continue; // someone in the other room is not here with us
         wanted[s.id] = true;
         gState[s.id] = s;
@@ -706,6 +814,13 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
     if (meshKind >= 0) actor->draw = Prop_DrawCustom; // the game's rock stays as the solid part, unseen; our model is what you see
+    switch (p.kind) { // a blob shadow under each, sized to the model
+        case royale::PropKind::Rock: actor->shape.shadowScale = 26.0f; break;
+        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f; break;
+        case royale::PropKind::Pillar: actor->shape.shadowScale = 40.0f; break;
+        case royale::PropKind::Roof: actor->shape.shadowScale = 0.0f; break;
+        default: break;
+    }
     if (p.kind == royale::PropKind::Roof) {
         actor->update = Prop_NoUpdate;                // floating stand-in: no collision, no breaking
         actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
@@ -715,6 +830,138 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
 
 void ClearProps() {
     for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
+}
+
+// ---- mini bosses ---------------------------------------------------------------------------------------------------------------
+
+// Each boss is drawn by a stand-in actor (the game's small rock with its logic switched off) using our golem model. The server decides
+// everything about it; here we only smooth what the snapshots say and animate it.
+struct BossActor {
+    Actor* actor = nullptr;
+    ActorFunc origDestroy = nullptr;
+    int kind = 0;
+    float x = 0, z = 0;          // smoothed position
+    float tx = 0, tz = 0;        // latest from the server
+    int16_t rot = 0, trot = 0;
+    float hp = 1.0f;
+    float smashAge = 10.0f;      // seconds since it last swung
+    float moved = 0;             // distance covered lately, for the walking bob
+    bool initialised = false;
+};
+std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
+std::unordered_map<const Actor*, uint32_t> gBossOf;
+std::unordered_map<uint32_t, int> gBossKindSeen;      // remembered after it is gone, for the messages
+
+void Boss_Update(Actor* actor, PlayState* play) {
+    auto of = gBossOf.find(actor);
+    if (of == gBossOf.end()) { Actor_Kill(actor); return; }
+    BossActor& b = gBosses[of->second];
+    const float dt = 1.0f / royale::kTickHz;
+    if (!b.initialised) { b.x = b.tx; b.z = b.tz; b.rot = b.trot; b.initialised = true; }
+    const float nx = b.x + (b.tx - b.x) * 0.4f, nz = b.z + (b.tz - b.z) * 0.4f;
+    b.moved = b.moved * 0.8f + std::hypot(nx - b.x, nz - b.z);
+    b.x = nx; b.z = nz;
+    const s16 diff = static_cast<s16>(b.trot - b.rot);
+    b.rot = static_cast<s16>(b.rot + diff * 0.35f);
+    b.smashAge += dt;
+    actor->world.pos.x = b.x;
+    actor->world.pos.z = b.z;
+    actor->world.pos.y = GroundY(play, b.x, b.z, actor->world.pos.y);
+    actor->shape.rot.y = b.rot;
+    actor->world.rot.y = b.rot;
+}
+
+void Boss_Draw(Actor* actor, PlayState* play) {
+    auto of = gBossOf.find(actor);
+    if (of == gBossOf.end()) return;
+    const BossActor& b = gBosses[of->second];
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Golem, static_cast<uint32_t>(b.kind));
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const float bob = b.moved > 0.5f ? std::fabs(std::sin(t * 6.0f)) * 9.0f : std::sin(t * 1.5f) * 2.0f;
+    const float lean = b.smashAge < 0.45f ? 0.55f * std::sin(b.smashAge / 0.45f * 3.14159f) : 0.0f; // a swing: it pitches forward
+    const float scale = royale::kBossDefs[b.kind].scale;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateX(lean, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, mesh->dl.data());
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void Boss_Destroy(Actor* actor, PlayState* play) {
+    ActorFunc orig = nullptr;
+    auto of = gBossOf.find(actor);
+    if (of != gBossOf.end()) {
+        auto b = gBosses.find(of->second);
+        if (b != gBosses.end()) { orig = b->second.origDestroy; gBosses.erase(b); }
+        gBossOf.erase(of);
+    }
+    if (orig) orig(actor, play);
+}
+
+void ReconcileBosses(const royale::HudState& hud) {
+    const bool show = gSession.Joined() && InField() && gSession.Client() &&
+                      (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch || hud.state == royale::MatchState::Ending);
+    std::unordered_map<uint32_t, bool> wanted;
+    if (show) {
+        for (const royale::net::BossNet& n : gSession.Client()->Bosses()) {
+            const uint32_t id = n.Id();
+            wanted[id] = true;
+            gBossKindSeen[id] = n.kind;
+            auto it = gBosses.find(id);
+            if (it == gBosses.end()) {
+                float y = 0;
+                if (!FloorAt(n.x, n.z, &y)) continue;
+                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
+                if (actor == nullptr) continue;
+                BossActor b;
+                b.actor = actor; b.origDestroy = actor->destroy; b.kind = n.kind;
+                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.rot = n.rot; b.x = n.x; b.z = n.z; b.initialised = true;
+                gBosses[id] = b;
+                gBossOf[actor] = id;
+                actor->update = Boss_Update;
+                actor->draw = Boss_Draw;
+                actor->destroy = Boss_Destroy;
+                actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
+                actor->uncullZoneForward = 5000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
+                actor->shape.shadowScale = 70.0f * royale::kBossDefs[n.kind].scale;
+            } else {
+                BossActor& b = it->second;
+                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f;
+                if (n.smashing && b.smashAge > 0.3f) b.smashAge = 0.0f;
+            }
+        }
+    }
+    for (auto& [id, b] : gBosses) if (!wanted.count(id) && b.actor) Actor_Kill(b.actor);
+}
+
+// Name and health bar over each boss.
+void DrawBossBars(ImDrawList* dl, ImFont* font, float scale) {
+    if (!InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    for (const auto& [id, b] : gBosses) {
+        if (!b.actor) continue;
+        const float dx = b.x - pl->actor.world.pos.x, dz = b.z - pl->actor.world.pos.z;
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d > 3800.0f) continue;
+        ImVec2 at;
+        if (!WorldToScreen(b.x, b.actor->world.pos.y + 330.0f * royale::kBossDefs[b.kind].scale, b.z, &at)) continue;
+        const float w = 130.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.55f, 1.4f), h = 11.0f * scale;
+        const char* name = royale::kBossDefs[b.kind].name;
+        const float ts = 17.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f);
+        const ImVec2 sz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, name);
+        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f + 1.5f, at.y - h - sz.y + 1.5f), IM_COL32(0, 0, 0, 230), name);
+        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f, at.y - h - sz.y), IM_COL32(255, 120, 90, 255), name);
+        dl->AddRectFilled(ImVec2(at.x - w * 0.5f - 2, at.y - h - 2), ImVec2(at.x + w * 0.5f + 2, at.y + 2), IM_COL32(0, 0, 0, 200));
+        const ImU32 col = b.hp > 0.5f ? IM_COL32(120, 220, 90, 255) : b.hp > 0.25f ? IM_COL32(240, 200, 60, 255) : IM_COL32(230, 70, 60, 255);
+        dl->AddRectFilled(ImVec2(at.x - w * 0.5f, at.y - h), ImVec2(at.x - w * 0.5f + w * std::clamp(b.hp, 0.0f, 1.0f), at.y), col);
+    }
 }
 
 // Keep a ring of scenery alive around the player, the same for everyone because the list comes from the host.
@@ -960,6 +1207,15 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
             dl->AddText(ImGui::GetFont(), 10.5f * scale, ImVec2(p.x + u + 2.0f, p.y - 6.0f * scale), IM_COL32(255, 240, 190, 235), royale::kPoiNames[poi.name]);
         }
     }
+    if (gSession.Client()) {
+        for (const auto& bn : gSession.Client()->Bosses()) { // mini bosses: a big purple diamond
+            const ImVec2 p = toMap(bn.x, bn.z);
+            if (!inside(p)) continue;
+            const float u = 6.0f * scale;
+            dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(190, 60, 255, 255));
+            dl->AddQuad(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(255, 255, 255, 230), 1.5f);
+        }
+    }
     for (const auto& st : gSession.Puppets()) {
         if (!st.alive) continue;
         const ImVec2 p = toMap(st.x, st.z);
@@ -1139,7 +1395,25 @@ void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float seco
 }
 
 
+void DrawQuestLabel() {
+    if (gRoyaleQuestLabel <= 0) return;
+    gRoyaleQuestLabel--;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
+    // The title screen is a 4:3 picture fitted to the window's height; its subtitle sits right of centre, a little below the middle.
+    const float cx = ds.x * 0.5f + (246.0f / 320.0f - 0.5f) * ds.y * (4.0f / 3.0f), cy = ds.y * (196.0f / 240.0f);
+    const char* text = "BATTLE ROYALE";
+    const float size = 30.0f * scale;
+    const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+    const ImVec2 pos(cx - sz.x * 0.5f, cy - sz.y * 0.5f);
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) if (dx || dy) dl->AddText(font, size, ImVec2(pos.x + dx * 2.0f, pos.y + dy * 2.0f), IM_COL32(40, 20, 0, 255), text);
+    dl->AddText(font, size, pos, IM_COL32(255, 214, 90, 255), text);
+}
+
 void DrawOverlay() {
+    DrawQuestLabel();
     if (!gSession.Joined()) return;
     royale::HudState h = gSession.Hud();
     ImDrawList* dl = ImGui::GetForegroundDrawList();
@@ -1203,13 +1477,14 @@ void DrawOverlay() {
         centered(ds.y * 0.58f, col, 30 * scale, gBannerText);
     }
     DrawStorm(dl, ds, scale, h);
+    DrawBossBars(dl, font, scale);
     DrawPoiLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
 
     // Top left: the numbers.
     float x = 16 * scale, y = 14 * scale, line = 24 * scale;
-    text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(royale::kMaxPlayers));
+    text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
     y += line;
     if (h.stormPhase >= royale::kStormPhaseCount) {
         text(x, y, red, 20 * scale, "FINAL ZONE");
@@ -1343,12 +1618,39 @@ void NoticePoi(Player* player, const royale::HudState& hud) {
     gCurrentPoi = now;
 }
 
-int gNextWeaponSlot = 1;     // which backup slot D-pad Left swaps in next
+int gNextWeaponSlot = 1;
+int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
     const Input& in = gPlayState->state.input[0];
+
+    // C-Up: jump. In the air, if a ledge about knee to chest high is right in front of you, you are hauled up onto it.
+    if ((in.press.button & BTN_CUP) && (player->actor.bgCheckFlags & 1) && !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM))) {
+        player->actor.velocity.y = 11.5f;
+        player->actor.bgCheckFlags &= ~1;
+        gJumpAssistFrames = 14;
+        Audio_PlaySoundGeneral(NA_SE_PL_JUMP, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    }
+    if (gJumpAssistFrames > 0) {
+        gJumpAssistFrames--;
+        const float yaw = player->actor.shape.rot.y * (3.14159265f / 32768.0f);
+        const float fx = std::sin(yaw), fz = std::cos(yaw);
+        float ledge = 0;
+        const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, player->actor.world.pos.y - 1.0f);
+        for (float reach : { 28.0f, 48.0f }) {
+            float y;
+            if (FloorAt(player->actor.world.pos.x + fx * reach, player->actor.world.pos.z + fz * reach, &y) && y > ledge) ledge = y;
+        }
+        const float rise = ledge - player->actor.world.pos.y;
+        if (ledge > 0 && rise > 6.0f && ledge - ground > 24.0f && ledge - ground < 105.0f && rise < 70.0f && player->actor.velocity.y < 6.5f) {
+            player->actor.world.pos.x += fx * 5.0f;                     // up and over the edge
+            player->actor.world.pos.z += fz * 5.0f;
+            player->actor.velocity.y = std::max(player->actor.velocity.y, 7.0f);
+            if (rise < 14.0f) player->actor.world.pos.y = ledge + 1.0f;  // close enough: on top
+        }
+    }
 
     if (in.press.button & BTN_DDOWN) {
         if (hud.potions > 0) gSession.RequestUsePotion();
@@ -1397,6 +1699,18 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
         if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
         if (d < bestDist) { bestDist = d; best = id; }
+    }
+    // The mini bosses are big: they count from their edge, not their middle.
+    if (gSession.Client()) {
+        for (const auto& bn : gSession.Client()->Bosses()) {
+            const float dx = bn.x - player->actor.world.pos.x, dz = bn.z - player->actor.world.pos.z;
+            const float d = std::sqrt(dx * dx + dz * dz) - royale::kBossBodyRadius;
+            if (d > w.range * 1.05f) continue;
+            s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+            s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+            if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
+            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
+        }
     }
     if (bestDist < 1e8f) gSession.ReportAttack(best, true);
 }
@@ -1511,6 +1825,15 @@ void OnPlayerUpdate() {
         // invulnerable spectator who can still walk around and watch the rest of the match.
         gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : gSaveContext.healthCapacity;
     }
+    static bool wasDead = false;
+    if (dead && !wasDead && InField()) {
+        royale::PuppetState me;
+        me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
+        me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
+        const float a = me.rot * (3.14159265f / 32768.0f);
+        SpawnCorpse(me, -std::sin(a), -std::cos(a));
+    }
+    wasDead = dead;
     if (dead && gHealthOverridden) {
         player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
         player->invincibilityTimer = 20;
@@ -1525,6 +1848,7 @@ void ReportEvents(const royale::HudState& hud) {
     for (const royale::ClientEvent& e : gSession.DrainEvents()) {
         auto nameOf = [&](uint16_t id) -> std::string {
             for (const auto& r : hud.roster) if (r.id == id) return r.name;
+            if (royale::IsBossId(id)) return std::string("a mini boss");
             return "Bot " + std::to_string(id >= 1000 ? id - 999 : id);
         };
         switch (e.type) {
@@ -1557,6 +1881,12 @@ void ReportEvents(const royale::HudState& hud) {
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 }
                 break;
+            case royale::ClientEvent::Type::BossDown: {
+                const int kind = gBossKindSeen.count(e.id) ? gBossKindSeen[e.id] : 0;
+                const std::string killer = e.other == hud.selfId ? std::string("You") : nameOf(e.other);
+                Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
+                break;
+            }
             case royale::ClientEvent::Type::MapChanged:
                 gBrokenProps.clear();   // a new match (or a rematch): all the scenery is back
                 gPickupLog.clear();
@@ -1576,7 +1906,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::StateChanged:
                 if (e.state == royale::MatchState::Drop) Say("Drop! Skydive to the ground. Z dives faster");
-                else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone!");
+                else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone! Mini bosses guard the caves and drop Legendary loot");
                 else if (e.state == royale::MatchState::Ending) {
                     if (hud.winnerId == hud.selfId) Say("VICTORY ROYALE! You won!");
                     else if (!hud.winnerName.empty()) Say("Match over. Winner: " + hud.winnerName);
@@ -1608,6 +1938,73 @@ void DriveStart(const royale::HudState& hud) {
     gPendingStart = false;
 }
 
+// ---- Battle Royale save files, the lobby timer, and the time of day --------------------------------------------------------------
+
+bool gWasInGame = false;
+int gMenuOpenCountdown = -1;
+int gLobbyAnnounced = 1 << 30;
+
+// Open the game's own menu on the Battle Royale page.
+void OpenRoyaleMenu() {
+    CVarSetString(CVAR_SETTING("Menu.ActiveHeader"), "Battle Royale");
+    if (SohGui::mSohMenu && !SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
+}
+
+// A save made with the "Battle Royale" quest option opens the Battle Royale menu a few seconds after it loads, so the mode starts from
+// there: host a lobby or join one, with no digging through the menus. (The quest option is in the file select; see patches/0008.)
+void NoticeRoyaleFile() {
+    const bool in = InGame();
+    if (in && !gWasInGame) {
+        char key[48];
+        std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.BRFile%d"), static_cast<int>(gSaveContext.fileNum));
+        if (CVarGetInteger(key, 0) != 0 && !gSession.Joined()) gMenuOpenCountdown = 60; // about 3 seconds
+    }
+    gWasInGame = in;
+    if (gMenuOpenCountdown > 0 && --gMenuOpenCountdown == 0) {
+        if (InGame() && !gSession.Joined()) {
+            OpenRoyaleMenu();
+            Say("Battle Royale: host a lobby or join one from this menu");
+        }
+        gMenuOpenCountdown = -1;
+    }
+}
+
+// The lobby counts down on the server. At zero the host's game does what the Start button does (it has to go to the field and measure the
+// map first); the server starts the match by itself if that never happens.
+void DriveLobbyTimer(const royale::HudState& hud) {
+    if (!gSession.Joined() || hud.state != royale::MatchState::Lobby || hud.lobbyLeft < 0) { gLobbyAnnounced = 1 << 30; return; }
+    const int left = static_cast<int>(std::ceil(hud.lobbyLeft));
+    for (int mark : { 60, 30, 10 }) {
+        if (left <= mark && gLobbyAnnounced > mark) Say("The match starts automatically in " + std::to_string(mark) + " seconds");
+    }
+    gLobbyAnnounced = left;
+    if (hud.isHost && hud.lobbyLeft <= 0.05f && !gPendingStart && InGame()) {
+        Say("Time is up: starting the match");
+        gPendingStart = true;
+    }
+}
+
+// A match runs from morning to night: the game's own day and night lighting (sky, sun and ambient light) is driven by how far the storm
+// has got, so the last circles are fought at dusk and in the dark. The player's own time of day is put back afterwards.
+bool gTimeTaken = false;
+u16 gSavedDayTime = 0;
+void DriveTimeOfDay(const royale::HudState& hud) {
+    const bool on = gSession.Joined() && InField() && (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch) && gSession.Client();
+    if (on) {
+        if (!gTimeTaken) { gSavedDayTime = gSaveContext.dayTime; gTimeTaken = true; }
+        float total = 0;
+        for (const auto& ph : royale::kStormPhases) total += ph.waitSec + ph.closeSec;
+        const float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
+        const u16 t = static_cast<u16>(0x5000 + static_cast<int>(p * 0x9000)); // about 7:30 in the morning to about 9 at night
+        gSaveContext.dayTime = t;
+        gSaveContext.skyboxTime = t;
+    } else if (gTimeTaken) {
+        gSaveContext.dayTime = gSavedDayTime;
+        gSaveContext.skyboxTime = gSavedDayTime;
+        gTimeTaken = false;
+    }
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -1619,6 +2016,9 @@ void OnGameFrameUpdate() {
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
+    NoticeRoyaleFile();
+    DriveLobbyTimer(hud);
+    DriveTimeOfDay(hud);
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
@@ -1664,6 +2064,7 @@ void OnGameFrameUpdate() {
     ReconcilePuppets(hud.state);
     ReconcileLoot(hud);
     ReconcileProps(hud);
+    ReconcileBosses(hud);
 }
 
 void OnSceneInit(int16_t) {
@@ -1672,6 +2073,9 @@ void OnSceneInit(int16_t) {
     gActorOf.clear();
     gPlaying.clear();
     gPlate.clear();
+    gCorpses.clear();
+    gCorpseOf.clear();
+    gLastSeen.clear();
     gSpawningPuppet = 0;
     gLoot.clear();
     gLootOf.clear();
@@ -1700,6 +2104,7 @@ void RegisterRoyaleMod() {
             actor->update = Puppet_Update;
             actor->draw = Puppet_Draw;
             actor->destroy = Puppet_Destroy;
+            if (gSpawningPuppet >= kCorpseIdBase) { actor->update = Corpse_Update; actor->draw = Corpse_Draw; } // a body, not a live player
         });
 
     // No enemies spawn while in a lobby or match.
@@ -1724,6 +2129,8 @@ struct UiState {
     int port = royale::net::kDefaultPort;
     bool waitingRoom = true;
     int botDifficulty = 1; // 0 easy, 1 normal, 2 hard
+    int playerLimit = royale::kMaxPlayers; // the host's slider
+    bool autoStart = true;                 // the lobby starts the match by itself after two minutes
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool showCustomize = false;
@@ -1753,6 +2160,10 @@ UiState& Ui() {
         ui.waitingRoom = CVarGetInteger(ROYALE_CVAR("WaitingRoom"), 1) != 0;
         ui.botDifficulty = std::clamp(CVarGetInteger(ROYALE_CVAR("BotDifficulty"), 1), 0, 2);
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
+        ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
+        ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
+        gSession.SetPlayerLimit(ui.playerLimit);
+        gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
         ui.skin = std::clamp(CVarGetInteger(ROYALE_CVAR("Skin"), 0), 0, royale::kCustomSkin);
         const uint32_t saved = static_cast<uint32_t>(CVarGetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(royale::SkinRgb(0))));
         ui.customTunic[0] = royale::RgbR(saved) / 255.0f; ui.customTunic[1] = royale::RgbG(saved) / 255.0f; ui.customTunic[2] = royale::RgbB(saved) / 255.0f;
@@ -1769,6 +2180,8 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("WaitingRoom"), ui.waitingRoom ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("BotDifficulty"), ui.botDifficulty);
     CVarSetInteger(ROYALE_CVAR("Skin"), ui.skin);
+    CVarSetInteger(ROYALE_CVAR("PlayerLimit"), ui.playerLimit);
+    CVarSetInteger(ROYALE_CVAR("AutoStart"), ui.autoStart ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
@@ -1909,7 +2322,7 @@ void DrawRoster(const royale::HudState& h) {
 
 void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("LOBBY");
-    ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, royale::kMaxPlayers, h.botSlots);
+    ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
     ImGui::Spacing();
 
     if (h.isHost) {
@@ -1939,6 +2352,21 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
         {
             UiState& ui = Ui();
+            int limit = h.playerLimit;
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
+                ui.playerLimit = limit;
+                gSession.SetPlayerLimit(limit);
+                SaveUi(ui);
+            }
+            ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
+            if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
+                gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
+                SaveUi(ui);
+            }
+        }
+        {
+            UiState& ui = Ui();
             static const char* kLevels[] = { "Easy", "Normal", "Hard" };
             ImGui::SetNextItemWidth(160);
             if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
@@ -1958,6 +2386,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
+    if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");
     int scene = InGame() ? gPlayState->sceneNum : -1;
@@ -1982,7 +2411,7 @@ void DrawCountdown(const royale::HudState& h) {
 
 void DrawInMatch(const royale::HudState& h) {
     Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
-    ImGui::Text("Players alive: %d / %d", h.alive, royale::kMaxPlayers);
+    ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
     if (h.haveSelf) {
         char label[32];
         std::snprintf(label, sizeof(label), "%.1f / %.1f hearts", h.selfHealth, h.maxHealth);
@@ -2060,6 +2489,13 @@ std::string ExportMapJson() {
     first = true;
     for (const auto& pl : gSession.Puppets()) {
         std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"bot\": %s}", first ? "" : ", ", pl.x, pl.z, pl.isBot ? "true" : "false");
+        json += buf;
+        first = false;
+    }
+    json += "],\n  \"bosses\": [";
+    first = true;
+    for (const auto& bn : c.Bosses()) {
+        std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"name\": \"%s\"}", first ? "" : ", ", bn.x, bn.z, royale::kBossDefs[bn.kind].name);
         json += buf;
         first = false;
     }

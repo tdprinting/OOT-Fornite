@@ -1,0 +1,82 @@
+diff --git a/soh/include/z64save.h b/soh/include/z64save.h
+index 751ad0b..f8ccc5a 100644
+--- a/soh/include/z64save.h
++++ b/soh/include/z64save.h
+@@ -314,12 +314,14 @@ typedef enum {
+     /* 01 */ QUEST_MASTER,
+     /* 02 */ QUEST_RANDOMIZER,
+     /* 03 */ QUEST_BOSSRUSH,
++    /* 04 */ QUEST_BATTLEROYALE, // OOT Royale: a normal save that opens the Battle Royale menu
+ } Quest;
+ 
+-#define IS_VANILLA (gSaveContext.ship.quest.id == QUEST_NORMAL)
++#define IS_VANILLA (gSaveContext.ship.quest.id == QUEST_NORMAL || gSaveContext.ship.quest.id == QUEST_BATTLEROYALE)
+ #define IS_MASTER_QUEST (gSaveContext.ship.quest.id == QUEST_MASTER)
+ #define IS_RANDO (gSaveContext.ship.quest.id == QUEST_RANDOMIZER)
+ #define IS_BOSS_RUSH (gSaveContext.ship.quest.id == QUEST_BOSSRUSH)
++#define IS_BATTLE_ROYALE (gSaveContext.ship.quest.id == QUEST_BATTLEROYALE)
+ 
+ typedef enum {
+     /* 0x00 */ BTN_ENABLED,
+diff --git a/soh/src/code/z_sram.c b/soh/src/code/z_sram.c
+index 8fc6d1d..34b727a 100644
+--- a/soh/src/code/z_sram.c
++++ b/soh/src/code/z_sram.c
+@@ -8,6 +8,7 @@
+ #include "soh/OTRGlobals.h"
+ #include "soh/SaveManager.h"
+ #include "soh/ResourceManagerHelpers.h"
++#include "soh/cvar_prefixes.h"
+ 
+ #define NUM_DUNGEONS 8
+ #define NUM_COWS 10
+@@ -269,6 +270,14 @@ void Sram_InitSave(FileChooseContext* fileChooseCtx) {
+         gSaveContext.ship.quest.id = currentQuest;
+     }
+ 
++    {
++        // The quest type is not stored in the save file (it is a normal save underneath), so remember which files were made as Battle Royale files.
++        char royaleKey[48];
++        snprintf(royaleKey, sizeof(royaleKey), CVAR_SETTING("Royale.BRFile%d"), fileChooseCtx->buttonIndex);
++        CVarSetInteger(royaleKey, currentQuest == QUEST_BATTLEROYALE ? 1 : 0);
++        CVarSave();
++    }
++
+     Save_SaveFile();
+     SaveManager_ThreadPoolWait();
+ }
+diff --git a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+index 6dae312..318551f 100644
+--- a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
++++ b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+@@ -703,8 +703,9 @@ static void DrawMoreInfo(FileChooseContext* this, s16 fileIndex, u8 alpha) {
+ }
+ 
+ #define MIN_QUEST (ResourceMgr_GameHasOriginal() ? QUEST_NORMAL : QUEST_MASTER)
+-#define MAX_QUEST QUEST_BOSSRUSH
++#define MAX_QUEST QUEST_BATTLEROYALE
+ 
++void Royale_ShowQuestLabel(void); // defined by the OOT Royale mod
+ void Sram_InitDebugSave(void);
+ void Sram_InitBossRushSave();
+ 
+@@ -2562,6 +2563,19 @@ void FileChoose_DrawWindowContents(GameState* thisx) {
+                     ResourceMgr_GameHasOriginal() ? gTitleZeldaShieldLogoTex : gTitleZeldaShieldLogoMQTex, 160, 160);
+                 FileChoose_DrawImageRGBA32(this->state.gfxCtx, 182, 180, gTitleBossRushSubtitleTex, 128, 32);
+                 break;
++
++            case QUEST_BATTLEROYALE:
++                // Same title as the others; the "BATTLE ROYALE" subtitle is drawn by the OOT Royale mod, told here every frame this is shown.
++                Royale_ShowQuestLabel();
++                gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, 255, 255, 255, this->logoAlpha);
++                FileChoose_DrawTextureI8(this->state.gfxCtx, gTitleTheLegendOfTextTex, 72, 8, 156, 108, 72, 8, 1024,
++                                         1024);
++                FileChoose_DrawTextureI8(this->state.gfxCtx, gTitleOcarinaOfTimeTMTextTex, 96, 8, 154, 163, 96, 8, 1024,
++                                         1024);
++                FileChoose_DrawImageRGBA32(
++                    this->state.gfxCtx, 160, 135,
++                    ResourceMgr_GameHasOriginal() ? gTitleZeldaShieldLogoTex : gTitleZeldaShieldLogoMQTex, 160, 160);
++                break;
+         }
+     } else if (this->configMode == CM_BOSS_RUSH_MENU) {
+         uint8_t language = (gSaveContext.language == LANGUAGE_JPN) ? LANGUAGE_ENG : gSaveContext.language;

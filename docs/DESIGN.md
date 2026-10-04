@@ -188,6 +188,15 @@ Not included (they have no sensible meaning in a battle royale): quest items, tr
 - Names are an index into `kPoiNames` (sixteen rhyming names, shuffled per match, the centre always "Hylian Billion Pavilion").
 - `shared/meshes.h` builds our own models in code (rocks, boulders, an eight-sided stone post, a gabled cottage roof) as flat-shaded triangles with baked light. The game layer converts them to vertices and display lists and draws them from the props' stand-in actors, with the game's own rock kept as the invisible solid part. This avoids shipping binary model files and keeps the geometry unit-testable. A real new Hyrule Field scene (terrain mesh, collision, textures) would need a different pipeline (authoring tools and the game's resource format) and is not part of this build.
 
+### 4.2.4 Mini bosses, player count, lobby timer, quest option
+
+- **Bosses** (`shared/boss.h`, `Match::TickBosses`): ids from 5000. Chase the nearest player in 450 units, leash 1100 from home, smash every `cooldown` seconds; healed while walking home. `Match::Attack` accepts a boss id; `KillBoss` drops `drops` chests (60% Epic, 40% Legendary) in a ring. Sent to clients in `Snapshot.bosses` (only ones within 4500 units) and `EvBossDown`. Drawn from a golem mesh on a stand-in actor. Bots (`bot.h`) engage when healthy with a decent weapon, otherwise keep 420 units away.
+- **Player count** (`Match::SetPlayerLimit`, 2 to 32): the lobby cap and the number the bots fill up to; sent in `MatchStateMsg.limit` and `Welcome.limit`. Towns and bosses scale with it.
+- **Lobby timer** (`GameServer::SetAutoStart`, default 120 s from the first player): the server counts, clients see `Snapshot.lobbyLeft`, the host's game starts the match at zero (it has to go to the field and measure first); the server does it after 30 more seconds if that never happens.
+- **Quest option** (`patches/0008`): a fifth quest type in the file select. The quest id isn't stored in the save, so `z_sram.c` records `gSettings.Royale.BRFile<n>` for files made this way; the mod opens the menu on its page when one loads.
+- **Falling limp** is a simple body simulation (gravity, bounces, friction, a spin and wobble that die away) on a puppet actor, then Link's knocked-down animation. It is not a per-limb ragdoll: the game's skeleton animates its own joints and that would need a different approach.
+- **Time of day** is the game's own lighting, driven by storm progress. **Shadows**: the game draws blob shadows under actors, and our scenery and bosses use them; real dynamic shadow casting from lights and shiny (specular) materials are not possible from a mod, because the renderer has no hooks for custom shaders.
+
 ### 4.3 Loot and rarity tiers
 
 Every weapon, shield and consumable has a rarity tier, as in Fortnite. Tier sets damage or effect strength, spawn
