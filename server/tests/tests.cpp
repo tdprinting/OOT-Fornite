@@ -1,5 +1,6 @@
 #include "../match.h"
 #include "../sim.h"
+#include "../nav.h"
 #include <set>
 #include <string>
 #include "../../shared/anim.h"
@@ -947,6 +948,153 @@ static void MovementPlausibilityAllowsSpeedBuffs() {
     CHECK(kMaxPlausibleSpeed / kRunSpeed > m.SpeedMultiplier(p) * 1.8f);               // the movement clamp has room for every buff stacked
 }
 
+// ---- Bot AI: pathfinding and smarter behaviour ----------------------------------------------------------------------
+
+// A wall down the middle of the map: x within 60 of zero from z=-450 to z=450.
+static bool NotWall(Vec2 p) { return !(std::fabs(p.x) < 60.0f && std::fabs(p.z) < 450.0f); }
+
+static void NavPathsAroundWalls() {
+    NavGrid nav(MapCircle(), NotWall);
+    CHECK(nav.WalkableCount() > 1000);
+    CHECK(!nav.Walkable({0, 0}) && nav.Walkable({500, 0}));
+    CHECK(!nav.LineClear({-500, 0}, {500, 0}));
+    std::vector<Vec2> path;
+    CHECK(nav.FindPath({-500, 0}, {500, 0}, path) && !path.empty());
+    Vec2 at = {-500, 0};
+    float length = 0;
+    bool allClear = true;
+    for (Vec2 w : path) { allClear &= nav.Walkable(w) && nav.LineClear(at, w); length += Distance(at, w); at = w; }
+    CHECK(allClear);
+    CHECK(Distance(at, {500, 0}) < 1.0f);
+    CHECK(length > 1000.0f && length < 2000.0f);          // goes around, but not absurdly far
+    CHECK(path.size() < 12);                              // and was smoothed into a few waypoints, not one per cell
+    CHECK(nav.FindPath({-500, 0}, {0, 0}, path));         // a goal inside the wall snaps to the nearest open ground
+    CHECK(nav.Walkable(path.back()));
+    CHECK(nav.FindPath({-100, -100}, {-300, 200}, path) && path.size() == 1); // clear lines need no detour
+
+    // A pocket sealed off from the rest: no route.
+    NavGrid sealed(MapCircle(), [](Vec2 p) { const float d = std::hypot(p.x, p.z); return d < 150.0f || d > 300.0f; });
+    CHECK(!sealed.FindPath({600, 0}, {0, 0}, path));
+}
+
+static void BotsWalkAroundWalls() {
+    // The same wall, a bot on one side and the sword on the other: with the grid it gets there; every step stays on open ground.
+    for (int useNav = 0; useNav < 2; useNav++) {
+        Simulation sim = Duel(5, {-1800, 0}, {-300, 0});
+        sim.match.AddLoot({{300, 0}, ItemId::MasterSword, Rarity::Epic, false});
+        if (useNav) sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
+        PlayerState* b = sim.match.Find(1000);
+        bool onWall = false;
+        for (int i = 0; i < 40 * kTickHz && b->weapon.item != ItemId::MasterSword; i++) {
+            sim.Tick(kDt);
+            onWall |= std::fabs(b->pos.x) < 25.0f && std::fabs(b->pos.z) < 450.0f; // the grid is 60 wide, so only the core of the wall is guaranteed
+        }
+        if (useNav) {
+            CHECK(b->weapon.item == ItemId::MasterSword);
+            CHECK(!onWall);
+        } else {
+            CHECK(b->weapon.item == ItemId::MasterSword); // no grid: straight line, through the wall (the old behaviour)
+        }
+    }
+}
+
+static void BotsUseAbilitiesWhenItCounts() {
+    {   // Din's Fire on a nearby foe.
+        Simulation sim = Duel(5, {200, 0}, {0, 0});
+        PlayerState* b = sim.match.Find(1000);
+        b->ability = {ItemId::DinsFire, Rarity::Rare}; b->hasAbility = true;
+        Run(sim, 4);
+        CHECK(sim.match.Find(1)->health < kMaxHealth);
+        CHECK(sim.match.Clock() < b->abilityReadyAt + 100 && b->abilityReadyAt > 0);
+    }
+    {   // Nayru's Love when about to die.
+        Simulation sim = Duel(5, {150, 0}, {0, 0});
+        PlayerState* b = sim.match.Find(1000);
+        b->ability = {ItemId::NayrusLove, Rarity::Rare}; b->hasAbility = true;
+        b->health = 1.0f;
+        sim.match.Find(1)->weapon = {ItemId::BiggoronSword, Rarity::Rare};
+        bool invulnerable = false;
+        for (int i = 0; i < 6 * kTickHz; i++) { sim.Tick(kDt); invulnerable |= sim.match.Invulnerable(*b); }
+        CHECK(invulnerable);
+    }
+    {   // No target, nothing to use it on: Din's Fire stays in the bag.
+        Simulation sim = Duel(5, {1900, 0}, {0, 0});
+        PlayerState* b = sim.match.Find(1000);
+        b->ability = {ItemId::DinsFire, Rarity::Rare}; b->hasAbility = true;
+        Run(sim, 3);
+        CHECK(b->abilityReadyAt == 0);
+    }
+    {   // The Hookshot reels in a foe who is out of sword range.
+        Simulation sim = Duel(5, {500, 0}, {0, 0});
+        PlayerState* b = sim.match.Find(1000);
+        b->ability = {ItemId::Hookshot, Rarity::Rare}; b->hasAbility = true;
+        b->weapon = {ItemId::KokiriSword, Rarity::Common};
+        float closest = 1e9f;
+        for (int i = 0; i < 5 * kTickHz; i++) { sim.Tick(kDt); closest = (std::min)(closest, Distance(b->pos, sim.match.Find(1)->pos)); }
+        CHECK(closest < 150.0f);
+        CHECK(b->abilityReadyAt > 0);
+    }
+}
+
+static void BotsFleeLosingFights() {
+    Simulation sim = Duel(5, {250, 0}, {0, 0});
+    PlayerState* b = sim.match.Find(1000);
+    b->health = 0.7f; b->potions.clear();
+    b->weapon = {ItemId::DekuStick, Rarity::Common};
+    sim.match.Find(1)->weapon = {ItemId::MasterSword, Rarity::Legendary};
+    const float before = Distance(b->pos, sim.match.Find(1)->pos);
+    Run(sim, 2);
+    CHECK(b->alive && Distance(b->pos, sim.match.Find(1)->pos) > before + 100.0f);   // ran away from the stronger human
+}
+
+static void HarderBotsKillFaster() {
+    // A bot with a sword against a human standing still, averaged over seeds. Harder bots aim better and react sooner.
+    float total[2] = {0, 0};
+    for (int d = 0; d < 2; d++) {
+        for (uint64_t seed = 1; seed <= 12; seed++) {
+            Simulation sim = Duel(seed, {120, 0}, {0, 0});
+            sim.bots.SetDifficulty(d == 0 ? BotDifficulty::Easy : BotDifficulty::Hard);
+            PlayerState* b = sim.match.Find(1000);
+            b->weapon = {ItemId::KokiriSword, Rarity::Common};
+            sim.match.Find(1)->weapon = {ItemId::DekuStick, Rarity::Common};
+            sim.match.Find(1)->health = 2.0f;
+            float t = 40.0f;
+            for (int i = 0; i < 40 * kTickHz; i++) {
+                sim.Tick(kDt);
+                sim.match.Find(1)->pos = {120, 0};   // the human stands still
+                if (!sim.match.Find(1)->alive) { t = static_cast<float>(i) / kTickHz; break; }
+            }
+            total[d] += t;
+        }
+    }
+    std::printf("  time to kill: easy %.1fs, hard %.1fs (mean of 12)\n", total[0] / 12, total[1] / 12);
+    CHECK(total[1] < total[0]);
+}
+
+static void BotsPickUpFairiesAndHearts() {
+    Simulation sim = Duel(5, {1900, 0}, {0, 0});
+    sim.match.AddLoot({{200, 0}, ItemId::Fairy, Rarity::Rare, false});
+    sim.match.AddLoot({{-200, 0}, ItemId::HeartContainer, Rarity::Rare, false});
+    PlayerState* b = sim.match.Find(1000);
+    Run(sim, 15);
+    bool fairy = false;
+    for (const Equipped& e : b->potions) fairy |= e.item == ItemId::Fairy;
+    CHECK(fairy);
+    CHECK(b->maxHealth > kMaxHealth);
+}
+
+static void BotsAdvantageMath() {
+    Simulation sim = Duel(5, {100, 0}, {0, 0});
+    PlayerState* a = sim.match.Find(1000);
+    PlayerState* h = sim.match.Find(1);
+    a->weapon = {ItemId::MasterSword, Rarity::Epic};
+    h->weapon = {ItemId::DekuStick, Rarity::Common};
+    CHECK(BotController::Advantage(sim.match, *a, *h) > 1.5f);
+    CHECK(BotController::Advantage(sim.match, *h, *a) < 0.7f);
+    h->stunUntil = sim.match.Clock() + 3;
+    CHECK(BotController::Advantage(sim.match, *a, *h) > 3.0f);
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -955,6 +1103,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
+    NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");
