@@ -195,7 +195,7 @@ static void DecodeRejectsBadValues() {
     Snapshot s, sOut;
     s.players.resize(2);
     bytes = Encode(s);
-    bytes[1 + 4 + 4 + 1 + 1 + 1] = 200; // player count far above the cap
+    bytes[1 + 4 + 4 + 1 + 1 + 1 + 1] = 200; // player count far above the cap
     CHECK(!Decode(bytes, sOut));
     ByteWriter huge; huge.U8(static_cast<uint8_t>(MsgType::Welcome)); huge.U16(1); huge.U16(kProtocolVersion); huge.U64(0);
     for (int i = 0; i < 3 + 3 * kStormPhaseCount; i++) huge.F32(1);
@@ -631,6 +631,62 @@ static void BossesOverTheWire() {
     bool farSees = false;
     for (const auto& n : b.Bosses()) farSees |= Distance({n.x, n.z}, {rig.M().Find(2)->pos.x, rig.M().Find(2)->pos.z}) > 4500.0f;
     CHECK(!farSees);
+}
+
+static void PlayerLimitOverTheWire() {
+    Rig rig(41, 20);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    CHECK(a.PlayerLimit() == kMaxPlayers && b.PlayerLimit() == kMaxPlayers);
+    CHECK(!rig.server.SetPlayerLimit(1) && !rig.server.SetPlayerLimit(40));
+    CHECK(rig.server.SetPlayerLimit(3));
+    rig.Run(0.4f);
+    CHECK(a.PlayerLimit() == 3 && b.PlayerLimit() == 3 && rig.server.PlayerLimit() == 3);       // everyone is told
+    GameClient& c = rig.Add("C");
+    CHECK(rig.RunUntil([&] { return c.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(c.PlayerLimit() == 3);                                                                  // a later joiner learns it from Welcome
+    GameClient& d = rig.Add("D");
+    CHECK(rig.RunUntil([&] { return d.GetStatus() == GameClient::Status::Rejected; }));          // full at three
+    CHECK(d.RejectedBecause() == RejectReason::LobbyFull);
+    CHECK(!rig.server.SetPlayerLimit(2));                                                         // can't go below the people here
+    rig.StartAndGoLive();
+    CHECK(rig.M().Players().size() == 3);                                                         // no bots at all
+    CHECK(!rig.server.SetPlayerLimit(10));                                                        // lobby only
+    { MatchStateMsg a2, b2; a2.limit = 12; CHECK(RoundTrips(a2, b2) && b2.limit == 12); }
+    { MatchStateMsg bad, out; bad.limit = 1; CHECK(!RoundTrips(bad, out)); }
+}
+
+static void LobbyTimer() {
+    Rig rig(51, 20);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.Run(0.3f);
+    CHECK(a.LobbyLeft() < 0 && rig.server.LobbyLeft() < 0);                           // off unless the host asks for it
+    rig.server.SetAutoStart(120.0f);
+    rig.Run(1.0f);
+    CHECK(a.LobbyLeft() > 116 && a.LobbyLeft() <= 120);
+    rig.Run(60.0f);
+    CHECK(a.LobbyLeft() > 54 && a.LobbyLeft() < 62);                                   // counting down, and clients see it
+    CHECK(rig.M().State() == MatchState::Lobby);
+    // The host's game starts the match when it reaches zero; if it never does, the server steps in after the grace period.
+    rig.Run(60.5f);
+    CHECK(a.LobbyLeft() >= 0 && a.LobbyLeft() < 1.5f && rig.M().State() == MatchState::Lobby);
+    rig.Run(kLobbyStartGraceSec - 4.0f);
+    CHECK(rig.M().State() == MatchState::Lobby);
+    rig.Run(5.0f);
+    CHECK(rig.M().State() == MatchState::Countdown);
+    CHECK(rig.server.LobbyLeft() < 0);                                                  // the timer is over once the match is on
+    { Snapshot s1, s2; s1.lobbyLeft = 77; CHECK(RoundTrips(s1, s2) && s2.lobbyLeft == 77); }
+    // Starting early by hand works as before and the timer plays no part afterwards.
+    Rig rig2(52, 20);
+    GameClient& b = rig2.Add("B");
+    CHECK(rig2.RunUntil([&] { return rig2.AllJoined(); }));
+    rig2.server.SetAutoStart(120.0f);
+    rig2.Run(10.0f);
+    CHECK(rig2.server.StartMatch());
+    rig2.Run(5.0f);
+    CHECK(b.LobbyLeft() < 0);
 }
 
 static void DisconnectHandling() {
@@ -1109,7 +1165,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

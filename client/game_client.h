@@ -108,6 +108,10 @@ class GameClient {
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
     // The mini bosses in the latest snapshot (the ones near you).
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
+    // Players in the match, bots included.
+    int PlayerLimit() const { return playerLimit; }
+    // Seconds until the lobby starts the match by itself (as of the last snapshot), or -1 if there is no timer.
+    float LobbyLeft() const { return lobbyLeftAtSnapshot == 255 ? -1.0f : (std::max)(0.0f, static_cast<float>(lobbyLeftAtSnapshot) - (localClock - snapshotArrival)); }
     const std::vector<Prop>& Props() const { return props; }
     const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
@@ -236,6 +240,7 @@ class GameClient {
                 SetState(static_cast<MatchState>(m.state));
                 alive = m.alive;
                 winner = m.winner;
+                playerLimit = m.limit;
                 ClientEvent e{ClientEvent::Type::StateChanged};
                 e.state = state;
                 events.push_back(e);
@@ -370,6 +375,7 @@ class GameClient {
         storm = std::make_unique<Storm>(w.map, w.stormEnds);
         loot = w.loot;
         props = w.props;
+        playerLimit = w.limit;
         pois = w.pois;
         roster.clear();
         for (const auto& r : w.roster) {
@@ -389,6 +395,7 @@ class GameClient {
         lastTick = s.tick;
         snapshotArrival = localClock;
         stormTimeAtSnapshot = s.stormTime;
+        lobbyLeftAtSnapshot = s.lobbyLeft;
         SetState(static_cast<MatchState>(s.state));
         alive = s.alive;
         epoch = s.epoch;
@@ -420,6 +427,8 @@ class GameClient {
     InventoryInfo inventory;
     std::vector<net::BossNet> bosses;
     float bossesAt = 0;
+    int playerLimit = kMaxPlayers;
+    uint8_t lobbyLeftAtSnapshot = 255;
     std::vector<Prop> props;
     std::vector<Poi> pois;
     std::vector<net::ResultRow> results;

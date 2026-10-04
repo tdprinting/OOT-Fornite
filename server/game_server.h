@@ -30,6 +30,26 @@ class GameServer {
         : link(transport), sim(seed, map, lootCount), mapCircle(map) {}
     // How many mini bosses a match has (0 to 8). Survives Reconfigure.
     void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(n); }
+    // The host's player-count slider: how many players the match has, bots included. Lobby only, and never fewer than the people here.
+    // Smaller matches also get fewer towns and bosses, so the map isn't mostly empty. Everyone is told.
+    bool SetPlayerLimit(int n) {
+        if (!sim.match.SetPlayerLimit(n)) return false;
+        playerLimit = n;
+        poiCount = (std::max)(4, (std::min)(12, n / 2 + 2));
+        if (bossCount > 0) { bossCount = (std::max)(0, (std::min)(5, n / 6)); sim.match.SetBossCount(bossCount); }
+        net::MatchStateMsg m;
+        m.state = static_cast<uint8_t>(sim.match.State());
+        m.alive = static_cast<uint8_t>(sim.match.Alive());
+        m.limit = static_cast<uint8_t>(n);
+        Broadcast(m);
+        return true;
+    }
+    int PlayerLimit() const { return playerLimit; }
+    // The lobby starts the match by itself after this many seconds (0 turns it off). The clock starts when the first player is here.
+    void SetAutoStart(float seconds) { autoStartSec = seconds; if (seconds <= 0) lobbyElapsed = 0; }
+    float AutoStartSeconds() const { return autoStartSec; }
+    // Seconds left on that timer, or a negative number when it is off or the match has begun.
+    float LobbyLeft() const { return (autoStartSec > 0 && sim.match.State() == MatchState::Lobby) ? (std::max)(0.0f, autoStartSec - lobbyElapsed) : -1.0f; }
 
     // The hosting process generates a random token and gives it both to the server (here) and to its own client's Hello, so
     // the server can tell which connected player is the host without trusting addresses or join order.
@@ -66,6 +86,7 @@ class GameServer {
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetBossCount(bossCount);
+        sim.match.SetPlayerLimit(playerLimit);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
@@ -304,7 +325,7 @@ class GameServer {
         if (hello.version != net::kProtocolVersion) { Reject(c, net::RejectReason::VersionMismatch); return; }
         if (sim.match.State() != MatchState::Lobby) { Reject(c, net::RejectReason::MatchInProgress); return; }
         uint32_t id = NextPlayerId();
-        if (HumanCount() >= kMaxPlayers || id == kNoPlayer || !sim.match.AddHuman(id)) { Reject(c, net::RejectReason::LobbyFull); return; }
+        if (HumanCount() >= playerLimit || id == kNoPlayer || !sim.match.AddHuman(id)) { Reject(c, net::RejectReason::LobbyFull); return; }
 
         c.joined = true;
         c.playerId = id;
@@ -319,6 +340,7 @@ class GameServer {
         net::Welcome w;
         w.playerId = static_cast<uint16_t>(id);
         w.seed = sim.match.Seed();
+        w.limit = static_cast<uint8_t>(playerLimit);
         w.map = mapCircle;
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
@@ -375,6 +397,12 @@ class GameServer {
     }
 
     void Step() {
+        if (sim.match.State() == MatchState::Lobby && autoStartSec > 0 && HumanCount() >= 1) {
+            lobbyElapsed += kStep;
+            // The host's game normally starts the match when the timer runs out (it has to measure the map first). If that never
+            // happens, the server does it with the map it has.
+            if (lobbyElapsed >= autoStartSec + kLobbyStartGraceSec) StartMatch();
+        }
         sim.Tick(kStep);
         clock += kStep;
         tick++;
@@ -390,6 +418,7 @@ class GameServer {
                     net::MatchStateMsg m;
                     m.state = static_cast<uint8_t>(e.state);
                     m.alive = static_cast<uint8_t>(sim.match.Alive());
+                    m.limit = static_cast<uint8_t>(playerLimit);
                     if (const PlayerState* w = sim.match.Winner()) m.winner = static_cast<uint16_t>(w->id);
                     Broadcast(m);
                     if (e.state == MatchState::Ending) {
@@ -536,6 +565,7 @@ class GameServer {
             s.state = static_cast<uint8_t>(sim.match.State());
             s.alive = static_cast<uint8_t>(sim.match.Alive());
             s.epoch = c.epoch;
+            { const float left = LobbyLeft(); s.lobbyLeft = left < 0 ? 255 : static_cast<uint8_t>((std::min)(254.0f, std::ceil(left))); }
             s.players.push_back(ToNet(*self));
 
             std::vector<std::pair<float, const PlayerState*>> nearby;
@@ -570,6 +600,9 @@ class GameServer {
     int propCount = 350;
     int poiCount = 12;
     int bossCount = 0;
+    int playerLimit = kMaxPlayers;
+    float autoStartSec = 0;
+    float lobbyElapsed = 0;
     PlacementFn lastValid;
     int lastLootCount = 150;
     Circle mapCircle;

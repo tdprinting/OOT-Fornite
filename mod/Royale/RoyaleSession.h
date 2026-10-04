@@ -83,6 +83,8 @@ struct HudState {
     bool isHost = false;
     bool selfReady = false;
     float countdownLeft = 0;      // seconds until the drop, while the state is Countdown
+    int playerLimit = kMaxPlayers; // players in the match, bots included (the host's slider)
+    float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
     std::vector<ResultsRow> results; // standings, best score first, once the match has ended
@@ -103,6 +105,8 @@ class RoyaleSession {
         server = std::make_unique<GameServer>(*hostTransport, seed, kHyruleFieldMap);
         server->SetBotDifficulty(botDifficulty);
         server->SetBossCount(5);
+        server->SetAutoStart(autoStart);
+        if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;
@@ -142,6 +146,10 @@ class RoyaleSession {
 
     // The tunic colour (0xRRGGBB) the other players see you in. Set before hosting or joining.
     void SetTunic(uint32_t rgb) { tunic = rgb; }
+    // Host only, in the lobby: how many players the match has, bots included (2 to 32). Returns false if that isn't allowed right now.
+    // Host only: the lobby starts the match by itself after this many seconds; 0 turns the timer off.
+    void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
+    bool SetPlayerLimit(int n) { playerLimit = n; return server ? server->SetPlayerLimit(n) : false; }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
@@ -228,7 +236,9 @@ class RoyaleSession {
             h.roster.push_back(std::move(row));
         }
         h.humanCount = static_cast<int>(h.roster.size());
-        h.botSlots = kMaxPlayers - h.humanCount;
+        h.playerLimit = client->PlayerLimit();
+        h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
+        h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
         for (const net::ResultRow& r : client->Results()) {
             ResultsRow row;
@@ -302,6 +312,8 @@ class RoyaleSession {
 
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     uint32_t tunic = SkinRgb(0);
+    int playerLimit = kMaxPlayers;
+    float autoStart = kLobbyAutoStartSec;
     Mode mode = Mode::Idle;
     // Order matters: clients are destroyed before the transports they use.
     std::unique_ptr<net::ENetTransport> hostTransport;

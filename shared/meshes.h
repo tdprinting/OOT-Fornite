@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Count };
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Count }; // Golem: the mini boss; the variant is its BossKind
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 
 struct MeshData {
@@ -136,6 +136,42 @@ inline MeshData Roof() {
     return b.mesh;
 }
 
+// A blocky mini-boss golem about 200 tall: stumpy legs, a barrel chest, long arms with big fists, a small head with glowing eyes and a
+// crest. The three kinds share the shape and differ in colour: grey stone, dark rock veined with lava, and pale ice.
+inline MeshData Golem(uint32_t kind) {
+    struct Palette { Rgb body, dark, glow, crest; };
+    static const Palette palettes[3] = {
+        {{138, 132, 122}, {96, 92, 84}, {255, 230, 120}, {170, 160, 140}},
+        {{78, 60, 56}, {52, 38, 36}, {255, 120, 30}, {210, 70, 20}},
+        {{176, 214, 232}, {120, 160, 190}, {120, 230, 255}, {232, 248, 255}},
+    };
+    const Palette& pal = palettes[kind % 3];
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    box(-34, 40, 0, 26, 40, 26, pal.dark);      // legs
+    box(34, 40, 0, 26, 40, 26, pal.dark);
+    box(0, 115, 0, 62, 36, 40, pal.body);       // hips and belly
+    box(0, 170, 0, 74, 34, 44, pal.body);       // chest
+    box(-96, 178, 0, 24, 26, 30, pal.dark);     // shoulders
+    box(96, 178, 0, 24, 26, 30, pal.dark);
+    box(-108, 110, 6, 20, 56, 22, pal.body);    // arms hanging down
+    box(108, 110, 6, 20, 56, 22, pal.body);
+    box(-108, 40, 12, 30, 24, 30, pal.dark);    // fists
+    box(108, 40, 12, 30, 24, 30, pal.dark);
+    box(0, 226, 6, 34, 28, 32, pal.body);       // head
+    box(0, 262, 4, 10, 20, 26, pal.crest);      // crest
+    box(-14, 230, 38, 8, 6, 2, pal.glow);       // eyes
+    box(14, 230, 38, 8, 6, 2, pal.glow);
+    box(0, 176, 46, 22, 14, 2, pal.glow);       // glowing core in the chest
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -144,6 +180,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Boulder: return mesh_detail::Lump(82.0f, 0.82f, true, 200 + variant);
         case MeshKind::Pillar: return mesh_detail::Post();
         case MeshKind::Roof: return mesh_detail::Roof();
+        case MeshKind::Golem: return mesh_detail::Golem(variant);
         default: return {};
     }
 }

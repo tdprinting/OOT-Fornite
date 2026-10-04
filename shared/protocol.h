@@ -20,7 +20,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 8; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 10; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -187,6 +187,7 @@ struct Welcome {
     uint16_t playerId = 0;
     uint16_t version = kProtocolVersion;
     uint64_t seed = 0;
+    uint8_t limit = kMaxPlayers;
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
@@ -194,7 +195,7 @@ struct Welcome {
     std::vector<Poi> pois;
     std::vector<RosterEntry> roster;
     void Write(ByteWriter& w) const {
-        w.U16(playerId); w.U16(version); w.U64(seed);
+        w.U16(playerId); w.U16(version); w.U64(seed); w.U8(limit);
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
@@ -205,7 +206,8 @@ struct Welcome {
         for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); }
     }
     bool Read(ByteReader& r) {
-        playerId = r.U16(); version = r.U16(); seed = r.U64();
+        playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8();
+        if (limit < kMinPlayers || limit > kMaxPlayers) return false;
         map = ReadCircle(r);
         for (auto& c : stormEnds) c = ReadCircle(r);
         size_t n = r.U16();
@@ -233,8 +235,9 @@ struct MatchStateMsg {
     uint8_t state = 0; // MatchState
     uint8_t alive = 0;
     uint16_t winner = kNoPlayer16; // set when state is Ending and somebody is left standing
-    void Write(ByteWriter& w) const { w.U8(state); w.U8(alive); w.U16(winner); }
-    bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); return r.ok && state <= 4; }
+    uint8_t limit = kMaxPlayers;   // players in the match, bots included (the host's slider)
+    void Write(ByteWriter& w) const { w.U8(state); w.U8(alive); w.U16(winner); w.U8(limit); }
+    bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); limit = r.U8(); return r.ok && state <= 4 && limit >= kMinPlayers && limit <= kMaxPlayers; }
 };
 
 // One player as seen in a snapshot. 25 bytes.
@@ -293,17 +296,18 @@ struct Snapshot {
     uint8_t state = 0;
     uint8_t alive = 0;
     uint8_t epoch = 0;       // bumped whenever the server teleports this client (match start); inputs with an old epoch are ignored
+    uint8_t lobbyLeft = 255; // seconds until the lobby starts the match by itself; 255 when the timer is off
     std::vector<PlayerNet> players; // first entry is always the receiving client
     std::vector<BossNet> bosses;    // the mini bosses near this client
     void Write(ByteWriter& w) const {
-        w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch);
+        w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch); w.U8(lobbyLeft);
         w.U8(static_cast<uint8_t>(players.size()));
         for (const auto& p : players) p.Write(w);
         w.U8(static_cast<uint8_t>(bosses.size()));
         for (const auto& b : bosses) b.Write(w);
     }
     bool Read(ByteReader& r) {
-        tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8();
+        tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8(); lobbyLeft = r.U8();
         size_t n = r.U8();
         if (n > static_cast<size_t>(kMaxPlayers) || state > 4 || !Finite(stormTime)) return false; // up to everyone, while revealing
         players.assign(n, {});

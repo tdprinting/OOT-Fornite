@@ -1293,6 +1293,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Rock) CHECK(mx[0] - mn[0] < 120 && mx[1] < 60);
             if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && mx[1] < 150);
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
+            if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }
@@ -1467,6 +1468,31 @@ static void MiniBosses() {
     }
 }
 
+static void PlayerLimitSlider() {
+    Match m(1, MapCircle());
+    CHECK(m.PlayerLimit() == kMaxPlayers);
+    CHECK(!m.SetPlayerLimit(1) && !m.SetPlayerLimit(33) && !m.SetPlayerLimit(0));       // 2 to 32 only
+    CHECK(m.SetPlayerLimit(6) && m.PlayerLimit() == 6);
+    for (uint32_t id = 1; id <= 4; id++) CHECK(m.AddHuman(id));
+    CHECK(!m.SetPlayerLimit(3));                                                          // not below the people already here
+    CHECK(m.SetPlayerLimit(5));
+    CHECK(m.AddHuman(5) && !m.AddHuman(6));                                               // the lobby is full at the limit
+    CHECK(m.Start());
+    CHECK(m.Players().size() == 5 && m.Alive() == 5);
+    int bots = 0;
+    for (auto& p : m.Players()) bots += p.isBot;
+    CHECK(bots == 0);
+    CHECK(!m.SetPlayerLimit(10));                                                         // lobby only
+    // A solo player on a small limit gets just enough bots.
+    Match solo(2, MapCircle());
+    solo.AddHuman(1);
+    CHECK(solo.SetPlayerLimit(2));
+    CHECK(solo.Start() && solo.Players().size() == 2 && solo.Alive() == 2);
+    Match big(3, MapCircle());
+    big.AddHuman(1);
+    CHECK(big.SetPlayerLimit(12) && big.Start() && big.Players().size() == 12);
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1475,7 +1501,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

@@ -157,8 +157,16 @@ class Match {
     }
 
     // Add a human. Returns false if the lobby is full or the match already started.
+    // How many players the match has, bots included (2 to 32). Can't go below the people already in the lobby.
+    bool SetPlayerLimit(int n) {
+        if (state != MatchState::Lobby || n < kMinPlayers || n > kMaxPlayers || n < static_cast<int>(players.size())) return false;
+        playerLimit = n;
+        return true;
+    }
+    int PlayerLimit() const { return playerLimit; }
+
     bool AddHuman(uint32_t id) {
-        if (state != MatchState::Lobby || players.size() >= kMaxPlayers) return false;
+        if (state != MatchState::Lobby || static_cast<int>(players.size()) >= playerLimit) return false;
         players.push_back(MakePlayer(id, false));
         return true;
     }
@@ -168,7 +176,7 @@ class Match {
         if (state != MatchState::Lobby || players.empty()) return false;
         humans = static_cast<int>(players.size());
         uint32_t nextId = 1000;
-        while (players.size() < kMaxPlayers) players.push_back(MakePlayer(nextId++, true));
+        while (static_cast<int>(players.size()) < playerLimit) players.push_back(MakePlayer(nextId++, true));
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
@@ -949,7 +957,8 @@ class Match {
     std::vector<Vec2> lootSpots;
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
-    int bossCount = 0; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
+    int bossCount = 0;
+    int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };
 
 } // namespace royale
