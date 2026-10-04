@@ -1278,6 +1278,21 @@ static void AlliesOverTheWire() {
     CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price);
 }
 
+static void ReplayOverTheWire() {
+    { EvReplayHeader a, b; a.frames = 5; a.ids = {1, 1000, 1001}; a.kills = {{2, 1, 1000}, {4, 0xFFFF, 1001}}; CHECK(RoundTrips(a, b) && b.ids.size() == 3 && b.kills.size() == 2 && b.kills[1].killer == 0xFFFF); }
+    { EvReplayHeader bad, out; bad.frames = 3; bad.ids = {1}; bad.kills = {{9, 1, 1}}; CHECK(!RoundTrips(bad, out)); }   // a kill after the last frame
+    { EvReplayChunk a, b; a.first = 4; a.players = 2; a.frames = {{1, 2, 3, 4}, {kReplayGone, 0, 7, 8}}; CHECK(RoundTrips(a, b) && b.frames.size() == 2 && b.frames[1][0] == kReplayGone && b.frames[1][3] == 8); }
+    Rig rig(61, 0);
+    GameClient& me = rig.Add("Replayer");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Ending; }, 1500));
+    CHECK(rig.RunUntil([&] { return me.ReplayComplete(); }, 10));
+    const Replay& rp = me.GetReplay();
+    CHECK(rp.ids.size() == static_cast<size_t>(kMaxPlayers) && rp.frames.size() >= 20 && !rp.kills.empty());
+    CHECK(rp.frames.size() == rig.M().GetReplay().frames.size() && rp.frames.back() == rig.M().GetReplay().frames.back());
+}
+
 static void CountdownElapsedTracksState() {
     Rig rig(11, 0);
     GameClient& a = rig.Add("A");
@@ -1374,7 +1389,7 @@ int main() {
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
-    WeatherOverTheWire(); AlliesOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
+    WeatherOverTheWire(); AlliesOverTheWire(); ReplayOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");

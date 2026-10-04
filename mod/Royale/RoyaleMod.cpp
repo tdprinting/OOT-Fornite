@@ -98,6 +98,8 @@ float gWeatherBlend = 0.0f;
 bool gSeasonAnnounced = false;
 royale::Weather gWeatherShown;
 float gWeatherDensity = 1.0f;       // the local option, 0 to 2
+royale::Vec2 gSignPos = {};         // where the sign in the middle of the map stands (once found)
+bool gSignKnown = false;
 float gClothScale = 1.0f;           // the local option: cloth and wind physics on the hat and glider, 0 (off) to 2
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
@@ -959,6 +961,9 @@ bool LiveAndAlive(const royale::HudState& h) {
 
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
+void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+bool MayaNear();
+void TalkToMaya();
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);
@@ -2558,6 +2563,75 @@ void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
 }
 
 // The end-of-match standings.
+// The replay of the match that just ended, as a top-down map at high speed beside the results: the storm closing in, everybody's dots, trails for you,
+// red flashes where somebody was eliminated. It loops.
+void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    royale::GameClient* client = gSession.Client();
+    if (client == nullptr || !client->ReplayComplete() || h.map.radius <= 0) return;
+    const royale::Replay& rp = client->GetReplay();
+    const float pw = std::min(ds.x * 0.9f, 640.0f * scale);
+    const float room = (ds.x - pw) * 0.5f - 24.0f * scale;
+    const float side = std::min(room, ds.y * 0.5f);
+    if (side < 150.0f * scale) return;                                  // no room beside the results on a small screen
+    const ImVec2 a(24.0f * scale, ds.y * 0.28f), b(a.x + side, a.y + side);
+    dl->AddRectFilled(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(8, 16, 26, 225), 10.0f * scale);
+    dl->AddRect(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 2.0f * scale);
+    const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+    const float k = side * 0.5f / h.map.radius * 0.97f;
+    auto toPanel = [&](float x, float z) { return ImVec2(c.x + (x - h.map.center.x) * k, c.y - (z - h.map.center.z) * k); };
+    const double cycle = rp.frames.size() * 0.12 + 2.5;
+    const double t = std::fmod(ImGui::GetTime(), cycle);
+    const float fpos = static_cast<float>(std::min(t / 0.12, static_cast<double>(rp.frames.size() - 1)));
+    const int f0 = static_cast<int>(fpos);
+    const int f1 = std::min<int>(f0 + 1, static_cast<int>(rp.frames.size()) - 1);
+    const float mix = fpos - f0;
+    dl->AddText(font, 20.0f * scale, ImVec2(a.x, a.y - 27 * scale), IM_COL32(255, 210, 70, 255), "REPLAY");
+    // the map, the storm (purple outside the safe circle) and the safe circle
+    dl->AddCircleFilled(c, h.map.radius * k, IM_COL32(110, 50, 170, 150), 72);
+    if (const royale::Storm* storm = client->GetStorm()) {
+        const royale::Circle safe = storm->SafeZoneAt(f0 * royale::kReplayStepSec);
+        dl->AddCircleFilled(toPanel(safe.center.x, safe.center.z), safe.radius * k, IM_COL32(26, 52, 40, 255), 64);
+        dl->AddCircle(toPanel(safe.center.x, safe.center.z), safe.radius * k, IM_COL32(255, 255, 255, 230), 64, 1.5f * scale);
+    }
+    dl->AddCircle(c, h.map.radius * k, IM_COL32(200, 160, 255, 255), 72, 1.5f * scale);
+    int alive = 0;
+    for (size_t i = 0; i < rp.ids.size(); i++) {
+        const int16_t x0 = rp.frames[static_cast<size_t>(f0)][i * 2], x1 = rp.frames[static_cast<size_t>(f1)][i * 2];
+        if (x0 == royale::kReplayGone) continue;
+        alive++;
+        const float z0 = rp.frames[static_cast<size_t>(f0)][i * 2 + 1], z1 = rp.frames[static_cast<size_t>(f1)][i * 2 + 1];
+        const float px = x1 == royale::kReplayGone ? x0 : x0 + (x1 - x0) * mix, pz = x1 == royale::kReplayGone ? z0 : z0 + (z1 - z0) * mix;
+        const bool self = rp.ids[i] == h.selfId, winner = rp.ids[i] == h.winnerId;
+        if (self || winner) {   // a trail behind you and the winner
+            ImVec2 prev = toPanel(px, pz);
+            for (int back = 1; back <= 10 && f0 - back >= 0; back++) {
+                const auto& fr = rp.frames[static_cast<size_t>(f0 - back)];
+                if (fr[i * 2] == royale::kReplayGone) break;
+                const ImVec2 q = toPanel(fr[i * 2], fr[i * 2 + 1]);
+                dl->AddLine(prev, q, self ? IM_COL32(255, 220, 90, 190 - back * 15) : IM_COL32(120, 255, 150, 190 - back * 15), 2.0f * scale);
+                prev = q;
+            }
+        }
+        const ImU32 col = self ? IM_COL32(255, 220, 90, 255) : winner ? IM_COL32(120, 255, 150, 255) : rp.ids[i] >= 1000 ? IM_COL32(190, 190, 205, 255) : IM_COL32(255, 255, 255, 255);
+        dl->AddCircleFilled(toPanel(px, pz), (self || winner ? 4.5f : 3.0f) * scale, col, 10);
+    }
+    // eliminations: a red ring that grows and fades where the player was last seen
+    for (const royale::ReplayKill& kill : rp.kills) {
+        const float age = fpos - kill.frame;
+        if (age < 0.0f || age > 6.0f) continue;
+        size_t col = rp.ids.size();
+        for (size_t i = 0; i < rp.ids.size(); i++) if (rp.ids[i] == kill.victim) col = i;
+        if (col == rp.ids.size()) continue;
+        const int fr = std::max(0, static_cast<int>(kill.frame) - 1);
+        const ImVec2 at = toPanel(rp.frames[static_cast<size_t>(fr)][col * 2], rp.frames[static_cast<size_t>(fr)][col * 2 + 1]);
+        dl->AddCircle(at, (5.0f + age * 3.5f) * scale, IM_COL32(255, 70, 60, static_cast<int>(255 * (1.0f - age / 6.0f))), 16, 2.0f * scale);
+    }
+    char caption[48];
+    const int secs = static_cast<int>(f0 * royale::kReplayStepSec);
+    std::snprintf(caption, sizeof(caption), "%d:%02d    %d alive", secs / 60, secs % 60, alive);
+    dl->AddText(font, 17.0f * scale, ImVec2(a.x, b.y + 5 * scale), IM_COL32(235, 235, 240, 255), caption);
+}
+
 void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.results.empty()) return;
     const float pw = std::min(ds.x * 0.9f, 640.0f * scale), rowH = 26.0f * scale;
@@ -3080,7 +3154,7 @@ void DrawOverlay() {
     }
     if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
 
-    if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
+    if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
     DrawPickupFx(dl, ds, scale);
     DrawFeed(dl, font, ds, scale);
@@ -3110,6 +3184,9 @@ void DrawOverlay() {
             centered(ds.y * 0.66f, IM_COL32(255, 222, 110, 255), 26 * scale, std::string(def.name) + " " + def.title);
             centered(ds.y * 0.66f + 31 * scale, afford ? white : IM_COL32(255, 130, 120, 255), 20 * scale,
                      afford ? "A: hire for " + std::to_string(def.price) + " rupees" : "Needs " + std::to_string(def.price) + " rupees (you have " + std::to_string(h.rupees) + ")");
+        } else if (MayaNear()) {
+            centered(ds.y * 0.66f, IM_COL32(255, 170, 215, 255), 26 * scale, "Maya");
+            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -3123,6 +3200,7 @@ void DrawOverlay() {
     DrawBossBars(dl, font, scale);
     DrawPoiLabels(dl, font, ds, scale, h);
     DrawSign(dl, font, ds, scale);
+    DrawMaya(dl, font, ds, scale);
     DrawAllyLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
@@ -3644,6 +3722,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 const royale::AllyDef& def = royale::kAllyDefs[ally];
                 if (hud.inv.rupees < def.price) Say(std::string("The ") + def.name + " wants " + std::to_string(def.price) + " rupees (you have " + std::to_string(hud.inv.rupees) + ")");
                 else gSession.HireAlly(ally);
+            } else if (MayaNear()) {
+                TalkToMaya();
             }
         }
     }
@@ -4323,6 +4403,133 @@ void DriveStormAlerts(const royale::HudState& hud) {
     }
 }
 
+// ---- Maya ---------------------------------------------------------------------------------------------------------------------
+// A little Kokiri called Maya stands in a random spot on every map (the same spot for everyone in the match). Walk up and press A to talk to her.
+Actor* gMayaActor = nullptr;
+royale::Vec2 gMayaPos = {};
+bool gMayaKnown = false;
+double gMayaTalkStart = -100.0;
+constexpr double kMayaTalkSeconds = 5.0;
+
+void Maya_Update(Actor* actor, PlayState* play) {
+    Player* pl = GET_PLAYER(play);
+    const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
+    if (dx * dx + dz * dz < 700.0f * 700.0f) {   // she turns to look at you as you come close
+        const s16 want = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.12f);
+    }
+    actor->focus.pos = actor->world.pos;
+}
+void Maya_Draw(Actor* actor, PlayState* play) {
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Ally, 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const bool talking = ImGui::GetTime() - gMayaTalkStart < kMayaTalkSeconds;
+    const float hop = talking ? std::fabs(std::sin(t * 9.0f)) * 16.0f : std::fabs(std::sin(t * 2.2f)) * 3.0f;   // she bounces when she talks
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + hop, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateZ(talking ? std::sin(t * 7.0f) * 0.1f : 0.0f, MTXMODE_APPLY);
+    Matrix_Scale(0.78f, 0.78f, 0.78f, MTXMODE_APPLY);   // she is small
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+void Maya_Destroy(Actor* actor, PlayState*) { if (gMayaActor == actor) gMayaActor = nullptr; }
+
+// Her spot: random but the same for everybody in the same match (it comes from the map's own numbers), on open walkable ground, clear of walls and
+// rocks and well away from the sign.
+bool FindMayaSpot(const royale::Circle& map, royale::Vec2* out) {
+    if (!gSession.Client()) return false;
+    const auto& props = gSession.Client()->Props();
+    uint64_t seed = gSession.Client()->Seed() ^ 0x4D617961ull;   // "Maya"
+    royale::Rng rng(seed);
+    auto clear = [&](royale::Vec2 p) {
+        if (!WalkableAt(p)) return false;
+        if (gSignKnown && royale::Distance(p, gSignPos) < 500.0f) return false;
+        for (const royale::Prop& pr : props) {
+            const float r = royale::PropRadius(pr.kind);
+            if (r > 0.0f && royale::Distance(pr.pos, p) < r + 100.0f) return false;
+        }
+        return true;
+    };
+    for (int attempt = 0; attempt < 400; attempt++) {
+        const float a = static_cast<float>(rng.Unit() * 6.2831853), d = map.radius * (0.2f + 0.5f * static_cast<float>(rng.Unit()));
+        const royale::Vec2 p = { map.center.x + std::cos(a) * d, map.center.z + std::sin(a) * d };
+        if (clear(p)) { *out = p; return true; }
+    }
+    return false;
+}
+
+void ReconcileMaya(const royale::HudState& hud) {
+    const bool want = gSession.Joined() && InField() && hud.map.radius > 0 &&
+                      (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch);
+    if (!want) {
+        if (gMayaActor != nullptr) { Actor_Kill(gMayaActor); gMayaActor = nullptr; }
+        gMayaKnown = false;
+        return;
+    }
+    if (gMayaActor != nullptr) return;
+    if (!gMayaKnown) { if (!FindMayaSpot(hud.map, &gMayaPos)) return; gMayaKnown = true; }
+    float y = 0;
+    if (!FloorAt(gMayaPos.x, gMayaPos.z, &y)) return;
+    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, gMayaPos.x, y, gMayaPos.z, 0, 0x4000, 0, 0, false);
+    if (a == nullptr) return;
+    a->update = Maya_Update;
+    a->draw = Maya_Draw;
+    a->destroy = Maya_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
+    a->shape.shadowScale = 30.0f;
+    gMayaActor = a;
+}
+
+bool MayaNear() {
+    if (gMayaActor == nullptr || !InField()) return false;
+    Player* pl = GET_PLAYER(gPlayState);
+    return std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z) < royale::kHireRange;
+}
+
+void TalkToMaya() {
+    gMayaTalkStart = ImGui::GetTime();
+    Say(std::string(royale::kMayaName) + ": " + royale::kMayaGreeting);
+    if (gPlayState != nullptr && gMayaActor != nullptr)
+        SparkBurst(gPlayState, gMayaPos.x, gMayaActor->world.pos.y + 90.0f, gMayaPos.z, { 255, 190, 220, 255 }, 16, 3.0f);
+    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+
+// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    if (gMayaActor == nullptr || !InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float d = std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z);
+    ImVec2 at;
+    if (d < 1800.0f && WorldToScreen(gMayaPos.x, gMayaActor->world.pos.y + 190.0f, gMayaPos.z, &at)) {
+        const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
+        const char* label = "Maya";
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(40, 10, 30, 230), label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 170, 215, 255), label);
+    }
+    const double since = ImGui::GetTime() - gMayaTalkStart;
+    if (since >= 0.0 && since < kMayaTalkSeconds) {
+        const std::string full = royale::kMayaGreeting;
+        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 28.0));
+        const std::string text = full.substr(0, shown);
+        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
+        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
+        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
+        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
+        dl->AddRectFilled(box, end, IM_COL32(40, 18, 40, 228), 12.0f * scale);
+        dl->AddRect(box, end, IM_COL32(255, 170, 215, 255), 12.0f * scale, 0, 3.0f * scale);
+        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(255, 170, 215, 255), royale::kMayaName);
+        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 248, 252, 255), text.c_str(), nullptr, wrap);
+    }
+}
+
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
 // Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
@@ -4535,8 +4742,6 @@ void ForgetOldHats() {
 // ---- the sign in the middle of the map -----------------------------------------------------------------------------------------
 // A wooden sign stands at the centre of every map (on the nearest bit of open, walkable ground), and reads out its message when you walk up.
 Actor* gSignActor = nullptr;
-royale::Vec2 gSignPos = {};
-bool gSignKnown = false;
 double gSignReadAt = -100.0;
 bool gSignRead = false;
 
@@ -4671,6 +4876,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
     ReconcileSign(hud);
+    ReconcileMaya(hud);
     ReconcileAllies(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     ReconcileProjectileActor();

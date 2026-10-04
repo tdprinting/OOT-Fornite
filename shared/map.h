@@ -78,6 +78,10 @@ constexpr MapDef kMaps[] = {
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
 
+// Maya, a Kokiri girl who stands somewhere on every map (see RoyaleMod.cpp, Maya): talk to her and she says this.
+inline constexpr const char* kMayaName = "Maya";
+inline constexpr const char* kMayaGreeting = "Hi Daddy I'm a Goo goo!";
+
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;

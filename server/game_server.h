@@ -518,6 +518,7 @@ class GameServer {
                             res.rows.push_back(row);
                         }
                         Broadcast(res);
+                        SendReplay();
                     }
                     break;
                 }
@@ -625,6 +626,25 @@ class GameServer {
                     break;
                 }
             }
+        }
+    }
+
+    // The replay of the match, to everybody: a header, then the frames a few at a time.
+    void SendReplay() {
+        const Replay& rp = sim.match.GetReplay();
+        if (!rp.Valid()) return;
+        net::EvReplayHeader head;
+        head.frames = static_cast<uint16_t>(rp.frames.size());
+        head.ids = rp.ids;
+        for (const ReplayKill& k : rp.kills) if (k.frame < head.frames) head.kills.push_back(k);
+        Broadcast(head);
+        const size_t perChunk = (std::max<size_t>)(1, 1200 / ((std::max<size_t>)(1, rp.ids.size()) * 4));
+        for (size_t first = 0; first < rp.frames.size(); first += perChunk) {
+            net::EvReplayChunk c;
+            c.first = static_cast<uint16_t>(first);
+            c.players = static_cast<uint8_t>(rp.ids.size());
+            for (size_t i = first; i < rp.frames.size() && i < first + perChunk; i++) c.frames.push_back(rp.frames[i]);
+            Broadcast(c);
         }
     }
 

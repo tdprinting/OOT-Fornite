@@ -5,6 +5,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/props.h"
+#include "../shared/replay.h"
 #include "../shared/storm.h"
 #include "../shared/weather.h"
 #include <algorithm>
@@ -235,6 +236,8 @@ class Match {
         SpawnAllies();
         nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
         for (auto& pl : players) { pl.magic = kMaxMagic; pl.magicStamp = clock; }
+        replay = Replay{}; replayNextAt = 0;
+        for (const auto& pl : players) replay.ids.push_back(static_cast<uint16_t>(pl.id));
         spell = -1; boltCount = 0; weather = Weather{PickSeason(wopt, seed), Sky::Clear, 0};
         Enter(MatchState::Countdown);
         return true;
@@ -253,6 +256,7 @@ class Match {
                 break;
             case MatchState::InMatch:
                 stormTime += dt;
+                TickReplay();
                 TickWeather();
                 TickSupplyDrops();
                 for (auto& p : players) {
@@ -669,6 +673,18 @@ class Match {
 
     // ---- allies (shared/ally.h): four people to hire. Their behaviour is in BotController::StepAllies; the rules of hiring are here. ----
     void PushEvent(const MatchEvent& e) { events.push_back(e); }
+    // The replay (shared/replay.h): where everyone was every kReplayStepSec of the match, and who eliminated whom.
+    const Replay& GetReplay() const { return replay; }
+    void TickReplay() {
+        if (stormTime < replayNextAt || static_cast<int>(replay.frames.size()) >= kReplayMaxFrames) return;
+        replayNextAt = stormTime + kReplayStepSec;
+        std::vector<int16_t> f;
+        for (const auto& p : players) {
+            f.push_back(p.alive ? static_cast<int16_t>((std::max)(-30000.0f, (std::min)(30000.0f, p.pos.x))) : kReplayGone);
+            f.push_back(static_cast<int16_t>((std::max)(-30000.0f, (std::min)(30000.0f, p.pos.z))));
+        }
+        replay.frames.push_back(std::move(f));
+    }
     void SetAllySpots(std::vector<Vec2> spots) { allySpots = std::move(spots); }
     const std::vector<AllyState>& Allies() const { return allies; }
     std::vector<AllyState>& MutableAllies() { return allies; }
@@ -1286,6 +1302,7 @@ class Match {
         if (killer != kNoPlayer && killer != p.id) {
             if (PlayerState* k = Find(killer)) k->kills++;
         }
+        if (!replay.frames.empty() || state == MatchState::InMatch) replay.kills.push_back({static_cast<uint16_t>((std::max)(0, static_cast<int>(replay.frames.size()) - 1)), killer == kNoPlayer ? static_cast<uint16_t>(0xFFFF) : static_cast<uint16_t>(killer), static_cast<uint16_t>(p.id)});
         MatchEvent e{MatchEvent::Type::Eliminated};
         e.a = p.id; e.b = killer;
         events.push_back(e);
@@ -1572,6 +1589,8 @@ class Match {
     std::vector<MiniBoss> bosses;
     std::vector<Strike> strikes;
     std::vector<AllyState> allies;
+    Replay replay;
+    float replayNextAt = 0;
     std::vector<Vec2> allySpots;
     bool majorBoss = false;
     bool dragonSpawned = false;

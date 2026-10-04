@@ -6,6 +6,7 @@
 #include "poi.h"
 #include "skins.h"
 #include "storm.h"
+#include "replay.h"
 #include "weather.h"
 #include <array>
 #include <cmath>
@@ -21,7 +22,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 17; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 18; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -32,7 +33,7 @@ enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -417,6 +418,51 @@ struct EvAllyAction {
     float x = 0, z = 0;
     void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); }
     bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); return r.ok && index < kAllyCount && Finite(x) && Finite(z); }
+};
+
+// The replay of the match that just ended, in two kinds of message: this describes it (who, how many frames, who eliminated whom)...
+struct EvReplayHeader {
+    static constexpr MsgType kType = MsgType::EvReplayHeader;
+    uint16_t frames = 0;
+    std::vector<uint16_t> ids;
+    std::vector<ReplayKill> kills;
+    void Write(ByteWriter& w) const {
+        w.U16(frames); w.U8(static_cast<uint8_t>(ids.size()));
+        for (uint16_t id : ids) w.U16(id);
+        w.U16(static_cast<uint16_t>(kills.size()));
+        for (const auto& k : kills) { w.U16(k.frame); w.U16(k.killer); w.U16(k.victim); }
+    }
+    bool Read(ByteReader& r) {
+        frames = r.U16();
+        const size_t n = r.U8();
+        if (n > static_cast<size_t>(kMaxPlayers) || frames > kReplayMaxFrames) return false;
+        ids.assign(n, 0);
+        for (auto& id : ids) id = r.U16();
+        const size_t nk = r.U16();
+        if (nk > 2000) return false;
+        kills.assign(nk, {});
+        for (auto& k : kills) { k.frame = r.U16(); k.killer = r.U16(); k.victim = r.U16(); if (r.ok && k.frame >= frames) return false; }
+        return r.ok;
+    }
+};
+// ...and these carry the frames, a few at a time: `players` x, z pairs per frame.
+struct EvReplayChunk {
+    static constexpr MsgType kType = MsgType::EvReplayChunk;
+    uint16_t first = 0;
+    uint8_t players = 0;
+    std::vector<std::vector<int16_t>> frames;
+    void Write(ByteWriter& w) const {
+        w.U16(first); w.U8(players); w.U8(static_cast<uint8_t>(frames.size()));
+        for (const auto& f : frames) for (size_t i = 0; i < static_cast<size_t>(players) * 2; i++) w.I16(i < f.size() ? f[i] : 0);
+    }
+    bool Read(ByteReader& r) {
+        first = r.U16(); players = r.U8();
+        const size_t n = r.U8();
+        if (players > kMaxPlayers || first >= kReplayMaxFrames || n > 64) return false;
+        frames.assign(n, std::vector<int16_t>(static_cast<size_t>(players) * 2));
+        for (auto& f : frames) for (auto& v : f) v = r.I16();
+        return r.ok;
+    }
 };
 
 // A supply drop has been announced: a crate lands at (x, z) in `delay` seconds.

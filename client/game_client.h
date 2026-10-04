@@ -121,6 +121,9 @@ class GameClient {
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
     // The hireable allies in the latest snapshot (the ones near you, and yours wherever they are).
     const std::vector<net::AllyNet>& Allies() const { return allies; }
+    // The replay of the match that just ended (valid once all of it has arrived).
+    const Replay& GetReplay() const { return replay; }
+    bool ReplayComplete() const { return replay.Valid() && replayGot >= replay.frames.size(); }
     // Players in the match, bots included.
     int PlayerLimit() const { return playerLimit; }
     int MapId() const { return mapId; }
@@ -372,6 +375,23 @@ class GameClient {
                 events.push_back(e);
                 break;
             }
+            case net::MsgType::EvReplayHeader: {
+                net::EvReplayHeader m;
+                if (!net::Decode(data, m)) break;
+                replay = Replay{};
+                replay.ids = m.ids;
+                replay.kills = m.kills;
+                replay.frames.assign(m.frames, std::vector<int16_t>(m.ids.size() * 2, 0));
+                replayGot = 0;
+                break;
+            }
+            case net::MsgType::EvReplayChunk: {
+                net::EvReplayChunk m;
+                if (!net::Decode(data, m)) break;
+                if (m.players != replay.ids.size()) break;
+                for (size_t i = 0; i < m.frames.size() && m.first + i < replay.frames.size(); i++) { replay.frames[m.first + i] = m.frames[i]; replayGot++; }
+                break;
+            }
             case net::MsgType::EvSupplyDrop: {
                 net::EvSupplyDrop m;
                 if (!net::Decode(data, m)) break;
@@ -517,6 +537,8 @@ class GameClient {
     InventoryInfo inventory;
     std::vector<net::BossNet> bosses;
     std::vector<net::AllyNet> allies;
+    Replay replay;
+    size_t replayGot = 0;
     float bossesAt = 0;
     int playerLimit = kMaxPlayers;
     uint8_t lobbyLeftAtSnapshot = 255;

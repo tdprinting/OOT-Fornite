@@ -1191,6 +1191,7 @@ static void ClothAndWind() {
 
 static void TheSignInTheMiddle() {
     CHECK(std::string(kMapSignText) == "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!");
+    CHECK(std::string(kMayaName) == "Maya" && std::string(kMayaGreeting) == "Hi Daddy I'm a Goo goo!");
     const MeshData sign = BuildMesh(MeshKind::Sign, 0);
     float mn[3], mx[3];
     sign.Bounds(mn, mx);
@@ -1289,6 +1290,27 @@ static void HireableAllies() {
     bool outside = m3.GetStorm().DamagePerSecond(lost.pos, m3.StormTime()) > 0;
     Run(s3, 2.0f);
     CHECK(!outside || lost.health < before || Distance(lost.pos, {m3.MapCircle().center.x + m3.MapCircle().radius * 0.95f, m3.MapCircle().center.z}) > 20.0f);   // it ran for cover or took damage
+}
+
+static void MatchReplayIsRecorded() {
+    Simulation sim(51, MapCircle(), 20);
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    for (int i = 0; i < 400 * kTickHz && sim.match.State() != MatchState::Ending; i++) sim.Tick(kDt);
+    const Replay& rp = sim.match.GetReplay();
+    CHECK(rp.Valid() && rp.ids.size() == static_cast<size_t>(kMaxPlayers));
+    CHECK(rp.frames.size() >= 20 && rp.frames.size() <= static_cast<size_t>(kReplayMaxFrames));
+    bool shaped = true;
+    for (const auto& f : rp.frames) shaped &= f.size() == rp.ids.size() * 2;
+    CHECK(shaped);
+    // The first frame has everyone in; by the last, most are gone; each elimination is on the list at a frame that exists.
+    int goneFirst = 0, goneLast = 0;
+    for (size_t i = 0; i < rp.ids.size(); i++) { goneFirst += rp.frames.front()[i * 2] == kReplayGone; goneLast += rp.frames.back()[i * 2] == kReplayGone; }
+    CHECK(goneFirst <= 2 && goneLast >= kMaxPlayers - 3);
+    CHECK(rp.kills.size() >= 20);
+    bool ok = true;
+    for (const ReplayKill& k : rp.kills) ok &= k.frame < rp.frames.size();
+    CHECK(ok);
 }
 
 static void HeartChestsAndAdultPower() {
@@ -2579,7 +2601,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
