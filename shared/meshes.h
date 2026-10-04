@@ -68,22 +68,27 @@ struct Lcg {
     float Next() { s = s * 1664525u + 1013904223u; return static_cast<float>(s >> 8) / 16777216.0f; } // 0..1
 };
 
-// One stone for a rock or boulder: an icosahedron split `subdiv` times, pushed out into lumps, then trimmed by a few random planes so it
-// has broad chiselled faces like the field rocks in Ocarina of Time's art, flattened where it sits on the ground at `c`. `colour(centre y
-// as a fraction of the stone's height, face normal, face centre, random 0..1)` picks each face's colour.
+inline void Put(MeshData& m, V3 p, Rgb c) { m.v.push_back({p.x, p.y, p.z, static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.r))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.g))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.b)))}); }
+inline Rgb Mix(Rgb a, Rgb b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; }
+
+// One stone for a rock or boulder: an icosahedron split `subdiv` times and pushed out into gentle lumps, with a couple of planes taking a
+// broad, soft flat off it, flattened where it sits on the ground at `c`. It is smooth shaded: every vertex gets a normal averaged from the
+// faces around it and its own colour, so the surface reads as rounded stone rather than facets. `colour(height as a fraction of the stone,
+// normal, position)` picks each vertex's colour before the light (warm key, cool fill, as in Builder::Tri) is baked in.
 template <class F>
-inline void Stone(Builder& b, V3 c, float radius, float squash, int subdiv, int cuts, Lcg& rng, F colour) {
+inline void Stone(MeshData& m, V3 c, float radius, float squash, int subdiv, int cuts, Lcg& rng, F colour) {
     const float t = 1.6180339887f;
     std::vector<V3> base = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
     std::vector<int> tris = {0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
                              3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1};
+    for (V3& q : base) q = Norm(q);
     for (int level = 0; level < subdiv; level++) {   // split every face in four, sharing edge midpoints so neighbouring faces still meet
         std::vector<int> next;
         auto mid = [&](int a, int bb) {
-            const V3 m = Norm({(base[a].x + base[bb].x) * 0.5f, (base[a].y + base[bb].y) * 0.5f, (base[a].z + base[bb].z) * 0.5f});
+            const V3 mp = Norm({(base[a].x + base[bb].x) * 0.5f, (base[a].y + base[bb].y) * 0.5f, (base[a].z + base[bb].z) * 0.5f});
             for (size_t i = 12; i < base.size(); i++)
-                if (std::fabs(base[i].x - m.x) + std::fabs(base[i].y - m.y) + std::fabs(base[i].z - m.z) < 1e-4f) return static_cast<int>(i);
-            base.push_back(m);
+                if (std::fabs(base[i].x - mp.x) + std::fabs(base[i].y - mp.y) + std::fabs(base[i].z - mp.z) < 1e-4f) return static_cast<int>(i);
+            base.push_back(mp);
             return static_cast<int>(base.size() - 1);
         };
         for (size_t k = 0; k < tris.size(); k += 3) {
@@ -92,68 +97,95 @@ inline void Stone(Builder& b, V3 c, float radius, float squash, int subdiv, int 
         }
         tris.swap(next);
     }
-    const size_t corners = 12;
-    const float stretch = 0.82f + 0.36f * rng.Next(); // a little longer one way than the other
+    // Gentle lumps from a few crossed waves over the sphere (not per-vertex noise, which would make it spiky).
+    const float stretch = 0.84f + 0.32f * rng.Next(), w[6] = {rng.Next() * 6.28f, rng.Next() * 6.28f, rng.Next() * 6.28f, 1.6f + rng.Next(), 1.6f + rng.Next(), 2.4f + rng.Next()};
     std::vector<V3> p(base.size());
     for (size_t i = 0; i < base.size(); i++) {
-        const V3 u = Norm(base[i]);
-        const float lump = i < corners ? 0.86f + 0.28f * rng.Next() : 0.92f + 0.14f * rng.Next(); // big corners wander more than the midpoints
+        const V3 u = base[i];
+        const float lump = 0.94f + 0.07f * std::sin(u.x * w[3] + w[0]) * std::cos(u.z * w[4] + w[1]) + 0.04f * std::sin((u.x + u.y - u.z) * w[5] + w[2]);
         p[i] = {u.x * lump * stretch, u.y * lump, u.z * lump / stretch};
     }
-    for (int k = 0; k < cuts; k++) {   // shave the stone flat beyond a few random planes: the broad, chiselled faces
-        const float a = 6.2831853f * rng.Next(), e = -0.2f + 1.0f * rng.Next();
+    for (int k = 0; k < cuts; k++) {   // take a broad, soft flat off the stone
+        const float a = 6.2831853f * rng.Next(), e = 0.1f + 0.9f * rng.Next();
         const V3 n = Norm({std::cos(a) * std::cos(e), std::sin(e), std::sin(a) * std::cos(e)});
-        const float d = 0.58f + 0.2f * rng.Next();
-        for (V3& q : p) { const float over = Dot(q, n) - d; if (over > 0) q = {q.x - n.x * over, q.y - n.y * over, q.z - n.z * over}; }
+        const float d = 0.7f + 0.15f * rng.Next();
+        for (V3& q : p) { const float over = Dot(q, n) - d; if (over > 0) { const float k2 = over * 0.85f; q = {q.x - n.x * k2, q.y - n.y * k2, q.z - n.z * k2}; } }
     }
     float lowest = 1e30f, top = -1e30f;
     for (V3& q : p) { q = {q.x * radius, q.y * radius * squash, q.z * radius}; lowest = (std::min)(lowest, q.y); }
     for (V3& q : p) { q.y = (std::max)(0.0f, q.y - lowest * 0.6f); top = (std::max)(top, q.y); } // sits on the ground with the bottom flattened
-    b.inside = {c.x, c.y + top * 0.4f, c.z};
-    for (size_t k = 0; k < tris.size(); k += 3) {
+    std::vector<V3> nrm(p.size(), V3{0, 0, 0});
+    const V3 inside = {0, top * 0.4f, 0};
+    for (size_t k = 0; k < tris.size(); k += 3) {   // area-weighted face normals, turned outward, summed into each corner
         const V3 a = p[tris[k]], b1 = p[tris[k + 1]], c1 = p[tris[k + 2]];
-        if (a.y + b1.y + c1.y < 0.01f) continue;   // the flat underside is never seen
-        const V3 n = Norm(Cross(Sub(b1, a), Sub(c1, a)));
-        const float h = (a.y + b1.y + c1.y) / (3 * (std::max)(top, 1.0f));
-        const V3 m = {(a.x + b1.x + c1.x) / 3 + c.x, (a.y + b1.y + c1.y) / 3 + c.y, (a.z + b1.z + c1.z) / 3 + c.z};
-        b.Tri({a.x + c.x, a.y + c.y, a.z + c.z}, {b1.x + c.x, b1.y + c.y, b1.z + c.z}, {c1.x + c.x, c1.y + c.y, c1.z + c.z}, colour(h, n, m, rng.Next()));
+        V3 n = Cross(Sub(b1, a), Sub(c1, a));
+        if (Dot(n, Sub({(a.x + b1.x + c1.x) / 3, (a.y + b1.y + c1.y) / 3, (a.z + b1.z + c1.z) / 3}, inside)) < 0) n = {-n.x, -n.y, -n.z};
+        for (int q = 0; q < 3; q++) { V3& v = nrm[tris[k + q]]; v = {v.x + n.x, v.y + n.y, v.z + n.z}; }
+    }
+    static const V3 sun = Norm({-0.45f, 0.8f, 0.4f});
+    std::vector<Rgb> lit(p.size());
+    for (size_t i = 0; i < p.size(); i++) {
+        const V3 n = Norm(nrm[i]);
+        const Rgb col = colour(p[i].y / (std::max)(top, 1.0f), n, V3{p[i].x + c.x, p[i].y + c.y, p[i].z + c.z});
+        const float l = (std::max)(0.0f, Dot(n, sun)), shade = 0.54f + 0.46f * l;
+        lit[i] = {col.r * shade * (0.84f + 0.22f * l), col.g * shade * (0.88f + 0.13f * l), col.b * shade * (1.04f - 0.12f * l)}; // cool fill -> warm key
+    }
+    for (size_t k = 0; k < tris.size(); k += 3) {
+        if (p[tris[k]].y + p[tris[k + 1]].y + p[tris[k + 2]].y < 0.01f) continue;   // the flat underside is never seen
+        for (int q = 0; q < 3; q++) { const V3 v = p[tris[k + q]]; Put(m, {v.x + c.x, v.y + c.y, v.z + c.z}, lit[tris[k + q]]); }
     }
 }
 
-// Rock or boulder: a big chiselled stone with smaller ones tumbled against its foot. The stone is painted in OoT's olive-grey ramp in
-// broad patches and layers (soft bands of lighter and darker rock that wander across it, not per-face speckle), with a few patches of
-// pale lichen and a damp dark band where it meets the ground. Boulders carry a ragged cap of moss on top. Scenery is kept a little muted
-// so loot, chests and players stand out against it.
+// Grass tufts in a loose ring round the foot of a rock: five blades each, darker at the root and sunlit at the tip, leaning outward.
+// Blades are a hand wide so they survive the whole-number vertex coordinates the game layer rounds to.
+inline void FootGrass(MeshData& m, float radius, int tufts, Lcg& rng) {
+    static const Rgb root = {48, 96, 40}, tip[2] = {{128, 184, 72}, {104, 164, 62}};
+    for (int k = 0; k < tufts; k++) {
+        const float a = 6.2831853f * (k + 0.7f * rng.Next()) / tufts, out = radius * (0.92f + 0.3f * rng.Next());
+        const V3 c = {std::cos(a) * out, 0, std::sin(a) * out};
+        const float tall = radius * (0.32f + 0.22f * rng.Next());
+        for (int blade = 0; blade < 5; blade++) {
+            const float ba = a + (blade - 2) * 0.55f + 0.5f * (rng.Next() - 0.5f), side = a + 1.5708f + blade * 0.7f;
+            const float wd = (std::max)(2.5f, radius * 0.07f), lean = tall * (0.25f + 0.25f * rng.Next());
+            const V3 tipP = {c.x + std::cos(ba) * lean, tall * (0.75f + 0.3f * rng.Next()), c.z + std::sin(ba) * lean};
+            Put(m, {c.x - std::cos(side) * wd, 0, c.z - std::sin(side) * wd}, root);
+            Put(m, {c.x + std::cos(side) * wd, 0, c.z + std::sin(side) * wd}, root);
+            Put(m, tipP, tip[rng.Next() < 0.5f ? 0 : 1]);
+        }
+    }
+}
+
+// Rock or boulder: a big rounded stone with smaller ones tumbled against its foot and tufts of grass growing round it, smooth shaded so it
+// reads as worn stone rather than a gem. The stone is painted in OoT's olive-grey ramp in soft patches and leaning layers that blend into
+// one another, with pale lichen, a damp dark foot, and on boulders a cap of moss that fades in over the top. Scenery is kept a little
+// muted so loot, chests and players stand out against it.
 inline MeshData Lump(float radius, float squash, bool mossy, uint32_t seed) {
-    static const Rgb ramp[4] = {{100, 96, 86}, {124, 120, 104}, {144, 138, 116}, {164, 156, 130}}; // dark, mid, light, top-lit
-    static const Rgb lichen = {170, 168, 128}, moss[2] = {{92, 148, 58}, {72, 124, 48}};
-    const Rgb foot = {76, 70, 62};
+    const Rgb dark = {102, 98, 88}, mid = {128, 123, 106}, light = {154, 147, 123}, lichen = {170, 168, 126}, moss = {84, 140, 56}, foot = {78, 72, 62};
     Lcg rng(seed);
     const float ph[4] = {rng.Next() * 6.2831853f, rng.Next() * 6.2831853f, rng.Next() * 6.2831853f, rng.Next() * 6.2831853f};
-    const float tilt = (rng.Next() - 0.5f) * 0.8f; // the layers lean a little
-    // A smooth field over the stone (a few crossed waves), so neighbouring faces share their tone and the colour reads as patches.
-    auto field = [&](V3 m, float f) { return std::sin(m.x * f + ph[0]) * std::sin(m.z * f * 1.3f + ph[1]) + 0.6f * std::sin((m.x + m.z) * f * 2.1f + ph[2]); };
-    auto paint = [&](bool capped) {
-        return [=](float h, V3 n, V3 m, float r) {
-            if (h < 0.13f + 0.05f * r) return foot;                                                            // damp where it meets the ground
-            if (capped && n.y > 0.3f && h > 0.6f - 0.12f * field(m, 0.05f)) return moss[field(m, 0.11f) > 0.2f ? 1 : 0]; // the moss cap, edge wandering
-            if (field(m, 0.09f) > 1.05f && n.y > -0.2f) return lichen;                                         // a few patches of lichen
-            const float layer = std::sin((m.y + m.x * tilt) * 0.11f * 34.0f / radius + ph[3]) + 0.5f * field(m, 0.06f);
-            int tone = layer > 0.45f ? 2 : layer < -0.45f ? 0 : 1;
-            if (n.y > 0.75f) tone++;                                                                           // tops catch the light
-            const float j = 0.96f + 0.08f * r;                                                                 // a touch of variation per face
-            return Rgb{ramp[tone].r * j, ramp[tone].g * j, ramp[tone].b * j};
+    const float tilt = (rng.Next() - 0.5f) * 0.8f, scale = 34.0f / radius; // the layers lean a little; patterns sized to the stone
+    auto field = [=](V3 q, float f) { f *= scale; return std::sin(q.x * f + ph[0]) * std::sin(q.z * f * 1.3f + ph[1]) + 0.6f * std::sin((q.x + q.z) * f * 2.1f + ph[2]); };
+    auto smooth = [](float e0, float e1, float x) { const float u = (std::min)(1.0f, (std::max)(0.0f, (x - e0) / (e1 - e0))); return u * u * (3 - 2 * u); };
+    auto paint = [=](bool capped) {
+        return [=](float h, V3 n, V3 q) {
+            const float layer = 0.5f + 0.5f * std::sin((q.y + q.x * tilt) * 0.11f * scale * 3.0f + ph[3]) * 0.7f + 0.15f * field(q, 0.06f);
+            Rgb c = layer < 0.5f ? Mix(dark, mid, smooth(0.15f, 0.5f, layer)) : Mix(mid, light, smooth(0.5f, 0.85f, layer));
+            c = Mix(c, light, smooth(0.6f, 0.95f, n.y) * 0.5f);                       // tops catch the light
+            c = Mix(c, lichen, smooth(0.9f, 1.3f, field(q, 0.09f)) * 0.8f);             // patches of lichen
+            if (capped) c = Mix(c, moss, smooth(0.15f, 0.55f, n.y) * smooth(0.5f, 0.72f, h + 0.1f * field(q, 0.12f)));
+            return Mix(c, foot, 1.0f - smooth(0.04f, 0.2f, h));                          // damp where it meets the ground
         };
     };
-    Builder b;
-    Stone(b, {0, 0, 0}, radius, squash, 2, 5, rng, paint(mossy));   // the main stone: 320 faces, less the hidden underside
+    MeshData m;
+    Stone(m, {0, 0, 0}, radius, squash, 2, 2, rng, paint(mossy));   // the main stone: 320 faces, less the hidden underside
     const int extra = mossy ? 3 : 2;
     for (int k = 0; k < extra; k++) {   // smaller stones tumbled against its foot
         const float a = 6.2831853f * (k + rng.Next() * 0.6f) / extra, r = radius * (0.2f + 0.12f * rng.Next());
-        const float out = radius * (0.8f + 0.1f * rng.Next());
-        Stone(b, {std::cos(a) * out, 0, std::sin(a) * out}, r, 0.7f, 0, 2, rng, paint(false));   // plain chunky ones, to stay in the triangle budget
+        const float out = radius * (0.82f + 0.1f * rng.Next());
+        Stone(m, {std::cos(a) * out, 0, std::sin(a) * out}, r, 0.7f, 0, 1, rng, paint(false));   // plain ones, to stay in the triangle budget
     }
-    return b.mesh;
+    FootGrass(m, radius, mossy ? 9 : 7, rng);
+    return m;
 }
 
 // A round (eight-sided) stone post: a footing, a shaft with a mossy foot, and a capital. Eight sides so it looks the same from any angle,
@@ -548,8 +580,6 @@ inline MeshData Cat() {
 // ---- foliage: grass tufts, trees and drifts of snow (scattered over the field by the game layer, purely for looks) ---------------------------
 // `variant` = shape (0-3) + 4 * season (spring, summer, autumn, winter), so the leaves turn with the weather's season. Grass is made 4 times
 // life size (the game layer shrinks it) so its thin blades survive the whole-number vertex coordinates.
-inline void Put(MeshData& m, V3 p, Rgb c) { m.v.push_back({p.x, p.y, p.z, static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.r))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.g))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.b)))}); }
-inline Rgb Mix(Rgb a, Rgb b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; }
 
 inline MeshData Grass(uint32_t variant) {
     const int shape = static_cast<int>(variant % 4), season = static_cast<int>(variant / 4 % 4);
