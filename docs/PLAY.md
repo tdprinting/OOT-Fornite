@@ -119,6 +119,7 @@ Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It li
 
 - **Weapon glow:** whatever weapon a player holds gives off glints in its rarity colour (grey, green, blue, purple, gold), more of them the rarer it is. It is on for other players by default; "Glow on your own weapon too" is off by default. Both are switches in **Options**.
 - **Lobby music:** put `.wav` files in the `music` folder inside the game's data folder (it is created the first time you reach a lobby). They play shuffled while you wait in the lobby and stop when the countdown starts. Only WAV files work (the game has no MP3/OGG decoder). Turn it off with "Play songs from the music folder in the lobby".
+- **OoT instruments:** with "Play them with OoT's own instruments" on in **Options** (it is on by default), the game turns each song in the folder into real Ocarina of Time music and plays it on its own sound engine, the same way it plays its own songs. It finds the song's notes and drums, splits them into melody, harmony, bass and drums, and picks the game's instruments and drum kit that sound most like each part (the same steps as `tools/song-to-oot.html`). Songs are converted one at a time in the background, about ten times faster than they play; until a song is ready its original plays. Each converted song is kept in `music/.oot`, so it is only converted once (delete that folder to convert them again). **Options** shows how many are ready.
 
 
 ## Maps

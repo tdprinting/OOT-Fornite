@@ -16,7 +16,15 @@
 #include "objmodel.h"
 #include "skins.h"
 #include "tune.h"
+#include "basic_pitch.h"
+#include "oot_arrange.h"
 #include <algorithm>
+#include <condition_variable>
+#include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <thread>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -38,6 +46,7 @@
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/SohGui/SohMenu.h"
 #include "soh/cvar_prefixes.h"
+#include "soh/ResourceManagerHelpers.h"
 #include <SDL2/SDL.h>
 #include <imgui.h>
 #include <libultraship/libultraship.h>
@@ -61,6 +70,9 @@ extern "C" {
 #include "objects/object_fd2/object_fd2.h"         // Volvagia (the dragons)
 #include "regs.h"                                // WREG, for the game's own minimap switch
 extern PlayState* gPlayState;
+// the game's font loader (audio_load.c; it returns the font's data, used here only as "did it load"), for playing the music folder's songs
+void* AudioLoad_SyncLoadFont(u32 fontId);
+extern char** sequenceMap;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
@@ -4787,6 +4799,7 @@ LobbyMusic gLobbyMusic;
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
+void QueueOotSongs();
 void ScanMusicFolder() {
     gLobbyMusic.tracks.clear();
     std::error_code ec;
@@ -4803,6 +4816,7 @@ void ScanMusicFolder() {
     gLobbyMusic.scanned = true;
     gLobbyMusic.failed = false;
     gLobbyMusic.status = std::to_string(gLobbyMusic.tracks.size()) + " .wav song(s) found in " + MusicFolder().string();
+    QueueOotSongs();
 }
 
 bool LoadNextTrack() {
@@ -4834,6 +4848,327 @@ bool LoadNextTrack() {
     return false;
 }
 
+// ---- the music folder's songs, played with Ocarina of Time's own instruments ---------------------------------------------------------
+// With the "OoT instruments" option on, each .wav in the music folder is turned into real OoT music in the background: Basic Pitch
+// finds its notes, the drum finder its drums, and the game's own soundfonts are searched for the instruments that sound most like each
+// part (the same steps as tools/song-to-oot.html). The result is a sequence in the game's own format, which the game's sound engine
+// plays on its second music player, exactly like its own songs. Each song is converted once and kept in music/.oot (it holds only notes
+// and the numbers of the game's soundfonts and instruments, nothing from the game's data). Until a song is ready, the original plays.
+struct OotRawSample {
+    std::vector<uint8_t> data;
+    int codec = 0, order = 0, npred = 0, loopStart = -1, loopEnd = -1;
+    std::vector<int16_t> book;
+};
+struct OotSong {
+    enum State { Waiting, Working, Ready, Failed } state = Waiting;
+    std::filesystem::path wav;
+    royale::seq::Sequence seq;
+    std::string why;                    // for Failed
+};
+struct OotMusic {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::thread worker;
+    bool quit = false;
+    bool captured = false;              // the soundfonts were copied out of the game (on the game thread)
+    royale::music::Bank bank;           // owned by the worker once captured
+    std::vector<OotRawSample> raw;
+    std::vector<std::shared_ptr<OotSong>> songs;
+    std::string status;                 // shown in the menu
+    std::shared_ptr<OotSong> playing;   // on the game's second music player now
+    float lastVolume = -1;
+};
+OotMusic gOot;
+constexpr int kOotSeqPlayer = SEQ_PLAYER_BGM_SUB;
+constexpr uint32_t kOotCacheVersion = 1;   // bump when the conversion changes, so old conversions are made again
+
+bool OotInstrumentsOn() { return MapOption("OotInstruments", true); }
+
+// The game's music soundfonts (the ones its songs use, not the sound effects), copied out for the worker: every instrument and drum
+// kit, with its samples still packed as the game keeps them. Runs once, on the game thread.
+void CaptureOotFonts() {
+    if (gOot.captured) return;
+    std::set<int> fonts;
+    for (size_t id = 2; id <= 108 && id < sequenceMapSize; id++) {
+        if (!sequenceMap[id]) continue;
+        const SequenceData sd = ResourceMgr_LoadSeqByName(sequenceMap[id]);
+        for (int i = 0; i < sd.numFonts && i < 16; i++) fonts.insert(sd.fonts[i]);
+    }
+    royale::music::Bank bank;
+    std::vector<OotRawSample> raw;
+    std::unordered_map<const SoundFontSample*, int> seen;
+    auto sampleOf = [&](const SoundFontSample* s) -> int {
+        if (!s || !s->sampleAddr || s->size == 0) return -1;
+        auto it = seen.find(s);
+        if (it != seen.end()) return it->second;
+        OotRawSample r;
+        r.codec = s->codec;
+        if (r.codec != CODEC_ADPCM && r.codec != CODEC_SMALL_ADPCM && r.codec != CODEC_S16 && r.codec != CODEC_S16_INMEMORY) return seen[s] = -1;
+        if (r.codec == CODEC_ADPCM || r.codec == CODEC_SMALL_ADPCM) {
+            if (!s->book || !s->book->book || s->book->order < 1 || s->book->order > 8 || s->book->npredictors < 1 || s->book->npredictors > 16) return seen[s] = -1;
+            r.order = s->book->order; r.npred = s->book->npredictors;
+            r.book.assign(s->book->book, s->book->book + 8 * r.order * r.npred);
+        }
+        r.data.assign(s->sampleAddr, s->sampleAddr + s->size);
+        if (s->loop && s->loop->count != 0 && s->loop->end > s->loop->start + 8) { r.loopStart = static_cast<int>(s->loop->start); r.loopEnd = static_cast<int>(s->loop->end); }
+        raw.push_back(std::move(r));
+        return seen[s] = static_cast<int>(raw.size()) - 1;
+    };
+    auto envelope = [](royale::music::Zone& z, const AdsrEnvelope* e) {
+        int16_t pairs[64] = {};
+        int n = 0;
+        if (e) for (; n < 32; n++) { pairs[2 * n] = e[n].delay; pairs[2 * n + 1] = e[n].arg; if (e[n].delay <= 0) { n++; break; } }
+        royale::music::SetEnvelope(z, e ? pairs : nullptr, n);
+    };
+    for (int f : fonts) {
+        if (f < 0 || f >= 256 || !fontMap[f]) continue;
+        const SoundFont* sf = ResourceMgr_LoadAudioSoundFont(fontMap[f]);
+        if (!sf) continue;
+        for (int i = 0; i < sf->numInstruments && sf->instruments; i++) {
+            const Instrument* ins = sf->instruments[i];
+            if (!ins) continue;
+            royale::music::Preset p;
+            p.font = f; p.program = i;
+            const int lo = ins->normalRangeLo, hi = ins->normalRangeHi, mo = royale::music::kMidiOffset;
+            const int ranges[3][2] = {{lo > 0 ? 0 : -1, lo + mo - 1}, {lo + mo, hi + mo}, {hi < 127 ? hi + mo + 1 : -1, 127}};
+            const SoundFontSound* sounds[3] = {&ins->lowNotesSound, &ins->normalNotesSound, &ins->highNotesSound};
+            for (int slot = 0; slot < 3; slot++) {
+                if (ranges[slot][0] < 0 || !sounds[slot]->sample) continue;
+                royale::music::Zone z;
+                z.lo = std::max(0, ranges[slot][0]); z.hi = std::min(127, ranges[slot][1]);
+                if (z.lo > z.hi) continue;
+                z.sample = sampleOf(sounds[slot]->sample);
+                if (z.sample < 0) continue;
+                z.tuning = sounds[slot]->tuning;
+                envelope(z, ins->envelope);
+                z.release = royale::music::ReleaseSeconds(ins->releaseRate);
+                p.zones.push_back(z);
+            }
+            if (!p.zones.empty()) bank.presets.push_back(std::move(p));
+        }
+        royale::music::Preset kit;
+        kit.font = f; kit.drums = true;
+        for (int d = 0; d < sf->numDrums && sf->drums; d++) {
+            const Drum* dr = sf->drums[d];
+            const int key = d + royale::music::kMidiOffset;
+            if (key > 127) break;
+            if (!dr) continue;
+            royale::music::Zone z;
+            z.lo = z.hi = z.fixedKey = key;
+            z.sample = sampleOf(dr->sound.sample);
+            if (z.sample < 0) continue;
+            z.tuning = dr->sound.tuning;
+            envelope(z, dr->envelope);
+            z.release = royale::music::ReleaseSeconds(dr->releaseRate);
+            z.pan = (dr->pan - 64) / 64.0;
+            kit.zones.push_back(z);
+        }
+        if (!kit.zones.empty()) bank.presets.push_back(std::move(kit));
+    }
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    gOot.bank = std::move(bank);
+    gOot.raw = std::move(raw);
+    gOot.captured = true;
+    gOot.wake.notify_all();
+}
+
+std::filesystem::path OotCachePath(const std::filesystem::path& wav) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(wav, ec);
+    return MusicFolder() / ".oot" / (wav.stem().string() + "-" + std::to_string(ec ? 0 : size) + ".ootseq");
+}
+bool ReadOotCache(const std::filesystem::path& file, royale::seq::Sequence& s) {
+    std::ifstream in(file, std::ios::binary);
+    char magic[8] = {};
+    uint32_t version = 0, nFonts = 0, size = 0;
+    if (!in.read(magic, 8) || std::memcmp(magic, "OOTSEQ\0\0", 8) != 0) return false;
+    if (!in.read(reinterpret_cast<char*>(&version), 4) || version != kOotCacheVersion) return false;
+    if (!in.read(reinterpret_cast<char*>(&nFonts), 4) || nFonts > 16) return false;
+    s.fonts.resize(nFonts);
+    if (!in.read(reinterpret_cast<char*>(s.fonts.data()), nFonts) || !in.read(reinterpret_cast<char*>(&s.seconds), 8)) return false;
+    if (!in.read(reinterpret_cast<char*>(&size), 4) || size == 0 || size > royale::seq::kMaxBytes) return false;
+    s.data.resize(size);
+    return static_cast<bool>(in.read(reinterpret_cast<char*>(s.data.data()), size)) && royale::seq::ParseSequence(s.data).ok;
+}
+void WriteOotCache(const std::filesystem::path& file, const royale::seq::Sequence& s) {
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary);
+    const uint32_t version = kOotCacheVersion, nFonts = static_cast<uint32_t>(s.fonts.size()), size = static_cast<uint32_t>(s.data.size());
+    out.write("OOTSEQ\0\0", 8);
+    out.write(reinterpret_cast<const char*>(&version), 4);
+    out.write(reinterpret_cast<const char*>(&nFonts), 4);
+    out.write(reinterpret_cast<const char*>(s.fonts.data()), nFonts);
+    out.write(reinterpret_cast<const char*>(&s.seconds), 8);
+    out.write(reinterpret_cast<const char*>(&size), 4);
+    out.write(reinterpret_cast<const char*>(s.data.data()), size);
+}
+
+// A .wav as mono 22050 Hz floats (what the note finder hears).
+bool LoadWavMono22k(const std::filesystem::path& file, std::vector<float>& out, std::string& why) {
+    SDL_AudioSpec spec = {};
+    Uint8* buf = nullptr;
+    Uint32 len = 0;
+    if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
+    SDL_AudioCVT cvt;
+    if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_F32SYS, 1, 22050) < 0) { SDL_FreeWAV(buf); why = SDL_GetError(); return false; }
+    std::vector<Uint8> work(static_cast<size_t>(len) * static_cast<size_t>(cvt.len_mult > 0 ? cvt.len_mult : 1) + 16);
+    std::memcpy(work.data(), buf, len);
+    SDL_FreeWAV(buf);
+    cvt.len = static_cast<int>(len);
+    cvt.buf = work.data();
+    if (cvt.needed && SDL_ConvertAudio(&cvt) < 0) { why = SDL_GetError(); return false; }
+    const size_t bytes = cvt.needed ? static_cast<size_t>(cvt.len_cvt) : len;
+    out.assign(bytes / sizeof(float), 0.0f);
+    std::memcpy(out.data(), work.data(), out.size() * sizeof(float));
+    return !out.empty();
+}
+
+// The worker: unpacks the samples once, then converts the songs one at a time, newest wishes first.
+void OotWorker() {
+    bool bankReady = false;
+    for (;;) {
+        std::shared_ptr<OotSong> song;
+        {
+            std::unique_lock<std::mutex> lock(gOot.mutex);
+            gOot.wake.wait(lock, [] {
+                if (gOot.quit) return true;
+                if (!gOot.captured) return false;
+                for (auto& s : gOot.songs) if (s->state == OotSong::Waiting) return true;
+                return false;
+            });
+            if (gOot.quit) return;
+            for (auto& s : gOot.songs) if (s->state == OotSong::Waiting) { song = s; break; }
+            song->state = OotSong::Working;
+        }
+        auto say = [&](const std::string& text) { std::lock_guard<std::mutex> lock(gOot.mutex); gOot.status = text; };
+        if (!bankReady) {
+            say("Reading the game's instruments...");
+            gOot.bank.samples.resize(gOot.raw.size());
+            for (size_t i = 0; i < gOot.raw.size(); i++) {
+                const OotRawSample& r = gOot.raw[i];
+                royale::music::Sample& s = gOot.bank.samples[i];
+                if (r.codec == CODEC_ADPCM || r.codec == CODEC_SMALL_ADPCM)
+                    s.pcm = royale::music::DecodeVadpcm(r.data.data(), r.data.size(), r.book.data(), r.order, r.npred, r.codec == CODEC_SMALL_ADPCM);
+                else { s.pcm.resize(r.data.size() / 2); std::memcpy(s.pcm.data(), r.data.data(), s.pcm.size() * 2); }
+                if (r.loopStart >= 0 && r.loopStart < static_cast<int>(s.pcm.size())) { s.loopStart = r.loopStart; s.loopEnd = std::min(r.loopEnd, static_cast<int>(s.pcm.size())); }
+                if (s.loopEnd <= s.loopStart + 8) s.loopStart = s.loopEnd = -1;
+            }
+            gOot.raw.clear();
+            for (royale::music::Preset& p : gOot.bank.presets) royale::music::Analyze(gOot.bank, p);
+            bankReady = true;
+        }
+        const std::string name = song->wav.stem().string();
+        royale::seq::Sequence seq;
+        std::string why;
+        const std::filesystem::path cache = OotCachePath(song->wav);
+        bool ok = ReadOotCache(cache, seq);
+        if (!ok) {
+            std::vector<float> y;
+            if (!LoadWavMono22k(song->wav, y, why)) why = "could not read it (" + why + ")";
+            else {
+                bool quit = false;
+                const royale::bp::Output o = royale::bp::Run(y.data(), y.size(), [&](float f) {
+                    say("Turning " + name + " into OoT music: finding the notes " + std::to_string(static_cast<int>(f * 100)) + "%");
+                    std::lock_guard<std::mutex> lock(gOot.mutex);
+                    quit = gOot.quit;
+                    return !quit;
+                });
+                if (quit) return;
+                say("Turning " + name + " into OoT music: picking instruments");
+                const std::vector<royale::music::DrumHit> hits = royale::music::TranscribeDrums(y.data(), y.size(), 22050);
+                const std::vector<royale::music::Note> notes = royale::music::CleanNotes(royale::music::ToNotes(o.frames, o.onsets, 0.5, 0.3, 11, 11), hits);
+                if (notes.empty()) why = "no notes were found in it";
+                else {
+                    const royale::music::Heard heard = royale::music::HearSong(y.data(), y.size(), 22050, notes, hits);
+                    const royale::music::Arrangement a = royale::music::Arrange(gOot.bank, notes, hits, &heard, y.size() / 22050.0);
+                    if (a.channels.empty()) why = "no instrument fits it";
+                    else {
+                        seq = royale::music::WriteArrangement(a);
+                        ok = !seq.tooBig;
+                        if (ok) WriteOotCache(cache, seq);
+                        else why = "it is too long for the game";
+                    }
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(gOot.mutex);
+        if (ok) { song->seq = std::move(seq); song->state = OotSong::Ready; gOot.status = name + " is ready to play with OoT instruments."; }
+        else { song->state = OotSong::Failed; song->why = why; gOot.status = name + ": " + why + "; the original plays instead."; }
+    }
+}
+
+// Queue every song in the folder (called after a scan). Starts the worker the first time.
+void QueueOotSongs() {
+    if (!OotInstrumentsOn()) return;
+    CaptureOotFonts();
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    for (const auto& t : gLobbyMusic.tracks) {
+        bool have = false;
+        for (auto& s : gOot.songs) if (s->wav == t) { have = true; break; }
+        if (!have) { auto s = std::make_shared<OotSong>(); s->wav = t; gOot.songs.push_back(s); }
+    }
+    if (!gOot.worker.joinable()) {
+        gOot.worker = std::thread(OotWorker);
+        std::atexit([] {
+            { std::lock_guard<std::mutex> lock(gOot.mutex); gOot.quit = true; }
+            gOot.wake.notify_all();
+            if (gOot.worker.joinable()) gOot.worker.join();
+        });
+    }
+    gOot.wake.notify_all();
+}
+std::shared_ptr<OotSong> ReadyOotSong(const std::filesystem::path& wav) {
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    for (auto& s : gOot.songs) if (s->wav == wav && s->state == OotSong::Ready) return s;
+    return nullptr;
+}
+
+// Is our song still on the second music player? (The game may have stopped it, or put its own music there.)
+bool OotSongPlaying() {
+    if (!gOot.playing) return false;
+    const SequencePlayer& sp = gAudioContext.seqPlayers[kOotSeqPlayer];
+    return sp.enabled && sp.seqData == gOot.playing->seq.data.data();
+}
+void StopOotSong() {
+    if (OotSongPlaying()) AudioSeq_SequencePlayerDisable(&gAudioContext.seqPlayers[kOotSeqPlayer]);
+    gOot.playing = nullptr;
+}
+// Start a converted song on the game's second music player, the way the game starts its own (audio_load.c,
+// AudioLoad_SyncInitSeqPlayerInternal), with no font list: the song names each soundfont itself. Runs on the game thread,
+// between the sound engine's updates.
+bool StartOotSong(const std::shared_ptr<OotSong>& song) {
+    StopOotSong();
+    for (uint8_t f : song->seq.fonts) if (!fontMap[f] || !AudioLoad_SyncLoadFont(f)) return false;
+    SequencePlayer* sp = &gAudioContext.seqPlayers[kOotSeqPlayer];
+    AudioSeq_SequencePlayerDisable(sp);
+    AudioSeq_ResetSequencePlayer(sp);
+    sp->seqId = NA_BGM_STAFF_4;
+    sp->defaultFont = 0xFF;
+    sp->seqData = song->seq.data.data();
+    sp->scriptState.pc = sp->seqData;
+    sp->scriptState.depth = 0;
+    sp->delay = 0;
+    sp->finished = 0;
+    sp->playerIdx = kOotSeqPlayer;
+    sp->enabled = 1;
+    gOot.playing = song;
+    gOot.lastVolume = -1;
+    return true;
+}
+// The song follows the player's main music volume.
+void KeepOotSongVolume() {
+    if (!OotSongPlaying()) return;
+    const float v = static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
+    if (v != gOot.lastVolume) { Audio_SetGameVolume(kOotSeqPlayer, v); gOot.lastVolume = v; }
+}
+std::string OotStatus() {
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    int ready = 0;
+    for (auto& s : gOot.songs) ready += s->state == OotSong::Ready;
+    return std::to_string(ready) + " of " + std::to_string(gOot.songs.size()) + " songs ready with OoT instruments. " + gOot.status;
+}
+
 // The music folder's songs play in the lobby (if that option is on) and, when "Match music" is set to Random, through the match too.
 void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     LobbyMusic& m = gLobbyMusic;
@@ -4841,11 +5176,31 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     if (!want) {
         if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
         m.playing = false;
+        StopOotSong();
         if (!inLobby && !inMatchRandom) m.scanned = false; // pick up newly added songs next time
         return;
     }
     if (!m.scanned) ScanMusicFolder();
     if (m.tracks.empty()) return;
+    // A song already turned into OoT music plays on the game's own sound engine; the others play as they are until they are ready.
+    if (OotSongPlaying()) { if (OotInstrumentsOn()) { KeepOotSongVolume(); return; } StopOotSong(); }
+    gOot.playing = nullptr;
+    if (OotInstrumentsOn() && (m.pcm.empty() || m.pos >= m.pcm.size())) {
+        for (size_t i = 0; i < m.tracks.size(); i++) {
+            const size_t k = (m.next + i) % m.tracks.size();
+            std::shared_ptr<OotSong> song = ReadyOotSong(m.tracks[k]);
+            if (!song || !StartOotSong(song)) continue;
+            m.next = k + 1;
+            m.pcm.clear();
+            m.pos = 0;
+            m.nowPlaying = m.tracks[k].stem().string();
+            if (m.device != 0) SDL_ClearQueuedAudio(m.device);
+            m.playing = true;
+            KeepOotSongVolume();
+            Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying + " (OoT instruments)");
+            return;
+        }
+    }
     if (m.device == 0) {
         SDL_AudioSpec want2 = {}, have = {};
         want2.freq = 44100; want2.format = AUDIO_S16SYS; want2.channels = 2; want2.samples = 2048; want2.callback = nullptr;
@@ -6785,6 +7140,7 @@ bool gBgmMuted = false;
 void SetGameBgmVolume(bool muted) {
     if (muted == gBgmMuted) return;
     gBgmMuted = muted;
+    gOot.lastVolume = -1;   // a converted song on the second music player keeps its own volume (set again on the next update)
     const float main = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
     const float sub = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.SubMusic"), 100)) / 100.0f;
     Audio_SetGameVolume(SEQ_PLAYER_BGM_MAIN, main);

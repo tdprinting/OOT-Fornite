@@ -20,7 +20,7 @@ endif()
 target_include_directories(royale_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet/include)
 
 enable_testing()
-foreach(t tests net_tests enet_tests session_tests)
+foreach(t tests net_tests enet_tests session_tests music_tests)
     add_executable(royale_${t} tests/${t}.cpp)
     target_link_libraries(royale_${t} royale_net)
     if(MSVC)

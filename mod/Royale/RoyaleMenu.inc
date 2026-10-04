@@ -1158,6 +1158,8 @@ void PageOptions(Ctx& c) {
     if (Button(c, "Look for new songs")) ScanMusicFolder();
     if (gLobbyMusic.status.empty()) ScanMusicFolder();
     Note(c, gLobbyMusic.status + " (16-bit PCM .wav files)");
+    OptionToggle(c, "OotInstruments", "Play them with OoT's own instruments", true);
+    if (OotInstrumentsOn()) Note(c, OotStatus());
     Header(c, "MINIMAP");
     OptionToggle(c, "MapPlayers", "Other players", true);
     OptionToggle(c, "MapBots", "Bots", true);
