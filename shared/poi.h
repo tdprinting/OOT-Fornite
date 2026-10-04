@@ -93,10 +93,233 @@ inline void AddClimb(PoiLayout& out, Vec2 at, int dir, const PlacementFn& valid)
     out.sites.push_back({pieces[2], 2});
 }
 
-// Climbs standing alone in the open and chests hidden behind big rocks, spread so no two are close together. `props` is the map's scenery so far
-// (the boulders to hide behind come from there); `taken` the chest spots already used, which new ones keep their distance from.
+namespace poi_detail {
+inline void Piece(PoiLayout& out, Rng& rng, PropKind kind, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (!valid || valid(p)) out.props.push_back({p, kind, static_cast<uint16_t>(rng.Below(0x10000))});
+}
+inline void Spot(PoiLayout& out, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (!valid || valid(p)) out.lootSpots.push_back(p);
+}
+// A square stepped mound of nine blocks: low corners, middle edges and a high middle, 450 across. The chest on the top is an Epic or better.
+inline bool Ziggurat(PoiLayout& out, Vec2 at, const PlacementFn& valid) {
+    const float s = kPlatformHalf * 2.0f;
+    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) if (valid && !valid({at.x + ix * s, at.z + iz * s})) return false;
+    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) {
+        const int edge = (ix == 0) + (iz == 0);
+        out.props.push_back({{at.x + ix * s, at.z + iz * s}, edge == 2 ? PropKind::PlatformHigh : edge == 1 ? PropKind::PlatformMid : PropKind::PlatformLow, 0});
+    }
+    out.sites.push_back({at, 2});
+    return true;
+}
+} // namespace poi_detail
+
+// ---- boulder formations -------------------------------------------------------------------------------------------------------
+// Boulders gathered into shapes you notice from a distance and can use in a fight, instead of every one standing alone: a tumbled pile, a
+// ridge with a gap to run through, a ring of standing stones with a chest in the middle, a line of flat table rocks to hop along, and a gate
+// of two tall slabs. Each piece is an ordinary boulder (solid, and the bots path round it); its shape comes from its rotation (BoulderShape).
+enum class Formation : uint8_t { Pile, Ridge, Ring, Steps, Gate, Count };
+constexpr int kFormationCount = static_cast<int>(Formation::Count);
+enum BoulderLook : int { kDome = 0, kSlab = 1, kTable = 2, kSplit = 3, kStack = 4, kHuddle = 5, kAnyShape = -1 };
+
+namespace poi_detail {
+inline void Stone(PoiLayout& out, Rng& rng, int shape, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (valid && !valid(p)) return;
+    const int s = shape < 0 ? static_cast<int>(rng.Below(kBoulderShapes)) : shape;
+    out.props.push_back({p, PropKind::Boulder, RotForShape(rng, s)});
+}
+// The map axis (AddClimb's `dir`) that points most directly away from `centre`, so a climb built at `from` runs outward, clear of the town.
+inline int OutwardDir(Vec2 from, Vec2 centre) {
+    const float dx = from.x - centre.x, dz = from.z - centre.z;
+    return std::fabs(dx) >= std::fabs(dz) ? (dx >= 0 ? 0 : 2) : (dz >= 0 ? 1 : 3);
+}
+inline void Pebble(PoiLayout& out, Rng& rng, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (!valid || valid(p)) out.props.push_back({p, PropKind::Rock, static_cast<uint16_t>(rng.Below(0x10000))});
+}
+} // namespace poi_detail
+
+// Builds one formation at `at`, turned by `angle`. A chest goes in the ring of standing stones (as a hideaway: a Rare or better).
+inline void AddFormation(PoiLayout& out, Rng& rng, Formation what, Vec2 at, float angle, const PlacementFn& valid) {
+    using namespace poi_detail;
+    const float pi = 3.14159265f;
+    switch (what) {
+        case Formation::Pile: {    // a stack in the middle with boulders tumbled round it and loose rocks further out
+            Stone(out, rng, kStack, {0, 0}, angle, at, valid);
+            const int n = 3 + static_cast<int>(rng.Below(2));
+            for (int i = 0; i < n; i++) {
+                const float a = i * 2.0f * pi / n + rng.Unit() * 0.5f, d = 140.0f + 20.0f * static_cast<float>(rng.Unit());
+                static const int shapes[3] = {kDome, kHuddle, kSplit};
+                Stone(out, rng, shapes[rng.Below(3)], {std::cos(a) * d, std::sin(a) * d}, angle, at, valid);
+            }
+            for (int i = 0; i < 3; i++) { const float a = rng.Unit() * 2.0f * pi; Pebble(out, rng, {std::cos(a) * 270.0f, std::sin(a) * 270.0f}, angle, at, valid); }
+            break;
+        }
+        case Formation::Ridge: {   // a curving line of slabs and split stones, with one gap to run through
+            const int n = 7, gap = 2 + static_cast<int>(rng.Below(3));
+            const float bend = (static_cast<float>(rng.Unit()) - 0.5f) * 0.0012f;
+            for (int i = 0; i < n; i++) {
+                if (i == gap) continue;
+                const float x = (i - (n - 1) * 0.5f) * 150.0f;
+                Stone(out, rng, i % 2 ? kSlab : (rng.Below(2) ? kSplit : kDome), {x, bend * x * x}, angle, at, valid);
+            }
+            Pebble(out, rng, {-540, 60}, angle, at, valid); Pebble(out, rng, {540, -60}, angle, at, valid);
+            break;
+        }
+        case Formation::Ring: {    // standing stones round a chest, open on two sides
+            const int n = 9;
+            const int gapA = static_cast<int>(rng.Below(n)), gapB = (gapA + 4 + static_cast<int>(rng.Below(2))) % n;
+            for (int i = 0; i < n; i++) {
+                if (i == gapA || i == gapB) continue;
+                const float a = i * 2.0f * pi / n;
+                Stone(out, rng, kSlab, {std::cos(a) * 280.0f, std::sin(a) * 280.0f}, 0, at, valid);
+            }
+            if (!valid || valid(at)) out.sites.push_back({at, 1});
+            break;
+        }
+        case Formation::Steps: {   // flat table rocks you can hop along, ending at a stack
+            for (int i = 0; i < 4; i++) Stone(out, rng, kTable, {i * 175.0f - 260.0f, (i % 2 ? 70.0f : -70.0f)}, angle, at, valid);
+            Stone(out, rng, kStack, {460, 0}, angle, at, valid);
+            Pebble(out, rng, {-430, 40}, angle, at, valid);
+            break;
+        }
+        case Formation::Gate: {    // two tall slabs framing a way through, with piled stones either side
+            Stone(out, rng, kSlab, {-115, 0}, angle, at, valid); Stone(out, rng, kSlab, {115, 0}, angle, at, valid);
+            Stone(out, rng, kHuddle, {-270, 40}, angle, at, valid); Stone(out, rng, kDome, {270, -30}, angle, at, valid);
+            Stone(out, rng, kStack, {-400, -60}, angle, at, valid); Stone(out, rng, kSplit, {410, 50}, angle, at, valid);
+            break;
+        }
+        default: break;
+    }
+}
+
+// ---- the kinds of town ----------------------------------------------------------------------------------------------------------
+// Every place on a map is one of these, dealt out so that neighbours differ, and each has something worth the trip: a climb or a stepped
+// mound with an Epic-or-better chest on top, chests indoors, and (at the fort, quarry and ruins) a mini boss standing guard.
+constexpr float kTownRadius = 500.0f;   // a town's area: its buildings and cave (its climb stands at the edge, up to 300 further out)
+enum class TownKind : uint8_t { Hamlet, Fort, Quarry, Shrine, Ruins, Camp, Count };
+constexpr int kTownKindCount = static_cast<int>(TownKind::Count);
+inline const char* TownKindName(TownKind k) {
+    static const char* names[kTownKindCount] = {"hamlet", "fort", "quarry", "shrine", "ruins", "camp"};
+    return names[static_cast<int>(k) % kTownKindCount];
+}
+
+inline void BuildTown(PoiLayout& out, Rng& rng, TownKind kind, Vec2 c, float base, const PlacementFn& valid) {
+    using namespace poi_detail;
+    const float pi = 3.14159265f;
+    auto local = [&](float x, float z) { return Rotated({x, z}, base, c); };
+    switch (kind) {
+        case TownKind::Hamlet: {   // two cottages facing a village green with a well post and hedges, a climb behind
+            AddHouse(out, rng, local(-225, -60), base, valid);
+            AddHouse(out, rng, local(225, -60), base, valid);
+            Piece(out, rng, PropKind::Pillar, {0, 210}, base, c, valid);   // the well
+            for (int i = 0; i < 6; i++) Piece(out, rng, PropKind::Bush, {-300.0f + i * 120.0f, 330.0f}, base, c, valid);
+            AddClimb(out, local(-120, -380), OutwardDir(local(-120, -380), c), valid);
+            Spot(out, {0, 150}, base, c, valid);
+            break;
+        }
+        case TownKind::Fort: {     // a square stockade with a gate front and back, a climb to the lookout inside, and a guard
+            const float half = 290.0f, step = 72.0f;
+            for (float t = -half; t <= half + 0.1f; t += step) {
+                for (int side = -1; side <= 1; side += 2) {
+                    if (std::fabs(t) > 75.0f) Piece(out, rng, PropKind::Pillar, {t, side * half}, base, c, valid);   // front and back, gates in the middle
+                    if (std::fabs(t) < half - 1.0f) Piece(out, rng, PropKind::Pillar, {side * half, t}, base, c, valid);
+                }
+            }
+            for (int k = 0; k < 4; k++) Stone(out, rng, kStack, {(k & 1 ? 1 : -1) * (half + 95.0f), (k & 2 ? 1 : -1) * (half + 95.0f)}, base, c, valid);   // corner bastions
+            AddClimb(out, {c.x - kPlatformHalf * 2.0f, c.z}, 0, valid);   // across the middle along the map's x axis, so it fits inside however the fort is turned
+            out.bossSpots.push_back({c.x, c.z + 200.0f});
+            Spot(out, {-200, 180}, base, c, valid); Spot(out, {200, 180}, base, c, valid); Spot(out, {200, -200}, base, c, valid); Spot(out, {-200, -200}, base, c, valid);
+            break;
+        }
+        case TownKind::Quarry: {   // a boulder cave with a guard, a ridge of stones behind it, a pile and table rocks to hop across
+            AddCave(out, rng, local(0, -60), base + pi, valid);
+            AddFormation(out, rng, Formation::Ridge, local(0, -480), base, valid);
+            AddFormation(out, rng, Formation::Pile, local(-380, 240), base, valid);
+            for (int i = 0; i < 3; i++) Stone(out, rng, kTable, {120.0f + i * 150.0f, 160.0f + (i % 2) * 90.0f}, base, c, valid);
+            AddClimb(out, local(380, -40), OutwardDir(local(380, -40), c), valid);
+            Spot(out, {200, 330}, base, c, valid); Spot(out, {-120, 380}, base, c, valid);
+            break;
+        }
+        case TownKind::Shrine: {   // a stepped mound with the prize on top, a ring of standing stones round it and hedges outside
+            Ziggurat(out, c, valid);
+            const int n = 12;
+            for (int i = 0; i < n; i++) {
+                if (i == 0 || i == n / 2) continue;   // two ways in
+                const float a = base + i * 2.0f * pi / n;
+                Stone(out, rng, kSlab, {std::cos(a) * 430.0f, std::sin(a) * 430.0f}, 0, c, valid);
+            }
+            for (int i = 0; i < 8; i++) { const float a = base + (i + 0.5f) * pi / 4.0f; Piece(out, rng, PropKind::Bush, {std::cos(a) * 530.0f, std::sin(a) * 530.0f}, 0, c, valid); }
+            Spot(out, {350, 0}, base, c, valid); Spot(out, {-350, 0}, base, c, valid);   // in the two ways in
+            Spot(out, {0, 340}, base, c, valid); Spot(out, {0, -340}, base, c, valid);
+            break;
+        }
+        case TownKind::Ruins: {    // broken walls round a graveyard, fallen boulders, a climb up the old tower, and something guarding it
+            AddRuins(out, rng, local(0, -260), base, valid);
+            AddRuins(out, rng, local(-270, 120), base + pi * 0.5f, valid);
+            for (int row = 0; row < 2; row++) for (int col = 0; col < 4; col++) Piece(out, rng, PropKind::Pillar, {-60.0f + col * 110.0f, 80.0f + row * 150.0f}, base, c, valid);
+            Stone(out, rng, kSplit, {330, -60}, base, c, valid); Stone(out, rng, kHuddle, {-120, 380}, base, c, valid);
+            AddClimb(out, local(260, -340), OutwardDir(local(260, -340), c), valid);
+            out.bossSpots.push_back(local(100, 0));
+            Spot(out, {380, 200}, base, c, valid);
+            break;
+        }
+        default: {                 // camp: a cottage, a cave in the hillside and a fence of posts with a climb at the end
+            AddHouse(out, rng, c, base, valid);
+            const float a1 = base + 1.1f + static_cast<float>(rng.Unit()) * 0.8f;
+            AddCave(out, rng, {c.x + std::cos(a1) * 330.0f, c.z + std::sin(a1) * 330.0f}, a1 + pi, valid);
+            for (int i = 0; i < 5; i++) { const float a = a1 + pi * 0.65f + i * 0.22f; Piece(out, rng, PropKind::Pillar, {std::cos(a) * 360.0f, std::sin(a) * 360.0f}, 0, c, valid); }
+            const Vec2 climb = {c.x + std::cos(base + 3.3f) * 420.0f, c.z + std::sin(base + 3.3f) * 420.0f};
+            AddClimb(out, climb, OutwardDir(climb, c), valid);
+            break;
+        }
+    }
+}
+
+// The landmark in the middle of a map: a keep. A ring wall of posts and boulders (stacks and standing slabs) with four gates, two halls inside
+// and the stepped mound of the keep itself in the middle with the best chest on top. `size` scales the ring for a small map, which leaves
+// the halls out.
+inline void BuildKeep(PoiLayout& out, Rng& rng, Vec2 c, float base, float size, const PlacementFn& valid) {
+    using namespace poi_detail;
+    const float pi = 3.14159265f, r = 600.0f * size;
+    const int posts = static_cast<int>(36 * size) + 6;
+    for (int i = 0; i < posts; i++) {
+        const float a = i * 2.0f * pi / posts;
+        if (std::fabs(std::cos(a * 2.0f)) < 0.22f) continue;   // the four gates, on the diagonals
+        if (i % 4 == 0) Stone(out, rng, i % 8 == 0 ? kStack : kSlab, {std::cos(a) * r, std::sin(a) * r}, base, c, valid);
+        else Piece(out, rng, PropKind::Pillar, {std::cos(a) * r, std::sin(a) * r}, base, c, valid);
+    }
+    if (size >= 0.9f) {   // the halls stand end-on to the mound, their doors facing along the ring
+        AddHouse(out, rng, Rotated({-390, 0}, base, c), base + pi * 0.5f, valid);
+        AddHouse(out, rng, Rotated({390, 0}, base, c), base - pi * 0.5f, valid);
+    }
+    Ziggurat(out, c, valid);
+    for (int i = 0; i < 4; i++) Spot(out, {std::cos(i * pi * 0.5f + 0.7f) * 340.0f, std::sin(i * pi * 0.5f + 0.7f) * 340.0f}, base, c, valid);
+}
+
+// The kinds of town for `count` places, shuffled from the seed and dealt round so that neighbours (and the first few) all differ.
+inline std::vector<TownKind> DealTownKinds(Rng& rng, int count) {
+    std::vector<TownKind> deck;
+    std::vector<TownKind> out;
+    while (static_cast<int>(out.size()) < count) {
+        if (deck.empty()) {
+            for (int k = 0; k < kTownKindCount; k++) deck.push_back(static_cast<TownKind>(k));
+            for (size_t i = deck.size(); i > 1; i--) std::swap(deck[i - 1], deck[rng.Below(static_cast<uint32_t>(i))]);
+            if (!out.empty() && deck.back() == out.back()) std::swap(deck.front(), deck.back());   // no two in a row across decks
+        }
+        out.push_back(deck.back());
+        deck.pop_back();
+    }
+    return out;
+}
+
+// Out in the open between the towns: boulder formations, climbs standing alone and chests hidden behind big rocks, spread so no two are close
+// together. `props` is the map's scenery so far (the boulders to hide behind come from there); `taken` the chest spots already used, which new
+// ones keep their distance from.
 inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::vector<Prop>& props, const std::vector<Vec2>& taken, int climbs, int hideaways,
-                          const PlacementFn& valid = nullptr) {
+                          const PlacementFn& valid = nullptr, int formations = 0) {
     Rng rng(seed ^ 0x77696C64ull); // "wild"
     std::vector<Vec2> spots = taken;
     for (const ChestSite& s : out.sites) spots.push_back(s.pos);
@@ -106,9 +329,32 @@ inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::
         for (const Poi& poi : out.pois) if (Distance(p, poi.center) < poi.radius * 0.8f) return false;
         return true;
     };
+    // Formations first: well clear of the towns (they have their own) and of each other, so each is a landmark of its own.
+    std::vector<Vec2> rocks;
+    int deck[kFormationCount] = {};
+    for (int n = 0, placed = 0; n < formations * 16 && placed < formations; n++) {
+        const Vec2 at = RandomPointIn(rng, map, valid, 0.88f);
+        if (valid && !valid(at)) continue;
+        bool ok = Distance(at, map.center) <= map.radius - 450.0f;
+        for (const Poi& poi : out.pois) ok = ok && Distance(at, poi.center) > poi.radius + 650.0f;   // a formation reaches about 600 from its middle
+        for (const Vec2& q : rocks) ok = ok && Distance(at, q) > (std::max)(1100.0f, map.radius * 0.22f);
+        for (const Vec2& q : spots) ok = ok && Distance(at, q) > 420.0f;
+        if (!ok) continue;
+        if (placed % kFormationCount == 0) {   // dealt from a shuffled deck, so a map gets one of each before any repeats
+            for (int i = 0; i < kFormationCount; i++) deck[i] = i;
+            for (int i = kFormationCount - 1; i > 0; i--) std::swap(deck[i], deck[rng.Below(static_cast<uint32_t>(i + 1))]);
+        }
+        const Formation kind = static_cast<Formation>(deck[placed % kFormationCount]);
+        const size_t sitesBefore = out.sites.size();
+        AddFormation(out, rng, kind, at, static_cast<float>(rng.Unit() * 6.2831853), valid);
+        for (size_t i = sitesBefore; i < out.sites.size(); i++) spots.push_back(out.sites[i].pos);
+        rocks.push_back(at);
+        placed++;
+    }
+    auto clearOfRocks = [&](Vec2 p) { for (const Vec2& q : rocks) if (Distance(p, q) < 650.0f) return false; return true; };
     for (int n = 0, placed = 0; n < climbs * 12 && placed < climbs; n++) {
         const Vec2 at = RandomPointIn(rng, map, valid, 0.85f);
-        if (!far(at) || Distance(at, map.center) > map.radius - 500.0f) continue;
+        if (!far(at) || !clearOfRocks(at) || Distance(at, map.center) > map.radius - 500.0f) continue;
         const size_t before = out.props.size();
         AddClimb(out, at, static_cast<int>(rng.Below(4)), valid);
         if (out.props.size() == before) continue;
@@ -138,27 +384,6 @@ inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::
 // The field is the biggest map and gets places of its own instead of the same town over and over: a ruined castle in the middle, a ranch, a long wall,
 // a canyon, a stone circle, a graveyard and so on. Each is built from ordinary props (so bots path around them and clients draw them) plus our solid
 // stone blocks, which is how the field's ground gets new hills, a raised causeway and a stepped mound that need jumping and climbing.
-namespace poi_detail {
-inline void Piece(PoiLayout& out, Rng& rng, PropKind kind, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
-    const Vec2 p = Rotated(local, angle, at);
-    if (!valid || valid(p)) out.props.push_back({p, kind, static_cast<uint16_t>(rng.Below(0x10000))});
-}
-inline void Spot(PoiLayout& out, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
-    const Vec2 p = Rotated(local, angle, at);
-    if (!valid || valid(p)) out.lootSpots.push_back(p);
-}
-// A square stepped mound of nine blocks: low corners, middle edges and a high middle, 450 across. The chest on the top is an Epic or better.
-inline bool Ziggurat(PoiLayout& out, Vec2 at, const PlacementFn& valid) {
-    const float s = kPlatformHalf * 2.0f;
-    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) if (valid && !valid({at.x + ix * s, at.z + iz * s})) return false;
-    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) {
-        const int edge = (ix == 0) + (iz == 0);
-        out.props.push_back({{at.x + ix * s, at.z + iz * s}, edge == 2 ? PropKind::PlatformHigh : edge == 1 ? PropKind::PlatformMid : PropKind::PlatformLow, 0});
-    }
-    out.sites.push_back({at, 2});
-    return true;
-}
-} // namespace poi_detail
 
 enum class FieldPlace : uint8_t { Castle, Ranch, GreatWall, Ravine, TemplePlaza, WindmillHill, Graveyard, StoneCircle, FairyGlade, Causeway, Count };
 constexpr int kFieldPlaceCount = static_cast<int>(FieldPlace::Count);
@@ -302,21 +527,16 @@ inline PoiLayout GenerateFieldPois(uint64_t seed, Circle map, int towns, const P
             break;
         }
     }
-    // Towns in the gaps: a wide ring, then anywhere there is room.
-    const float townRadius = 330.0f;
+    // Towns in the gaps: a wide ring, then anywhere there is room. Each is a different kind of place (BuildTown).
+    const float townRadius = kTownRadius;
+    const std::vector<TownKind> kinds = DealTownKinds(rng, towns);
     for (int n = 0, placed = 0; n < 90 && placed < towns && placed < static_cast<int>(townNames.size()); n++) {
         const float a = static_cast<float>(rng.Unit() * 6.2831853), d = map.radius * (0.35f + 0.55f * static_cast<float>(rng.Unit()));
         const Vec2 c = {map.center.x + std::cos(a) * d, map.center.z + std::sin(a) * d};
         if (!groundUnder(c, townRadius) || !apart(c, townRadius + 160.0f)) continue;
         Poi p; p.name = townNames[static_cast<size_t>(placed)]; p.center = c; p.radius = townRadius;
         out.pois.push_back(p);
-        const float base = static_cast<float>(rng.Unit() * 6.2831853);
-        AddHouse(out, rng, c, base, valid);
-        const float a1 = base + 1.1f + static_cast<float>(rng.Unit()) * 0.8f;
-        AddCave(out, rng, {c.x + std::cos(a1) * 310.0f, c.z + std::sin(a1) * 310.0f}, a1 + pi, valid);
-        const float a2 = a1 + pi + static_cast<float>(rng.Unit() - 0.5) * 1.0f;
-        AddRuins(out, rng, {c.x + std::cos(a2) * 300.0f, c.z + std::sin(a2) * 300.0f}, a2, valid);
-        AddClimb(out, {c.x + std::cos(base + 3.3f) * 400.0f, c.z + std::sin(base + 3.3f) * 400.0f}, static_cast<int>(rng.Below(4)), valid);
+        BuildTown(out, rng, kinds[static_cast<size_t>(placed)], c, static_cast<float>(rng.Unit() * 6.2831853), valid);
         placed++;
     }
     std::vector<Vec2> spots;
@@ -353,24 +573,27 @@ inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const Placem
     for (int i = 0; i < kNamesPerMap; i++) names[i] = static_cast<uint8_t>(nameBase + i);
     for (int i = kNamesPerMap - 1; i > 1; i--) std::swap(names[i], names[1 + rng.Below(static_cast<uint32_t>(i))]); // name 0 stays the landmark's
 
-    // Laid out the way battle royale maps are: a big landmark in the middle, a ring of towns around it and a wider ring near the edge,
-    // each with room around it so there are open stretches (full of rocks to hide behind) between them to run across.
-    const float poiRadius = (std::max)(260.0f, (std::min)(480.0f, map.radius * 0.13f)); // small places get smaller towns
-    const float minGap = (std::max)(poiRadius * 2.2f, map.radius * 0.26f);
+    // Laid out the way battle royale maps are: a keep in the middle, a ring of towns around it and a wider ring near the edge, each a
+    // different kind of place (BuildTown) with room around it, so there are open stretches (with boulder formations) to run across between
+    // them. A town is about a thousand across whatever the map, so a small map gets fewer of them rather than a pile of overlapping ones.
+    const float poiRadius = kTownRadius;
+    const float minGap = (std::max)((std::min)(1250.0f, map.radius * 0.57f), map.radius * 0.26f);
     const int wanted = (std::min)(count, kNamesPerMap);
+    const float keepSize = (std::max)(0.6f, (std::min)(1.0f, map.radius / 3000.0f));
+    const std::vector<TownKind> kinds = DealTownKinds(rng, wanted);
     struct Slot { float ring; int index, of; float phase; };
     std::vector<Slot> slots = {{0.0f, 0, 1, 0.0f}};
     const float phase = static_cast<float>(rng.Unit() * 6.2831853);
-    for (int i = 0; i < 5; i++) slots.push_back({0.50f, i, 5, phase});
+    for (int i = 0; i < 5; i++) slots.push_back({0.58f, i, 5, phase});
     for (int i = 0; i < 6; i++) slots.push_back({0.80f, i, 6, phase + 0.5f});
     for (const Slot& slot : slots) {
         if (static_cast<int>(out.pois.size()) >= wanted) break;
         bool placed = false;
         for (int attempt = 0; attempt < 24 && !placed; attempt++) {
-            const float angle = phase * 0.0f + slot.phase + slot.index * 6.2831853f / slot.of + static_cast<float>(rng.Unit() - 0.5) * 0.35f;
+            const float angle = slot.phase + slot.index * 6.2831853f / slot.of + static_cast<float>(rng.Unit() - 0.5) * 0.35f;
             const float dist = map.radius * slot.ring * (1.0f + static_cast<float>(rng.Unit() - 0.5) * 0.12f);
             const Vec2 c = {map.center.x + std::cos(angle) * dist, map.center.z + std::sin(angle) * dist};
-            if (Distance(c, map.center) > map.radius - poiRadius * 1.1f) continue;
+            if (slot.ring > 0.0f && Distance(c, map.center) > map.radius - poiRadius * 1.1f) continue;
             bool ok = !valid || valid(c);
             for (int k = 0; ok && k < 8; k++) { // the ground under the whole area has to exist
                 const float a = k * 0.785398f;
@@ -382,26 +605,24 @@ inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const Placem
             Poi p;
             p.name = names[out.pois.size()];
             p.center = c;
-            p.radius = poiRadius;
-            out.pois.push_back(p);
-
+            p.radius = slot.ring == 0.0f ? 600.0f * keepSize : poiRadius;
             const float base = static_cast<float>(rng.Unit() * 6.2831853);
-            AddHouse(out, rng, c, base, valid);
-            const float a1 = base + 1.1f + static_cast<float>(rng.Unit()) * 0.8f;
-            AddCave(out, rng, {c.x + std::cos(a1) * 310.0f, c.z + std::sin(a1) * 310.0f}, a1 + 3.14159265f, valid);
-            const float a2 = a1 + 3.14159265f + static_cast<float>(rng.Unit() - 0.5) * 1.0f;
-            AddRuins(out, rng, {c.x + std::cos(a2) * 300.0f, c.z + std::sin(a2) * 300.0f}, a2, valid);
-            AddClimb(out, {c.x + std::cos(base + 3.3f) * 400.0f, c.z + std::sin(base + 3.3f) * 400.0f}, static_cast<int>(rng.Below(4)), valid);
-            if (slot.ring == 0.0f) { // the landmark in the middle is bigger: a second building and more ruins
-                AddHouse(out, rng, {c.x + std::cos(base + 2.1f) * 330.0f, c.z + std::sin(base + 2.1f) * 330.0f}, base + 0.8f, valid);
-                AddRuins(out, rng, {c.x + std::cos(base + 4.2f) * 330.0f, c.z + std::sin(base + 4.2f) * 330.0f}, base + 2.3f, valid);
-            }
+            if (slot.ring == 0.0f) BuildKeep(out, rng, c, base, keepSize, valid);
+            else BuildTown(out, rng, kinds[out.pois.size()], c, base, valid);
+            out.pois.push_back(p);
         }
     }
     // Keep only the chest spots that are on real ground.
     std::vector<Vec2> spots;
     for (const Vec2& s : out.lootSpots) if (!valid || valid(s)) spots.push_back(s);
     out.lootSpots = spots;
+    return out;
+}
+
+// Loose scenery (GenerateProps) keeps out of the places, so a town isn't cluttered with stray rocks and bushes on its streets.
+inline std::vector<Circle> PoiClearings(const std::vector<Poi>& pois) {
+    std::vector<Circle> out;
+    for (const Poi& p : pois) out.push_back({p.center, p.radius + 120.0f});
     return out;
 }
 
