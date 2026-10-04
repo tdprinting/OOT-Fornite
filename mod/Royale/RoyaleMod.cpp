@@ -840,6 +840,7 @@ struct LootActor {
     bool big = false;         // Epic and Legendary chests are the big kind
     bool supply = false;      // from a supply drop
     royale::Rarity rarity = royale::Rarity::Common;
+    int gid = -1;             // the game's own model for this item (GetItemDrawID), or -1 to keep the stand-in's
     ActorFunc origUpdate = nullptr, origDestroy = nullptr;
 };
 std::unordered_map<size_t, LootActor> gLoot;        // loot index -> its actor
@@ -1532,6 +1533,117 @@ void ReconcileProps(const royale::HudState& hud) {
     }
 }
 
+// The game's own 3D model for each item, so what lies on the ground is the real thing (a bow, a hookshot, a Zora tunic...) and not a
+// stand-in gem. -1 means the game has no model for it and the stand-in stays.
+int GidFor(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DekuStick: return GID_STICK;
+        case ItemId::KokiriSword: case ItemId::MasterSword: case ItemId::BasicSword: return GID_SWORD_KOKIRI;
+        case ItemId::BiggoronSword: return GID_SWORD_BGS;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return GID_HAMMER;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: return GID_SLINGSHOT;
+        case ItemId::FairyBow: return GID_BOW;
+        case ItemId::Boomerang: return GID_BOOMERANG;
+        case ItemId::Bombs: case ItemId::BombAmmo: case ItemId::ShockwaveGrenade: return GID_BOMB;
+        case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
+        case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
+        case ItemId::FireArrows: return GID_ARROW_FIRE;
+        case ItemId::IceArrows: return GID_ARROW_ICE;
+        case ItemId::LightArrows: return GID_ARROW_LIGHT;
+        case ItemId::ArrowAmmo: return GID_ARROWS_MEDIUM;
+        case ItemId::SeedAmmo: return GID_SEEDS;
+        case ItemId::DekuShield: return GID_SHIELD_DEKU;
+        case ItemId::HylianShield: return GID_SHIELD_HYLIAN;
+        case ItemId::MirrorShield: return GID_SHIELD_MIRROR;
+        case ItemId::GreenPotion: case ItemId::LargeShieldPotion: return GID_POTION_GREEN;
+        case ItemId::RedPotion: return GID_POTION_RED;
+        case ItemId::BluePotion: case ItemId::SmallShieldPotion: return GID_POTION_BLUE;
+        case ItemId::Fairy: return GID_FAIRY;
+        case ItemId::Milk: return GID_MILK;
+        case ItemId::Fish: return GID_FISH;
+        case ItemId::BlueFire: return GID_BLUE_FIRE;
+        case ItemId::Bug: return GID_BUG;
+        case ItemId::Poe: return GID_POE;
+        case ItemId::RecoveryHeart: return GID_HEART;
+        case ItemId::HeartPiece: return GID_HEART_PIECE;
+        case ItemId::HeartContainer: return GID_HEART_CONTAINER;
+        case ItemId::MagicJar: return GID_MAGIC_LARGE;
+        case ItemId::DinsFire: return GID_DINS_FIRE;
+        case ItemId::FaroresWind: return GID_FARORES_WIND;
+        case ItemId::NayrusLove: return GID_NAYRUS_LOVE;
+        case ItemId::Hookshot: return GID_HOOKSHOT;
+        case ItemId::Longshot: return GID_LONGSHOT;
+        case ItemId::LensOfTruth: return GID_LENS;
+        case ItemId::MagicBeans: return GID_BEAN;
+        case ItemId::FairyOcarina: return GID_OCARINA_FAIRY;
+        case ItemId::OcarinaOfTime: return GID_OCARINA_TIME;
+        case ItemId::ZeldasLullaby: return GID_SONG_ZELDA;
+        case ItemId::EponasSong: return GID_SONG_EPONA;
+        case ItemId::SariasSong: return GID_SONG_SARIA;
+        case ItemId::SunsSong: return GID_SONG_SUN;
+        case ItemId::SongOfTime: return GID_SONG_TIME;
+        case ItemId::SongOfStorms: return GID_SONG_STORM;
+        case ItemId::MinuetOfForest: return GID_SONG_MINUET;
+        case ItemId::BoleroOfFire: return GID_SONG_BOLERO;
+        case ItemId::SerenadeOfWater: return GID_SONG_SERENADE;
+        case ItemId::NocturneOfShadow: return GID_SONG_NOCTURNE;
+        case ItemId::RequiemOfSpirit: return GID_SONG_REQUIEM;
+        case ItemId::PreludeOfLight: return GID_SONG_PRELUDE;
+        case ItemId::KokiriTunic: case ItemId::GoronTunic: return GID_TUNIC_GORON;
+        case ItemId::ZoraTunic: return GID_TUNIC_ZORA;
+        case ItemId::KokiriBoots: case ItemId::IronBoots: return GID_BOOTS_IRON;
+        case ItemId::HoverBoots: return GID_BOOTS_HOVER;
+        case ItemId::GoronBracelet: return GID_BRACELET;
+        case ItemId::SilverGauntlets: return GID_GAUNTLETS_SILVER;
+        case ItemId::GoldenGauntlets: return GID_GAUNTLETS_GOLD;
+        case ItemId::KeatonMask: return GID_MASK_KEATON;
+        case ItemId::SkullMask: return GID_MASK_SKULL;
+        case ItemId::SpookyMask: return GID_MASK_SPOOKY;
+        case ItemId::BunnyHood: return GID_MASK_BUNNY;
+        case ItemId::GoronMask: return GID_MASK_GORON;
+        case ItemId::ZoraMask: return GID_MASK_ZORA;
+        case ItemId::GerudoMask: return GID_MASK_GERUDO;
+        case ItemId::MaskOfTruth: return GID_MASK_TRUTH;
+        case ItemId::SilverScale: return GID_SCALE_SILVER;
+        case ItemId::GoldenScale: return GID_SCALE_GOLDEN;
+        case ItemId::BigQuiver: return GID_QUIVER_50;
+        case ItemId::BulletBag: return GID_BULLET_BAG_50;
+        case ItemId::BombBag: return GID_BOMB_BAG_40;
+        case ItemId::ForestMedallion: return GID_MEDALLION_FOREST;
+        case ItemId::FireMedallion: return GID_MEDALLION_FIRE;
+        case ItemId::WaterMedallion: return GID_MEDALLION_WATER;
+        case ItemId::SpiritMedallion: return GID_MEDALLION_SPIRIT;
+        case ItemId::ShadowMedallion: return GID_MEDALLION_SHADOW;
+        case ItemId::LightMedallion: return GID_MEDALLION_LIGHT;
+        case ItemId::KokiriEmerald: return GID_KOKIRI_EMERALD;
+        case ItemId::GoronRuby: return GID_GORON_RUBY;
+        case ItemId::ZoraSapphire: return GID_ZORA_SAPPHIRE;
+        default: return -1;   // rupees keep the game's own rupee drawing
+    }
+}
+
+// How big a model is drawn (the game's own item drops use 25; long things are drawn smaller so they do not tower over the player).
+float GidScale(int gid) {
+    switch (gid) {
+        case GID_SWORD_KOKIRI: case GID_SWORD_BGS: case GID_HAMMER: case GID_BOW: case GID_HOOKSHOT: case GID_LONGSHOT: return 17.0f;
+        case GID_TUNIC_GORON: case GID_TUNIC_ZORA: case GID_SHIELD_DEKU: case GID_SHIELD_HYLIAN: case GID_SHIELD_MIRROR: return 20.0f;
+        default: return 25.0f;
+    }
+}
+
+void Loot_Draw(Actor* actor, PlayState* play) {
+    auto idx = gLootOf.find(actor);
+    if (idx == gLootOf.end()) return;
+    const LootActor& la = gLoot[idx->second];
+    if (la.gid < 0) return;
+    func_8002EBCC(actor, play, 0);   // the same highlights the game's own 3D drops get
+    func_8002ED80(actor, play, 0);
+    const float k = GidScale(la.gid);
+    Matrix_Scale(k, k, k, MTXMODE_APPLY);
+    GetItem_Draw(play, static_cast<s16>(la.gid));
+}
+
 void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     if (l.chest) { SpawnChest(index, l, groundY); return; } // generated loot is in chests; only dropped items lie on the ground
     royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
@@ -1544,6 +1656,11 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     actor->destroy = Loot_Destroy;
     gLoot[index] = { actor, groundY, 0 };
     gLoot[index].rarity = rarity;
+    gLoot[index].gid = GidFor(static_cast<royale::ItemId>(l.item));
+    if (gLoot[index].gid >= 0) {   // the item's real model instead of the stand-in
+        actor->draw = Loot_Draw;
+        Actor_SetScale(actor, 0.03f);
+    }
     gLootOf[actor] = index;
     std::string label = LootLabel(l);
     NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", 26, RarityColor(rarity) });

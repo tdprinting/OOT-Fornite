@@ -1180,15 +1180,25 @@ class Match {
         e.a = p.id; e.b = killer;
         events.push_back(e);
     }
+    // Only part of the kit is left behind: a random half of the items (at least one, never all of them when there is more than one) and
+    // about 60 per cent of the money and ammo. The rest goes with the player.
     void DropKit(const PlayerState& p) {
-        DropEquipment(p, p.weapon);
-        for (const Equipped& spare : p.reserve) DropEquipment(p, spare);
-        if (p.hasShield) DropEquipment(p, p.shield);
-        if (p.hasAbility) DropEquipment(p, p.ability);
-        for (int slot = 0; slot < kGearSlots; slot++) {
-            if (p.gearMask & (1 << slot)) DropEquipment(p, p.gear[slot]);
+        std::vector<const Equipped*> kit;
+        auto add = [&](const Equipped& e) { if (!IsStarter(e)) kit.push_back(&e); };
+        add(p.weapon);
+        for (const Equipped& spare : p.reserve) add(spare);
+        if (p.hasShield) add(p.shield);
+        if (p.hasAbility) add(p.ability);
+        for (int slot = 0; slot < kGearSlots; slot++) if (p.gearMask & (1 << slot)) add(p.gear[slot]);
+        for (const Equipped& potion : p.potions) add(potion);
+        Rng rng(seed ^ ((static_cast<uint64_t>(p.id) + 1) * 0x9E3779B97F4A7C15ull) ^ 0x64726F70ull);   // "drop"
+        for (size_t i = kit.size(); i > 1; i--) std::swap(kit[i - 1], kit[rng.Below(static_cast<uint32_t>(i))]);
+        if (!kit.empty()) {
+            const int n = static_cast<int>(kit.size());
+            int keep = static_cast<int>(std::lround(n * kDeathDropShare + (rng.Unit() - 0.5)));
+            keep = (std::max)(1, (std::min)(keep, n > 1 ? n - 1 : 1));
+            for (int i = 0; i < keep; i++) DropEquipment(p, *kit[static_cast<size_t>(i)]);
         }
-        for (const Equipped& potion : p.potions) DropEquipment(p, potion);
         // Their money and ammo too, in a few piles so it isn't one jackpot: rupees in lumps of up to 50, each kind of ammo in one pile.
         const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
         int pile = 0;
@@ -1198,7 +1208,7 @@ class Match {
             if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = p.pos;
             return at;
         };
-        for (int left = p.rupees; left > 0 && pile < 8;) {
+        for (int left = ShareOf(p.rupees); left > 0 && pile < 8;) {
             const int lump = (std::min)(left, 50);
             LootSpawn l = {spot(), ItemId::Rupees, Rarity::Common, false, false};
             l.amount = static_cast<uint16_t>(lump);
@@ -1208,10 +1218,11 @@ class Match {
         for (int k = 0; k < kAmmoKinds; k++) {
             if (p.ammo[static_cast<size_t>(k)] <= 0) continue;
             LootSpawn l = {spot(), AmmoItem(static_cast<AmmoKind>(k)), Rarity::Common, false, false};
-            l.amount = static_cast<uint16_t>(p.ammo[static_cast<size_t>(k)]);
+            l.amount = static_cast<uint16_t>((std::max)(1, ShareOf(p.ammo[static_cast<size_t>(k)])));
             AddLoot(l);
         }
     }
+    static int ShareOf(int amount) { return (amount * 60 + 99) / 100; }
 
     // A Fairy in the bag brings a dying player back with half their hearts and a moment of safety.
     bool TryFairy(PlayerState& p) {

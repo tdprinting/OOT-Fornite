@@ -23,6 +23,9 @@ constexpr float kLobbyStartGraceSec = 30.0f; // if the host's game hasn't starte
 constexpr float kMaxShield = 3.0f;   // the shield bar under the hearts, in hearts' worth of damage it soaks up (shown as 0 to 100)
 constexpr int kMinPlayers = 2;        // the host's player-count slider runs from kMinPlayers to kMaxPlayers
 constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
+// Share of a player's items that is left on the ground when they are eliminated (money and ammo drop 60%).
+constexpr float kDeathDropShare = 0.5f;
+
 constexpr int kMaxProps = 1200;
 
 // Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.
