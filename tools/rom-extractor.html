@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OOT ROM Extractor</title>
+<style>
+body{margin:0;font:14px system-ui,sans-serif;background:#14161c;color:#e6e6e6;display:flex;height:100vh}
+#side{width:300px;overflow:auto;padding:10px;background:#1b1e26;box-sizing:border-box}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#drop{margin:10px;padding:30px;border:3px dashed #5a6;border-radius:12px;text-align:center;font-size:18px}
+#drop.over{background:#243}
+#view{flex:1;width:100%;min-height:0;background:#0b0d12}
+.row{padding:4px 6px;cursor:pointer;border-radius:4px}.row:hover{background:#2a2f3b}.row.sel{background:#35508a}
+button{background:#3b6;border:0;color:#fff;padding:6px 10px;margin:2px;border-radius:5px;cursor:pointer}
+button:disabled{background:#444}
+#bar{padding:6px 10px;background:#1b1e26}
+#log{font:12px monospace;white-space:pre-wrap;max-height:90px;overflow:auto;padding:4px 10px;color:#9c9}
+h3{margin:10px 0 4px}
+</style></head><body>
+<div id="side"><div id="title"><b>OOT ROM Extractor</b></div><h3>Maps</h3><div id="scenes"></div><h3>Models</h3><div id="objs"></div></div>
+<div id="main">
+<div id="drop">Drag your Ocarina of Time ROM (.z64 / .v64 / .n64) here<br><small>Everything happens in your browser. Nothing is uploaded.</small></div>
+<div id="bar">
+<label><input type="checkbox" id="showRooms" checked> Rooms</label>
+<label><input type="checkbox" id="showCol"> Collision</label>
+<label><input type="checkbox" id="showAct" checked> Actors</label>
+<button id="bObj" disabled>Save OBJ</button><button id="bPly" disabled>Save PLY</button>
+<button id="bPng" disabled>Save top-down PNG</button><button id="bJson" disabled>Save analysis JSON</button>
+<button id="bAll" disabled>Analyse ALL maps (JSON to share)</button>
+</div>
+<canvas id="view"></canvas><div id="log"></div></div>
+<script>
+// BEGIN_LIB
+// ===== ROMLIB: everything that reads the ROM. No page code in here, so the tests can run it under Node. =====
+const ROMLIB = (function () {
+    'use strict';
+    const be32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+    const be16 = (b, o) => (b[o] << 8) | b[o + 1];
+    const s16 = (b, o) => { const v = (b[o] << 8) | b[o + 1]; return v & 0x8000 ? v - 0x10000 : v; };
+    const s8 = v => (v & 0x80 ? v - 0x100 : v);
+
+    // ---- the ROM file: any of the three byte orders people have them in ----------------------------------------------------------
+    function normalizeRom(buffer) {
+        const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        if (u8.length < 0x100000) throw new Error('That file is too small to be an Ocarina of Time ROM.');
+        const magic = be32(u8, 0);
+        let out = u8, order = 'z64 (big endian)';
+        if (magic === 0x37804012) {            // v64: every pair of bytes swapped
+            out = new Uint8Array(u8.length);
+            for (let i = 0; i + 1 < u8.length; i += 2) { out[i] = u8[i + 1]; out[i + 1] = u8[i]; }
+            order = 'v64 (byte swapped), converted';
+        } else if (magic === 0x40123780) {     // n64: every word reversed
+            out = new Uint8Array(u8.length);
+            for (let i = 0; i + 3 < u8.length; i += 4) { out[i] = u8[i + 3]; out[i + 1] = u8[i + 2]; out[i + 2] = u8[i + 1]; out[i + 3] = u8[i]; }
+            order = 'n64 (little endian), converted';
+        } else if (magic !== 0x80371240) {
+            throw new Error('That does not look like an N64 ROM (unknown header).');
+        }
+        let title = '';
+        for (let i = 0x20; i < 0x34; i++) title += out[i] >= 32 && out[i] < 127 ? String.fromCharCode(out[i]) : '';
+        let code = '';
+        for (let i = 0x3B; i < 0x3F; i++) code += String.fromCharCode(out[i]);
+        return { rom: out, order, title: title.trim(), code, isZelda: /ZELDA/i.test(title) };
+    }
+
+    // ---- Yaz0 --------------------------------------------------------------------------------------------------------------------
+    function yaz0(src) {
+        if (!(src[0] === 0x59 && src[1] === 0x61 && src[2] === 0x7A && src[3] === 0x30)) return src;   // "Yaz0"; anything else is already plain
+        const size = be32(src, 4);
+        const out = new Uint8Array(size);
+        let sp = 16, dp = 0;
+        while (dp < size && sp < src.length) {
+            const code = src[sp++];
+            for (let bit = 0x80; bit && dp < size; bit >>= 1) {
+                if (code & bit) { out[dp++] = src[sp++]; continue; }
+                const b1 = src[sp++], b2 = src[sp++];
+                const dist = (((b1 & 0x0F) << 8) | b2) + 1;
+                let n = b1 >> 4;
+                n = n === 0 ? src[sp++] + 0x12 : n + 2;
+                for (let i = 0; i < n && dp < size; i++, dp++) out[dp] = dp - dist >= 0 ? out[dp - dist] : 0;
+            }
+        }
+        return out;
+    }
+
+    // ---- the file table (dmadata) --------------------------------------------------------------------------------------------------
+    function findDmaTable(rom) {
+        const limit = Math.min(rom.length - 0x40, 0x400000);
+        for (let o = 0; o < limit; o += 0x10) {
+            if (be32(rom, o) === 0 && be32(rom, o + 4) === 0x1060 && be32(rom, o + 8) === 0 && be32(rom, o + 12) === 0 && be32(rom, o + 16) === 0x1060) {
+                const entries = [];
+                for (let i = 0; i < 6000 && o + i * 16 + 16 <= rom.length; i++) {
+                    const p = o + i * 16;
+                    const e = { vs: be32(rom, p), ve: be32(rom, p + 4), ps: be32(rom, p + 8), pe: be32(rom, p + 12), index: i };
+                    if (e.vs === 0 && e.ve === 0 && e.ps === 0 && e.pe === 0 && i > 2) break;
+                    if (e.ve < e.vs || e.vs > 0x10000000) break;
+                    entries.push(e);
+                }
+                if (entries.length > 100) return { offset: o, entries };
+            }
+        }
+        throw new Error('Could not find the ROM\'s file table. Is this an Ocarina of Time ROM?');
+    }
+
+    function fileBytes(rom, e) {
+        if (e.ps === 0xFFFFFFFF || e.ve <= e.vs) return null;
+        if (e.pe === 0) return rom.subarray(e.ps, e.ps + (e.ve - e.vs));
+        return yaz0(rom.subarray(e.ps, e.pe));
+    }
+
+    // ---- the tables that live in the code file ---------------------------------------------------------------------------------------
+    // The scene table is 110 entries of 0x14 bytes: {scene start, scene end, title card start, title card end, ...}, every address one of the
+    // ROM's own files. Rather than hard-code where it is in each ROM version, find the longest run of entries that fit that pattern.
+    function findTable(rom, dma, stride, matcher, minRun, maxIndex, exclude, accept) {
+        const known = new Map();
+        for (const e of dma.entries) if (e.ve > e.vs && e.ps !== 0xFFFFFFFF) known.set(e.vs, e);
+        let best = null;
+        const limit = Math.min(maxIndex || 120, dma.entries.length);
+        for (let i = 0; i < limit; i++) {
+            const e = dma.entries[i];
+            const size = e.ve - e.vs;
+            if (size < 0x20000 || size > 0x600000 || e.ps === 0xFFFFFFFF) continue;
+            const data = fileBytes(rom, e);
+            if (!data) continue;
+            for (let off = 0; off + stride * minRun <= data.length; off += 4) {
+                if (exclude && exclude.file === i && off >= exclude.from && off < exclude.to) { off = exclude.to - 4; continue; }
+                let k = 0;
+                while (off + stride * (k + 1) <= data.length && matcher(data, off + stride * k, known, k)) k++;
+                if (k >= minRun && (!best || k > best.count) && (!accept || accept(data, off, k))) best = { file: i, offset: off, count: k, data };
+                if (k > 1) off += 4 * (k - 1) * (stride / 4) - 4 + (stride === 0x14 ? 0 : 0);
+            }
+        }
+        return best;
+    }
+
+    function findSceneTable(rom, dma) {
+        const matcher = (d, o, known) => {
+            const a = be32(d, o), b = be32(d, o + 4), c = be32(d, o + 8), dd = be32(d, o + 12);
+            const ka = known.get(a);
+            if (!ka || ka.ve !== b) return false;
+            if (c === 0 && dd === 0) return true;
+            const kc = known.get(c);
+            return !!kc && kc.ve === dd;
+        };
+        const found = findTable(rom, dma, 0x14, matcher, 30, 120);
+        if (!found) throw new Error('Could not find the scene table in the ROM\'s code file.');
+        const scenes = [];
+        for (let k = 0; k < Math.min(found.count, 110); k++) {
+            const o = found.offset + k * 0x14;
+            scenes.push({ id: k, sceneStart: be32(found.data, o), sceneEnd: be32(found.data, o + 4), titleStart: be32(found.data, o + 8), titleEnd: be32(found.data, o + 12) });
+        }
+        return { scenes, codeFile: found.file, offset: found.offset };
+    }
+
+    // The object table: 8 bytes each {start, end}; entry 0 is empty and unused ones are {0, 0}.
+    function findObjectTable(rom, dma, scenes) {
+        const matcher = (d, o, known, k) => {
+            const a = be32(d, o), b = be32(d, o + 4);
+            if (a === 0 && b === 0) return k < 400;
+            const ka = known.get(a);
+            return !!ka && ka.ve === b;
+        };
+        const nonZero = (d, o, k) => { let n = 0; for (let j = 0; j < k; j++) if (be32(d, o + j * 8)) n++; return n >= 60; };
+        const st = scenes ? { file: scenes.codeFile, from: scenes.offset, to: scenes.offset + scenes.scenes.length * 0x14 } : null;
+        const found = findTable(rom, dma, 8, matcher, 150, 120, st, nonZero);
+        if (!found) return null;
+        // zero entries before the table would shift every index: the real table starts with exactly one empty entry
+        let first = 0;
+        while (first < found.count && !be32(found.data, found.offset + first * 8)) first++;
+        const base = found.offset + Math.max(0, first - 1) * 8;
+        const objects = [];
+        for (let k = 0; k < Math.min(found.count - Math.max(0, first - 1), 402); k++) objects.push({ id: k, start: be32(found.data, base + k * 8), end: be32(found.data, base + k * 8 + 4) });
+        return { objects, codeFile: found.file };
+    }
+
+    // ---- scene and room headers ------------------------------------------------------------------------------------------------------
+    function headerCommands(b) {
+        const cmds = [];
+        for (let o = 0; o + 8 <= b.length && cmds.length < 80; o += 8) {
+            const id = b[o];
+            cmds.push({ id, d1: b[o + 1], d2: be32(b, o + 4), w0: be32(b, o), off: o });
+            if (id === 0x14) break;
+        }
+        return cmds;
+    }
+    const segOff = (addr, seg) => ((addr >>> 24) === seg ? addr & 0xFFFFFF : -1);
+
+    function readActor(b, o) {
+        return { id: be16(b, o), x: s16(b, o + 2), y: s16(b, o + 4), z: s16(b, o + 6), rx: s16(b, o + 8), ry: s16(b, o + 10), rz: s16(b, o + 12), params: be16(b, o + 14) };
+    }
+
+    function parseCollision(b, off) {
+        if (off < 0 || off + 0x2C > b.length) return null;
+        const c = { min: [s16(b, off), s16(b, off + 2), s16(b, off + 4)], max: [s16(b, off + 6), s16(b, off + 8), s16(b, off + 10)] };
+        const nv = be16(b, off + 12), vp = segOff(be32(b, off + 16), 2);
+        const np = be16(b, off + 20), pp = segOff(be32(b, off + 24), 2);
+        const sp = segOff(be32(b, off + 28), 2);
+        const nw = be16(b, off + 36), wp = segOff(be32(b, off + 40), 2);
+        if (vp < 0 || pp < 0 || vp + nv * 6 > b.length || pp + np * 16 > b.length || nv > 20000 || np > 40000) return null;
+        const verts = new Float32Array(nv * 3);
+        for (let i = 0; i < nv; i++) { verts[i * 3] = s16(b, vp + i * 6); verts[i * 3 + 1] = s16(b, vp + i * 6 + 2); verts[i * 3 + 2] = s16(b, vp + i * 6 + 4); }
+        const tris = [];   // each: [a, b, c, exitIndex, floorProperty, wallType, nx, ny, nz]
+        for (let i = 0; i < np; i++) {
+            const o = pp + i * 16;
+            const type = be16(b, o);
+            const a = be16(b, o + 2) & 0x1FFF, bb = be16(b, o + 4) & 0x1FFF, cc = be16(b, o + 6) & 0x1FFF;
+            if (a >= nv || bb >= nv || cc >= nv) continue;
+            let exit = 0, floorType = 0;
+            if (sp >= 0 && sp + (type + 1) * 8 <= b.length) { const w0 = be32(b, sp + type * 8); exit = (w0 >>> 8) & 0x1F; floorType = (w0 >>> 13) & 0x1F; }
+            tris.push([a, bb, cc, exit, floorType, 0, s16(b, o + 8) / 32767, s16(b, o + 10) / 32767, s16(b, o + 12) / 32767]);
+        }
+        const water = [];
+        if (wp >= 0 && nw < 200) for (let i = 0; i < nw && wp + i * 16 + 16 <= b.length; i++) {
+            const o = wp + i * 16;
+            water.push({ x: s16(b, o), y: s16(b, o + 2), z: s16(b, o + 4), w: be16(b, o + 6), l: be16(b, o + 8) });
+        }
+        c.verts = verts; c.tris = tris; c.water = water;
+        return c;
+    }
+
+    function parseScene(sceneBytes, loadRoom) {
+        const out = { spawns: [], actors: [], transitions: [], exits: [], rooms: [], collision: null };
+        for (const cmd of headerCommands(sceneBytes)) {
+            const o = segOff(cmd.d2, 2);
+            switch (cmd.id) {
+                case 0x00: if (o >= 0) for (let i = 0; i < cmd.d1 && o + i * 16 + 16 <= sceneBytes.length; i++) out.spawns.push(readActor(sceneBytes, o + i * 16)); break;
+                case 0x01: if (o >= 0) for (let i = 0; i < cmd.d1 && o + i * 16 + 16 <= sceneBytes.length; i++) out.actors.push(readActor(sceneBytes, o + i * 16)); break;
+                case 0x03: out.collision = parseCollision(sceneBytes, o); break;
+                case 0x0E: if (o >= 0) for (let i = 0; i < cmd.d1 && o + i * 16 + 16 <= sceneBytes.length; i++) {
+                    const p = o + i * 16;
+                    out.transitions.push({ front: s8(sceneBytes[p]), back: s8(sceneBytes[p + 2]), actor: be16(sceneBytes, p + 4), x: s16(sceneBytes, p + 6), y: s16(sceneBytes, p + 8), z: s16(sceneBytes, p + 10), ry: s16(sceneBytes, p + 12), params: be16(sceneBytes, p + 14) });
+                } break;
+                case 0x13: if (o >= 0) for (let i = 0; i < 64 && o + i * 2 + 2 <= sceneBytes.length; i++) out.exits.push(be16(sceneBytes, o + i * 2)); break;
+                case 0x04: if (o >= 0) for (let i = 0; i < cmd.d1 && o + i * 8 + 8 <= sceneBytes.length; i++) {
+                    const vs = be32(sceneBytes, o + i * 8), ve = be32(sceneBytes, o + i * 8 + 4);
+                    const bytes = loadRoom ? loadRoom(vs, ve) : null;
+                    out.rooms.push({ index: i, vs, ve, bytes });
+                } break;
+                default: break;
+            }
+        }
+        // each room's own actors and mesh
+        for (const room of out.rooms) {
+            room.actors = [];
+            room.meshes = [];
+            if (!room.bytes) continue;
+            for (const cmd of headerCommands(room.bytes)) {
+                const o = segOff(cmd.d2, 3);
+                if (cmd.id === 0x01 && o >= 0) for (let i = 0; i < cmd.d1 && o + i * 16 + 16 <= room.bytes.length; i++) { const a = readActor(room.bytes, o + i * 16); a.room = room.index; room.actors.push(a); }
+                if (cmd.id === 0x0A && o >= 0) {
+                    const type = room.bytes[o], num = room.bytes[o + 1];
+                    const start = segOff(be32(room.bytes, o + 4), 3);
+                    if ((type === 0 || type === 2) && start >= 0 && num < 128) {
+                        const step = type === 0 ? 8 : 16, add = type === 0 ? 0 : 8;
+                        for (let i = 0; i < num && start + i * step + step <= room.bytes.length; i++) {
+                            const p = start + i * step + add;
+                            room.meshes.push({ opa: be32(room.bytes, p), xlu: be32(room.bytes, p + 4) });
+                        }
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    // ---- display lists (F3DEX2) -> triangles ---------------------------------------------------------------------------------------------
+    const G_LIGHTING = 0x20000;
+    function walkDisplayList(start, segs, opts) {
+        opts = opts || {};
+        const maxTris = opts.maxTris || 1500000;
+        const pos = [], col = [];
+        const vtx = new Array(32);
+        let mode = 0;
+        const stack = [];
+        let addr = start;
+        let steps = 0, depth = 0;
+        const base = [0.78, 0.76, 0.70];
+        const fetch = (a, n) => {
+            const bytes = segs[a >>> 24];
+            const off = a & 0xFFFFFF;
+            return bytes && off + n <= bytes.length ? { bytes, off } : null;
+        };
+        const push = (i) => {
+            const v = vtx[i];
+            if (!v) return false;
+            pos.push(v.x, v.y, v.z);
+            col.push(v.r, v.g, v.b);
+            return true;
+        };
+        const tri = (a, b, c) => {
+            if (!vtx[a] || !vtx[b] || !vtx[c]) return;
+            push(a); push(b); push(c);
+        };
+        while (steps++ < 400000 && pos.length / 9 < maxTris) {
+            const f = fetch(addr, 8);
+            if (!f) { if (!stack.length) break; addr = stack.pop(); depth--; continue; }
+            const w0 = be32(f.bytes, f.off), w1 = be32(f.bytes, f.off + 4);
+            const op = w0 >>> 24;
+            addr = (addr + 8) >>> 0;
+            if (op === 0xDF) { if (!stack.length) break; addr = stack.pop(); depth--; }
+            else if (op === 0xDE) {
+                if (((w0 >>> 16) & 0xFF) === 1) addr = w1;
+                else if (depth < 12) { stack.push(addr); depth++; addr = w1; }
+            } else if (op === 0x01) {
+                const n = (w0 >>> 12) & 0xFF, v0 = ((w0 >>> 1) & 0x7F) - n;
+                const vf = fetch(w1, n * 16);
+                if (vf && v0 >= 0 && v0 + n <= 32) for (let i = 0; i < n; i++) {
+                    const o = vf.off + i * 16, b = vf.bytes;
+                    const x = s16(b, o), y = s16(b, o + 2), z = s16(b, o + 4);
+                    let r, g, bl;
+                    if (mode & G_LIGHTING) {            // the bytes are a normal: shade it from a fixed light
+                        const nx = s8(b[o + 12]) / 127, ny = s8(b[o + 13]) / 127, nz = s8(b[o + 14]) / 127;
+                        const l = Math.max(0.3, Math.min(1, nx * 0.35 + ny * 0.8 + nz * 0.45));
+                        r = base[0] * l; g = base[1] * l; bl = base[2] * l;
+                    } else { r = b[o + 12] / 255; g = b[o + 13] / 255; bl = b[o + 14] / 255; }
+                    vtx[v0 + i] = { x, y, z, r, g, b: bl };
+                }
+            } else if (op === 0x05) tri(((w0 >>> 16) & 0xFF) >> 1, ((w0 >>> 8) & 0xFF) >> 1, (w0 & 0xFF) >> 1);
+            else if (op === 0x06 || op === 0x07) {
+                tri(((w0 >>> 16) & 0xFF) >> 1, ((w0 >>> 8) & 0xFF) >> 1, (w0 & 0xFF) >> 1);
+                tri(((w1 >>> 16) & 0xFF) >> 1, ((w1 >>> 8) & 0xFF) >> 1, (w1 & 0xFF) >> 1);
+            } else if (op === 0xD9) mode = ((mode & (w0 & 0xFFFFFF)) | w1) >>> 0;
+        }
+        return { pos: new Float32Array(pos), col: new Float32Array(col), tris: pos.length / 9 };
+    }
+
+    function mergeMeshes(list) {
+        let n = 0;
+        for (const m of list) n += m.pos.length;
+        const pos = new Float32Array(n), col = new Float32Array(n);
+        let o = 0;
+        for (const m of list) { pos.set(m.pos, o); col.set(m.col, o); o += m.pos.length; }
+        return { pos, col, tris: n / 9 };
+    }
+
+    function buildRoomMesh(room, sceneBytes) {
+        const parts = [];
+        const segs = { 2: sceneBytes, 3: room.bytes };
+        for (const m of room.meshes) for (const dl of [m.opa, m.xlu]) if (dl && (dl >>> 24) === 3) parts.push(walkDisplayList(dl, segs));
+        return mergeMeshes(parts);
+    }
+
+    // ---- objects: models are display lists inside object files; find them, and the skeletons that arrange them ----------------------------
+    const DL_OPS = new Set([0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0xD7, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEB, 0xF0, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xDC, 0xE0, 0xEA, 0xEC, 0xED, 0xEE, 0xEF]);
+    function findDisplayLists(obj, limit) {
+        const found = [];
+        let coveredUntil = 0;
+        const segs = { 6: obj };
+        for (let o = 0; o + 8 <= obj.length && found.length < (limit || 2500); o += 8) {
+            if (o < coveredUntil) continue;
+            const first = obj[o];
+            if (first !== 0xE7 && first !== 0xFD && first !== 0xD9 && first !== 0x01 && first !== 0xDE && first !== 0xE1 && first !== 0xFC && first !== 0xDA && first !== 0xFB) continue;
+            // walk it in place, checking every command is one the chip has
+            let p = o, ok = false;
+            for (let i = 0; i < 2000 && p + 8 <= obj.length; i++, p += 8) {
+                const op = obj[p];
+                if (!DL_OPS.has(op)) break;
+                if (op === 0xDF) { ok = i > 0; p += 8; break; }
+                if (op === 0x01) { const a = be32(obj, p + 4); if ((a >>> 24) !== 6 || (a & 0xFFFFFF) >= obj.length) break; }
+            }
+            if (!ok) continue;
+            const m = walkDisplayList((6 << 24) | o, segs, { maxTris: 40000 });
+            if (m.tris < 1) continue;
+            found.push({ offset: o, end: p, tris: m.tris });
+            coveredUntil = p;
+        }
+        return found;
+    }
+
+    function findSkeletons(obj) {
+        const found = [];
+        for (let o = 0; o + 8 <= obj.length && found.length < 40; o += 4) {
+            const p = be32(obj, o);
+            if ((p >>> 24) !== 6) continue;
+            const n = obj[o + 4];
+            if (n < 3 || n > 60) continue;
+            const table = p & 0xFFFFFF;
+            if (table + 4 * n > obj.length || table % 4) continue;
+            for (const stride of [12, 16]) {
+                const limbs = [];
+                let good = true, withDl = 0;
+                for (let i = 0; i < n && good; i++) {
+                    const lp = be32(obj, table + 4 * i);
+                    if ((lp >>> 24) !== 6) { good = false; break; }
+                    const lo = lp & 0xFFFFFF;
+                    if (lo + stride > obj.length) { good = false; break; }
+                    const child = obj[lo + 6], sibling = obj[lo + 7];
+                    const dl = be32(obj, lo + 8), dl2 = stride === 16 ? be32(obj, lo + 12) : 0;
+                    const dlOk = d => d === 0 || ((d >>> 24) === 6 && (d & 0xFFFFFF) < obj.length) || (stride === 16 && d === 0x80000000);
+                    if (!(child === 0xFF || child < n) || !(sibling === 0xFF || sibling < n) || !dlOk(dl) || (stride === 16 && !dlOk(dl2))) { good = false; break; }
+                    if (dl !== 0) withDl++;
+                    limbs.push({ x: s16(obj, lo), y: s16(obj, lo + 2), z: s16(obj, lo + 4), child, sibling, dl: dl && dl !== 0x80000000 ? dl : 0 });
+                }
+                if (good && withDl >= 2) { found.push({ offset: o, limbCount: n, stride, limbs }); break; }
+            }
+        }
+        return found;
+    }
+
+    function buildSkeletonMesh(obj, skel) {
+        const segs = { 6: obj };
+        const parts = [];
+        const seen = new Set();
+        const visit = (i, px, py, pz) => {
+            if (i === 0xFF || i >= skel.limbs.length || seen.has(i)) return;
+            seen.add(i);
+            const l = skel.limbs[i];
+            const x = px + l.x, y = py + l.y, z = pz + l.z;       // the bind pose: every limb's rotation is zero
+            if (l.dl) {
+                const m = walkDisplayList(l.dl, segs, { maxTris: 20000 });
+                for (let k = 0; k < m.pos.length; k += 3) { m.pos[k] += x; m.pos[k + 1] += y; m.pos[k + 2] += z; }
+                parts.push(m);
+            }
+            visit(l.child, x, y, z);
+            visit(l.sibling, px, py, pz);
+        };
+        visit(0, 0, 0, 0);
+        return mergeMeshes(parts);
+    }
+
+    // ---- analysis and exports --------------------------------------------------------------------------------------------------------------
+    function collisionTriangles(c) {
+        const pos = new Float32Array(c.tris.length * 9);
+        c.tris.forEach((t, i) => { for (let k = 0; k < 3; k++) { pos[i * 9 + k * 3] = c.verts[t[k] * 3]; pos[i * 9 + k * 3 + 1] = c.verts[t[k] * 3 + 1]; pos[i * 9 + k * 3 + 2] = c.verts[t[k] * 3 + 2]; } });
+        return pos;
+    }
+
+    function analyzeScene(info, scene, names) {
+        const rep = { id: info.id, name: info.name, spec: info.spec, rooms: scene.rooms.length };
+        const c = scene.collision;
+        if (c) {
+            rep.bounds = { min: c.min, max: c.max };
+            rep.triangles = c.tris.length;
+            let floorArea = 0, exitTris = 0;
+            const floors = [], exits = new Map();
+            for (const t of c.tris) {
+                const ax = c.verts[t[0] * 3], ay = c.verts[t[0] * 3 + 1], az = c.verts[t[0] * 3 + 2];
+                const bx = c.verts[t[1] * 3], by = c.verts[t[1] * 3 + 1], bz = c.verts[t[1] * 3 + 2];
+                const cx = c.verts[t[2] * 3], cy = c.verts[t[2] * 3 + 1], cz = c.verts[t[2] * 3 + 2];
+                const area = Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax)) / 2;       // area seen from above
+                if (t[7] > 0.7) { floorArea += area; floors.push({ x: (ax + bx + cx) / 3, y: (ay + by + cy) / 3, z: (az + bz + cz) / 3, a: area }); }
+                if (t[3]) {
+                    exitTris++;
+                    const e = exits.get(t[3]) || { exit: t[3], n: 0, x: 0, y: 0, z: 0 };
+                    e.n++; e.x += (ax + bx + cx) / 3; e.y += (ay + by + cy) / 3; e.z += (az + bz + cz) / 3;
+                    exits.set(t[3], e);
+                }
+            }
+            rep.floorAreaUnits2 = Math.round(floorArea);
+            rep.exitTriangles = exitTris;
+            rep.exitZones = [...exits.values()].map(e => ({ exitIndex: e.exit, triangles: e.n, centre: [Math.round(e.x / e.n), Math.round(e.y / e.n), Math.round(e.z / e.n)] }));
+            rep.water = c.water;
+            if (floors.length) {
+                // the same fit the game uses to size the battle royale map: centre of the floor, radius that holds 95% of it
+                let sx = 0, sz = 0, sa = 0;
+                for (const f of floors) { sx += f.x * f.a; sz += f.z * f.a; sa += f.a; }
+                const cx = sx / sa, cz = sz / sa;
+                const d = floors.map(f => ({ r: Math.hypot(f.x - cx, f.z - cz), a: f.a })).sort((p, q) => p.r - q.r);
+                let acc = 0, r95 = 0;
+                for (const q of d) { acc += q.a; if (acc >= sa * 0.95) { r95 = q.r; break; } }
+                rep.floorCentre = [Math.round(cx), Math.round(cz)];
+                rep.radiusHolding95PercentOfFloor = Math.round(r95);
+                const hs = floors.map(f => f.y).sort((p, q) => p - q);
+                rep.floorHeight = { min: Math.round(hs[0]), median: Math.round(hs[Math.floor(hs.length / 2)]), max: Math.round(hs[hs.length - 1]) };
+            }
+        }
+        const count = list => { const m = {}; for (const a of list) { const n = (names.actors[a.id] || '0x' + a.id.toString(16)); m[n] = (m[n] || 0) + 1; } return m; };
+        const allActors = scene.actors.concat(...scene.rooms.map(r => r.actors || []));
+        rep.spawns = scene.spawns.map(a => [a.x, a.y, a.z, a.ry]);
+        rep.actorCount = allActors.length;
+        rep.actorsByType = count(allActors);
+        rep.actors = allActors.map(a => [names.actors[a.id] || a.id, a.x, a.y, a.z, a.params]);
+        rep.loadingZones = scene.transitions.map(t => ({ actor: names.actors[t.actor] || t.actor, at: [t.x, t.y, t.z], rooms: [t.front, t.back] }));
+        rep.exitList = scene.exits;
+        rep.roomTriangles = scene.rooms.map(r => r.mesh ? r.mesh.tris : 0);
+        return rep;
+    }
+
+    function toObj(mesh, name) {
+        const lines = ['# ' + (name || 'mesh') + ' - extracted in the browser from your own ROM; vertex colours are the extra three numbers on each v line'];
+        const n = mesh.pos.length / 3;
+        for (let i = 0; i < n; i++) lines.push('v ' + mesh.pos[i * 3] + ' ' + mesh.pos[i * 3 + 1] + ' ' + mesh.pos[i * 3 + 2] + (mesh.col ? ' ' + mesh.col[i * 3].toFixed(3) + ' ' + mesh.col[i * 3 + 1].toFixed(3) + ' ' + mesh.col[i * 3 + 2].toFixed(3) : ''));
+        for (let i = 0; i < n; i += 3) lines.push('f ' + (i + 1) + ' ' + (i + 2) + ' ' + (i + 3));
+        return lines.join('\n') + '\n';
+    }
+
+    function toPly(mesh) {
+        const n = mesh.pos.length / 3;
+        const lines = ['ply', 'format ascii 1.0', 'element vertex ' + n, 'property float x', 'property float y', 'property float z', 'property uchar red', 'property uchar green', 'property uchar blue',
+                       'element face ' + n / 3, 'property list uchar int vertex_indices', 'end_header'];
+        for (let i = 0; i < n; i++) lines.push(mesh.pos[i * 3] + ' ' + mesh.pos[i * 3 + 1] + ' ' + mesh.pos[i * 3 + 2] + ' ' + Math.round(mesh.col[i * 3] * 255) + ' ' + Math.round(mesh.col[i * 3 + 1] * 255) + ' ' + Math.round(mesh.col[i * 3 + 2] * 255));
+        for (let i = 0; i < n; i += 3) lines.push('3 ' + i + ' ' + (i + 1) + ' ' + (i + 2));
+        return lines.join('\n') + '\n';
+    }
+
+    return { be32, be16, s16, normalizeRom, yaz0, findDmaTable, fileBytes, findSceneTable, findObjectTable, headerCommands, parseCollision, parseScene,
+             walkDisplayList, mergeMeshes, buildRoomMesh, findDisplayLists, findSkeletons, buildSkeletonMesh, collisionTriangles, analyzeScene, toObj, toPly };
+})();
+// ===== end of ROMLIB =====
+// END_LIB
+const NAMES = {"scenes":[[0,"ydan_scene","Deku Tree"],[1,"ddan_scene","Dodongos Cavern"],[2,"bdan_scene","Jabu Jabu"],[3,"Bmori1_scene","Forest Temple"],[4,"HIDAN_scene","Fire Temple"],[5,"MIZUsin_scene","Water Temple"],[6,"jyasinzou_scene","Spirit Temple"],[7,"HAKAdan_scene","Shadow Temple"],[8,"HAKAdanCH_scene","Bottom Of The Well"],[9,"ice_doukutu_scene","Ice Cavern"],[10,"ganon_scene","Ganons Tower"],[11,"men_scene","Gerudo Training Ground"],[12,"gerudoway_scene","Thieves Hideout"],[13,"ganontika_scene","Inside Ganons Castle"],[14,"ganon_sonogo_scene","Ganons Tower Collapse Interior"],[15,"ganontikasonogo_scene","Inside Ganons Castle Collapse"],[16,"takaraya_scene","Treasure Box Shop"],[17,"ydan_boss_scene","Deku Tree Boss"],[18,"ddan_boss_scene","Dodongos Cavern Boss"],[19,"bdan_boss_scene","Jabu Jabu Boss"],[20,"moribossroom_scene","Forest Temple Boss"],[21,"FIRE_bs_scene","Fire Temple Boss"],[22,"MIZUsin_bs_scene","Water Temple Boss"],[23,"jyasinboss_scene","Spirit Temple Boss"],[24,"HAKAdan_bs_scene","Shadow Temple Boss"],[25,"ganon_boss_scene","Ganondorf Boss"],[26,"ganon_final_scene","Ganons Tower Collapse Exterior"],[27,"entra_scene","Market Entrance Day"],[28,"entra_n_scene","Market Entrance Night"],[29,"enrui_scene","Market Entrance Ruins"],[30,"market_alley_scene","Back Alley Day"],[31,"market_alley_n_scene","Back Alley Night"],[32,"market_day_scene","Market Day"],[33,"market_night_scene","Market Night"],[34,"market_ruins_scene","Market Ruins"],[35,"shrine_scene","Temple Of Time Exterior Day"],[36,"shrine_n_scene","Temple Of Time Exterior Night"],[37,"shrine_r_scene","Temple Of Time Exterior Ruins"],[38,"kokiri_home_scene","Know It All Bros House"],[39,"kokiri_home3_scene","Twins House"],[40,"kokiri_home4_scene","Midos House"],[41,"kokiri_home5_scene","Sarias House"],[42,"kakariko_scene","Kakariko Center Guest House"],[43,"kakariko3_scene","Back Alley House"],[44,"shop1_scene","Bazaar"],[45,"kokiri_shop_scene","Kokiri Shop"],[46,"golon_scene","Goron Shop"],[47,"zoora_scene","Zora Shop"],[48,"drag_scene","Potion Shop Kakariko"],[49,"alley_shop_scene","Potion Shop Market"],[50,"night_shop_scene","Bombchu Shop"],[51,"face_shop_scene","Happy Mask Shop"],[52,"link_home_scene","Links House"],[53,"impa_scene","Dog Lady House"],[54,"malon_stable_scene","Stable"],[55,"labo_scene","Impas House"],[56,"hylia_labo_scene","Lakeside Laboratory"],[57,"tent_scene","Carpenters Tent"],[58,"hut_scene","Gravekeepers Hut"],[59,"daiyousei_izumi_scene","Great Fairys Fountain Magic"],[60,"yousei_izumi_tate_scene","Fairys Fountain"],[61,"yousei_izumi_yoko_scene","Great Fairys Fountain Spells"],[62,"kakusiana_scene","Grottos"],[63,"hakaana_scene","Redead Grave"],[64,"hakaana2_scene","Grave With Fairys Fountain"],[65,"hakaana_ouke_scene","Royal Familys Tomb"],[66,"syatekijyou_scene","Shooting Gallery"],[67,"tokinoma_scene","Temple Of Time"],[68,"kenjyanoma_scene","Chamber Of The Sages"],[69,"hairal_niwa_scene","Castle Courtyard Guards Day"],[70,"hairal_niwa_n_scene","Castle Courtyard Guards Night"],[71,"hiral_demo_scene","Cutmap"],[72,"hakasitarelay_scene","Windmill And Dampes Grave"],[73,"turibori_scene","Fishing Pond"],[74,"nakaniwa_scene","Castle Courtyard Zelda"],[75,"bowling_scene","Bombchu Bowling Alley"],[76,"souko_scene","Lon Lon Buildings"],[77,"miharigoya_scene","Market Guard House"],[78,"mahouya_scene","Potion Shop Granny"],[79,"ganon_demo_scene","Ganon Boss"],[80,"kinsuta_scene","House Of Skulltula"],[81,"spot00_scene","Hyrule Field"],[82,"spot01_scene","Kakariko Village"],[83,"spot02_scene","Graveyard"],[84,"spot03_scene","Zoras River"],[85,"spot04_scene","Kokiri Forest"],[86,"spot05_scene","Sacred Forest Meadow"],[87,"spot06_scene","Lake Hylia"],[88,"spot07_scene","Zoras Domain"],[89,"spot08_scene","Zoras Fountain"],[90,"spot09_scene","Gerudo Valley"],[91,"spot10_scene","Lost Woods"],[92,"spot11_scene","Desert Colossus"],[93,"spot12_scene","Gerudos Fortress"],[94,"spot13_scene","Haunted Wasteland"],[95,"spot15_scene","Hyrule Castle"],[96,"spot16_scene","Death Mountain Trail"],[97,"spot17_scene","Death Mountain Crater"],[98,"spot18_scene","Goron City"],[99,"spot20_scene","Lon Lon Ranch"],[100,"ganon_tou_scene","Outside Ganons Castle"],[101,"test01_scene","Test01"],[102,"besitu_scene","Besitu"],[103,"depth_test_scene","Depth Test"],[104,"syotes_scene","Syotes"],[105,"syotes2_scene","Syotes2"],[106,"sutaru_scene","Sutaru"],[107,"hairal_niwa2_scene","Hairal Niwa2"],[108,"sasatest_scene","Sasatest"],[109,"testroom_scene","Testroom"]],"objects":[null,"gameplay_keep","gameplay_field_keep","gameplay_dangeon_keep",null,null,"object_human","object_okuta","object_crow","object_poh","object_dy_obj","object_wallmaster","object_dodongo","object_firefly","object_box","object_fire",null,null,"object_bubble","object_niw","object_link_boy","object_link_child","object_tite","object_reeba","object_peehat","object_kingdodongo","object_horse","object_zf","object_goma","object_zl1","object_gol","object_dodojr","object_torch2","object_bl","object_tp","object_oA1","object_st","object_bw","object_ei","object_horse_normal","object_oB1","object_o_anime","object_spot04_objects","object_ddan_objects","object_hidan_objects","object_horse_ganon","object_oA2","object_spot00_objects","object_mb","object_bombf","object_sk2","object_oE1","object_oE_anime","object_oE2","object_ydan_objects","object_gnd","object_am","object_dekubaba",null,"object_oA3","object_oA4","object_oA5","object_oA6","object_oA7","object_jj","object_oA8","object_oA9","object_oB2","object_oB3","object_oB4","object_horse_zelda","object_opening_demo1","object_warp1","object_b_heart","object_dekunuts","object_oE3","object_oE4","object_menkuri_objects","object_oE5","object_oE6","object_oE7","object_oE8","object_oE9","object_oE10","object_oE11","object_oE12","object_vali","object_oA10","object_oA11","object_mizu_objects","object_fhg","object_ossan","object_mori_hineri1","object_Bb","object_toki_objects","object_yukabyun","object_zl2","object_mjin","object_mjin_flash","object_mjin_dark","object_mjin_flame","object_mjin_ice","object_mjin_soul","object_mjin_wind","object_mjin_oka","object_haka_objects","object_spot06_objects","object_ice_objects","object_relay_objects","object_po_field","object_po_composer","object_mori_hineri1a","object_mori_hineri2","object_mori_hineri2a","object_mori_objects","object_mori_tex","object_spot08_obj","object_warp2","object_hata","object_bird",null,null,null,null,"object_wood02",null,null,null,null,"object_lightbox","object_pu_box",null,null,"object_trap","object_vase","object_im","object_ta","object_tk","object_xc","object_vm","object_bv","object_hakach_objects","object_efc_crystal_light","object_efc_fire_ball","object_efc_flash","object_efc_lgt_shower","object_efc_star_field","object_god_lgt","object_light_ring","object_triforce_spot","object_bdan_objects","object_sd","object_rd","object_po_sisters","object_heavy_object","object_gndd","object_fd","object_du","object_fw","object_medal","object_horse_link_child","object_spot02_objects","object_haka","object_ru1","object_syokudai","object_fd2","object_dh","object_rl","object_efc_tw","object_demo_tre_lgt","object_gi_key","object_mir_ray","object_brob","object_gi_jewel","object_spot09_obj","object_spot18_obj","object_bdoor","object_spot17_obj","object_shop_dungen","object_nb","object_mo","object_sb","object_gi_melody","object_gi_heart","object_gi_compass","object_gi_bosskey","object_gi_medal","object_gi_nuts","object_sa","object_gi_hearts","object_gi_arrowcase","object_gi_bombpouch","object_in","object_tr","object_spot16_obj","object_oE1s","object_oE4s","object_os_anime","object_gi_bottle","object_gi_stick","object_gi_map","object_oF1d_map","object_ru2","object_gi_shield_1","object_dekujr","object_gi_magicpot","object_gi_bomb_1","object_oF1s","object_ma2","object_gi_purse","object_hni","object_tw","object_rr","object_bxa","object_anubice","object_gi_gerudo","object_gi_arrow","object_gi_bomb_2","object_gi_egg","object_gi_scale","object_gi_shield_2","object_gi_hookshot","object_gi_ocarina","object_gi_milk","object_ma1","object_ganon","object_sst","object_ny",null,"object_ny","object_fr","object_gi_pachinko","object_gi_boomerang","object_gi_bow","object_gi_glasses","object_gi_liquid","object_ani","object_demo_6k","object_gi_shield_3","object_gi_letter","object_spot15_obj","object_jya_obj","object_gi_clothes","object_gi_bean","object_gi_fish","object_gi_saw","object_gi_hammer","object_gi_grass","object_gi_longsword","object_spot01_objects","object_md","object_md","object_km1","object_kw1","object_zo","object_kz","object_umajump","object_masterkokiri","object_masterkokirihead","object_mastergolon","object_masterzoora","object_aob","object_ik","object_ahg","object_cne","object_gi_niwatori","object_skj","object_gi_bottle_letter","object_bji","object_bba","object_gi_ocarina_0","object_ds","object_ane","object_boj","object_spot03_object","object_spot07_object","object_fz","object_bob","object_ge1","object_yabusame_point","object_gi_boots_2","object_gi_seed","object_gnd_magic","object_d_elevator","object_d_hsblock","object_d_lift","object_mamenoki","object_goroiwa",null,"object_toryo","object_daiku",null,"object_nwc","object_blkobj","object_gm","object_ms","object_hs","object_ingate","object_lightswitch","object_kusa","object_tsubo","object_gi_gloves","object_gi_coin","object_kanban","object_gjyo_objects","object_owl","object_mk","object_fu","object_gi_ki_tan_mask","object_gi_redead_mask","object_gi_skj_mask","object_gi_rabit_mask","object_gi_truth_mask","object_ganon_objects","object_siofuki","object_stream","object_mm","object_fa","object_os","object_gi_eye_lotion","object_gi_powder","object_gi_mushroom","object_gi_ticketstone","object_gi_brokensword","object_js","object_cs","object_gi_prescription","object_gi_bracelet","object_gi_soldout","object_gi_frog","object_mag","object_door_gerudo","object_gt","object_efc_erupc","object_zl2_anime1","object_zl2_anime2","object_gi_golonmask","object_gi_zoramask","object_gi_gerudomask","object_ganon2","object_ka","object_ts","object_zg","object_gi_hoverboots","object_gi_m_arrow","object_ds2","object_ec","object_fish","object_gi_sutaru","object_gi_goddess","object_ssh","object_bigokuta","object_bg","object_spot05_objects","object_spot12_obj","object_bombiwa","object_hintnuts","object_rs","object_spot00_break","object_gla","object_shopnuts","object_geldb","object_gr","object_dog","object_jya_iron","object_jya_door",null,"object_spot11_obj","object_kibako2","object_dns","object_dnk","object_gi_fire","object_gi_insect","object_gi_butterfly","object_gi_ghost","object_gi_soul","object_bowl","object_demo_kekkai","object_efc_doughnut","object_gi_dekupouch","object_ganon_anime1","object_ganon_anime2","object_ganon_anime3","object_gi_rupy","object_spot01_matoya","object_spot01_matoyab","object_mu","object_wf","object_skb","object_gj","object_geff","object_haka_door","object_gs","object_ps","object_bwall","object_cow","object_cob","object_gi_sword_1","object_door_killer","object_ouke_haka","object_timeblock","object_zl4"],"actors":["Player","Unset 1","En Test","Unset 3","En Girla","Unset 5","Unset 6","En Part","En Light","En Door","En Box","Bg Dy Yoseizo","Bg Hidan Firewall","En Poh","En Okuta","Bg Ydan Sp","En Bom","En Wallmas","En Dodongo","En Firefly","En Horse","En Item00","En Arrow","Unset 17","En Elf","En Niw","Unset 1A","En Tite","En Reeba","En Peehat","En Butte","Unset 1F","En Insect","En Fish","Unset 22","En Holl","En Scene Change","En Zf","En Hata","Boss Dodongo","Boss Goma","En Zl1","En Viewer","En Goma","Bg Pushbox","En Bubble","Door Shutter","En Dodojr","En Bdfire","Unset 31","En Boom","En Torch2","En Bili","En Tp","Unset 36","En St","En Bw","En A Obj","En Eiyer","En River Sound","En Horse Normal","En Ossan","Bg Treemouth","Bg Dodoago","Bg Hidan Dalm","Bg Hidan Hrock","En Horse Ganon","Bg Hidan Rock","Bg Hidan Rsekizou","Bg Hidan Sekizou","Bg Hidan Sima","Bg Hidan Syoku","En Xc","Bg Hidan Curtain","Bg Spot00 Hanebasi","En Mb","En Bombf","En Zl2","Bg Hidan Fslift","En Oe2","Bg Ydan Hasi","Bg Ydan Maruta","Boss Ganondrof","Unset 53","En Am","En Dekubaba","En M Fire1","En M Thunder","Bg Ddan Jd","Bg Breakwall","En Jj","En Horse Zelda","Bg Ddan Kd","Door Warp1","Obj Syokudai","Item B Heart","En Dekunuts","Bg Menkuri Kaiten","Bg Menkuri Eye","En Vali","Bg Mizu Movebg","Bg Mizu Water","Arms Hook","En Fhg","Bg Mori Hineri","En Bb","Bg Toki Hikari","En Yukabyun","Bg Toki Swd","En Fhg Fire","Bg Mjin","Bg Hidan Kousi","Door Toki","Bg Hidan Hamstep","En Bird","Unset 73","Unset 74","Unset 75","Unset 76","En Wood02","Unset 78","Unset 79","Unset 7A","Unset 7B","En Lightbox","En Pu Box","Unset 7E","Unset 7F","En Trap","En Arow Trap","En Vase","Unset 83","En Ta","En Tk","Bg Mori Bigst","Bg Mori Elevator","Bg Mori Kaitenkabe","Bg Mori Rakkatenjo","En Vm","Demo Effect","Demo Kankyo","Bg Hidan Fwbig","En Floormas","En Heishi1","En Rd","En Po Sisters","Bg Heavy Block","Bg Po Event","Obj Mure","En Sw","Boss Fd","Object Kankyo","En Du","En Fd","En Horse Link Child","Door Ana","Bg Spot02 Objects","Bg Haka","Magic Wind","Magic Fire","Unset A0","En Ru1","Boss Fd2","En Fd Fire","En Dh","En Dha","En Rl","En Encount1","Demo Du","Demo Im","Demo Tre Lgt","En Fw","Bg Vb Sima","En Vb Ball","Bg Haka Megane","Bg Haka Meganebg","Bg Haka Ship","Bg Haka Sgami","Unset B2","En Heishi2","En Encount2","En Fire Rock","En Brob","Mir Ray","Bg Spot09 Obj","Bg Spot18 Obj","Boss Va","Bg Haka Tubo","Bg Haka Trap","Bg Haka Huta","Bg Haka Zou","Bg Spot17 Funen","En Syateki Itm","En Syateki Man","En Tana","En Nb","Boss Mo","En Sb","En Bigokuta","En Karebaba","Bg Bdan Objects","Demo Sa","Demo Go","En In","En Tr","Bg Spot16 Bombstone","Unset Ce","Bg Hidan Kowarerukabe","Bg Bombwall","Bg Spot08 Iceblock","En Ru2","Obj Dekujr","Bg Mizu Uzu","Bg Spot06 Objects","Bg Ice Objects","Bg Haka Water","Unset D8","En Ma2","En Bom Chu","En Horse Game Check","Boss Tw","En Rr","En Ba","En Bx","En Anubice","En Anubice Fire","Bg Mori Hashigo","Bg Mori Hashira4","Bg Mori Idomizu","Bg Spot16 Doughnut","Bg Bdan Switch","En Ma1","Boss Ganon","Boss Sst","Unset Ea","Unset Eb","En Ny","En Fr","Item Shield","Bg Ice Shelter","En Ice Hono","Item Ocarina","Unset F2","Unset F3","Magic Dark","Demo 6K","En Anubice Tag","Bg Haka Gate","Bg Spot15 Saku","Bg Jya Goroiwa","Bg Jya Zurerukabe","Unset Fb","Bg Jya Cobra","Bg Jya Kanaami","Fishing","Obj Oshihiki","Bg Gate Shutter","Eff Dust","Bg Spot01 Fusya","Bg Spot01 Idohashira","Bg Spot01 Idomizu","Bg Po Syokudai","Bg Ganon Otyuka","Bg Spot15 Rrbox","Bg Umajump","Unset 109","Arrow Fire","Arrow Ice","Arrow Light","Unset 10D","Unset 10E","Item Etcetera","Obj Kibako","Obj Tsubo","En Wonder Item","En Ik","Demo Ik","En Skj","En Skjneedle","En G Switch","Demo Ext","Demo Shd","En Dns","Elf Msg","En Honotrap","En Tubo Trap","Obj Ice Poly","Bg Spot03 Taki","Bg Spot07 Taki","En Fz","En Po Relay","Bg Relay Objects","En Diving Game","En Kusa","Obj Bean","Obj Bombiwa","Unset 128","Unset 129","Obj Switch","Obj Elevator","Obj Lift","Obj Hsblock","En Okarina Tag","En Yabusame Mark","En Goroiwa","En Ex Ruppy","En Toryo","En Daiku","Unset 134","En Nwc","En Blkobj","Item Inbox","En Ge1","Obj Blockstop","En Sda","En Clear Tag","En Niw Lady","En Gm","En Ms","En Hs","Bg Ingate","En Kanban","En Heishi3","En Syateki Niw","En Attack Niw","Bg Spot01 Idosoko","En Sa","En Wonder Talk","Bg Gjyo Bridge","En Ds","En Mk","En Bom Bowl Man","En Bom Bowl Pit","En Owl","En Ishi","Obj Hana","Obj Lightswitch","Obj Mure2","En Go","En Fu","Unset 154","En Changer","Bg Jya Megami","Bg Jya Lift","Bg Jya Bigmirror","Bg Jya Bombchuiwa","Bg Jya Amishutter","Bg Jya Bombiwa","Bg Spot18 Basket","Unset 15D","En Ganon Organ","En Siofuki","En Stream","Unset 161","En Mm","En Ko","En Kz","En Weather Tag","Bg Sst Floor","En Ani","En Ex Item","Bg Jya Ironobj","En Js","En Jsjutan","En Cs","En Md","En Hy","En Ganon Mant","En Okarina Effect","En Mag","Door Gerudo","Elf Msg2","Demo Gt","En Po Field","Efc Erupc","Bg Zg","En Heishi4","En Zl3","Boss Ganon2","En Kakasi","En Takara Man","Obj Makeoshihiki","Oceff Spot","End Title","Unset 180","En Torch","Demo Ec","Shot Sun","En Dy Extra","En Wonder Talk2","En Ge2","Obj Roomtimer","En Ssh","En Sth","Oceff Wipe","Oceff Storm","En Weiyer","Bg Spot05 Soko","Bg Jya 1Flift","Bg Jya Haheniron","Bg Spot12 Gate","Bg Spot12 Saku","En Hintnuts","En Nutsball","Bg Spot00 Break","En Shopnuts","En It","En Geldb","Oceff Wipe2","Oceff Wipe3","En Niw Girl","En Dog","En Si","Bg Spot01 Objects2","Obj Comb","Bg Spot11 Bakudankabe","Obj Kibako2","En Dnt Demo","En Dnt Jiji","En Dnt Nomal","En Guest","Bg Bom Guard","En Hs2","Demo Kekkai","Bg Spot08 Bakudankabe","Bg Spot17 Bakudankabe","Unset 1Aa","Obj Mure3","En Tg","En Mu","En Go2","En Wf","En Skb","Demo Gj","Demo Geff","Bg Gnd Firemeiro","Bg Gnd Darkmeiro","Bg Gnd Soulmeiro","Bg Gnd Nisekabe","Bg Gnd Iceblock","En Gb","En Gs","Bg Mizu Bwall","Bg Mizu Shutter","En Daiku Kakariko","Bg Bowl Wall","En Wall Tubo","En Po Desert","En Crow","Door Killer","Bg Spot11 Oasis","Bg Spot18 Futa","Bg Spot18 Shutter","En Ma3","En Cow","Bg Ice Turara","Bg Ice Shutter","En Kakasi2","En Kakasi3","Oceff Wipe4","En Eg","Bg Menkuri Nisekabe","En Zo","Obj Makekinsuta","En Ge3","Obj Timeblock","Obj Hamishi","En Zl4","En Mm2","Bg Jya Block","Obj Warp2Block"]};
+// ===== page =====
+if (typeof document !== 'undefined') (function () {
+    const $ = id => document.getElementById(id);
+    const log = t => { $('log').textContent += t + '\n'; $('log').scrollTop = 1e9; };
+    let rom, dma, sceneTab, objTab, cur = null, curKind = '';
+    const cam = { yaw: 0.6, pitch: 0.7, dist: 3000, tx: 0, ty: 0, tz: 0 };
+    const gl = $('view').getContext('webgl');
+    const prog = (() => {
+        const mk = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o; };
+        const p = gl.createProgram();
+        gl.attachShader(p, mk(gl.VERTEX_SHADER, 'attribute vec3 p;attribute vec3 c;uniform mat4 m;varying vec3 v;void main(){v=c;gl_Position=m*vec4(p,1.0);gl_PointSize=6.0;}'));
+        gl.attachShader(p, mk(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec3 v;void main(){gl_FragColor=vec4(v,1.0);}'));
+        gl.linkProgram(p); return p;
+    })();
+    const buf = () => gl.createBuffer();
+    let layers = [];
+    function layer(mesh, mode) { const l = { n: mesh.pos.length / 3, mode, bp: buf(), bc: buf() };
+        gl.bindBuffer(gl.ARRAY_BUFFER, l.bp); gl.bufferData(gl.ARRAY_BUFFER, mesh.pos, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, l.bc); gl.bufferData(gl.ARRAY_BUFFER, mesh.col, gl.STATIC_DRAW); return l; }
+    function persp(f, a, n, fa) { const t = 1 / Math.tan(f / 2); return [t / a, 0, 0, 0, 0, t, 0, 0, 0, 0, (fa + n) / (n - fa), -1, 0, 0, 2 * fa * n / (n - fa), 0]; }
+    function mul(a, b) { const r = new Array(16).fill(0); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) r[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k]; return r; }
+    function draw() {
+        const c = $('view'); const w = c.clientWidth, h = c.clientHeight; if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+        gl.viewport(0, 0, w, h); gl.clearColor(0.04, 0.05, 0.07, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST);
+        const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+        const ex = cam.tx + cam.dist * cp * sy, ey = cam.ty + cam.dist * sp, ez = cam.tz + cam.dist * cp * cy;
+        let fx = cam.tx - ex, fy = cam.ty - ey, fz = cam.tz - ez; const fl = Math.hypot(fx, fy, fz); fx /= fl; fy /= fl; fz /= fl;
+        let rx = fy * 0 - fz * 1, ry = fz * 0 - fx * 0, rz = fx * 1 - fy * 0; rx = -fz; ry = 0; rz = fx; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+        const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+        const view = [rx, ux, -fx, 0, ry, uy, -fy, 0, rz, uz, -fz, 0, -(rx * ex + ry * ey + rz * ez), -(ux * ex + uy * ey + uz * ez), (fx * ex + fy * ey + fz * ez), 1];
+        gl.useProgram(prog); gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'm'), false, mul(persp(0.9, w / h, 20, cam.dist * 20 + 50000), view));
+        const ap = gl.getAttribLocation(prog, 'p'), ac = gl.getAttribLocation(prog, 'c');
+        for (const l of layers) { if (!l.on()) continue;
+            gl.bindBuffer(gl.ARRAY_BUFFER, l.bp); gl.enableVertexAttribArray(ap); gl.vertexAttribPointer(ap, 3, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, l.bc); gl.enableVertexAttribArray(ac); gl.vertexAttribPointer(ac, 3, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(l.mode, 0, l.n); }
+        requestAnimationFrame(draw);
+    }
+    requestAnimationFrame(draw);
+    let drag = null;
+    $('view').onmousedown = e => drag = [e.clientX, e.clientY, e.shiftKey];
+    window.onmouseup = () => drag = null;
+    window.onmousemove = e => { if (!drag) return; const dx = e.clientX - drag[0], dy = e.clientY - drag[1]; drag = [e.clientX, e.clientY, drag[2]];
+        if (drag[2]) { const s = cam.dist / 800; cam.tx -= Math.cos(cam.yaw) * dx * s; cam.tz += Math.sin(cam.yaw) * dx * s; cam.ty += dy * s; }
+        else { cam.yaw -= dx * 0.01; cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + dy * 0.01)); } };
+    $('view').onwheel = e => { e.preventDefault(); cam.dist *= e.deltaY > 0 ? 1.1 : 0.9; };
+
+    function showScene(i) {
+        const info = sceneInfo(i); log('Loading ' + info.name + '...');
+        const sb = ROMLIB.fileBytes(rom, dma.entries.find(e => e.vs === sceneTab.scenes[i].sceneStart)); if (!sb) return log('Scene file missing.');
+        const scene = ROMLIB.parseScene(sb, (vs, ve) => { const e = dma.entries.find(x => x.vs === vs); return e ? ROMLIB.fileBytes(rom, e) : null; });
+        for (const r of scene.rooms) r.mesh = ROMLIB.buildRoomMesh(r, sb);
+        const rooms = ROMLIB.mergeMeshes(scene.rooms.map(r => r.mesh));
+        cur = { info, scene, rooms, sb }; curKind = 'scene';
+        layers = [layer(rooms, gl.TRIANGLES)]; layers[0].on = () => $('showRooms').checked;
+        if (scene.collision) { const cp = ROMLIB.collisionTriangles(scene.collision); const cc = new Float32Array(cp.length / 3 * 3);
+            for (let k = 0; k < cc.length; k += 3) { cc[k] = 0.2; cc[k + 1] = 0.7; cc[k + 2] = 1; }
+            const l = layer({ pos: cp, col: cc }, gl.LINES); l.n = cp.length / 3; l.on = () => $('showCol').checked; layers.push(l); cur.colMesh = { pos: cp, col: cc }; }
+        const act = scene.actors.concat(...scene.rooms.map(r => r.actors)); const ap = new Float32Array(act.length * 3), ac = new Float32Array(act.length * 3);
+        act.forEach((a, k) => { ap[k * 3] = a.x; ap[k * 3 + 1] = a.y; ap[k * 3 + 2] = a.z; ac[k * 3] = 1; ac[k * 3 + 1] = 0.3; ac[k * 3 + 2] = 0.3; });
+        const al = layer({ pos: ap, col: ac }, gl.POINTS); al.on = () => $('showAct').checked; layers.push(al);
+        const c = scene.collision; if (c) { cam.tx = (c.min[0] + c.max[0]) / 2; cam.ty = (c.min[1] + c.max[1]) / 2; cam.tz = (c.min[2] + c.max[2]) / 2; cam.dist = Math.max(c.max[0] - c.min[0], c.max[2] - c.min[2]) * 0.9 + 500; }
+        for (const b of ['bObj', 'bPly', 'bPng', 'bJson']) $(b).disabled = false;
+        log(info.name + ': ' + rooms.tris + ' room triangles, ' + (c ? c.tris.length : 0) + ' collision triangles, ' + act.length + ' actors.');
+    }
+    function showObject(i) {
+        const o = objTab.objects[i], e = dma.entries.find(x => x.vs === o.start); const b = ROMLIB.fileBytes(rom, e); if (!b) return;
+        const sk = ROMLIB.findSkeletons(b); let mesh;
+        if (sk.length) mesh = ROMLIB.buildSkeletonMesh(b, sk[0]); else { const dls = ROMLIB.findDisplayLists(b, 60); mesh = ROMLIB.mergeMeshes(dls.map(d => ROMLIB.walkDisplayList((6 << 24) | d.offset, { 6: b }, { maxTris: 30000 }))); }
+        cur = { info: { name: objName(i) }, rooms: mesh }; curKind = 'object'; layers = [layer(mesh, gl.TRIANGLES)]; layers[0].on = () => true;
+        cam.tx = cam.ty = cam.tz = 0; cam.dist = 400; for (const x of ['bObj', 'bPly']) $(x).disabled = false; for (const x of ['bPng', 'bJson']) $(x).disabled = true;
+        log(objName(i) + ': ' + mesh.tris + ' triangles' + (sk.length ? ' (posed skeleton, ' + sk[0].limbCount + ' limbs)' : ' (loose display lists)'));
+    }
+    const sceneInfo = i => { const n = NAMES.scenes[i]; return { id: i, spec: n ? n[1] : 'scene' + i, name: n ? n[2] : 'Scene ' + i }; };
+    const objName = i => NAMES.objects[i] || 'object_' + i;
+    function save(name, data, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: type || 'text/plain' })); a.download = name; a.click(); }
+    $('bObj').onclick = () => save(cur.info.name.replace(/\W+/g, '_') + '.obj', ROMLIB.toObj(cur.rooms, cur.info.name));
+    $('bPly').onclick = () => save(cur.info.name.replace(/\W+/g, '_') + '.ply', ROMLIB.toPly(cur.rooms));
+    $('bJson').onclick = () => save(cur.info.spec + '_analysis.json', JSON.stringify(ROMLIB.analyzeScene(cur.info, cur.scene, NAMES), null, 1));
+    $('bPng').onclick = () => { const c = cur.scene.collision; if (!c) return; const S = 1024, cv = document.createElement('canvas'); cv.width = cv.height = S; const g = cv.getContext('2d');
+        g.fillStyle = '#000'; g.fillRect(0, 0, S, S); const w = c.max[0] - c.min[0], d = c.max[2] - c.min[2], sc = (S - 20) / Math.max(w, d), V = c.verts;
+        const ys = c.tris.map(t => V[t[0] * 3 + 1]); const lo = Math.min(...ys), hi = Math.max(...ys);
+        c.tris.slice().sort((p, q) => V[p[0] * 3 + 1] - V[q[0] * 3 + 1]).forEach(t => { if (t[7] < 0.5) return; const y = (V[t[0] * 3 + 1] - lo) / Math.max(1, hi - lo);
+            g.fillStyle = t[3] ? '#e33' : 'hsl(' + (120 - y * 90) + ',50%,' + (25 + y * 30) + '%)'; g.beginPath();
+            for (let k = 0; k < 3; k++) { const x = 10 + (V[t[k] * 3] - c.min[0]) * sc, z = 10 + (V[t[k] * 3 + 2] - c.min[2]) * sc; k ? g.lineTo(x, z) : g.moveTo(x, z); } g.fill(); });
+        cv.toBlob(b => save(cur.info.spec + '_top.png', b, 'image/png')); };
+    $('bAll').onclick = () => { const all = []; log('Analysing every map... (a minute or two)');
+        sceneTab.scenes.forEach((s, i) => { try { const e = dma.entries.find(x => x.vs === s.sceneStart); const sb = e && ROMLIB.fileBytes(rom, e); if (!sb) return;
+            const sc = ROMLIB.parseScene(sb, (vs) => { const r = dma.entries.find(x => x.vs === vs); return r ? ROMLIB.fileBytes(rom, r) : null; });
+            for (const r of sc.rooms) r.mesh = ROMLIB.buildRoomMesh(r, sb); all.push(ROMLIB.analyzeScene(sceneInfo(i), sc, NAMES)); } catch (err) { all.push({ id: i, error: String(err) }); } });
+        save('oot_maps_analysis.json', JSON.stringify({ rom: $('title').textContent, scenes: all })); log('Done: ' + all.length + ' maps. Send me that file.'); };
+
+    async function load(file) {
+        try {
+            log('Reading ' + file.name + '...'); const n = ROMLIB.normalizeRom(await file.arrayBuffer()); rom = n.rom;
+            $('title').innerHTML = '<b>' + n.title + '</b> [' + n.code + '] ' + n.order; if (!n.isZelda) log('Warning: this does not say ZELDA; trying anyway.');
+            dma = ROMLIB.findDmaTable(rom); log('File table: ' + dma.entries.length + ' files.');
+            sceneTab = ROMLIB.findSceneTable(rom, dma); log('Scene table: ' + sceneTab.scenes.length + ' maps.');
+            objTab = ROMLIB.findObjectTable(rom, dma, sceneTab); log(objTab ? 'Object table: ' + objTab.objects.length + ' objects.' : 'No object table found (models disabled).');
+            $('scenes').innerHTML = ''; sceneTab.scenes.forEach((s, i) => { const d = document.createElement('div'); d.className = 'row'; d.textContent = i + '  ' + sceneInfo(i).name; d.onclick = () => { document.querySelectorAll('.row').forEach(r => r.classList.remove('sel')); d.classList.add('sel'); setTimeout(() => showScene(i), 10); }; $('scenes').appendChild(d); });
+            $('objs').innerHTML = ''; if (objTab) objTab.objects.forEach((o, i) => { if (!o.end) return; const d = document.createElement('div'); d.className = 'row'; d.textContent = i + '  ' + objName(i); d.onclick = () => setTimeout(() => showObject(i), 10); $('objs').appendChild(d); });
+            $('bAll').disabled = false;
+        } catch (err) { log('ERROR: ' + err.message); }
+    }
+    const dz = $('drop');
+    window.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+    window.addEventListener('dragleave', () => dz.classList.remove('over'));
+    window.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); });
+    dz.onclick = () => { const i = document.createElement('input'); i.type = 'file'; i.onchange = () => i.files[0] && load(i.files[0]); i.click(); };
+})();
+</script></body></html>
