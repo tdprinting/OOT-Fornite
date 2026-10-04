@@ -198,7 +198,39 @@ def find_audio(rom, log=lambda m: None):
             break
     if fonts is None or samples is None:
         raise ValueError("could not find the game's audio tables in this ROM. Is it Ocarina of Time?")
-    return bank, table, fonts, samples
+    seq_fonts = None
+    for o in range(0, len(data) - 0x100, 2):
+        if data[o] == 0:
+            seq_fonts = _seq_font_table_at(data, o, len(fonts))
+            if seq_fonts:
+                log("Song to soundfont table: %d songs" % len(seq_fonts))
+                break
+    return bank, table, fonts, samples, seq_fonts
+
+
+# sequences 0 (sound effects), 1 (nature ambience) and 109 (cutscene effects) are not music
+NOT_MUSIC = {0, 1, 109}
+
+
+def _seq_font_table_at(d, o, n_fonts):
+    """The table of which soundfonts each sequence (song) uses: a u16 offset per sequence, each to a count then that many font ids."""
+    first = d[o] << 8 | d[o + 1]
+    n = first >> 1
+    if first & 1 or not 64 <= n <= 256 or o + first > len(d):
+        return None
+    out = []
+    for k in range(n):
+        off = d[o + 2 * k] << 8 | d[o + 2 * k + 1]
+        if not first <= off <= first + n * 8 or o + off + 1 > len(d):
+            return None
+        c = d[o + off]
+        if not 1 <= c <= 4 or o + off + c >= len(d):
+            return None
+        ids = list(d[o + off + 1:o + off + 1 + c])
+        if any(f >= n_fonts for f in ids):
+            return None
+        out.append(ids)
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -212,10 +244,10 @@ def _unpack_codes(raw, frame_size):
         b = frames[:, 1:].astype(np.int64)
         nib = np.stack([b >> 4, b & 15], axis=2).reshape(-1, 16)
         codes = np.where(nib >= 8, nib - 16, nib)
-    else:                                                        # the small 5-byte kind: 2 bits a sample, in the top of a nibble
+    else:                                                        # the small 5-byte kind: 2-bit signed samples
         b = frames[:, 1:].astype(np.int64)
-        two = np.stack([b >> 6, b >> 4 & 3, b >> 2 & 3, b & 3], axis=2).reshape(-1, 16) << 2
-        codes = np.where(two >= 8, two - 16, two)
+        two = np.stack([b >> 6, b >> 4 & 3, b >> 2 & 3, b & 3], axis=2).reshape(-1, 16)
+        codes = np.where(two >= 2, two - 4, two)
     return head & 15, codes << (head >> 4)[:, None]
 
 
@@ -292,11 +324,11 @@ def read_sample(font, ptr, banks, table):
 def release_seconds(index):
     """The game's release rates (an index into its decay table) -> how long the note takes to fade out after it is let go."""
     if index == 0:
-        return 0.25
+        index = 0xF0                                             # 0: the channel's default
     if index >= 251:
         frames = {251: 0.75, 252: 0.66, 253: 0.5, 254: 0.33, 255: 0.25}[index]
     elif index >= 128:
-        frames = 252 - index
+        frames = 251 - index
     elif index >= 16:
         frames = 4 * (143 - index)
     else:
@@ -315,7 +347,7 @@ def read_envelope(font, ptr):
         delay, level = struct.unpack_from(">hh", font, ptr + 4 * k)
         if delay > 0:
             t += delay * ENV_TICK
-            points.append((t, max(0, level) / 32767.0))
+            points.append((t, (max(0, level) / 32767.0) ** 2))      # the game squares each level
             continue
         silent_end = delay == 0                                  # 0 ends the note; -1 holds, -2 jumps back, -3 restarts: all keep sounding
         break
@@ -336,10 +368,18 @@ def tuning_to_key(tuning):
     return max(0, min(127, 60 - r)), int(round((s - r) * 100))
 
 
-def extract(rom_bytes, log=lambda m: None):
-    """ROM bytes -> (samples, presets) ready for write_sf2."""
+def extract(rom_bytes, log=lambda m: None, all_fonts=False):
+    """ROM bytes -> (samples, presets) ready for write_sf2. Only the soundfonts the game's music uses are kept, unless all_fonts."""
     rom = normalize_rom(rom_bytes)
-    bank, table, fonts, sample_banks = find_audio(rom, log)
+    bank, table, fonts, sample_banks, seq_fonts = find_audio(rom, log)
+    music = set()
+    if seq_fonts:
+        for q, ids in enumerate(seq_fonts):
+            if q not in NOT_MUSIC:
+                music.update(ids)
+    else:
+        log("Could not tell music from sound effects in this ROM, so every soundfont is kept.")
+    keep = lambda f: all_fonts or not seq_fonts or f in music
 
     def bank_offset(i, depth=0):
         if i == 0xFF or i >= len(sample_banks) or depth > 4:
@@ -370,7 +410,7 @@ def extract(rom_bytes, log=lambda m: None):
     for f, (off, size, nins, ndrums, b1, b2) in enumerate(fonts):
         font = bank[off:off + size]
         banks = (bank_offset(b1), bank_offset(b2))
-        if len(font) < 8:
+        if len(font) < 8 or not keep(f):
             continue
         drums_ptr, _sfx_ptr = struct.unpack_from(">II", font, 0)
         for i in range(nins):
@@ -483,11 +523,11 @@ def write_sf2(path, samples, presets, title="Ocarina of Time"):
         f.write(b"RIFF" + struct.pack("<I", len(body)) + body)
 
 
-def rom_to_sf2(rom_path, sf2_path, log=print):
+def rom_to_sf2(rom_path, sf2_path, log=print, all_fonts=False):
     log("Reading %s..." % rom_path)
     with open(rom_path, "rb") as f:
         data = f.read()
-    samples, presets = extract(data, log=lambda m: log("  " + m))
+    samples, presets = extract(data, log=lambda m: log("  " + m), all_fonts=all_fonts)
     write_sf2(sf2_path, samples, presets)
     log("Wrote %s (%.1f MB)" % (sf2_path, os.path.getsize(sf2_path) / 1e6))
     return sf2_path
@@ -502,15 +542,16 @@ def main():
     ap.add_argument("rom", help="your Ocarina of Time ROM (.z64, .v64 or .n64)")
     ap.add_argument("-o", "--out", help="the .sf2 to write (default: oot.sf2 next to the ROM)")
     ap.add_argument("--list", action="store_true", help="only list the instruments found, write nothing")
+    ap.add_argument("--all", action="store_true", help="also keep the sound effect soundfonts (footsteps, items...), not just the music ones")
     args = ap.parse_args()
     try:
         if args.list:
             with open(args.rom, "rb") as f:
-                samples, presets = extract(f.read(), log=print)
+                samples, presets = extract(f.read(), log=print, all_fonts=args.all)
             for p in presets:
                 print("%3d:%-3d %-16s %d zone(s)" % (p["bank"], p["program"], p["name"], len(p["zones"])))
             return
-        rom_to_sf2(args.rom, args.out or os.path.join(os.path.dirname(os.path.abspath(args.rom)), "oot.sf2"))
+        rom_to_sf2(args.rom, args.out or os.path.join(os.path.dirname(os.path.abspath(args.rom)), "oot.sf2"), all_fonts=args.all)
     except (ValueError, OSError) as e:
         sys.exit("Error: %s" % e)
 

@@ -125,8 +125,13 @@ def table_at(o, rows):
 
 
 table_at(0x1000, [(k * 0x100, 0x80, 2, 0, 0, 0, 0) for k in range(12)])                  # a sequence table: same shape, no instruments
-fonts = [(0, 0x400, 2, 0, 0x00FF, 0, 0)] + [(0x400, 0x400, 2, 0, 0x0001, (3 << 8) | 2, 0)] + [(0, 0x10, 2, 0, 0x00FF, 0, 0)] * 8
+fonts = [(0, 0x400, 2, 0, 0x00FF, 0, 0)] + [(0x400, 0x400, 2, 0, 0x0001, (3 << 8) | 2, 0)] * 2 + [(0, 0x10, 2, 0, 0x00FF, 0, 0)] * 7
 table_at(0x2000, fonts)
+# which soundfonts each of 110 sequences uses: sequence 0 (sound effects) uses fonts 0 and 2 (a copy of ours), every song uses font 1
+SEQ, NSEQ = 0x5000, 110
+for k in range(NSEQ):
+    struct.pack_into(">H", code, SEQ + 2 * k, 2 * NSEQ if k == 0 else 2 * NSEQ + 4)
+code[SEQ + 2 * NSEQ:SEQ + 2 * NSEQ + 6] = bytes([2, 0, 2, 0, 1, 1])
 table_at(0x3000, [(0, 0x10000, 2, 0, 0, 0, 0), (0, 0, 2, 0, 0, 0, 0)])
 
 files = {3: bytes(bank), 4: b"\0" * 0x100, 5: bytes(table)}
@@ -162,8 +167,16 @@ ok(any("2 banks" in m for m in logs), "finds the sample bank table")
 names = sorted(p["name"] for p in presets)
 ok(names == ["OoT f01 drums", "OoT f01 i00", "OoT f01 i02"], "presets: two instruments and the drum kit of font 1, empty slots skipped: %s" % names)
 ok(len(samples) == 2, "each sample stored once even when used by several zones")
+ok(any("110 songs" in m for m in logs), "finds which soundfonts each song uses")
+ok(len(x.extract(rom, all_fonts=True)[1]) == 6, "the sound-effect soundfont is left out unless asked for")
 inst0 = next(p for p in presets if p["name"] == "OoT f01 i00")
 ok([z["keys"] for z in inst0["zones"]] == [(0, 50), (51, 71), (72, 127)], "key splits follow the game's note ranges (game note 39 = middle C)")
+
+# the game's rules: levels are squared, release index 0 is the channel default 0xF0, and the small ADPCM kind is 2-bit signed
+ok(abs(x.read_envelope(bytes(font), 0x180)[2] - 0.25) < 0.01, "an envelope that falls to half level sustains at a quarter of the volume")
+ok(abs(x.release_seconds(0) - 11 / 60) < 1e-9 and abs(x.release_seconds(250) - 1 / 60) < 1e-9, "release times follow the game's table")
+_, small = x._unpack_codes(bytes([0x00, 0b00011011, 0, 0, 0]), 5)
+ok(list(small[0][:4]) == [0, 1, -2, -1], "the small ADPCM kind reads 2-bit signed values: %s" % list(small[0][:4]))
 
 # the other byte orders give the same thing
 v64 = np.frombuffer(rom, dtype=np.uint8).reshape(-1, 2)[:, ::-1].tobytes()

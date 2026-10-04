@@ -68,7 +68,12 @@ const bank = new Uint8Array(0x800); bank.set(font, 0x400);
 const code = new Uint8Array(0x90000);
 const tableAt = (o, rows) => { w16(code, o, rows.length); rows.forEach((r, k) => { const p = o + 16 + k * 16; w32(code, p, r[0]); w32(code, p + 4, r[1]); code[p + 8] = r[2]; w16(code, p + 10, r[4]); w16(code, p + 12, r[5]); }); };
 tableAt(0x1000, Array.from({ length: 12 }, (_, k) => [k * 0x100, 0x80, 2, 0, 0, 0]));
-tableAt(0x2000, [[0, 0x400, 2, 0, 0x00FF, 0], [0x400, 0x400, 2, 0, 0x0001, 0x0302]].concat(Array(8).fill([0, 0x10, 2, 0, 0x00FF, 0])));
+tableAt(0x2000, [[0, 0x400, 2, 0, 0x00FF, 0], [0x400, 0x400, 2, 0, 0x0001, 0x0302], [0x400, 0x400, 2, 0, 0x0001, 0x0302]].concat(Array(7).fill([0, 0x10, 2, 0, 0x00FF, 0])));
+// the sequence -> soundfont table: 110 sequences; sequence 0 (sound effects) uses fonts 0 and 2, every song uses font 1
+{ const o = 0x5000, n = 110; w16(code, o, 2 * n); w16(code, o + 2, 2 * n);
+  code[o + 2 * n] = 2; code[o + 2 * n + 1] = 0; code[o + 2 * n + 2] = 2;
+  for (let k = 2; k < n; k++) w16(code, o + 2 * k, 2 * n + 4);
+  code[o + 2 * n + 4] = 1; code[o + 2 * n + 5] = 1; }
 tableAt(0x3000, [[0, 0x10000, 2, 0, 0, 0], [0, 0, 2, 0, 0, 0]]);
 const yaz0Literal = d => { const out = [0x59, 0x61, 0x7A, 0x30, d.length >>> 24, (d.length >> 16) & 255, (d.length >> 8) & 255, d.length & 255, 0, 0, 0, 0, 0, 0, 0, 0];
     for (let i = 0; i < d.length; i += 8) { out.push(0xFF); for (let k = i; k < Math.min(i + 8, d.length); k++) out.push(d[k]); } return Uint8Array.from(out); };
@@ -91,6 +96,8 @@ ok(logs.some(t => /Soundfont table.*10 soundfonts/.test(t)), 'finds the soundfon
 ok(logs.some(t => /2 banks/.test(t)), 'finds the sample bank table');
 ok(m.presets.map(p => p.name).sort().join() === 'OoT f01 drums,OoT f01 i00,OoT f01 i02', 'two instruments and a drum kit, empty slots skipped');
 ok(m.samples.length === 2, 'each sample stored once');
+ok(m.fonts.length === 1 && m.fonts[0].index === 1 && /Hyrule Field/.test(m.fonts[0].label), 'only soundfonts the music uses are kept (the sound-effect font is left out): ' + m.fonts.map(f => f.label).join(' | '));
+ok(S.extract(rom, () => {}, { all: true }).presets.length === 6, 'every soundfont can still be read on request');
 const i0 = m.presets.find(p => p.name === 'OoT f01 i00');
 ok(i0.zones.map(z => z.lo + '-' + z.hi).join() === '0-50,51-71,72-127', 'key splits follow the game\'s note ranges (game note 39 = middle C)');
 const v64 = new Uint8Array(rom.length); for (let i = 0; i < rom.length; i += 2) { v64[i] = rom[i + 1]; v64[i + 1] = rom[i]; }
@@ -131,6 +138,22 @@ tune.forEach((k, i) => { const f = 440 * Math.pow(2, (k - 69) / 12); for (let t 
     y[Math.floor(i * 0.5 * sr) + t] += 0.4 * a * (Math.sin(2 * Math.PI * f * t / sr) + 0.4 * Math.sin(4 * Math.PI * f * t / sr)); } });
 const found = S.assignParts(S.transcribe(y, sr)).filter(n => n.part === 'melody' && n.end - n.start > 0.3).map(n => n.pitch);
 ok(found.join() === tune.join(), 'a clean tune is transcribed note for note (short blips at the note changes aside): ' + found.join());
+
+// matching instruments to a song, and drums
+ok(m.presets.find(p => p.name === 'OoT f01 i00').pitched, 'a sine instrument counts as pitched');
+const pk = S.pickInstruments(m, notes.concat([{ start: 0, end: 1, pitch: 40, vel: 90, part: 'bass' }]), null);
+ok(pk && pk.font.index === 1 && pk.pick.melody && pk.pick.bass, 'an instrument is picked for each part from the best soundfont');
+const dy = new Float32Array(sr * 2);
+for (let b = 0; b < 4; b++) { const a = Math.floor((0.25 + b * 0.4) * sr); for (let t = 0; t < 0.3 * sr; t++) dy[a + t] += 0.8 * Math.exp(-t / (0.03 * sr)) * Math.sin(2 * Math.PI * (60 + 90 * Math.exp(-t / 400)) * t / sr); }
+const hits = S.transcribeDrums(dy, sr).filter(h => h.kind === 'kick');
+ok(hits.length === 4 && hits.every((h, i) => near(h.time, 0.25 + i * 0.4, 0.05)), 'four kicks are heard on the beat: ' + hits.map(h => h.time.toFixed(2)).join());
+const flat = new Float32Array(sr * 2).map((_, i) => 0.3 * Math.min(1, i / 2000, (2 * sr - i) / 11025) * Math.sin(2 * Math.PI * 220 * i / sr));
+{ const fh = S.transcribeDrums(flat, sr); ok(fh.length === 0, 'a steady tone has no drums: ' + JSON.stringify(fh)); }
+// Basic Pitch's note decoding on made-up model output: one held note at key 60
+const F = 200, fr = Array.from({ length: F }, (_, i) => { const r = new Float32Array(88); if (i >= 20 && i < 120) r[60 - 21] = 0.9; return r; });
+const on = Array.from({ length: F }, (_, i) => { const r = new Float32Array(88); if (i === 20) r[60 - 21] = 0.9; return r; });
+const bn = S.BP.toNotes(fr, on, 0.5, 0.3, 11, 11);
+ok(bn.length === 1 && bn[0].pitch === 60 && near(bn[0].start, 20 * 256 / 22050, 0.03) && near(bn[0].end - bn[0].start, 100 * 256 / 22050, 0.05), 'Basic Pitch output is turned into notes: ' + JSON.stringify(bn.map(n => [n.pitch, +n.start.toFixed(2), +n.end.toFixed(2)])));
 
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');
 process.exit(fails ? 1 : 0);
