@@ -438,7 +438,18 @@ Look LookFor(royale::ItemId weapon) {
         case ItemId::TripleSlingshot:
         case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
-        default: return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE }; // sticks, bombs, spells: empty-handed for now
+        case ItemId::Hookshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_HOOKSHOT, ITEM_HOOKSHOT };
+        case ItemId::Longshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_LONGSHOT, ITEM_LONGSHOT };
+        case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
+            return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };   // the elemental arrows are loosed from the real bow
+        case ItemId::DekuStick: return { PLAYER_MODELGROUP_10, PLAYER_IA_DEKU_STICK, ITEM_STICK };
+        case ItemId::Bombs: case ItemId::Bombchus: case ItemId::HomingBombchus:
+            return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_BOMB, ITEM_BOMB };
+        case ItemId::FairyOcarina: return { PLAYER_MODELGROUP_OCARINA, PLAYER_IA_OCARINA_FAIRY, ITEM_OCARINA_FAIRY };
+        default:
+            if (weapon == ItemId::OcarinaOfTime || (weapon >= ItemId::ZeldasLullaby && weapon <= ItemId::PreludeOfLight))
+                return { PLAYER_MODELGROUP_OOT, PLAYER_IA_OCARINA_OF_TIME, ITEM_OCARINA_TIME };
+            return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE };
     }
 }
 const royale::PuppetState* StateOf(const Actor* actor) {
@@ -506,15 +517,38 @@ std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash 
 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
 
-LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword) {
-    const bool hammer = weapon == royale::ItemId::MegatonHammer || weapon == royale::ItemId::GiantsHammer;
+#define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
+// Actions are played once, from their first frame, each time one begins (see Puppet_Update); `combo` varies a sword's slash.
+bool OneShotAnim(uint8_t anim) {
     switch (static_cast<royale::Anim>(anim)) {
-        case royale::Anim::Attack: return hammer ? (LinkAnimationHeader*)&gPlayerAnim_link_hammer_hit : (LinkAnimationHeader*)&gPlayerAnim_link_fighter_normal_kiru;   // a swing
-        case royale::Anim::Shoot: return (LinkAnimationHeader*)&gPlayerAnim_link_bow_bow_shoot;                // loosing an arrow or a seed
-        case royale::Anim::Throw: return (LinkAnimationHeader*)&gPlayerAnim_link_boom_throwR;                  // throwing a bomb, a boomerang, a grenade
-        case royale::Anim::Drink: return (LinkAnimationHeader*)&gPlayerAnim_link_bottle_drink_demo;            // a potion
-        case royale::Anim::Play: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_okarina_swing;          // an ocarina song
-        case royale::Anim::Cast: return (LinkAnimationHeader*)&gPlayerAnim_link_magic_tame;                    // a spell
+        case royale::Anim::Attack: case royale::Anim::Shoot: case royale::Anim::Throw: case royale::Anim::Drink:
+        case royale::Anim::Play: case royale::Anim::Cast: case royale::Anim::Roll: return true;
+        default: return false;
+    }
+}
+LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword, int combo = 0) {
+    using royale::ItemId;
+    const bool hammer = weapon == ItemId::MegatonHammer || weapon == ItemId::GiantsHammer;
+    switch (static_cast<royale::Anim>(anim)) {
+        case royale::Anim::Attack: {
+            if (hammer) return RA(hammer_hit);
+            static LinkAnimationHeader* const slashes[4] = { RA(fighter_Lnormal_kiru), RA(fighter_LLside_kiru), RA(fighter_LRside_kiru), RA(fighter_Lpierce_kiru) };
+            if (weapon == ItemId::DekuStick) return RA(fighter_normal_kiru);
+            return slashes[combo & 3];
+        }
+        case royale::Anim::Shoot:
+            if (weapon == ItemId::Hookshot || weapon == ItemId::Longshot) return RA(hook_shot_ready);
+            return RA(bow_bow_shoot);
+        case royale::Anim::Throw:
+            if (weapon == ItemId::Boomerang) return RA(boom_throwR);
+            if (weapon == ItemId::Bombs || weapon == ItemId::Bombchus || weapon == ItemId::HomingBombchus) return RA(normal_throw);
+            return RA(boom_throwL);
+        case royale::Anim::Drink: return RA(bottle_drink_demo_start);
+        case royale::Anim::Play: return RA(normal_okarina_start);
+        case royale::Anim::Cast:
+            if (weapon == ItemId::DinsFire) return RA(magic_honoo1);
+            if (weapon == ItemId::FaroresWind) return RA(magic_kaze1);
+            return RA(magic_tamashii1);
         case royale::Anim::Roll: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_landing_roll;           // a dodge roll
         case royale::Anim::SideL: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkL;            // the lock-on footwork
         case royale::Anim::SideR: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkR;
@@ -632,17 +666,36 @@ void Puppet_Update(Actor* actor, PlayState* play) {
             SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot);
         before = s.anim;
     }
-    LinkAnimationHeader* want = AnimFor(s.anim, s.weapon);
+    // Actions play once, from their first frame, every time they begin, and hold their last pose until the player does something else:
+    // that is what makes a slash, a shot or a throw read as a movement instead of a looping wiggle. Sword slashes cycle through the
+    // game's four different swings.
+    static std::unordered_map<const Actor*, uint8_t> lastAnim;
+    static std::unordered_map<uint16_t, int> combo;
+    bool restart = false;
+    LinkAnimationHeader* want = nullptr;
     {
         auto sw = gSwingFrames.find(s.id);
-        if (sw != gSwingFrames.end() && sw->second > 0) {
-            sw->second--;
-            want = (LinkAnimationHeader*)&gPlayerAnim_link_fighter_normal_kiru; // a sword slash while they are hitting someone
+        const bool hitting = sw != gSwingFrames.end() && sw->second > 0;
+        const bool swingStart = hitting && sw->second == 10;
+        if (hitting) sw->second--;
+        uint8_t& before = lastAnim[actor];
+        const bool attackStart = s.anim == static_cast<uint8_t>(royale::Anim::Attack) && before != s.anim;
+        if (swingStart || attackStart) {
+            want = AnimFor(static_cast<uint8_t>(royale::Anim::Attack), s.weapon, combo[s.id]++);
+            restart = true;
+        } else if (hitting) {
+            auto cur = gPlaying.find(actor);
+            want = cur != gPlaying.end() ? (LinkAnimationHeader*)cur->second : AnimFor(s.anim, s.weapon);
+        } else {
+            want = AnimFor(s.anim, s.weapon, combo[s.id]);
+            restart = OneShotAnim(s.anim) && before != s.anim;
         }
+        before = s.anim;
     }
     auto playing = gPlaying.find(actor);
-    if (playing == gPlaying.end() || playing->second != (const void*)want) {
-        LinkAnimation_PlayLoop(play, &player->skelAnime, want);
+    if (restart || playing == gPlaying.end() || playing->second != (const void*)want) {
+        if (OneShotAnim(s.anim) || restart) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
+        else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
         gPlaying[actor] = (const void*)want;
     }
     LinkAnimation_Update(play, &player->skelAnime);
@@ -1455,6 +1508,12 @@ struct Projectile {
 std::vector<Projectile> gProjectiles;
 Actor* gProjectileActor = nullptr;
 
+// What came out of a chest you can see being opened: the item's real model floats up out of the chest over a few seconds, turning and
+// glittering, so you can tell what it was before it is gone (drawn by the same stand-in actor as the projectiles).
+struct Reveal { float x, y, z; int gid; float age; royale::Rarity rarity; };
+std::vector<Reveal> gReveals;
+constexpr float kRevealSeconds = 3.2f;
+
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw) {
     using royale::ItemId;
     if (!InField() || gPlayState == nullptr) return;
@@ -1487,8 +1546,30 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
     Audio_PlaySoundGeneral(sfx, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
+int GidFor(royale::ItemId id);
+float GidScale(int gid);
+void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
+
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    for (size_t i = 0; i < gReveals.size();) {
+        Reveal& r = gReveals[i];
+        r.age += dt;
+        if (r.age >= kRevealSeconds) { gReveals.erase(gReveals.begin() + static_cast<long>(i)); continue; }
+        const float t = r.age / kRevealSeconds;
+        const float ease = 1.0f - (1.0f - t) * (1.0f - t);          // quick at first, then settling
+        const float grow = std::min(1.0f, r.age / 0.6f);
+        const Vec3f at = { r.x, r.y + 10.0f + ease * 70.0f, r.z };
+        Sparkle(play, at, r.rarity);
+        const float k = GidScale(r.gid) * 0.0016f * (0.4f + 0.6f * grow) * 1.5f;
+        OPEN_DISPS(play->state.gfxCtx);
+        Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
+        Matrix_RotateY(r.age * 2.4f, MTXMODE_APPLY);
+        Matrix_Scale(k * 20.0f, k * 20.0f, k * 20.0f, MTXMODE_APPLY);
+        GetItem_Draw(play, static_cast<s16>(r.gid));
+        CLOSE_DISPS(play->state.gfxCtx);
+        i++;
+    }
     for (size_t i = 0; i < gProjectiles.size();) {
         Projectile& p = gProjectiles[i];
         p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
@@ -1848,7 +1929,11 @@ void ReconcileLoot(const royale::HudState& hud) {
         const bool far = dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius * 1.5f;
         if (la.chest) {
             // Chests clean up their own entry when the game destroys them (they have collision to remove first).
-            if (known && loot[idx].taken && !la.opened) OpenChest(la);
+            if (known && loot[idx].taken && !la.opened) {
+                OpenChest(la);
+                const int gid = GidFor(static_cast<royale::ItemId>(loot[idx].item));
+                if (gid >= 0 && dx * dx + dz * dz < 1800.0f * 1800.0f && gReveals.size() < 8) gReveals.push_back({ la.actor->world.pos.x, la.actor->world.pos.y + 25.0f, la.actor->world.pos.z, gid, 0.0f, la.rarity });
+            }
             if ((!known || far) && !la.killing) { la.killing = true; Actor_Kill(la.actor); }
             ++it;
         } else if (!known || loot[idx].taken || far) {
@@ -2193,11 +2278,106 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
                           ImVec2(me.x - fwd.x * u - side.x * u * 0.8f, me.y - fwd.y * u - side.y * u * 0.8f), IM_COL32(120, 255, 140, 255));
 }
 
+// The game's own item art (the 32x32 icons from its resource archive) is used wherever the game has one for the item; the hand-drawn
+// icons below are only the fallback for things the original never had an icon for (songs, loot like rupee piles, medallions).
+const char* RealIconName(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DekuStick: return "gItemIconDekuStickTex";
+        case ItemId::BasicSword: case ItemId::KokiriSword: return "gItemIconSwordKokiriTex";
+        case ItemId::MasterSword: return "gItemIconSwordMasterTex";
+        case ItemId::BiggoronSword: return "gItemIconSwordBiggoronTex";
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return "gItemIconHammerTex";
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: return "gItemIconSlingshotTex";
+        case ItemId::FairyBow: return "gItemIconBowTex";
+        case ItemId::Boomerang: return "gItemIconBoomerangTex";
+        case ItemId::Bombs: case ItemId::BombAmmo: return "gItemIconBombTex";
+        case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return "gItemIconBombchuTex";
+        case ItemId::DekuNuts: case ItemId::NutAmmo: return "gItemIconDekuNutTex";
+        case ItemId::FireArrows: return "gItemIconArrowFireTex";
+        case ItemId::IceArrows: return "gItemIconArrowIceTex";
+        case ItemId::LightArrows: return "gItemIconArrowLightTex";
+        case ItemId::ArrowAmmo: return "gItemIconBowTex";
+        case ItemId::SeedAmmo: return "gItemIconDekuSeedsTex";
+        case ItemId::DekuShield: return "gItemIconShieldDekuTex";
+        case ItemId::HylianShield: return "gItemIconShieldHylianTex";
+        case ItemId::MirrorShield: return "gItemIconShieldMirrorTex";
+        case ItemId::GreenPotion: return "gItemIconBottlePotionGreenTex";
+        case ItemId::RedPotion: return "gItemIconBottlePotionRedTex";
+        case ItemId::BluePotion: return "gItemIconBottlePotionBlueTex";
+        case ItemId::Fairy: return "gItemIconBottleFairyTex";
+        case ItemId::Milk: return "gItemIconBottleMilkFullTex";
+        case ItemId::Fish: return "gItemIconBottleFishTex";
+        case ItemId::BlueFire: return "gItemIconBottleBlueFireTex";
+        case ItemId::Bug: return "gItemIconBottleBugTex";
+        case ItemId::Poe: return "gItemIconBottlePoeTex";
+        case ItemId::SmallShieldPotion: case ItemId::LargeShieldPotion: return "gItemIconBottleEmptyTex";
+        case ItemId::DinsFire: return "gItemIconDinsFireTex";
+        case ItemId::FaroresWind: return "gItemIconFaroresWindTex";
+        case ItemId::NayrusLove: return "gItemIconNayrusLoveTex";
+        case ItemId::Hookshot: return "gItemIconHookshotTex";
+        case ItemId::Longshot: return "gItemIconLongshotTex";
+        case ItemId::LensOfTruth: return "gItemIconLensOfTruthTex";
+        case ItemId::MagicBeans: return "gItemIconMagicBeanTex";
+        case ItemId::FairyOcarina: return "gItemIconOcarinaFairyTex";
+        case ItemId::OcarinaOfTime: return "gItemIconOcarinaOfTimeTex";
+        case ItemId::KokiriTunic: return "gItemIconTunicKokiriTex";
+        case ItemId::GoronTunic: return "gItemIconTunicGoronTex";
+        case ItemId::ZoraTunic: return "gItemIconTunicZoraTex";
+        case ItemId::KokiriBoots: return "gItemIconBootsKokiriTex";
+        case ItemId::IronBoots: return "gItemIconBootsIronTex";
+        case ItemId::HoverBoots: return "gItemIconBootsHoverTex";
+        case ItemId::GoronBracelet: return "gItemIconGoronsBraceletTex";
+        case ItemId::SilverGauntlets: return "gItemIconSilverGauntletsTex";
+        case ItemId::GoldenGauntlets: return "gItemIconGoldenGauntletsTex";
+        case ItemId::KeatonMask: return "gItemIconMaskKeatonTex";
+        case ItemId::SkullMask: return "gItemIconMaskSkullTex";
+        case ItemId::SpookyMask: return "gItemIconMaskSpookyTex";
+        case ItemId::BunnyHood: return "gItemIconMaskBunnyHoodTex";
+        case ItemId::GoronMask: return "gItemIconMaskGoronTex";
+        case ItemId::ZoraMask: return "gItemIconMaskZoraTex";
+        case ItemId::GerudoMask: return "gItemIconMaskGerudoTex";
+        case ItemId::MaskOfTruth: return "gItemIconMaskTruthTex";
+        case ItemId::SilverScale: return "gItemIconScaleSilverTex";
+        case ItemId::GoldenScale: return "gItemIconScaleGoldenTex";
+        case ItemId::BigQuiver: return "gItemIconQuiver50Tex";
+        case ItemId::BulletBag: return "gItemIconBulletBag50Tex";
+        case ItemId::BombBag: return "gItemIconBombBag40Tex";
+        default: return nullptr;
+    }
+}
+
+// Loads an icon on first use. nullptr (no icon, or not loadable) means "draw the fallback".
+void* RealIcon(royale::ItemId id) {
+    static std::unordered_map<std::string, bool> loaded;
+    const char* name = RealIconName(id);
+    if (name == nullptr) return nullptr;
+    auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+    auto it = loaded.find(name);
+    if (it == loaded.end()) {
+        bool ok = false;
+        try {
+            auto res = Ship::Context::GetInstance()->GetResourceManager()->LoadResource(std::string("__OTR__textures/icon_item_static/") + name, true);
+            if (res != nullptr) {
+                gui->LoadGuiTexture(std::string("royale:") + name, std::string("__OTR__textures/icon_item_static/") + name, ImVec4(1, 1, 1, 1));
+                ok = true;
+            }
+        } catch (...) {}
+        it = loaded.emplace(name, ok).first;
+    }
+    return it->second ? (void*)gui->GetTextureByName(std::string("royale:") + name) : nullptr;
+}
+
 // ---- item icons ------------------------------------------------------------------------------------------------------------
 // The game's own item icons live in its resource archive and aren't reachable from here, so every item gets a small hand-drawn
 // icon built from lines and shapes, tinted by what the item is. `tier` is the rarity colour, used as the accent.
 void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 tier) {
     using royale::ItemId;
+    if (void* real = RealIcon(id)) {
+        const float h = s * 0.5f;
+        dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h));
+        return;
+    }
     const float u = s * 0.5f; // half the icon box
     auto P = [&](float x, float y) { return ImVec2(c.x + x * u, c.y + y * u); };
     const ImU32 steel = IM_COL32(205, 215, 225, 255), dark = IM_COL32(40, 46, 58, 255), wood = IM_COL32(150, 98, 52, 255), gold = IM_COL32(240, 200, 70, 255),
@@ -3449,6 +3629,7 @@ struct LobbyMusic {
     bool failed = false;
     bool playing = false;
     std::string nowPlaying;
+    std::string status;         // shown in the menu: where the folder is, how many songs, and why one could not be read
 };
 LobbyMusic gLobbyMusic;
 
@@ -3468,6 +3649,8 @@ void ScanMusicFolder() {
     std::shuffle(gLobbyMusic.tracks.begin(), gLobbyMusic.tracks.end(), rng);
     gLobbyMusic.next = 0;
     gLobbyMusic.scanned = true;
+    gLobbyMusic.failed = false;
+    gLobbyMusic.status = std::to_string(gLobbyMusic.tracks.size()) + " .wav song(s) found in " + MusicFolder().string();
 }
 
 bool LoadNextTrack() {
@@ -3477,7 +3660,10 @@ bool LoadNextTrack() {
         SDL_AudioSpec spec = {};
         Uint8* buf = nullptr;
         Uint32 len = 0;
-        if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) continue;
+        if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) {
+            m.status = "Could not read " + file.filename().string() + ": " + SDL_GetError() + " (use a 16-bit PCM .wav)";
+            continue;
+        }
         SDL_AudioCVT cvt;
         if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_S16SYS, 2, 44100) < 0) { SDL_FreeWAV(buf); continue; }
         cvt.len = static_cast<int>(len);
@@ -3656,6 +3842,9 @@ void ApplyPlatforms(Player* player) {
     const auto& props = gSession.Client()->Props();
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
     float py = player->actor.world.pos.y;
+    // Walking: a grounded player steps up onto a block up to 64 tall without jumping (the real game's own step-up is much smaller), so the blocks
+    // behave like stairs and terrain you can walk over; anything taller needs a jump.
+    const float reach = ((player->actor.bgCheckFlags & 1) || player->actor.floorHeight >= py - 2.0f) ? 64.0f : 28.0f;
     for (size_t i : gPlatformIdx) {
         const royale::Prop& p = props[i];
         const float dx = px - p.pos.x, dz = pz - p.pos.z;
@@ -3664,12 +3853,14 @@ void ApplyPlatforms(Player* player) {
         if (base < -1.0e8f) continue;
         const float top = base + royale::PlatformHeight(p.kind);
         const bool onTop = std::fabs(dx) <= royale::kPlatformHalf && std::fabs(dz) <= royale::kPlatformHalf;
-        if (onTop && py >= top - 28.0f && player->actor.velocity.y <= 0.5f) {         // standing on it
+        if (onTop && py >= top - reach && player->actor.velocity.y <= 0.5f) {         // standing on it
             player->actor.world.pos.y = py = top;
             player->actor.velocity.y = 0.0f;
             player->actor.bgCheckFlags |= 1;
+            player->actor.bgCheckFlags &= ~(2 | 4 | 8);   // not airborne, not against a wall: so no falling pose and no snagging on the block's edge
             player->actor.floorHeight = top;
-        } else if (py < top - 28.0f && std::fabs(dx) <= royale::kPlatformHalf + 16.0f && std::fabs(dz) <= royale::kPlatformHalf + 16.0f) {   // against its side: pushed out
+            player->actor.gravity = player->actor.gravity > -0.1f ? player->actor.gravity : -1.0f;
+        } else if (py < top - reach && std::fabs(dx) <= royale::kPlatformHalf + 16.0f && std::fabs(dz) <= royale::kPlatformHalf + 16.0f) {   // against its side: pushed out
             const float penX = royale::kPlatformHalf + 16.0f - std::fabs(dx), penZ = royale::kPlatformHalf + 16.0f - std::fabs(dz);
             if (penX < penZ) player->actor.world.pos.x += (dx >= 0 ? penX : -penX);
             else player->actor.world.pos.z += (dz >= 0 ? penZ : -penZ);
@@ -5024,7 +5215,9 @@ bool DriveMatchMusic(const royale::HudState& hud, bool joined) {
     const bool random = live && gMusicMode == 1;
     if (random && !gLobbyMusic.scanned) ScanMusicFolder();
     const bool haveSongs = !gLobbyMusic.tracks.empty();
-    SetGameBgmVolume(live && (gMusicMode == 2 || (gMusicMode == 1 && haveSongs)));
+    const bool lobbySongs = joined && hud.state == royale::MatchState::Lobby && MapOption("LobbyMusic", true);
+    if (lobbySongs && !gLobbyMusic.scanned) ScanMusicFolder();
+    SetGameBgmVolume((live && (gMusicMode == 2 || (gMusicMode == 1 && haveSongs))) || (lobbySongs && !gLobbyMusic.tracks.empty() && !gLobbyMusic.failed));
     return random && haveSongs;
 }
 
@@ -5039,6 +5232,7 @@ void OnGameFrameUpdate() {
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
+    if (joined && InField() && gPlayState != nullptr) ApplyPlatforms(GET_PLAYER(gPlayState));   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     UpdateChickenMusic();
@@ -5303,7 +5497,10 @@ void DrawMinimapOptions() {
         }
     }
     ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
-    ImGui::TextColored(kGrey, "Lobby songs: put .wav files in the 'music' folder inside the game's data folder (made for you on first use).");
+    ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
+    if (gLobbyMusic.status.empty()) ScanMusicFolder();
+    ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
+    if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
 }
 
 // Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
