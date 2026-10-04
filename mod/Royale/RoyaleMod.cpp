@@ -220,8 +220,12 @@ bool MustBeInField(royale::MatchState state) {
 
 // ---- rarity presentation ------------------------------------------------------------------------------------------------
 
+// Tiers wear the colours of Ocarina of Time's rupees (green, blue, red, purple, gold), the same rupee models loot is drawn with below.
 struct Rgb { u8 r, g, b; };
-constexpr Rgb kRarityRgb[royale::kRarityCount] = { { 190, 190, 190 }, { 80, 220, 100 }, { 80, 150, 255 }, { 190, 100, 255 }, { 255, 200, 60 } };
+constexpr Rgb kRarityRgb[royale::kRarityCount] = { { 96, 210, 84 }, { 72, 132, 250 }, { 236, 64, 52 }, { 186, 92, 236 }, { 250, 210, 40 } };
+
+// Panels are the game's own dark, slightly warm text-box black rather than a modern navy.
+ImU32 OotPanel(int alpha) { return IM_COL32(16, 12, 8, alpha); }
 
 const char* RarityName(royale::Rarity r) {
     static const char* names[royale::kRarityCount] = { "Common", "Uncommon", "Rare", "Epic", "Legendary" };
@@ -3249,9 +3253,10 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
     }
     const float u = s * 0.5f; // half the icon box
     auto P = [&](float x, float y) { return ImVec2(c.x + x * u, c.y + y * u); };
-    const ImU32 steel = IM_COL32(205, 215, 225, 255), dark = IM_COL32(40, 46, 58, 255), wood = IM_COL32(150, 98, 52, 255), gold = IM_COL32(240, 200, 70, 255),
-                red = IM_COL32(225, 60, 60, 255), green = IM_COL32(70, 205, 100, 255), blue = IM_COL32(70, 130, 240, 255), white = IM_COL32(245, 245, 250, 255),
-                purple = IM_COL32(170, 90, 230, 255), orange = IM_COL32(240, 140, 50, 255), cyan = IM_COL32(120, 225, 245, 255);
+    // Colours from the official art: chrome steel with a cool tint, Triforce gold, Kokiri green, Hylian-shield blue, crest red, warm leather.
+    const ImU32 steel = IM_COL32(200, 218, 232, 255), dark = IM_COL32(43, 32, 30, 255), wood = IM_COL32(134, 92, 45, 255), gold = IM_COL32(247, 214, 34, 255),
+                red = IM_COL32(205, 55, 37, 255), green = IM_COL32(72, 166, 64, 255), blue = IM_COL32(70, 96, 200, 255), white = IM_COL32(240, 236, 222, 255),
+                purple = IM_COL32(150, 70, 190, 255), orange = IM_COL32(238, 130, 40, 255), cyan = IM_COL32(110, 200, 220, 255);
     const float th = std::max(1.5f, s * 0.07f);
     auto sword = [&](ImU32 blade, ImU32 hilt, float len, float width) {
         dl->AddLine(P(-0.62f, 0.62f), P(0.62f - (1.0f - len) * 0.6f, -0.62f + (1.0f - len) * 0.6f), blade, th * width);
@@ -3502,7 +3507,7 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
 // on a touch screen you can tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; };
-    const ImU32 grey = IM_COL32(120, 120, 130, 255);
+    const ImU32 grey = IM_COL32(120, 112, 100, 255);
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
@@ -3544,7 +3549,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     for (size_t i = 0; i < slots.size(); i++) {
         const Slot& sl = slots[i];
         const ImVec2 a(x, y), b(x + w, y + hgt);
-        dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 195), 6.0f * scale);
+        dl->AddRectFilled(a, b, OotPanel(195), 6.0f * scale);
         if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
@@ -3554,7 +3559,8 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
             const float hs = 12.5f * scale;
             const ImVec2 hsz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, hint);
             dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f + 1, b.y + 2 * scale + 1), IM_COL32(0, 0, 0, 220), hint);
-            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), IM_COL32(210, 220, 235, 235), hint);
+            const ImU32 hintCol = i == 0 ? IM_COL32(100, 230, 110, 255) : static_cast<int>(i) == nres + 1 ? IM_COL32(255, 220, 40, 255) : IM_COL32(210, 205, 190, 235); // B green, C yellow, as on the N64 pad
+            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
         }
         const float ts = 11.5f * scale;
         dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
@@ -3592,7 +3598,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.gear[i].item);
         const ImU32 col = RarityU32(static_cast<royale::Rarity>(h.inv.gear[i].rarity));
         const ImVec2 a(gx, gy), b(gx + gs, gy + gs);
-        dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 195), 5.0f * scale);
+        dl->AddRectFilled(a, b, OotPanel(195), 5.0f * scale);
         DrawItemIcon(dl, id, ImVec2(gx + gs * 0.5f, gy + gs * 0.5f), gs * 0.72f, col);
         dl->AddRect(a, b, col, 5.0f * scale, 0, 2.0f * scale);
         gx += gs + 5.0f * scale;
@@ -3610,14 +3616,14 @@ void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const float w = 128.0f * scale, hgt = 40.0f * scale;
     const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
     auto inside = [&](ImVec2 p0, ImVec2 p1) { return io.MousePos.x >= p0.x && io.MousePos.x <= p1.x && io.MousePos.y >= p0.y && io.MousePos.y <= p1.y; };
-    dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 200), 6.0f * scale);
+    dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
     dl->AddRect(a, b, gEmotePanelOpen ? IM_COL32(255, 236, 120, 255) : IM_COL32(190, 190, 200, 255), 6.0f * scale, 0, 2.5f * scale);
     dl->AddText(font, 16.0f * scale, ImVec2(a.x + 12 * scale, a.y + 10 * scale), IM_COL32(255, 255, 255, 255), "EMOTE");
     if (tap && inside(a, b)) gEmotePanelOpen = !gEmotePanelOpen;
     if (!gEmotePanelOpen) return;
     for (int i = 0; i < royale::kEmoteCount; i++) {
         const ImVec2 ea(a.x - 40.0f * scale, a.y - (i + 1) * (hgt + 6.0f * scale)), eb(b.x, ea.y + hgt);
-        dl->AddRectFilled(ea, eb, IM_COL32(8, 18, 28, 215), 6.0f * scale);
+        dl->AddRectFilled(ea, eb, OotPanel(215), 6.0f * scale);
         dl->AddRect(ea, eb, IM_COL32(120, 200, 255, 255), 6.0f * scale, 0, 2.0f * scale);
         dl->AddText(font, 15.0f * scale, ImVec2(ea.x + 10 * scale, ea.y + 11 * scale), IM_COL32(255, 255, 255, 255), royale::kEmoteNames[i]);
         if (tap && inside(ea, eb)) StartEmote(i, h);
@@ -3636,7 +3642,7 @@ void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const float side = std::min(room, ds.y * 0.5f);
     if (side < 150.0f * scale) return;                                  // no room beside the results on a small screen
     const ImVec2 a(24.0f * scale, ds.y * 0.28f), b(a.x + side, a.y + side);
-    dl->AddRectFilled(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(8, 16, 26, 225), 10.0f * scale);
+    dl->AddRectFilled(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), OotPanel(225), 10.0f * scale);
     dl->AddRect(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 2.0f * scale);
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float k = side * 0.5f / h.map.radius * 0.97f;
@@ -3700,7 +3706,7 @@ void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, cons
     const int shown = std::min<int>(8, static_cast<int>(h.results.size()));
     const float ph = (shown + 4) * rowH + 70.0f * scale;
     const ImVec2 a((ds.x - pw) * 0.5f, ds.y * 0.28f), b(a.x + pw, a.y + ph);
-    dl->AddRectFilled(a, b, IM_COL32(8, 16, 26, 225), 10.0f * scale);
+    dl->AddRectFilled(a, b, OotPanel(225), 10.0f * scale);
     dl->AddRect(a, b, IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 3.0f * scale);
     auto put = [&](float x, float y, ImU32 col, float size, const std::string& t) { dl->AddText(font, size, ImVec2(x, y), col, t.c_str()); };
     float y = a.y + 10.0f * scale;
@@ -4038,7 +4044,7 @@ void DrawPickupFx(ImDrawList* dl, ImVec2 ds, float scale) {
             dl->AddLine(ImVec2(at.x + std::cos(ang) * R * 0.9f, at.y + std::sin(ang) * R * 0.9f), ImVec2(at.x + std::cos(ang) * R * 1.8f, at.y + std::sin(ang) * R * 1.8f),
                         IM_COL32(c.r, c.g, c.b, static_cast<int>(150 * a)), 3.0f * scale);
         }
-        dl->AddCircleFilled(at, R, IM_COL32(8, 18, 28, static_cast<int>(210 * a)), 28);
+        dl->AddCircleFilled(at, R, OotPanel(static_cast<int>(210 * a)), 28);
         dl->AddCircle(at, R, IM_COL32(c.r, c.g, c.b, static_cast<int>(255 * a)), 28, 3.0f * scale);
         DrawItemIcon(dl, f.item, at, R * 1.25f, IM_COL32(c.r, c.g, c.b, 255));
     }
@@ -4242,7 +4248,7 @@ void DrawOverlay() {
         for (int side = 0; side < 2; side++) {
             const float bw = 54.0f * scale, bh = 40.0f * scale;
             const ImVec2 a(side == 0 ? ds.x * 0.5f - 190.0f * scale : ds.x * 0.5f + 136.0f * scale, ds.y * 0.12f + 36.0f * scale), b(a.x + bw, a.y + bh);
-            dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 205), 6.0f * scale);
+            dl->AddRectFilled(a, b, OotPanel(205), 6.0f * scale);
             dl->AddRect(a, b, IM_COL32(255, 236, 120, 255), 6.0f * scale, 0, 2.0f * scale);
             dl->AddText(font, 24.0f * scale, ImVec2(a.x + 19 * scale, a.y + 7 * scale), IM_COL32(255, 255, 255, 255), side == 0 ? "<" : ">");
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
@@ -7026,10 +7032,10 @@ void RefreshLocalAddresses(UiState& ui, bool force) {
     ui.addressAge = 0;
 }
 
-const ImVec4 kGold(1.0f, 0.82f, 0.25f, 1.0f);
-const ImVec4 kGreen(0.35f, 0.85f, 0.45f, 1.0f);
-const ImVec4 kGrey(0.65f, 0.65f, 0.65f, 1.0f);
-const ImVec4 kRed(1.0f, 0.4f, 0.4f, 1.0f);
+const ImVec4 kGold(0.97f, 0.84f, 0.13f, 1.0f);   // Triforce gold
+const ImVec4 kGreen(0.42f, 0.78f, 0.36f, 1.0f);  // Kokiri green
+const ImVec4 kGrey(0.68f, 0.65f, 0.6f, 1.0f);    // warm stone grey
+const ImVec4 kRed(0.93f, 0.36f, 0.28f, 1.0f);    // Goron ruby red
 
 void Heading(const char* text) {
     ImGui::TextColored(kGold, "%s", text);
