@@ -195,6 +195,63 @@ inline void AddFormation(PoiLayout& out, Rng& rng, Formation what, Vec2 at, floa
     }
 }
 
+// ---- outposts: designed stone structures out in the open --------------------------------------------------------------------
+// Built from the climbing blocks (each 150 square, 60, 120 or 180 tall, edge to edge on the map's grid) so each one is a little climb with a
+// purpose, rather than blocks dropped at random:
+//   Lookout  - a square of four blocks winding up (low, mid, high) to a high corner with the prize, guarded by standing stones
+//   Bridge   - a raised walkway: steps up at both ends to a three-block high span across the open, a sniper's perch with a chest in the middle
+//   Arena    - a square ring of mid blocks round an open pit with a chest in it, two low steps to get up; fight in it or on the walls
+//   Terraces - a broad stair three blocks wide, low to high, with slabs at its sides and the prize along the top
+enum class Outpost : uint8_t { Lookout, Bridge, Arena, Terraces, Count };
+constexpr int kOutpostCount = static_cast<int>(Outpost::Count);
+
+// Builds one, turned to face `dir` (0-3, quarter turns on the map's grid). All of it has to stand on ground, or nothing is built.
+inline bool AddOutpost(PoiLayout& out, Rng& rng, Outpost what, Vec2 at, int dir, const PlacementFn& valid) {
+    struct Cell { int x, z; PropKind kind; };
+    const PropKind L = PropKind::PlatformLow, M = PropKind::PlatformMid, H = PropKind::PlatformHigh;
+    std::vector<Cell> cells;
+    Vec2 prize = {0, 0};
+    uint8_t bonus = 2;
+    std::vector<std::pair<Vec2, int>> stones;   // grid-space position and shape
+    switch (what) {
+        case Outpost::Lookout:
+            cells = {{0, 0, L}, {1, 0, M}, {1, 1, H}, {0, 1, H}};
+            prize = {0, 1};
+            stones = {{{-1.4f, -0.9f}, 1}, {{2.4f, -0.9f}, 1}, {{2.4f, 2.0f}, 4}, {{-1.4f, 2.0f}, 1}};
+            break;
+        case Outpost::Bridge:
+            cells = {{-3, 0, L}, {-2, 0, M}, {-1, 0, H}, {0, 0, H}, {1, 0, H}, {2, 0, M}, {3, 0, L}};
+            prize = {0, 0};
+            stones = {{{0, -1.6f}, 3}, {{0, 1.6f}, 5}};
+            break;
+        case Outpost::Arena:
+            for (int x = -1; x <= 2; x++) for (int z = -1; z <= 2; z++) if (x == -1 || x == 2 || z == -1 || z == 2) cells.push_back({x, z, M});
+            cells.push_back({-2, -1, L}); cells.push_back({3, 2, L});
+            prize = {0.5f, 0.5f};
+            bonus = 1;
+            break;
+        default:   // terraces
+            for (int x = -1; x <= 1; x++) { cells.push_back({x, 0, L}); cells.push_back({x, 1, M}); cells.push_back({x, 2, H}); }
+            prize = {0, 2};
+            stones = {{{-2.2f, 0.5f}, 1}, {{2.2f, 0.5f}, 1}, {{-2.2f, 2.2f}, 4}, {{2.2f, 2.2f}, 3}};
+            break;
+    }
+    const float s = kPlatformHalf * 2.0f;
+    auto place = [&](float gx, float gz) {   // grid to map, turned by dir
+        float x = gx, z = gz;
+        for (int k = 0; k < (dir & 3); k++) { const float t = x; x = -z; z = t; }
+        return Vec2{at.x + x * s, at.z + z * s};
+    };
+    for (const Cell& c : cells) if (valid && !valid(place(static_cast<float>(c.x), static_cast<float>(c.z)))) return false;
+    for (const Cell& c : cells) out.props.push_back({place(static_cast<float>(c.x), static_cast<float>(c.z)), c.kind, 0});
+    for (const auto& st : stones) {
+        const Vec2 p = place(st.first.x, st.first.z);
+        if (!valid || valid(p)) out.props.push_back({p, PropKind::Boulder, RotForShape(rng, st.second)});
+    }
+    out.sites.push_back({place(prize.x, prize.z), bonus});
+    return true;
+}
+
 // ---- the kinds of town ----------------------------------------------------------------------------------------------------------
 // Every place on a map is one of these, dealt out so that neighbours differ, and each has something worth the trip: a climb or a stepped
 // mound with an Epic-or-better chest on top, chests indoors, and (at the fort, quarry and ruins) a mini boss standing guard.
@@ -319,7 +376,7 @@ inline std::vector<TownKind> DealTownKinds(Rng& rng, int count) {
 // together. `props` is the map's scenery so far (the boulders to hide behind come from there); `taken` the chest spots already used, which new
 // ones keep their distance from.
 inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::vector<Prop>& props, const std::vector<Vec2>& taken, int climbs, int hideaways,
-                          const PlacementFn& valid = nullptr, int formations = 0) {
+                          const PlacementFn& valid = nullptr, int formations = 0, int outposts = 0) {
     Rng rng(seed ^ 0x77696C64ull); // "wild"
     std::vector<Vec2> spots = taken;
     for (const ChestSite& s : out.sites) spots.push_back(s.pos);
@@ -352,6 +409,22 @@ inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::
         placed++;
     }
     auto clearOfRocks = [&](Vec2 p) { for (const Vec2& q : rocks) if (Distance(p, q) < 650.0f) return false; return true; };
+    // Outposts next: one of each design before any repeats, each well apart from the towns and formations.
+    for (int n = 0, placed = 0; n < outposts * 16 && placed < outposts; n++) {
+        const Vec2 at = RandomPointIn(rng, map, valid, 0.85f);
+        if (!far(at) || !clearOfRocks(at) || Distance(at, map.center) > map.radius - 650.0f) continue;
+        bool ok = true;
+        for (const Poi& poi : out.pois) ok = ok && Distance(at, poi.center) > poi.radius + 600.0f;
+        if (!ok) continue;
+        const size_t before = out.props.size(), sitesBefore = out.sites.size();
+        if (!AddOutpost(out, rng, static_cast<Outpost>((placed + static_cast<int>(seed % kOutpostCount)) % kOutpostCount), at, static_cast<int>(rng.Below(4)), valid)) continue;
+        bool apartEnough = true;
+        for (size_t i = sitesBefore; i < out.sites.size(); i++) apartEnough = apartEnough && far(out.sites[i].pos);
+        if (!apartEnough) { out.props.resize(before); out.sites.resize(sitesBefore); continue; }
+        for (size_t i = sitesBefore; i < out.sites.size(); i++) spots.push_back(out.sites[i].pos);
+        rocks.push_back(at);
+        placed++;
+    }
     for (int n = 0, placed = 0; n < climbs * 12 && placed < climbs; n++) {
         const Vec2 at = RandomPointIn(rng, map, valid, 0.85f);
         if (!far(at) || !clearOfRocks(at) || Distance(at, map.center) > map.radius - 500.0f) continue;

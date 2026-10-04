@@ -17,7 +17,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -306,10 +306,21 @@ inline MeshData Boulder(uint32_t variant) {
 
 // A round (eight-sided) stone post: a footing, a shaft with a mossy foot, and a capital. Eight sides so it looks the same from any angle,
 // which lets a row of them stand as a wall.
-inline MeshData Post() {
+// The stone colour of each map (royale::Theme) for the built pieces (posts, blocks): a tint on their olive stone.
+inline Rgb BuiltStone(uint32_t theme, Rgb c) {
+    static const Rgb tint[kStoneLooks] = {{1.0f, 1.0f, 1.0f}, {0.9f, 1.0f, 1.1f}, {0.92f, 0.94f, 1.0f}, {0.72f, 0.6f, 0.58f}, {1.22f, 1.04f, 0.84f}};
+    const Rgb k = tint[theme % kStoneLooks];
+    return {(std::min)(255.0f, c.r * k.r), (std::min)(255.0f, c.g * k.g), (std::min)(255.0f, c.b * k.b)};
+}
+
+// `theme` = the map's (royale::Theme): its stone, and its moss (algae by the lake, ash on the mountain, sand in the desert) round the foot.
+inline MeshData Post(uint32_t theme = 0) {
     struct Ring { float r, y; Rgb col; };
-    const Ring rings[] = {{40, 0, {84, 80, 70}},     {40, 26, {116, 112, 96}},  {33, 26, {110, 106, 92}},  {33, 62, {80, 132, 58}},
-                          {33, 74, {138, 132, 112}}, {33, 170, {148, 142, 120}}, {42, 170, {166, 158, 132}}, {42, 200, {180, 170, 140}}};
+    const StoneLook& look = StoneLookOf(theme);
+    const Rgb foot = look.grass ? Mix(look.cap, Rgb{80, 132, 58}, 0.5f) : look.cap;
+    Ring rings[] = {{40, 0, {84, 80, 70}},     {40, 26, {116, 112, 96}},  {33, 26, {110, 106, 92}},  {33, 62, foot},
+                    {33, 74, {138, 132, 112}}, {33, 170, {148, 142, 120}}, {42, 170, {166, 158, 132}}, {42, 200, {180, 170, 140}}};
+    for (Ring& g : rings) if (g.y != 62) g.col = BuiltStone(theme, g.col);
     const int n = 8;
     Builder b;
     b.inside = {0, 100, 0};
@@ -321,13 +332,16 @@ inline MeshData Post() {
         for (int i = 0; i < n; i++) b.Quad(at(rings[k], i), at(rings[k], (i + 1) % n), at(rings[k + 1], (i + 1) % n), at(rings[k + 1], i), rings[k + 1].col);
     }
     const Ring top = rings[sizeof(rings) / sizeof(rings[0]) - 1];
-    for (int i = 0; i < n; i++) b.Tri({0, top.y, 0}, at(top, i), at(top, (i + 1) % n), {188, 178, 146});
+    for (int i = 0; i < n; i++) b.Tri({0, top.y, 0}, at(top, i), at(top, (i + 1) % n), BuiltStone(theme, {188, 178, 146}));
     return b.mesh;
 }
 
 // A gabled cottage roof over a 360 x 280 courtyard (x along the width, z across), standing on posts 200 high. Terracotta tiles in
-// stripes, plaster gable ends and a dark ridge beam.
-inline MeshData Roof() {
+// stripes, plaster gable ends and a dark ridge beam, in the map's own colours (`theme`): red tiles on the field, blue slate by the lake,
+// Kakariko's brown shingles, dark slate on the mountain and a sun-bleached cloth awning in the desert.
+inline MeshData Roof(uint32_t theme = 0) {
+    static const Rgb tiles[kStoneLooks] = {{178, 76, 54}, {70, 104, 146}, {128, 78, 54}, {72, 62, 66}, {222, 186, 124}};
+    const Rgb tile = tiles[theme % kStoneLooks];
     const float hx = 224, hz = 178, eave = 200, ridge = 318;
     Builder b;
     b.inside = {0, eave + 10, 0};
@@ -337,7 +351,7 @@ inline MeshData Roof() {
             const float t0 = static_cast<float>(s) / strips, t1 = static_cast<float>(s + 1) / strips;
             const float z0 = side * hz * (1 - t0), z1 = side * hz * (1 - t1), y0 = eave + (ridge - eave) * t0, y1 = eave + (ridge - eave) * t1;
             const float v = (s % 2) ? 1.0f : 0.88f;
-            b.Quad({-hx, y0, z0}, {hx, y0, z0}, {hx, y1, z1}, {-hx, y1, z1}, {178 * v, 76 * v, 54 * v});
+            b.Quad({-hx, y0, z0}, {hx, y0, z0}, {hx, y1, z1}, {-hx, y1, z1}, {tile.r * v, tile.g * v, tile.b * v});
         }
     }
     for (int end = -1; end <= 1; end += 2) b.Tri({end * hx, eave, -hz}, {end * hx, eave, hz}, {end * hx, ridge, 0}, {222, 208, 170});
@@ -514,7 +528,9 @@ inline MeshData Dragon(uint32_t variant) {
 // stripes around the sides, so it reads as a stone step from far off.
 inline MeshData Platform(uint32_t variant) {
     const float h = 60.0f * static_cast<float>(variant % 3 + 1), half = 75.0f;
-    const Rgb body = {150, 144, 122}, dark = {82, 78, 68}, top = {192, 182, 148}, panel = {164, 154, 124}; // olive stone, dark mortar
+    // olive stone with dark mortar, tinted to the map's stone (variant / 3 = theme, as the boulders: StoneLook)
+    auto t = [&](Rgb c) { return BuiltStone(variant / 3, c); };
+    const Rgb body = t({150, 144, 122}), dark = t({82, 78, 68}), top = t({192, 182, 148}), panel = t({164, 154, 124});
     Builder b;
     auto box = [&](float x0, float y0, float z0, float x1, float y1, float z1, Rgb col) {
         b.inside = {(x0 + x1) * 0.5f, (y0 + y1) * 0.5f, (z0 + z1) * 0.5f};
@@ -816,6 +832,188 @@ inline MeshData Tree(uint32_t variant) {
             Blob(b, -56, 176, -24, 66, 54, 66, leaf2[season], 702 + variant, snow);
             break;
         }
+    }
+    return b.mesh;
+}
+
+// ---- the lived-in world: small things scattered about each map and round its towns (drawn by the game layer near the player, purely for looks) ----
+namespace decor_detail {
+inline void Box(Builder& b, V3 c, V3 h, float yaw, Rgb col, Rgb top) {   // a box of half size h turned by yaw, standing on c
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    auto P = [&](float x, float y, float z) { return V3{c.x + x * cy - z * sy, c.y + y, c.z + x * sy + z * cy}; };
+    b.inside = {c.x, c.y + h.y, c.z};
+    const V3 p[8] = {P(-h.x, 0, -h.z), P(h.x, 0, -h.z), P(h.x, 0, h.z), P(-h.x, 0, h.z), P(-h.x, 2 * h.y, -h.z), P(h.x, 2 * h.y, -h.z), P(h.x, 2 * h.y, h.z), P(-h.x, 2 * h.y, h.z)};
+    b.Quad(p[0], p[1], p[5], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col); b.Quad(p[2], p[3], p[7], p[6], col); b.Quad(p[3], p[0], p[4], p[7], col);
+    b.Quad(p[4], p[5], p[6], p[7], top);
+}
+inline void Blade(Builder& b, V3 base, float height, float ang, float lean, float w, Rgb root, Rgb tip) {   // one leaning blade or leaf, dark at the root
+    const V3 out = {std::cos(ang), 0, std::sin(ang)}, side = {-std::sin(ang), 0, std::cos(ang)};
+    auto at = [&](float f, float hw) { const float bend = lean * f * f; return V3{base.x + out.x * bend + side.x * hw, base.y + height * f, base.z + out.z * bend + side.z * hw}; };
+    const V3 l0 = at(0, -w), r0 = at(0, w), l1 = at(0.5f, -w * 0.7f), r1 = at(0.5f, w * 0.7f), t = at(1, 0);
+    const Rgb c1 = Mix(root, tip, 0.6f);
+    Put(b.mesh, l0, root); Put(b.mesh, r0, root); Put(b.mesh, r1, c1);
+    Put(b.mesh, l0, root); Put(b.mesh, r1, c1); Put(b.mesh, l1, c1);
+    Put(b.mesh, l1, c1); Put(b.mesh, r1, c1); Put(b.mesh, t, tip);
+}
+inline void Flower(Builder& b, V3 at, float r, Rgb petal) {   // a flat four-petalled flower head on a stalk
+    b.inside = {at.x, at.y - 10, at.z};
+    for (int k = 0; k < 4; k++) {
+        const float a0 = k * 1.5707963f, a1 = a0 + 1.5707963f;
+        b.Tri(at, {at.x + std::cos(a0) * r, at.y + 2, at.z + std::sin(a0) * r}, {at.x + std::cos(a1) * r, at.y + 2, at.z + std::sin(a1) * r}, k % 2 ? petal : Mix(petal, {255, 255, 255}, 0.25f));
+    }
+    Blade(b, {at.x, 0, at.z}, at.y, 0, 0, 1.5f, {50, 110, 40}, {90, 160, 60});
+}
+} // namespace decor_detail
+
+// Small scenery for each map, so the ground between the towns isn't bare. `variant` = item (0-5) + 6 * theme (meadow, water, shadow, fire, desert):
+//   meadow: flower bed, ferns, a ring of mushrooms, a berry bush, tall blue flowers, a mossy fallen log
+//   water:  cattails, a clump of tall reeds, pink water flowers, driftwood, lush ferns, shells and pebbles
+//   shadow: dark weeds, a patch of gourds, a dead bush, a broken fence, grey toadstools, a small old gravestone
+//   fire:   a Bomb Flower, a charred stump, glowing ember crystals, a heap of ash, obsidian shards, a thorny dead bush
+//   desert: golden dry grass, a desert shrub, a barrel cactus, bleached bones, a broken sandstone column, a Gerudo pot
+inline MeshData Decor(uint32_t variant) {
+    using namespace decor_detail;
+    const int item = static_cast<int>(variant % 6), theme = static_cast<int>(variant / 6 % 5);
+    Builder b;
+    Lcg rng(1300 + variant * 7);
+    auto R = [&]() { return rng.Next(); };
+    auto tuft = [&](int blades, float tall, float spread, Rgb root, Rgb tip, float w) {
+        for (int i = 0; i < blades; i++) {
+            const float a = (i + R() * 0.7f) / blades * 6.2831853f, r = spread * R();
+            Blade(b, {std::cos(a) * r, 0, std::sin(a) * r}, tall * (0.7f + 0.5f * R()), a + (R() - 0.5f), tall * (0.15f + 0.3f * R()), w, root, tip);
+        }
+    };
+    auto log = [&](float len, float rad, Rgb bark, Rgb top) {   // lying along x
+        b.inside = {0, rad, 0};
+        const int n = 6;
+        for (int i = 0; i < n; i++) {
+            const float a0 = i * 6.2831853f / n, a1 = (i + 1) * 6.2831853f / n;
+            const V3 p0 = {-len, rad + std::cos(a0) * rad, std::sin(a0) * rad}, p1 = {-len, rad + std::cos(a1) * rad, std::sin(a1) * rad};
+            const V3 q0 = {len, rad + std::cos(a0) * rad, std::sin(a0) * rad}, q1 = {len, rad + std::cos(a1) * rad, std::sin(a1) * rad};
+            b.Quad(p0, p1, q1, q0, (i == 0 || i == n - 1) ? top : bark);
+            b.Tri({-len, rad, 0}, p0, p1, {200, 170, 120}); b.Tri({len, rad, 0}, q1, q0, {200, 170, 120});   // cut ends
+        }
+    };
+    switch (theme * 6 + item) {
+        // ---- meadow (Hyrule Field) ----
+        case 0: { static const Rgb p[3] = {{236, 64, 52}, {250, 214, 60}, {245, 240, 230}}; tuft(10, 20, 26, {40, 110, 40}, {110, 190, 70}, 3);
+                  for (int i = 0; i < 9; i++) { const float a = R() * 6.28f, r = 30 * R(); Flower(b, {std::cos(a) * r, 18 + 10 * R(), std::sin(a) * r}, 6, p[i % 3]); } break; }
+        case 1: for (int i = 0; i < 9; i++) { const float a = i * 0.7f; Blade(b, {0, 0, 0}, 34 + 10 * R(), a, 30, 7, {40, 100, 40}, {100, 180, 70}); } break;
+        case 2: for (int i = 0; i < 7; i++) { const float a = i * 0.9f, r = 28 + 6 * R(); Prism(b, std::cos(a) * r, std::sin(a) * r, 0, 9, 2.5f, 2.5f, 5, {236, 226, 200});
+                  Blob(b, std::cos(a) * r, 11, std::sin(a) * r, 8, 4, 8, i % 3 ? Rgb{214, 60, 44} : Rgb{180, 120, 70}, 1400 + i); } break;
+        case 3: Blob(b, 0, 22, 0, 34, 24, 30, {54, 128, 52}, 1410); Blob(b, 18, 30, 8, 22, 18, 20, {70, 150, 60}, 1411);
+                for (int i = 0; i < 8; i++) { const float a = i * 0.8f; Blob(b, std::cos(a) * 30, 24 + 14 * R(), std::sin(a) * 26, 3.5f, 3.5f, 3.5f, {200, 40, 70}, 1420 + i); } break;
+        case 4: tuft(8, 30, 20, {40, 110, 40}, {110, 190, 70}, 3);
+                for (int i = 0; i < 6; i++) { const float a = R() * 6.28f, r = 22 * R(); Flower(b, {std::cos(a) * r, 34 + 14 * R(), std::sin(a) * r}, 7, {90, 120, 240}); } break;
+        case 5: log(55, 13, {104, 74, 44}, {84, 140, 56}); tuft(5, 14, 50, {40, 100, 40}, {100, 170, 70}, 3); break;
+        // ---- water (Lake Hylia) ----
+        case 6: for (int i = 0; i < 8; i++) { const float a = R() * 6.28f, r = 16 * R(), h = 60 + 30 * R(); Blade(b, {std::cos(a) * r, 0, std::sin(a) * r}, h, a, 6, 2.5f, {60, 110, 50}, {110, 170, 80});
+                  if (i % 2 == 0) Prism(b, std::cos(a) * r + std::cos(a) * 4, std::sin(a) * r + std::sin(a) * 4, h * 0.7f, h * 0.9f, 3.5f, 3.5f, 5, {110, 70, 40}); } break;
+        case 7: tuft(14, 80, 22, {50, 100, 60}, {140, 190, 110}, 3.5f); break;
+        case 8: tuft(6, 16, 24, {40, 110, 70}, {90, 170, 110}, 6);
+                for (int i = 0; i < 4; i++) { const float a = i * 1.6f, r = 18 + 8 * R(); Flower(b, {std::cos(a) * r, 8, std::sin(a) * r}, 9, {250, 150, 200}); } break;
+        case 9: log(48, 8, {178, 168, 150}, {196, 190, 172}); break;
+        case 10: for (int i = 0; i < 11; i++) { const float a = i * 0.57f; Blade(b, {0, 0, 0}, 40 + 14 * R(), a, 40, 8, {30, 110, 60}, {90, 200, 110}); } break;
+        case 11: for (int i = 0; i < 7; i++) { const float a = R() * 6.28f, r = 30 * R(); Blob(b, std::cos(a) * r, 3, std::sin(a) * r, 6 + 3 * R(), 3, 5, i % 3 ? Rgb{236, 220, 200} : Rgb{240, 170, 160}, 1500 + i); } break;
+        // ---- shadow (Kakariko) ----
+        case 12: tuft(10, 40, 24, {40, 60, 36}, {96, 120, 70}, 3); break;
+        case 13: for (int i = 0; i < 4; i++) { const float a = i * 1.7f, r = 22 * R(); Blob(b, std::cos(a) * r, 9, std::sin(a) * r, 11, 9, 11, i % 2 ? Rgb{226, 130, 40} : Rgb{200, 170, 60}, 1600 + i); }
+                 tuft(6, 12, 34, {40, 90, 36}, {80, 140, 60}, 4); break;
+        case 14: for (int i = 0; i < 9; i++) { const float a = i * 0.7f; Blade(b, {0, 0, 0}, 30 + 14 * R(), a, 24, 1.8f, {80, 64, 48}, {120, 100, 76}); } break;
+        case 15: Box(b, {-30, 0, 0}, {3.5f, 22, 3.5f}, 0, {110, 82, 52}, {130, 100, 64}); Box(b, {30, 0, 0}, {3.5f, 16, 3.5f}, 0.2f, {110, 82, 52}, {130, 100, 64});
+                 Box(b, {0, 26, 0}, {34, 2.5f, 2}, 0.1f, {128, 96, 60}, {150, 116, 74}); Box(b, {-4, 12, 0}, {30, 2.5f, 2}, -0.15f, {128, 96, 60}, {150, 116, 74}); break;
+        case 16: for (int i = 0; i < 5; i++) { const float a = i * 1.3f, r = 16 * R(); Prism(b, std::cos(a) * r, std::sin(a) * r, 0, 12, 2.5f, 2.5f, 5, {200, 196, 180});
+                 Blob(b, std::cos(a) * r, 14, std::sin(a) * r, 7, 3.5f, 7, {150, 140, 130}, 1620 + i); } break;
+        case 17: Box(b, {0, 0, 0}, {16, 24, 5}, 0.05f, {128, 128, 120}, {150, 150, 140}); Blob(b, 0, 48, 0, 16, 7, 5, {128, 128, 120}, 1630);
+                 tuft(5, 10, 22, {40, 80, 40}, {90, 130, 70}, 3); break;
+        // ---- fire (Death Mountain) ----
+        case 18: for (int i = 0; i < 6; i++) { const float a = i * 1.047f; Blade(b, {0, 0, 0}, 14, a, 22, 7, {40, 90, 50}, {70, 150, 70}); }
+                 Blob(b, 0, 16, 0, 11, 11, 11, {44, 50, 80}, 1700); Blob(b, 0, 28, 0, 3, 4, 3, {250, 170, 60}, 1701); break;   // its fuse lit gold
+        case 19: Prism(b, 0, 0, 0, 30, 15, 11, 7, {48, 38, 32}); Prism(b, 0, 0, 30, 33, 11, 6, 7, {230, 110, 40}); break;
+        case 20: for (int i = 0; i < 5; i++) { const float a = i * 1.25f, r = 10 * R(); Prism(b, std::cos(a) * r, std::sin(a) * r, 0, 18 + 18 * R(), 6, 0.5f, 4, i % 2 ? Rgb{255, 120, 40} : Rgb{250, 200, 70}); } break;
+        case 21: Blob(b, 0, 2, 0, 40, 12, 34, {120, 116, 112}, 1710); Blob(b, 14, 6, 6, 18, 9, 16, {150, 146, 140}, 1711); break;
+        case 22: for (int i = 0; i < 4; i++) { const float a = i * 1.6f, r = 18 * R(); Prism(b, std::cos(a) * r, std::sin(a) * r, 0, 14 + 22 * R(), 7, 0.5f, 3, i % 2 ? Rgb{52, 46, 70} : Rgb{90, 84, 120}); } break;   // glassy, catching the light
+        case 23: for (int i = 0; i < 10; i++) { const float a = i * 0.63f; Blade(b, {0, 0, 0}, 26 + 14 * R(), a, 22, 1.5f, {50, 36, 30}, {90, 70, 56}); } break;
+        // ---- desert (Desert Colossus) ----
+        case 24: tuft(12, 32, 22, {150, 110, 50}, {236, 200, 110}, 3); break;
+        case 25: Blob(b, 0, 16, 0, 26, 16, 24, {120, 124, 70}, 1800); Blob(b, 12, 22, -6, 16, 12, 14, {140, 140, 80}, 1801); break;
+        case 26: Blob(b, 0, 18, 0, 16, 20, 16, {70, 130, 70}, 1810); Prism(b, 26, 6, 0, 52, 8, 7, 6, {80, 140, 76}); Prism(b, 26, 6, 52, 58, 7, 2, 6, {240, 120, 150});
+                 Prism(b, 32, 6, 26, 30, 3, 3, 4, {80, 140, 76}); break;
+        case 27: for (int i = 0; i < 5; i++) { const float x = -24 + i * 12.0f; Box(b, {x, 0, 0}, {2, 10 - std::fabs(x) * 0.2f, 16}, 0, {232, 222, 196}, {244, 236, 214}); }
+                 Blob(b, 40, 9, 0, 11, 9, 10, {236, 226, 200}, 1820); break;   // a ribcage and a skull
+        case 28: Prism(b, 0, 0, 0, 34, 20, 19, 8, {214, 170, 110}); Prism(b, 0, 0, 34, 40, 19, 14, 8, {196, 150, 96}); Blob(b, 30, 7, 10, 12, 7, 10, {214, 170, 110}, 1830); break;
+        default: Prism(b, 0, 0, 0, 18, 14, 18, 8, {180, 96, 60}); Prism(b, 0, 0, 18, 30, 18, 9, 8, {196, 110, 70}); Prism(b, 0, 0, 30, 36, 9, 11, 8, {150, 80, 50}); break;
+    }
+    for (MeshVertex& v : b.mesh.v) v.y = (std::max)(0.0f, v.y);   // the round bits sit on the ground, not through it
+    return b.mesh;
+}
+
+// The clutter of people living there, set about each town by the game layer: `variant` 0 a crate, 1 a barrel, 2 clay pots, 3 a hay bale,
+// 4 a hand cart, 5 a lantern post, 6 a fire pit, 7 a signpost.
+inline MeshData Clutter(uint32_t variant) {
+    using namespace decor_detail;
+    Builder b;
+    const Rgb wood = {150, 104, 58}, dark = {96, 64, 36}, iron = {70, 70, 76};
+    switch (variant % 8) {
+        case 0: Box(b, {0, 0, 0}, {20, 20, 20}, 0, wood, {170, 124, 74}); Box(b, {0, 0, 0}, {21, 3, 21}, 0, dark, dark); Box(b, {0, 34, 0}, {21, 3, 21}, 0, dark, {120, 84, 50}); break;
+        case 1: Prism(b, 0, 0, 0, 22, 15, 18, 8, wood); Prism(b, 0, 0, 22, 44, 18, 15, 8, wood); Prism(b, 0, 0, 20, 24, 18.6f, 18.6f, 8, iron); Prism(b, 0, 0, 44, 45, 15, 2, 8, {120, 84, 50}); break;
+        case 2: for (int i = 0; i < 3; i++) { const float x = i * 22.0f - 22.0f, s = i == 1 ? 1.2f : 0.9f; Prism(b, x, (i % 2) * 8.0f, 0, 14 * s, 8 * s, 13 * s, 8, {176, 92, 56});
+                Prism(b, x, (i % 2) * 8.0f, 14 * s, 24 * s, 13 * s, 6 * s, 8, {196, 110, 70}); Prism(b, x, (i % 2) * 8.0f, 24 * s, 28 * s, 6 * s, 7 * s, 8, {150, 78, 46}); } break;
+        case 3: Box(b, {0, 0, 0}, {30, 18, 20}, 0, {226, 190, 96}, {240, 210, 120}); Box(b, {0, 0, 0}, {31, 18.5f, 3}, 0, {120, 90, 50}, {120, 90, 50}); break;
+        case 4: Box(b, {0, 14, 0}, {40, 10, 24}, 0, wood, {128, 88, 50}); Box(b, {50, 18, 10}, {26, 2, 2}, 0, dark, dark); Box(b, {50, 18, -10}, {26, 2, 2}, 0, dark, dark);
+                for (int s = -1; s <= 1; s += 2) { Builder& bb = b; bb.inside = {0, 16, s * 26.0f};
+                    for (int k = 0; k < 8; k++) { const float a0 = k * 0.785f, a1 = a0 + 0.785f; bb.Tri({0, 16, s * 26.0f}, {std::cos(a0) * 16, 16 + std::sin(a0) * 16, s * 26.0f}, {std::cos(a1) * 16, 16 + std::sin(a1) * 16, s * 26.0f}, dark); } }
+                Blob(b, -10, 34, 0, 18, 10, 14, {226, 190, 96}, 1900); break;
+        case 5: Prism(b, 0, 0, 0, 110, 4, 3, 6, dark); Box(b, {9, 104, 0}, {12, 1.5f, 1.5f}, 0, dark, dark); Prism(b, 18, 0, 84, 100, 7, 7, 4, {255, 214, 120});
+                Prism(b, 18, 0, 100, 106, 8, 2, 4, iron); break;
+        case 6: for (int i = 0; i < 8; i++) { const float a = i * 0.785f; Blob(b, std::cos(a) * 30, 5, std::sin(a) * 30, 9, 6, 9, {130, 124, 112}, 1910 + i); }
+                for (int i = 0; i < 3; i++) Box(b, {0, 3 + i * 3.0f, 0}, {20, 3, 3}, i * 1.05f, dark, {60, 40, 26});
+                Prism(b, 0, 0, 6, 34, 12, 0.5f, 5, {250, 150, 40}); Prism(b, 0, 0, 6, 22, 7, 0.5f, 5, {255, 230, 110}); break;
+        default: Box(b, {0, 0, 0}, {3.5f, 50, 3.5f}, 0, dark, dark); Box(b, {14, 76, 0}, {24, 9, 2}, 0.05f, wood, {170, 124, 74}); Box(b, {-12, 58, 0}, {20, 8, 2}, -0.08f, wood, {170, 124, 74}); break;
+    }
+    for (MeshVertex& v : b.mesh.v) v.y = (std::max)(0.0f, v.y);
+    return b.mesh;
+}
+
+// Trees for the places the field's trees don't belong: `variant` 0-3 a palm (the desert's oases), 4-7 a dead, burnt tree (the mountain).
+inline MeshData ThemeTree(uint32_t variant) {
+    Builder b;
+    Lcg rng(2000 + variant);
+    if (variant % 8 < 4) {
+        const float lean = 0.12f + 0.1f * (variant % 4), tall = 200.0f + 30.0f * (variant % 3);
+        V3 at = {0, 0, 0};
+        for (int s = 0; s < 6; s++) {   // a curving trunk in rings
+            const float y0 = tall * s / 6, y1 = tall * (s + 1) / 6, x0 = lean * y0 * y0 / tall, x1 = lean * y1 * y1 / tall;
+            b.inside = {(x0 + x1) * 0.5f, (y0 + y1) * 0.5f, 0};
+            for (int k = 0; k < 6; k++) {
+                const float a0 = k * 1.047f, a1 = a0 + 1.047f, r0 = 11.0f - s, r1 = 10.0f - s;
+                b.Quad({x0 + std::cos(a0) * r0, y0, std::sin(a0) * r0}, {x0 + std::cos(a1) * r0, y0, std::sin(a1) * r0}, {x1 + std::cos(a1) * r1, y1, std::sin(a1) * r1},
+                       {x1 + std::cos(a0) * r1, y1, std::sin(a0) * r1}, s % 2 ? Rgb{150, 112, 70} : Rgb{128, 92, 56});
+            }
+            at = {x1, y1, 0};
+        }
+        for (int f = 0; f < 7; f++) {   // fronds drooping from the crown
+            const float a = f * 0.9f + rng.Next() * 0.3f, len = 90.0f + 20.0f * rng.Next();
+            const V3 tip = {at.x + std::cos(a) * len, at.y - 40.0f - 20.0f * rng.Next(), at.z + std::sin(a) * len};
+            const V3 mid = {at.x + std::cos(a) * len * 0.5f, at.y + 14.0f, at.z + std::sin(a) * len * 0.5f};
+            const V3 side = {-std::sin(a) * 18.0f, 0, std::cos(a) * 18.0f};
+            b.inside = {at.x, at.y - 30, at.z};
+            b.Tri(at, {mid.x + side.x, mid.y, mid.z + side.z}, mid, {70, 150, 60}); b.Tri(at, mid, {mid.x - side.x, mid.y, mid.z - side.z}, {90, 170, 70});
+            b.Tri({mid.x + side.x, mid.y, mid.z + side.z}, tip, mid, {80, 160, 64}); b.Tri(mid, tip, {mid.x - side.x, mid.y, mid.z - side.z}, {60, 136, 54});
+        }
+        Blob(b, at.x, at.y - 6, at.z, 9, 8, 9, {120, 90, 50}, 2100 + variant);   // coconuts
+    } else {
+        const Rgb bark = {58, 46, 40}, ember = {200, 90, 40};
+        Prism(b, 0, 0, 0, 140, 15, 8, 7, bark);
+        for (int k = 0; k < 4; k++) {   // bare, crooked branches
+            const float a = k * 1.6f + rng.Next(), y = 70.0f + 20.0f * k, len = 50.0f + 20.0f * rng.Next();
+            const V3 p0 = {std::cos(a) * 6, y, std::sin(a) * 6}, p1 = {std::cos(a) * len, y + 30 + 20 * rng.Next(), std::sin(a) * len};
+            const V3 side = {-std::sin(a) * 4.0f, 0, std::cos(a) * 4.0f};
+            b.inside = {0, y - 20, 0};
+            b.Tri({p0.x - side.x, p0.y, p0.z - side.z}, {p0.x + side.x, p0.y, p0.z + side.z}, p1, bark);
+            b.Tri({p0.x, p0.y - 5, p0.z}, {p0.x, p0.y + 5, p0.z}, p1, Mix(bark, {0, 0, 0}, 0.3f));
+        }
+        Prism(b, 0, 0, 0, 10, 17, 15, 7, ember);   // still smouldering at the foot
     }
     return b.mesh;
 }
@@ -1126,8 +1324,8 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
     switch (kind) {
         case MeshKind::Rock: return mesh_detail::Lump(34.0f, 0.78f, variant);
         case MeshKind::Boulder: return mesh_detail::Boulder(variant);
-        case MeshKind::Pillar: return mesh_detail::Post();
-        case MeshKind::Roof: return mesh_detail::Roof();
+        case MeshKind::Pillar: return mesh_detail::Post(variant);
+        case MeshKind::Roof: return mesh_detail::Roof(variant);
         case MeshKind::Golem: return mesh_detail::Golem(variant);
         case MeshKind::Glider: return mesh_detail::Glider(variant);
         case MeshKind::GliderFrame: return mesh_detail::Glider(0, false);
@@ -1146,6 +1344,9 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Tree: return mesh_detail::Tree(variant);
         case MeshKind::SnowPatch: return mesh_detail::SnowPatch(variant);
         case MeshKind::Ripple: return mesh_detail::Ripple(variant);
+        case MeshKind::Decor: return mesh_detail::Decor(variant);
+        case MeshKind::Clutter: return mesh_detail::Clutter(variant);
+        case MeshKind::ThemeTree: return mesh_detail::ThemeTree(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
