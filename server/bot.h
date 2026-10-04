@@ -1,5 +1,7 @@
 #pragma once
+#include "../shared/anim.h"
 #include "match.h"
+#include <cmath>
 #include <unordered_map>
 
 namespace royale {
@@ -57,6 +59,9 @@ class BotController {
         float step = (std::min)(len, kRunSpeed * speedScale * dt);
         p.pos.x += dx / len * step;
         p.pos.z += dz / len * step;
+        // Face the direction of travel (OoT binary angle, 0x10000 = 360 degrees, 0 = +z) and show running.
+        p.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(dx, dz) * (32768.0f / 3.14159265358979f)));
+        p.anim = static_cast<uint8_t>(speedScale < 0.9f ? Anim::Walk : Anim::Run);
     }
 
     static float EffectiveDps(const Equipped& e) {
@@ -66,6 +71,7 @@ class BotController {
 
     void Act(Match& m, PlayerState& p, const Circle& soon, float dt) {
         Memory& mem = Mem(p.id);
+        p.anim = static_cast<uint8_t>(Anim::Idle); // MoveToward overrides this when the bot moves
 
         // Nearest living enemy.
         PlayerState* enemy = nullptr;

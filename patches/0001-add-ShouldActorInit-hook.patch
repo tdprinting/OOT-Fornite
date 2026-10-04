@@ -1,0 +1,86 @@
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+index ecd970b..4e7ef92 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+@@ -25,6 +25,7 @@ DEFINE_HOOK(OnPlayerUpdate, ());
+ DEFINE_HOOK(OnOcarinaSongAction, ());
+ DEFINE_HOOK(OnCuccoOrChickenHatch, ());
+ DEFINE_HOOK(OnShopSlotChange, (uint8_t cursorIndex, int16_t price));
++DEFINE_HOOK(ShouldActorInit, (void* actor, bool* result));
+ DEFINE_HOOK(OnActorInit, (void* actor));
+ DEFINE_HOOK(OnActorUpdate, (void* actor));
+ DEFINE_HOOK(OnActorKill, (void* actor));
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+index 5e52bed..7b49aa5 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+@@ -97,6 +97,15 @@ void GameInteractor_ExecuteOnShopSlotChangeHooks(uint8_t cursorIndex, int16_t pr
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnShopSlotChange>(cursorIndex, price);
+ }
+ 
++bool GameInteractor_ShouldActorInit(void* actor) {
++    bool result = true;
++    GameInteractor::Instance->ExecuteHooks<GameInteractor::ShouldActorInit>(actor, &result);
++    GameInteractor::Instance->ExecuteHooksForID<GameInteractor::ShouldActorInit>(((Actor*)actor)->id, actor, &result);
++    GameInteractor::Instance->ExecuteHooksForPtr<GameInteractor::ShouldActorInit>((uintptr_t)actor, actor, &result);
++    GameInteractor::Instance->ExecuteHooksForFilter<GameInteractor::ShouldActorInit>(actor, &result);
++    return result;
++}
++
+ void GameInteractor_ExecuteOnActorInit(void* actor) {
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnActorInit>(actor);
+     GameInteractor::Instance->ExecuteHooksForID<GameInteractor::OnActorInit>(((Actor*)actor)->id, actor);
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+index b1f9195..f6c3421 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+@@ -27,6 +27,7 @@ void GameInteractor_ExecuteOnSceneSpawnActors();
+ void GameInteractor_ExecuteOnPlayerUpdate();
+ void GameInteractor_ExecuteOnOcarinaSongAction();
+ void GameInteractor_ExecuteOnCuccoOrChickenHatch();
++bool GameInteractor_ShouldActorInit(void* actor);
+ void GameInteractor_ExecuteOnActorInit(void* actor);
+ void GameInteractor_ExecuteOnActorUpdate(void* actor);
+ void GameInteractor_ExecuteOnActorKill(void* actor);
+diff --git a/soh/src/code/z_actor.c b/soh/src/code/z_actor.c
+index 3ca67ad..c0a4b07 100644
+--- a/soh/src/code/z_actor.c
++++ b/soh/src/code/z_actor.c
+@@ -1254,10 +1254,15 @@ void Actor_Init(Actor* actor, PlayState* play) {
+     ActorShape_Init(&actor->shape, 0.0f, NULL, 0.0f);
+     if (Object_IsLoaded(&play->objectCtx, actor->objBankIndex)) {
+         Actor_SetObjectDependency(play, actor);
+-        actor->init(actor, play);
+-        actor->init = NULL;
++        if (GameInteractor_ShouldActorInit(actor)) {
++            actor->init(actor, play);
++            actor->init = NULL;
+ 
+-        GameInteractor_ExecuteOnActorInit(actor);
++            GameInteractor_ExecuteOnActorInit(actor);
++        } else {
++            actor->init = NULL;
++            Actor_Kill(actor);
++        }
+ 
+         // For enemy health bar we need to know the max health during init
+         if (actor->category == ACTORCAT_ENEMY) {
+@@ -2615,10 +2620,15 @@ void Actor_UpdateAll(PlayState* play, ActorContext* actorCtx) {
+             if (actor->init != NULL) {
+                 if (Object_IsLoaded(&play->objectCtx, actor->objBankIndex)) {
+                     Actor_SetObjectDependency(play, actor);
+-                    actor->init(actor, play);
+-                    actor->init = NULL;
++                    if (GameInteractor_ShouldActorInit(actor)) {
++                        actor->init(actor, play);
++                        actor->init = NULL;
+ 
+-                    GameInteractor_ExecuteOnActorInit(actor);
++                        GameInteractor_ExecuteOnActorInit(actor);
++                    } else {
++                        actor->init = NULL;
++                        Actor_Kill(actor);
++                    }
+ 
+                     // For enemy health bar we need to know the max health during init
+                     if (actor->category == ACTORCAT_ENEMY) {

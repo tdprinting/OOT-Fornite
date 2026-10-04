@@ -1,0 +1,17 @@
+diff --git a/soh/CMakeLists.txt b/soh/CMakeLists.txt
+index 799fdcd..0ee9f05 100644
+--- a/soh/CMakeLists.txt
++++ b/soh/CMakeLists.txt
+@@ -776,6 +776,12 @@ else()
+     target_link_libraries(${PROJECT_NAME} PRIVATE "${ADDITIONAL_LIBRARY_DEPENDENCIES}")
+ endif()
+ 
++# OOT Royale: networking library, include paths and ENet. Only active when this tree sits inside the OOT Royale repo
++# (third_party/Shipwright-Android), so the fork still builds standalone.
++if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/royale.cmake")
++    include("${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/royale.cmake")
++endif()
++
+ if(CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch")
+ 
+ nx_generate_nacp(Ship.nacp

@@ -1,5 +1,6 @@
 #include "../match.h"
 #include "../sim.h"
+#include "../../shared/anim.h"
 #include "../../shared/loot.h"
 #include <cstdio>
 #include <cstdlib>
@@ -290,6 +291,19 @@ static void BotsFightToTheDeath() {
     const PlayerState* w = sim.match.Winner();
     CHECK(w && w->kills == 1);
 }
+static void BotsFaceTheirDirectionAndAnimate() {
+    // A bot with a sword pickup straight ahead on the +x axis runs toward it: it must face +x and show a run animation,
+    // then go back to idle once it has nothing to do.
+    Simulation sim = Duel(5, {1500, 0}, {0, 0});
+    sim.match.AddLoot({{300, 0, }, ItemId::MasterSword, Rarity::Epic, false});
+    PlayerState* b = sim.match.Find(1000);
+    for (int i = 0; i < 20; i++) sim.Tick(kDt);
+    CHECK(b->anim == static_cast<uint8_t>(Anim::Run));
+    CHECK(std::abs(static_cast<int>(b->rot) - 16384) < 200);   // +x is a quarter turn from +z: 0x4000
+    CHECK(b->pos.x > 50);
+    Run(sim, 10);                                              // picked it up; now it wanders (walks) or idles
+    CHECK(b->weapon.item == ItemId::MasterSword);
+}
 static void BotsKeepDistanceWithBow() {
     Simulation sim = Duel(5, {0, 0}, {400, 0});
     sim.match.Find(1000)->weapon = {ItemId::FairyBow, Rarity::Rare};
@@ -338,7 +352,7 @@ static void FullMatchWithBots() {
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
-    BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsKeepDistanceWithBow(); FullMatchWithBots();
+    BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");
