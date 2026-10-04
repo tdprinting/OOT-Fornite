@@ -27,6 +27,7 @@ struct PuppetState {
     float health = kMaxHealth;
     ItemId weapon = ItemId::DekuStick;
     Rarity weaponRarity = Rarity::Common;
+    uint32_t tunic = SkinRgb(0); // 0xRRGGBB, the colour this player chose (bots wear a preset by id)
 };
 
 // One line of the lobby list.
@@ -108,6 +109,7 @@ class RoyaleSession {
         clientTransport = net::ENetTransport::Connect("127.0.0.1", hostTransport->Port(), &err);
         if (!clientTransport) { Leave(); Fail(error, err); return false; }
         client = std::make_unique<GameClient>(*clientTransport, playerName, token);
+        client->SetTunic(tunic);
         mode = Mode::Hosting;
         return true;
     }
@@ -119,6 +121,7 @@ class RoyaleSession {
         clientTransport = net::ENetTransport::Connect(address, port, &err);
         if (!clientTransport) { Fail(error, err); return false; }
         client = std::make_unique<GameClient>(*clientTransport, playerName);
+        client->SetTunic(tunic);
         mode = Mode::Joined;
         return true;
     }
@@ -136,6 +139,8 @@ class RoyaleSession {
     // Host only, lobby only: rebuild the world on the measured map (see GameServer::Reconfigure).
     bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid)); }
 
+    // The tunic colour (0xRRGGBB) the other players see you in. Set before hosting or joining.
+    void SetTunic(uint32_t rgb) { tunic = rgb; }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
@@ -178,6 +183,7 @@ class RoyaleSession {
             s.id = id;
             auto it = client->Roster().find(id);
             s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? "Bot " + std::to_string(id) : "Player " + std::to_string(id));
+            s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
@@ -294,6 +300,7 @@ class RoyaleSession {
     }
 
     BotDifficulty botDifficulty = BotDifficulty::Normal;
+    uint32_t tunic = SkinRgb(0);
     Mode mode = Mode::Idle;
     // Order matters: clients are destroyed before the transports they use.
     std::unique_ptr<net::ENetTransport> hostTransport;

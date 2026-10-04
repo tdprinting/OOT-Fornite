@@ -110,6 +110,8 @@ static void MessagesRoundTrip() {
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
     { EvLootAdded a, b; a.index = 400; a.loot = {1, 2, 3, 4, true, false}; CHECK(RoundTrips(a, b) && b.index == 400 && b.loot.item == 3); }
     { EvPlayerJoined a, b; a.id = 5; a.flags = kRosterHost | kRosterReady; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi" && b.flags == 3); }
+    { Hello a, b; a.name = "X"; a.tunic = PackRgb(10, 200, 255); CHECK(RoundTrips(a, b) && b.tunic == PackRgb(10, 200, 255)); }
+    { EvPlayerJoined a, b; a.id = 4; a.name = "Y"; a.tunic = PackRgb(1, 2, 3); CHECK(RoundTrips(a, b) && b.tunic == PackRgb(1, 2, 3)); }
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
     { SelectWeaponRequest a, b; a.slot = 2; CHECK(RoundTrips(a, b) && b.slot == 2); }
     { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
@@ -559,6 +561,26 @@ static void ResultsAndRematchOverTheWire() {
     CHECK(rig.M().Find(1)->kills == 0 && rig.M().Find(1)->damageDealt == 0 && rig.M().Find(1)->placement == 0);
     CHECK(host.Results().empty() && host.Loot().size() == rig.M().Loot().size());
     CHECK(rig.M().Players().size() == static_cast<size_t>(kMaxPlayers));                // bots refilled to 32
+}
+
+static void SkinsTravelToEveryone() {
+    Rig rig(21, 20);
+    GameClient& a = rig.Add("Red");
+    a.SetTunic(PackRgb(200, 30, 30));
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    GameClient& b = rig.Add("Blue");
+    b.SetTunic(PackRgb(30, 30, 200));
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.Run(0.5f);
+    // Each sees the other's colour; the one who joined first learned about the second through the join event.
+    CHECK(a.Roster().at(2).tunic == PackRgb(30, 30, 200) && b.Roster().at(1).tunic == PackRgb(200, 30, 30));
+    CHECK(a.Roster().at(1).tunic == PackRgb(200, 30, 30));
+    // Bots wear presets by id, the same on every machine, and not all one colour.
+    CHECK(BotTunic(1000) == BotTunic(1000));
+    bool varied = false;
+    for (uint32_t id = 1001; id < 1032; id++) varied |= BotTunic(id) != BotTunic(1000);
+    CHECK(varied);
+    CHECK(SkinRgb(0) == PackRgb(30, 105, 27) && SkinRgb(-1) == SkinRgb(0) && SkinRgb(kSkinCount + 5) == SkinRgb(0));
 }
 
 static void DisconnectHandling() {
@@ -1037,7 +1059,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

@@ -68,6 +68,11 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - **Custom models.** The stone posts, boulders, rocks and cottage roofs are drawn from low-poly models made for this mod, in the flat chunky Ocarina of Time style, instead of the game's own rock models. There is a checkbox in the Battle Royale menu ("Custom rocks and buildings"). If the game ever crashes or the scenery looks wrong when a match starts, turn it off and tell me.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
 
+## Customize character
+In the Battle Royale menu press **Customize character**. Pick one of ten preset skins (Hero of Time, Hero of the Winds, Goron Red, Zora Blue, Gerudo Gold, Shadow, Sheikah Crimson, Moblin Magenta, Snowhead Frost, Midnight) or choose **Custom colour** and mix your own. It sets the colour of Link's tunic. Everyone in the match sees you in your colour, and bots wear presets. Your choice is sent when you connect, so change it before hosting or joining. It is saved between sessions.
+
+Skins are colours on the game's own Link model, not new models. If you install a Link model pack in Ship of Harkinian on your own device, that changes how *you* see every player (they are all drawn with the same Link model), but other players don't see your model, because only your colour and name are sent over the network. For everyone to see the same model, everyone installs the same pack. Whether a pack's tunic follows the colour depends on the pack.
+
 ## Points and playing again
 You score points for damage dealt (100 per heart), kills (500), chests opened (25), how long you last, and 1000 for winning. When the match ends the standings show everyone's kills, damage and points. The host presses **A** (or **Play again** in the menu) to start a new match straight away with everyone who is still connected, with fresh chests, scenery and storm.
 

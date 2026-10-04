@@ -47,6 +47,7 @@ struct RosterInfo {
     std::string name;
     bool host = false;
     bool ready = false;
+    uint32_t tunic = SkinRgb(0);
 };
 
 // Client side of the protocol: connects, mirrors the server's world, and smooths remote players for rendering.
@@ -73,6 +74,7 @@ class GameClient {
                     net::Hello h;
                     h.name = name;
                     h.hostToken = token;
+                    h.tunic = tunic;
                     Send(h);
                     break;
                 }
@@ -123,6 +125,8 @@ class GameClient {
     const Circle& Map() const { return map; }
     const std::vector<net::LootNet>& Loot() const { return loot; }
     const std::map<uint16_t, RosterInfo>& Roster() const { return roster; }
+    // The tunic colour sent in Hello. Set it before the connection comes up.
+    void SetTunic(uint32_t rgb) { tunic = rgb; }
     const InventoryInfo& Inventory() const { return inventory; }
     // Seconds left on a timed value from the inventory, counting down since it arrived.
     float Left(float secondsAtReceipt) const { return (std::max)(0.0f, secondsAtReceipt - (localClock - inventory.receivedAt)); }
@@ -275,7 +279,7 @@ class GameClient {
             case net::MsgType::EvPlayerJoined: {
                 net::EvPlayerJoined m;
                 if (!net::Decode(data, m)) break;
-                roster[m.id] = RosterInfo{m.name, (m.flags & net::kRosterHost) != 0, (m.flags & net::kRosterReady) != 0};
+                roster[m.id] = RosterInfo{m.name, (m.flags & net::kRosterHost) != 0, (m.flags & net::kRosterReady) != 0, m.tunic};
                 ClientEvent e{ClientEvent::Type::PlayerJoined};
                 e.id = m.id;
                 events.push_back(e);
@@ -359,7 +363,7 @@ class GameClient {
         pois = w.pois;
         roster.clear();
         for (const auto& r : w.roster) {
-            roster[r.id] = RosterInfo{r.name, (r.flags & net::kRosterHost) != 0, (r.flags & net::kRosterReady) != 0};
+            roster[r.id] = RosterInfo{r.name, (r.flags & net::kRosterHost) != 0, (r.flags & net::kRosterReady) != 0, r.tunic};
         }
         status = Status::Joined;
     }
@@ -400,6 +404,7 @@ class GameClient {
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;
+    uint32_t tunic = SkinRgb(0);
     InventoryInfo inventory;
     std::vector<Prop> props;
     std::vector<Poi> pois;

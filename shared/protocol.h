@@ -3,6 +3,7 @@
 #include "bytes.h"
 #include "loot.h"
 #include "poi.h"
+#include "skins.h"
 #include "storm.h"
 #include <array>
 #include <cmath>
@@ -18,7 +19,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 6; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 7; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -55,8 +56,9 @@ struct Hello {
     std::string name;
     // Secret the hosting process generated; a Hello carrying it is the host's own player. 0 for everyone else.
     uint64_t hostToken = 0;
-    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); w.U64(hostToken); }
-    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); hostToken = r.U64(); return r.ok; }
+    uint32_t tunic = SkinRgb(0); // the player's chosen tunic colour, 0xRRGGBB
+    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); w.U64(hostToken); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); }
+    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); hostToken = r.U64(); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); return r.ok; }
 };
 
 struct Input {
@@ -143,6 +145,7 @@ struct RosterEntry {
     uint16_t id = 0;
     uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
+    uint32_t tunic = SkinRgb(0);
 };
 
 inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
@@ -198,7 +201,7 @@ struct Welcome {
         WriteProps(w, props);
         WritePois(w, pois);
         w.U8(static_cast<uint8_t>(roster.size()));
-        for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); }
+        for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); }
     }
     bool Read(ByteReader& r) {
         playerId = r.U16(); version = r.U16(); seed = r.U64();
@@ -212,7 +215,7 @@ struct Welcome {
         if (!ReadPois(r, pois)) return false;
         size_t m = r.U8();
         roster.assign(m, {});
-        for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); if (e.flags > 3) r.ok = false; }
+        for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); e.tunic = PackRgb(cr, cg, cb); if (e.flags > 3) r.ok = false; }
         return r.ok;
     }
 };
@@ -323,8 +326,9 @@ struct EvPlayerJoined {
     uint16_t id = 0;
     uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
-    void Write(ByteWriter& w) const { w.U16(id); w.U8(flags); w.Str(name); }
-    bool Read(ByteReader& r) { id = r.U16(); flags = r.U8(); name = r.Str(kMaxNameLen); return r.ok && flags <= 3; }
+    uint32_t tunic = SkinRgb(0);
+    void Write(ByteWriter& w) const { w.U16(id); w.U8(flags); w.Str(name); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); }
+    bool Read(ByteReader& r) { id = r.U16(); flags = r.U8(); name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); return r.ok && flags <= 3; }
 };
 
 struct EvReady {

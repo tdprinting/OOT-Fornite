@@ -139,6 +139,7 @@ class GameServer {
         bool joined = false;
         uint32_t playerId = 0;
         std::string name;
+        uint32_t tunic = SkinRgb(0);
         uint8_t epoch = 0;
         uint16_t lastSeq = 0;
         bool hasSeq = false;
@@ -303,6 +304,7 @@ class GameServer {
 
         c.joined = true;
         c.playerId = id;
+        c.tunic = hello.tunic;
         c.name = net::SanitizeName(hello.name);
         if (c.name.empty()) c.name = "Player " + std::to_string(id);
         bool haveHost = false;
@@ -318,13 +320,14 @@ class GameServer {
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
         w.props = props;
         w.pois = pois;
-        for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), RosterFlags(o), o.name});
+        for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), RosterFlags(o), o.name, o.tunic});
         SendTo(c, w);
 
         net::EvPlayerJoined joined;
         joined.id = static_cast<uint16_t>(id);
         joined.flags = RosterFlags(c);
         joined.name = c.name;
+        joined.tunic = c.tunic;
         for (auto& o : clients) if (o.joined && o.peer != c.peer) SendTo(o, joined);
     }
 

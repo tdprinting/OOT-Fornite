@@ -9,6 +9,7 @@
 #include "anim.h"
 #include "map.h"
 #include "meshes.h"
+#include "skins.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -294,6 +295,8 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     actor->focus.pos = actor->world.pos;
     actor->focus.pos.y += 50.0f;
 
+    player->currentTunic = PLAYER_TUNIC_KOKIRI; // the colour comes from the player's skin, not from whatever the local save wears
+
     // Hold what the server says this player holds.
     Look look = LookFor(s.weapon);
     if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction) {
@@ -328,12 +331,53 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
 }
 
+// ---- character skins (tunic colour) -----------------------------------------------------------------------------------------
+
+// The game colours Link's tunic from its cosmetic settings, so a player's skin is applied by setting those just for the moment their
+// model is drawn, then putting the local player's own colour back. All three tunic colours are set so it doesn't matter which one is worn.
+uint32_t gLocalTunic = royale::SkinRgb(0);
+bool gTunicApplied = false;                      // we have taken over the cosmetic tunic settings
+int gSavedTunicChanged[3] = {0, 0, 0};
+Color_RGB8 gSavedTunicValue[3] = {};
+const char* const kTunicChanged[3] = { CVAR_COSMETIC("Link.KokiriTunic.Changed"), CVAR_COSMETIC("Link.GoronTunic.Changed"), CVAR_COSMETIC("Link.ZoraTunic.Changed") };
+const char* const kTunicValue[3] = { CVAR_COSMETIC("Link.KokiriTunic.Value"), CVAR_COSMETIC("Link.GoronTunic.Value"), CVAR_COSMETIC("Link.ZoraTunic.Value") };
+
+void SetTunicCosmetics(uint32_t rgb) {
+    const Color_RGB8 c = { royale::RgbR(rgb), royale::RgbG(rgb), royale::RgbB(rgb) };
+    for (int i = 0; i < 3; i++) {
+        CVarSetInteger(kTunicChanged[i], 1);
+        CVarSetColor24(kTunicValue[i], c);
+    }
+}
+
+// While you are in a match your own Link wears your chosen skin; leaving gives the player's own cosmetic settings back.
+void ApplyLocalTunic(bool on) {
+    if (on && !gTunicApplied) {
+        for (int i = 0; i < 3; i++) {
+            gSavedTunicChanged[i] = CVarGetInteger(kTunicChanged[i], 0);
+            gSavedTunicValue[i] = CVarGetColor24(kTunicValue[i], Color_RGB8{ 30, 105, 27 });
+        }
+        gTunicApplied = true;
+    }
+    if (on) {
+        SetTunicCosmetics(gLocalTunic);
+    } else if (gTunicApplied) {
+        for (int i = 0; i < 3; i++) {
+            CVarSetInteger(kTunicChanged[i], gSavedTunicChanged[i]);
+            CVarSetColor24(kTunicValue[i], gSavedTunicValue[i]);
+        }
+        gTunicApplied = false;
+    }
+}
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
     gSaveContext.equips.buttonItems[0] = st ? LookFor(st->weapon).buttonItem : ITEM_NONE;
+    if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
     Player_Draw(actor, play);
+    if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
 }
 
@@ -1574,6 +1618,7 @@ void OnGameFrameUpdate() {
     bool joined = gSession.Joined();
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
+    ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
@@ -1679,6 +1724,9 @@ struct UiState {
     int port = royale::net::kDefaultPort;
     bool waitingRoom = true;
     int botDifficulty = 1; // 0 easy, 1 normal, 2 hard
+    int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
+    float customTunic[3] = { 0.12f, 0.41f, 0.11f };
+    bool showCustomize = false;
     bool loaded = false;
     bool showPosition = false;
     std::string error;
@@ -1686,6 +1734,14 @@ struct UiState {
     std::vector<std::string> localAddresses;
     int addressAge = 1 << 30; // frames since localAddresses was refreshed
 };
+
+uint32_t SelectedTunic(const UiState& ui) {
+    if (ui.skin == royale::kCustomSkin) {
+        auto byte = [](float f) { return static_cast<uint8_t>(std::clamp(f, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        return royale::PackRgb(byte(ui.customTunic[0]), byte(ui.customTunic[1]), byte(ui.customTunic[2]));
+    }
+    return royale::SkinRgb(ui.skin);
+}
 
 UiState& Ui() {
     static UiState ui;
@@ -1697,6 +1753,11 @@ UiState& Ui() {
         ui.waitingRoom = CVarGetInteger(ROYALE_CVAR("WaitingRoom"), 1) != 0;
         ui.botDifficulty = std::clamp(CVarGetInteger(ROYALE_CVAR("BotDifficulty"), 1), 0, 2);
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
+        ui.skin = std::clamp(CVarGetInteger(ROYALE_CVAR("Skin"), 0), 0, royale::kCustomSkin);
+        const uint32_t saved = static_cast<uint32_t>(CVarGetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(royale::SkinRgb(0))));
+        ui.customTunic[0] = royale::RgbR(saved) / 255.0f; ui.customTunic[1] = royale::RgbG(saved) / 255.0f; ui.customTunic[2] = royale::RgbB(saved) / 255.0f;
+        gLocalTunic = SelectedTunic(ui);
+        gSession.SetTunic(gLocalTunic);
     }
     return ui;
 }
@@ -1707,6 +1768,8 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("Port"), ui.port);
     CVarSetInteger(ROYALE_CVAR("WaitingRoom"), ui.waitingRoom ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("BotDifficulty"), ui.botDifficulty);
+    CVarSetInteger(ROYALE_CVAR("Skin"), ui.skin);
+    CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
 
@@ -1730,6 +1793,32 @@ const char* CleanName(const char* name) {
     return name[0] != '\0' ? name : "Link";
 }
 
+// Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
+void DrawCustomize(UiState& ui) {
+    ImGui::Spacing();
+    ImGui::TextColored(kGold, "Choose a skin");
+    bool changed = false;
+    for (int i = 0; i < royale::kSkinCount; i++) {
+        const royale::Skin& sk = royale::kSkins[i];
+        ImGui::PushID(i);
+        const ImVec4 col(sk.r / 255.0f, sk.g / 255.0f, sk.b / 255.0f, 1.0f);
+        if (ImGui::ColorButton("##swatch", col, ImGuiColorEditFlags_NoTooltip | (ui.skin == i ? ImGuiColorEditFlags_None : ImGuiColorEditFlags_None), ImVec2(28, 28))) { ui.skin = i; changed = true; }
+        ImGui::SameLine();
+        if (ImGui::Selectable(sk.name, ui.skin == i, 0, ImVec2(190, 28))) { ui.skin = i; changed = true; }
+        ImGui::PopID();
+    }
+    if (ImGui::Selectable("Custom colour", ui.skin == royale::kCustomSkin, 0, ImVec2(220, 24))) { ui.skin = royale::kCustomSkin; changed = true; }
+    if (ui.skin == royale::kCustomSkin) changed |= ImGui::ColorEdit3("Tunic colour", ui.customTunic, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+    if (changed) {
+        gLocalTunic = SelectedTunic(ui);
+        gSession.SetTunic(gLocalTunic);
+        SaveUi(ui);
+        if (gSession.Joined()) ImGui::TextColored(kGrey, "Other players see the new colour from the next lobby you join.");
+    }
+    ImGui::TextColored(kGrey, "This changes the colour of Link's tunic. Each player's colour is shown on their character to everyone else.");
+    ImGui::Spacing();
+}
+
 void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     Heading("OOT ROYALE");
     ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
@@ -1742,6 +1831,9 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     if (!h.status.empty() && h.status != "Not in a match") ImGui::TextColored(kRed, "%s", h.status.c_str());
     if (!ui.error.empty()) ImGui::TextColored(kRed, "%s", ui.error.c_str());
 
+    if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
+    if (ui.showCustomize) DrawCustomize(ui);
+    ImGui::Spacing();
     ImGui::Text("Your name");
     ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
     ImGui::Checkbox("Wait in the Temple of Time while the lobby fills", &ui.waitingRoom);
