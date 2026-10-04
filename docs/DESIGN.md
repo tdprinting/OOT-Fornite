@@ -1,6 +1,9 @@
 # OOT Royale: 32-Player Battle Royale on Ship of Harkinian
 
-Status: design draft (milestone 0). No code yet.
+Status: design draft v2 (milestone 0). No code yet.
+
+Decisions so far: **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
+Matches are **host-run**: whoever starts a game hosts it (listen server), no dedicated servers required.
 Base: [HarbourMasters/Shipwright](https://github.com/HarbourMasters/Shipwright) (Ship of Harkinian, "SoH").
 
 ## 1. Pitch
@@ -29,13 +32,18 @@ Farore's Wind), and Hyrule Field's large open map.
 1. **One shared scene.** The engine only runs one scene (plus rooms) at a time. The match uses a single map. Phase 1
    uses Hyrule Field, which is large and open. Later we can build a custom combined overworld scene. Door and cave
    entrances are blocked or become loot-room "interiors" in the same scene.
-2. **Authoritative dedicated server, not peer-to-peer.** With 32 players you need cheating resistance, one source of
-   truth for storm, loot and eliminations, and no NAT problems.
-   - The server is a separate headless C++ program (no renderer, no N64 game code). It does *not* run OoT actor logic.
-   - Players are client-authoritative for movement (OoT physics can't be duplicated server-side). The server
-     validates plausibility (speed, teleports, fire rate) and is **authoritative for health, damage, loot and storm**.
-3. **UDP with a reliable channel.** Use a library like ENet or GameNetworkingSockets, not SDL_net TCP. Unreliable
-   snapshots at 20 Hz; reliable messages for events (damage, pickup, elimination, match state).
+2. **Host-authoritative listen server.** The player who starts a match runs the game server inside their own game
+   client (a `RoyaleServer` library linked into the mod). Everyone else, including the host's own local player,
+   connects to it with the same protocol.
+   - The server does *not* run OoT actor logic. It owns health, damage, loot, storm and match state.
+   - Movement is client-authoritative (OoT physics can't be duplicated server-side). The server checks plausibility
+     (speed, teleports, fire rate).
+   - The server code lives in `server/` as a plain C++ library with no game dependencies. It can also be built as
+     a headless executable later for dedicated hosting and bot load tests, at no extra design cost.
+   - Trade-off: the host can cheat, and if the host quits the match ends (v1; host migration is a stretch goal).
+     Acceptable for a friends and community fan game.
+3. **UDP with a reliable channel.** Use ENet (small, permissive license, builds for Windows and Android NDK), not
+   SDL_net TCP. Unreliable snapshots at 20 Hz; reliable messages for events (damage, pickup, elimination, match state).
 4. **Don't sync the world. Sync players and events.** Each client runs its own copy of the map. The server owns only
    what matters: players, dropped items, projectiles, storm and match state. Ambient actors (grass, pots, cuccos)
    are local and non-authoritative. Hostile NPCs are either removed or run on host-less deterministic seeds.
@@ -93,7 +101,7 @@ Solo and Duos are the first modes. Squads come later.
 
 ```
 +----------------------+      UDP (ENet)       +--------------------------+
-| SoH client + mod     | <-------------------> | oot-royale-server        |
+| SoH client + mod     | <-------------------> | RoyaleServer (host's game)|
 |  RoyaleMod (Enh.)    |   20 Hz snapshots     |  match state machine     |
 |  - hooks             |   reliable events     |  storm, loot, projectiles|
 |  - puppet players    |                       |  damage / elimination    |
@@ -139,7 +147,7 @@ each player supplies their own OoT ROM, as with stock SoH.
 - Cheats and enhancements that break the game (the Cheats menu, Warping, speed modifiers) are disabled in match.
 
 ### 5.4 Server
-- Single process hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
+- Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
 - State machine: `Lobby -> Countdown -> Drop -> InMatch -> Ending`.
 - Deterministic storm: seeded circle centres derived from the match seed and published at match start.
 - Simple bots (path to storm centre, melee nearest) for filling lobbies and for load testing.
@@ -155,21 +163,64 @@ each player supplies their own OoT ROM, as with stock SoH.
 | Nintendo IP | High | Fan project, non-commercial, no assets or ROM distributed, and users supply their own ROM. Do not monetise. Expect that distribution may be sensitive. |
 | Animation fidelity for remote players | Medium | Start with a small set of states (idle, run, roll, slash, shoot, hurt, dead). |
 
-## 7. Milestones
+## 7. Hosting and connectivity
+
+Host-run games make *reaching the host* the main problem, not server CPU. A 32-player match is cheap for the host:
+about 32 x 10 KB/s = ~320 KB/s up and a trivial amount of CPU, since no game logic is simulated.
+
+| Option | Works when | Notes |
+|---|---|---|
+| LAN / direct IP + port | Same network, or host forwards a port | v1, simplest |
+| UPnP / NAT-PMP port mapping | Home routers | Try automatically on host start |
+| **Join codes + relay (recommended v2)** | Always, including phones on cellular (CGNAT) | A tiny rendezvous/relay service maps a 5-letter code to the host. Hole punching first, relay fallback. Needs one small hosted service. |
+| Tailscale / ZeroTier | Friends who set it up | Zero code, works today as a workaround |
+
+Mobile hosts on cellular data will usually be behind carrier NAT, so only the relay path works for them. Cellular
+upload and battery also make a handheld a poor host for a full lobby. Expected guidance: host from Windows for 32
+players, host from the Odin 2 Portal on Wi-Fi for smaller groups.
+
+## 8. Platforms: Windows and Android
+
+**Windows:** upstream-supported (DirectX 11 or OpenGL). Milestones 1 to 5 target Windows first.
+
+**Android:** upstream Shipwright has **no Android target** (its CMake build covers Windows, Linux, macOS, and
+consoles via forks, and its README lists only DirectX 11, OpenGL and Metal). Android is therefore a port, not a
+build flag. This is the largest single risk in the project.
+
+Work needed for Android:
+- Cross-compile with the Android NDK, package as an APK with SDL2's Android activity (SDL2 supports Android natively).
+- Use the OpenGL ES backend of the rendering layer (libultraship). It must be checked for GLES 3 support. If missing,
+  this is the biggest piece of work.
+- Replace desktop file paths with Android storage: the user selects their own OoT ROM through the system file
+  picker (SAF). The ROM to OTR/O2R asset extraction (the Torch tool) must run on-device or be done on a PC and copied over.
+  Never bundle assets.
+- Gamepad-first controls. The Odin 2 Portal has built-in gamepad controls, which SDL maps already. Touch UI
+  isn't needed for v1, but menus (the ImGui UI) must be usable with the gamepad. ImGui is mouse-oriented, so
+  gamepad navigation needs work.
+- Performance: the Odin 2 Portal uses a Snapdragon 8 Gen 2 with 8 to 16 GB RAM, and should be adequate for N64-era
+  content. The risk is thermals while rendering 32 puppets, so cap puppet draw distance and test early.
+- Sustained hosting (see section 7) and background network handling (hold a wake lock while hosting).
+
+Strategy: look at existing community Android forks of Shipwright first and decide whether to base our port on one
+rather than start from scratch (need to evaluate maintenance state and license compatibility before committing).
+
+## 9. Milestones
+
+Android is pulled forward as a feasibility spike because it could change the whole plan.
 
 | # | Goal | Done when |
 |---|---|---|
 | 0 | This document | Reviewed |
-| 1 | Import Shipwright as a submodule, build it on Linux, add an empty `RoyaleMod` that logs hook calls | Builds and boots with a user ROM |
-| 2 | Server skeleton with 32 bot clients, 20 Hz snapshots, plus puppets rendered in a client | 32 puppets move smoothly at 60 fps |
-| 3 | Storm, health, damage and elimination are server-authoritative | A full bot match finishes with one winner |
+| 1 | Shipwright as submodule, Windows build, stub `RoyaleMod` logging hooks | Boots with a user ROM |
+| 1b | **Android feasibility spike**: vanilla Shipwright (or a community fork) running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
+| 2 | `server/` library plus 32 bot clients on loopback, puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
+| 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
 | 4 | Loot, weapons and pickups | Players can arm themselves and fight |
 | 5 | Lobby, HUD, minimap, spectator | Playable end to end with friends |
-| 6 | Custom larger map, bots, squads, balance | Public playtest |
+| 6 | Join codes and relay, bots, balance | Cross-network play between Windows and Android |
 
-## 8. Open questions
-1. Which map for v1: Hyrule Field as is, or a custom scene?
-2. Windows and Linux only, or also Switch, Wii U, macOS? (SoH supports all of them. A modded server protocol
-   makes consoles harder.)
-3. Is Anchor's relay server something we want to stay compatible with, or are we free to diverge?
-4. Hosting: community-run servers, or a single hosted instance?
+## 10. Open questions
+1. Android: build on a community fork, or port from upstream? (Needs the spike in 1b.)
+2. Hosting v2: are you OK running one small relay/rendezvous service for join codes?
+3. Minimum players to start, and should bots fill empty slots?
+4. Is Anchor compatibility wanted, or are we free to diverge?
