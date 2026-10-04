@@ -2859,6 +2859,84 @@ std::string ClockText(float seconds) {
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
 
+// Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
+// It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
+// click, so it is read from SDL directly. Purely local, like the other speed buffs (see ApplySpeedBuffs): the server trusts your position.
+constexpr float kSprintMult = 1.35f;        // run speed while sprinting
+constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
+constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
+constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
+constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
+float gStamina = 1.0f;
+float gStaminaRestLeft = 0.0f;
+float gSprintMult = 1.0f;                   // read by ApplySpeedBuffs
+bool gSprinting = false;
+bool gSprintButtonWasDown = false;
+double gStaminaFullAt = 0.0;                // when the bar last filled, so it can fade away
+
+bool SprintButtonDown() {
+    for (int i = 0; i < SDL_NumJoysticks(); i++) {
+        if (!SDL_IsGameController(i)) continue;
+        SDL_GameController* pad = SDL_GameControllerFromInstanceID(SDL_JoystickGetDeviceInstanceID(i));   // only pads the game already opened
+        if (pad != nullptr && SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_LEFTSTICK)) return true;
+    }
+    return false;
+}
+
+void UpdateSprint(Player* player, const royale::HudState& hud) {
+    const float dt = 1.0f / royale::kTickHz;   // the game updates the player 20 times a second
+    const bool down = SprintButtonDown();
+    const bool clicked = down && !gSprintButtonWasDown;
+    gSprintButtonWasDown = down;
+
+    if (!LiveAndAlive(hud)) {   // a fresh bar for every match
+        gStamina = 1.0f; gSprinting = false; gSprintMult = 1.0f;
+        return;
+    }
+    const Input& in = gPlayState->state.input[0];
+    const bool stickHeld = std::hypot(static_cast<float>(in.cur.stick_x), static_cast<float>(in.cur.stick_y)) > 30.0f;
+    const bool canSprint = InField() && !gSkydiving && hud.stunLeft <= 0 && (player->actor.bgCheckFlags & 1) &&
+                           !(player->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_ON_HORSE | PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_SHIELDING |
+                                                    PLAYER_STATE1_CARRYING_ACTOR | PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER));
+    if (clicked) gSprinting = !gSprinting && canSprint && stickHeld && gStamina >= kSprintMinStamina;
+    // Jumping off a ledge mid-sprint keeps it going; only the conditions that really end a run stop it.
+    if (!stickHeld || gStamina <= 0.0f || hud.stunLeft > 0 || (player->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_ON_HORSE | PLAYER_STATE1_IN_CUTSCENE |
+                                                                                          PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER)))
+        gSprinting = false;
+
+    if (gSprinting) {
+        if (std::fabs(player->linearVelocity) > 2.0f) gStamina = std::max(0.0f, gStamina - dt / kSprintSeconds);   // only running costs stamina
+        gStaminaRestLeft = kStaminaRest;
+    } else if (gStaminaRestLeft > 0.0f) {
+        gStaminaRestLeft -= dt;
+    } else if (gStamina < 1.0f) {
+        gStamina = std::min(1.0f, gStamina + dt / kStaminaRefill);
+        if (gStamina >= 1.0f) gStaminaFullAt = ImGui::GetTime();
+    }
+    gSprintMult = gSprinting ? kSprintMult : 1.0f;
+}
+
+// A thin bar under the magic meter, the width of the hearts, like the shield and magic bars above it. No text. It only shows while you are using
+// stamina and fades out a moment after it fills, so it stays off the screen the rest of the time.
+void DrawStaminaBar(ImDrawList* dl, ImVec2 ds, const royale::HudState& h) {
+    if (!LiveAndAlive(h) || !InField()) return;
+    const double sinceFull = gStamina >= 1.0f ? ImGui::GetTime() - gStaminaFullAt : 0.0;
+    const float alpha = static_cast<float>(std::clamp(1.0 - (sinceFull - 0.8) / 0.4, 0.0, 1.0));
+    if (alpha <= 0.0f) return;
+    auto a = [&](int v) { return static_cast<int>(v * alpha); };
+    const float unit = ds.y / 240.0f;   // the game's own HUD is laid out on a 240 high screen
+    const float bx = 30.0f * unit, by = 66.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 4.0f * unit;
+    const float fill = std::clamp(gStamina, 0.0f, 1.0f);
+    const bool winded = !gSprinting && fill < kSprintMinStamina;
+    dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, a(170)), 3.0f);
+    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(58, 42, 16, a(200)), 2.0f);   // dark leather brown
+    if (fill > 0.0f) {
+        // Hylian hair gold (#F0DF57) from the art guide; Hylian crest red (#AD3725) while too winded to sprint.
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), winded ? IM_COL32(173, 55, 37, a(255)) : IM_COL32(240, 223, 87, a(255)), 2.0f);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(255, 248, 200, a(150)), 2.0f);
+    }
+}
+
 struct SupplyMark { float x, z; double until; };
 std::vector<SupplyMark> gSupplyMarks;   // announced crates, shown on the minimap until they have landed and been taken
 
@@ -4344,6 +4422,7 @@ void DrawOverlay() {
         }
         if (need > 0.0f) dl->AddLine(ImVec2(bx + bw * need, by - 1), ImVec2(bx + bw * need, by + bh + 1), IM_COL32(255, 255, 255, 200), 1.5f);   // what your ability costs
     }
+    DrawStaminaBar(dl, ds, h);
 
     // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
     // under the safe-zone compass: how many are left, the zone, the weather and anything that is affecting you.
@@ -5006,11 +5085,12 @@ royale::Vec2 gLastPos = {};
 bool gHaveLastPos = false;
 void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     const bool active = LiveAndAlive(hud) && InField();
-    if (active && gHaveLastPos && std::fabs(hud.speedMult - 1.0f) > 0.01f) {
+    const float mult = hud.speedMult * gSprintMult;
+    if (active && gHaveLastPos && std::fabs(mult - 1.0f) > 0.01f) {
         const float dx = player->actor.world.pos.x - gLastPos.x, dz = player->actor.world.pos.z - gLastPos.z;
         if (dx * dx + dz * dz < 40.0f * 40.0f) {
-            player->actor.world.pos.x += dx * (hud.speedMult - 1.0f);
-            player->actor.world.pos.z += dz * (hud.speedMult - 1.0f);
+            player->actor.world.pos.x += dx * (mult - 1.0f);
+            player->actor.world.pos.z += dz * (mult - 1.0f);
         }
     }
     gLastPos = { player->actor.world.pos.x, player->actor.world.pos.z };
@@ -5094,6 +5174,7 @@ void OnPlayerUpdate() {
     ApplyRocks(player);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
+    UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
