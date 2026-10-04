@@ -6,6 +6,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include <set>
+#include "cloth.h"
 #include <string>
 #include "../../shared/anim.h"
 #include "../../shared/loot.h"
@@ -1118,6 +1119,85 @@ static void BotsPickUpFairiesAndHearts() {
 
 static Simulation DragonArena(int mapId, bool enabled);
 
+
+static void ClothAndWind() {
+    // The sheet stays attached to the frame, stays finite and stays near its cut shape, whatever the air does.
+    GliderCloth calm;
+    for (int i = 0; i < 240; i++) calm.Update(1.0f / 60.0f, {0, 0, 0}, 0.0f, i / 60.0f, 3);
+    float calmMove = 0;
+    for (int j = 0; j <= kClothSpan; j++) for (int i2 = 0; i2 <= kClothChord; i2++) calmMove = (std::max)(calmMove, Len(calm.left.At(i2, j) - calm.left.Rest(i2, j)));
+    CHECK(calmMove < 40.0f);
+    for (int j = 0; j <= kClothSpan; j++) { CHECK(Len(calm.left.At(0, j) - calm.left.Rest(0, j)) < 0.001f && Len(calm.left.At(kClothChord, 0) - calm.left.Rest(kClothChord, 0)) < 0.001f); }   // leading edge and keel are fixed
+    // Falling fast into a storm billows the cloth up and makes it flutter far more than a still day.
+    GliderCloth storm;
+    float maxMove = 0, wobble = 0;
+    ClothV3 last = storm.left.At(kClothChord, kClothSpan - 1);
+    for (int i = 0; i < 600; i++) {
+        storm.Update(1.0f / 60.0f, {40, 600, -80}, 1.0f, i / 60.0f, 3);
+        for (int j = 0; j <= kClothSpan; j++) for (int i2 = 0; i2 <= kClothChord; i2++) {
+            const ClothV3 d = storm.left.At(i2, j) - storm.left.Rest(i2, j);
+            CHECK(std::isfinite(d.x) && std::isfinite(d.y) && std::isfinite(d.z));
+            maxMove = (std::max)(maxMove, Len(d));
+        }
+        const ClothV3 now = storm.left.At(kClothChord, kClothSpan - 1);
+        wobble += Len(now - last); last = now;
+    }
+    float calmWobble = 0;
+    GliderCloth still;
+    ClothV3 lastStill = still.left.At(kClothChord, kClothSpan - 1);
+    for (int i = 0; i < 600; i++) { still.Update(1.0f / 60.0f, {0, 100, 0}, 0.0f, i / 60.0f, 3); const ClothV3 now = still.left.At(kClothChord, kClothSpan - 1); calmWobble += Len(now - lastStill); lastStill = now; }
+    CHECK(maxMove > 8.0f && maxMove <= 90.5f);                          // it moves, but is held within a leash
+    CHECK(wobble > calmWobble * 1.5f);                                    // and the storm makes it much livelier
+    // Air from below lifts the trailing edge; air from above pushes it down.
+    GliderCloth up, down;
+    for (int i = 0; i < 180; i++) { up.Update(1.0f / 60.0f, {0, 600, 0}, 0.0f, 0.0f, 0); down.Update(1.0f / 60.0f, {0, -600, 0}, 0.0f, 0.0f, 0); }
+    CHECK(up.left.At(kClothChord, 3).y > down.left.At(kClothChord, 3).y + 6.0f);
+    // Mirror wings: the right wing of the same air is a mirror of the left.
+    CHECK(up.right.At(kClothChord, 3).x < 0 ? false : true);
+    // Garbage in does no harm, and a huge time step is clipped rather than blowing up.
+    GliderCloth wild;
+    wild.Update(5.0f, {1e6f, -1e6f, 1e6f}, 5.0f, 1e5f, 0xFFFFFFFFu);
+    bool finite = true;
+    for (const auto& v : wild.left.p) finite &= std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && Len(v) < 400.0f;
+    CHECK(finite);
+    // The triangles for drawing: whole triangles, both sides, in the colours asked for, nothing NaN.
+    std::vector<ClothVertex> tris;
+    const uint8_t a[3] = {230, 70, 60}, b[3] = {245, 235, 220};
+    storm.Build(tris, a, b);
+    CHECK(tris.size() == static_cast<size_t>(2 * kClothSpan * kClothChord * 2 * 2 * 3) && tris.size() % 3 == 0);   // two wings, two triangles a cell, two faces
+    bool tfinite = true; int reds = 0, creams = 0;
+    for (const auto& v : tris) { tfinite &= std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); reds += v.r > v.g * 2; creams += v.g > 120; }
+    CHECK(tfinite && reds > 100 && creams > 100);
+    // The cap: still on a still day, streams back and up when Link runs forward, settles again afterwards, and never goes wild.
+    HatSpring hat;
+    for (int i = 0; i < 120; i++) hat.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+    CHECK(std::fabs(hat.fore) < 0.05f && std::fabs(hat.side) < 0.05f);
+    HatSpring run;
+    for (int i = 0; i < 120; i++) run.Step(1.0f / 60.0f, 0, -300, 0, 0.0f, 0.0f, 0);   // air streaming back past him at 300 a second
+    HatSpring stand;
+    for (int i = 0; i < 120; i++) stand.Step(1.0f / 60.0f, 0, 300, 0, 0.0f, 0.0f, 0);  // the opposite direction
+    CHECK(run.fore > 0.3f && stand.fore < -0.3f && run.fore <= 0.7f);
+    for (int i = 0; i < 240; i++) run.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+    CHECK(std::fabs(run.fore) < 0.06f);
+    HatSpring junk;
+    junk.Step(10.0f, 1e9f, -1e9f, 1e9f, 9.0f, 1e9f, 5);
+    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::fabs(junk.fore) <= 0.7f + 1e-4f);
+    // The wind spins the cap more in a gale than a breeze.
+    float breeze = 0, gale = 0;
+    HatSpring h1, h2;
+    for (int i = 0; i < 600; i++) { h1.Step(1.0f / 60.0f, 20, 10, 0, 0.1f, i / 60.0f, 2); h2.Step(1.0f / 60.0f, 20, 10, 0, 1.0f, i / 60.0f, 2); breeze = (std::max)(breeze, std::fabs(h1.fore)); gale = (std::max)(gale, std::fabs(h2.fore)); }
+    CHECK(gale > breeze);
+}
+
+static void TheSignInTheMiddle() {
+    CHECK(std::string(kMapSignText) == "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!");
+    const MeshData sign = BuildMesh(MeshKind::Sign, 0);
+    float mn[3], mx[3];
+    sign.Bounds(mn, mx);
+    CHECK(sign.Triangles() >= 24 && mx[1] > 140 && mx[1] < 170 && mx[0] - mn[0] > 130 && mx[0] - mn[0] < 160);
+    const MeshData frame = BuildMesh(MeshKind::GliderFrame, 0);
+    CHECK(frame.Triangles() >= 24 && frame.Triangles() < BuildMesh(MeshKind::Glider, 0).Triangles());   // the cloth version has no wings of its own
+}
 
 static void MagicMeter() {
     Simulation sim = Duel(1, {0, 0}, {3000, 0});
@@ -2354,7 +2434,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

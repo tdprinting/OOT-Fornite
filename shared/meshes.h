@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -178,7 +178,7 @@ inline MeshData Golem(uint32_t kind) {
 }
 
 // The skydiving glider: a striped delta wing 150 above a player's feet, hung from two struts. Variants are colour schemes.
-inline MeshData Glider(uint32_t variant) {
+inline MeshData Glider(uint32_t variant, bool wings = true) {
     static const Rgb schemes[4][2] = {
         {{230, 70, 60}, {245, 235, 220}}, {{70, 130, 235}, {245, 220, 90}}, {{70, 190, 100}, {245, 245, 235}}, {{170, 90, 230}, {250, 210, 120}}};
     const Rgb* sc = schemes[variant % 4];
@@ -187,7 +187,7 @@ inline MeshData Glider(uint32_t variant) {
     const V3 nose = {0, 156, 78}, tail = {0, 150, -64};
     const V3 tipL = {-118, 140, -58}, tipR = {118, 140, -58};
     auto lerp = [](V3 a, V3 c, float t) { return V3{a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t, a.z + (c.z - a.z) * t}; };
-    for (int side = 0; side < 2; side++) {
+    for (int side = 0; side < (wings ? 2 : 0); side++) {   // (the cloth version of the glider draws the wings itself, see cloth.h)
         const V3 tip = side == 0 ? tipL : tipR;
         for (int i = 0; i < 3; i++) {
             const float t0 = i / 3.0f, t1 = (i + 1) / 3.0f;
@@ -356,6 +356,23 @@ inline MeshData Projectile(uint32_t variant) {
     return b.mesh;
 }
 
+
+// A wooden signpost about 150 tall: a post and a broad board facing +z. The writing is drawn by the game's overlay, not the mesh.
+inline MeshData Sign() {
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    box(0, 50, 0, 9, 50, 9, {112, 76, 44});        // the post
+    box(0, 118, 6, 72, 36, 5, {138, 94, 54});      // the frame
+    box(0, 118, 11, 62, 28, 3, {206, 164, 104});   // the board itself, paler
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -366,6 +383,8 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Roof: return mesh_detail::Roof();
         case MeshKind::Golem: return mesh_detail::Golem(variant);
         case MeshKind::Glider: return mesh_detail::Glider(variant);
+        case MeshKind::GliderFrame: return mesh_detail::Glider(0, false);
+        case MeshKind::Sign: return mesh_detail::Sign();
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);

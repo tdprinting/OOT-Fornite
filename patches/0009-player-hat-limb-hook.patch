@@ -1,0 +1,44 @@
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h	2026-10-04 07:19:13.272793191 +0000
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h	2026-10-04 07:19:13.327005292 +0000
+@@ -69,3 +69,4 @@
+ DEFINE_HOOK(OnFileDropped, (std::string filePath));
+ DEFINE_HOOK(OnAssetAltChange, ());
+ DEFINE_HOOK(OnKaleidoUpdate, ());
++DEFINE_HOOK(OnPlayerHatLimb, (void* player, int16_t* rot));
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp	2026-10-04 07:19:13.283573992 +0000
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp	2026-10-04 07:19:13.330446814 +0000
+@@ -306,3 +306,7 @@
+ void GameInteractor_ExecuteOnKaleidoUpdate() {
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnKaleidoUpdate>();
+ }
++
++void GameInteractor_ExecuteOnPlayerHatLimb(void* player, int16_t* rot) {
++    GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerHatLimb>(player, rot);
++}
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h	2026-10-04 07:19:13.293870972 +0000
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h	2026-10-04 07:19:13.332924623 +0000
+@@ -80,6 +80,7 @@
+ 
+ // Mark: - Pause Menu
+ void GameInteractor_ExecuteOnKaleidoUpdate();
++void GameInteractor_ExecuteOnPlayerHatLimb(void* player, int16_t* rot);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+--- a/soh/src/code/z_player_lib.c	2026-10-04 07:19:13.304083212 +0000
++++ b/soh/src/code/z_player_lib.c	2026-10-04 07:19:13.336298561 +0000
+@@ -1354,6 +1354,10 @@
+             func_8008F87C(play, this, &this->skelAnime, pos, rot, PLAYER_LIMB_R_THIGH, PLAYER_LIMB_R_SHIN,
+                           PLAYER_LIMB_R_FOOT);
+             return false;
++        } else if (limbIndex == PLAYER_LIMB_HAT) {
++            // OOT Royale: lets the mod swing the cap's tail with the wind and Link's movement (secondary motion on top of the animation)
++            GameInteractor_ExecuteOnPlayerHatLimb(this, (s16*)rot);
++            return false;
+         } else {
+             return false;
+         }

@@ -7,6 +7,7 @@
 // Include order matters: our headers first, because the game's headers define short macro names (MIN, MAX, ABS, ...).
 #include "RoyaleSession.h"
 #include "anim.h"
+#include "cloth.h"
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
@@ -86,6 +87,38 @@ bool InGame() {
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+// State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
+float gStormWeather = 0.0f;         // 0 to 1: how far you are into the storm's dark weather
+double gBoltFlashUntil = 0;   // a lightning bolt has landed nearby: the screen flashes until then
+float gWeatherBlend = 0.0f;
+bool gSeasonAnnounced = false;
+royale::Weather gWeatherShown;
+float gWeatherDensity = 1.0f;       // the local option, 0 to 2
+float gClothScale = 1.0f;           // the local option: cloth and wind physics on the hat and glider, 0 (off) to 2
+
+// The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
+// turning. Returns the wind in world units per second; `strength` is 0 to 1.
+void WindNow(float* wx, float* wz, float* strength) {
+    const float t = static_cast<float>(ImGui::GetTime());
+    float speed = 28.0f;
+    const float amount = gWeatherBlend * gWeatherShown.Strength();
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Rain: speed += 120.0f * amount; break;
+        case royale::Sky::Thunder: speed += 230.0f * amount; break;
+        case royale::Sky::Snow: speed += 90.0f * amount; break;
+        case royale::Sky::Sandstorm: speed += 330.0f * amount; break;
+        case royale::Sky::Ash: speed += 150.0f * amount; break;
+        case royale::Sky::Fog: speed += 15.0f * amount; break;
+        default: break;
+    }
+    speed += 170.0f * gStormWeather;
+    speed *= 0.75f + 0.25f * std::sin(t * 0.9f) + 0.12f * std::sin(t * 2.3f + 1.0f);
+    const float dir = 0.4f + t * 0.04f + static_cast<float>(static_cast<int>(gWeatherShown.season)) * 1.1f;
+    *wx = std::cos(dir) * speed;
+    *wz = std::sin(dir) * speed;
+    *strength = std::clamp(speed / 330.0f, 0.0f, 1.0f);
+}
+
 const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 bool InField() { return InGame() && gPlayState->sceneNum == CurrentMap().scene; }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
@@ -896,6 +929,7 @@ bool LiveAndAlive(const royale::HudState& h) {
 }
 
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
+void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
 
 void Loot_Update(Actor* actor, PlayState* play) {
     auto idx = gLootOf.find(actor);
@@ -1233,10 +1267,43 @@ float gGliderRoll = 0.0f;       // how far the local glider is banked
 bool gGliderDiving = false;
 Actor* gLocalGlider = nullptr;
 
+// Each glider's canopy is a small piece of cloth (shared/cloth.h): it billows when air pushes up from below, ripples at the trailing edge and
+// flaps harder in storms and wind. Simulated here per glider, from how it is moving through the air now.
+struct GliderClothState {
+    royale::GliderCloth cloth;
+    float lx = 0, ly = 0, lz = 0;
+    double lastT = 0;
+    bool have = false;
+};
+std::unordered_map<uint32_t, GliderClothState> gGliderCloth;
+
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme) {
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Glider, scheme);
+    const bool cloth = gClothScale > 0.01f;
+    const GpuMesh* mesh = GpuMeshFor(cloth ? royale::MeshKind::GliderFrame : royale::MeshKind::Glider, cloth ? 0u : scheme);
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const double now = ImGui::GetTime();
+    std::vector<royale::ClothVertex> tris;
+    if (cloth) {
+        if (gGliderCloth.size() > 48) gGliderCloth.clear();
+        GliderClothState& st = gGliderCloth[scheme];
+        if (!st.have) { st.lx = x; st.ly = y; st.lz = z; st.lastT = now; st.have = true; }
+        const float dt = static_cast<float>(now - st.lastT);
+        if (dt > 0.004f) {
+            const float h = std::min(dt, 0.1f);
+            const float vx = (x - st.lx) / dt, vy = (y - st.ly) / dt, vz = (z - st.lz) / dt;
+            st.lx = x; st.ly = y; st.lz = z; st.lastT = now;
+            float wx, wz, wind;
+            WindNow(&wx, &wz, &wind);
+            // The air as the glider sees it: wind minus its own movement, turned into the glider's frame (x to its left, z along its nose).
+            const float ax = wx - vx, az = wz - vz, ay = -vy;
+            const float yawRad = yaw * (3.14159265f / 32768.0f), c = std::cos(yawRad), sn = std::sin(yawRad);
+            const royale::ClothV3 air = { (ax * c - az * sn) * gClothScale, ay * gClothScale, (ax * sn + az * c) * gClothScale };
+            st.cloth.Update(h, air, wind * gClothScale, static_cast<float>(now), scheme);
+        }
+        static const uint8_t schemes[4][2][3] = { {{230, 70, 60}, {245, 235, 220}}, {{70, 130, 235}, {245, 220, 90}}, {{70, 190, 100}, {245, 245, 235}}, {{170, 90, 230}, {250, 210, 120}} };
+        st.cloth.Build(tris, schemes[scheme % 4][0], schemes[scheme % 4][1]);
+    }
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(x, y, z, MTXMODE_NEW);
@@ -1248,6 +1315,21 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
     gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    if (!tris.empty()) {   // the canopy: this frame's triangles, in memory the game hands out for one frame
+        Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, tris.size() * sizeof(Vtx)));
+        for (size_t i = 0; i < tris.size(); i++) {
+            v[i].v.ob[0] = static_cast<s16>(std::lround(tris[i].x));
+            v[i].v.ob[1] = static_cast<s16>(std::lround(tris[i].y));
+            v[i].v.ob[2] = static_cast<s16>(std::lround(tris[i].z));
+            v[i].v.flag = 0; v[i].v.tc[0] = v[i].v.tc[1] = 0;
+            v[i].v.cn[0] = tris[i].r; v[i].v.cn[1] = tris[i].g; v[i].v.cn[2] = tris[i].b; v[i].v.cn[3] = 255;
+        }
+        for (size_t first = 0; first < tris.size(); first += 30) {
+            const size_t count = std::min<size_t>(30, tris.size() - first);
+            gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&v[first]), static_cast<int>(count), 0);
+            for (size_t k = 0; k + 2 < count; k += 3) gSP1Triangle(POLY_OPA_DISP++, static_cast<int>(k), static_cast<int>(k + 1), static_cast<int>(k + 2), 0);
+        }
+    }
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
@@ -1832,7 +1914,6 @@ std::string SpectateName() {
 // The storm. There is no wall to see (anything drawn over the world showed through hills and buildings); the edge is on the map and the
 // timer. What you do see is the weather: while you stand outside the safe zone the sky goes dark (DriveTimeOfDay), and this puts a heavy
 // grey-violet haze, driving rain, gusting wind streaks and lightning on the screen. It fades in and out over a few seconds.
-float gStormWeather = 0.0f;
 void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     const bool in = InField() && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
     gStormWeather = std::clamp(gStormWeather + (in ? 0.02f : -0.03f), 0.0f, 1.0f);
@@ -1870,11 +1951,6 @@ void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h
 // ---- seasons and weather ----------------------------------------------------------------------------------------------------
 // What the sky is doing (the server's spell of weather) drawn over the game: a seasonal tint, then rain, fog, snow, ash or sand streaming
 // across the screen. Everything fades in and out as spells change. The "Weather density" option scales the particles (0 turns them off).
-double gBoltFlashUntil = 0;   // a lightning bolt has landed nearby: the screen flashes until then
-float gWeatherBlend = 0.0f;
-bool gSeasonAnnounced = false;
-royale::Weather gWeatherShown;
-float gWeatherDensity = 1.0f;       // the local option, 0 to 2
 
 float WeatherAmount() { return gWeatherBlend * gWeatherShown.Strength(); }
 
@@ -2917,6 +2993,7 @@ void DrawOverlay() {
     DrawStorm(dl, ds, scale, h);
     DrawBossBars(dl, font, scale);
     DrawPoiLabels(dl, font, ds, scale, h);
+    DrawSign(dl, font, ds, scale);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
@@ -4083,6 +4160,146 @@ void DriveStormAlerts(const royale::HudState& hud) {
     }
 }
 
+// ---- Link's cap ---------------------------------------------------------------------------------------------------------------
+// The game calls us while it draws the cap's limb (a patch adds the hook, patches/0009): the tail of the cap swings on a spring pushed by the
+// air, which is the wind plus how fast Link is moving, running or falling. Everyone's cap does it, the other players' too.
+struct HatState {
+    royale::HatSpring spring;
+    float lx = 0, ly = 0, lz = 0;
+    double lastT = 0, seen = 0;
+    bool have = false;
+};
+std::unordered_map<const void*, HatState> gHats;
+
+void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
+    if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
+    const Player* pl = static_cast<const Player*>(playerPtr);
+    const double now = ImGui::GetTime();
+    HatState& h = gHats[playerPtr];
+    const float x = pl->actor.world.pos.x, y = pl->actor.world.pos.y, z = pl->actor.world.pos.z;
+    if (!h.have) { h.lx = x; h.ly = y; h.lz = z; h.lastT = now; h.have = true; }
+    h.seen = now;
+    const float dt = static_cast<float>(now - h.lastT);
+    if (dt > 0.004f) {   // (the limb is drawn more than once a frame sometimes: only step when time has passed)
+        const float vx = std::clamp((x - h.lx) / dt, -900.0f, 900.0f), vy = std::clamp((y - h.ly) / dt, -1500.0f, 1500.0f), vz = std::clamp((z - h.lz) / dt, -900.0f, 900.0f);
+        h.lx = x; h.ly = y; h.lz = z; h.lastT = now;
+        float wx, wz, wind;
+        WindNow(&wx, &wz, &wind);
+        const float ax = wx - vx, az = wz - vz;
+        const float yaw = pl->actor.shape.rot.y * (3.14159265f / 32768.0f), c = std::cos(yaw), sn = std::sin(yaw);
+        // The air in Link's frame: x to his left, z in front of him. (Running forward makes air stream back over the cap.)
+        h.spring.Step(std::min(dt, 0.1f), (ax * c - az * sn) * gClothScale, (ax * sn + az * c) * gClothScale, -vy * gClothScale, wind * gClothScale,
+                      static_cast<float>(now), static_cast<float>(reinterpret_cast<uintptr_t>(playerPtr) % 61));
+    }
+    const float toBinary = 32768.0f / 3.14159265f;
+    rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.spring.fore * toBinary));   // fore and aft: the limb's pitch
+    rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(h.spring.side * toBinary));   // sideways: its yaw
+}
+
+void ForgetOldHats() {
+    const double now = ImGui::GetTime();
+    for (auto it = gHats.begin(); it != gHats.end();) it = now - it->second.seen > 4.0 ? gHats.erase(it) : std::next(it);
+}
+
+// ---- the sign in the middle of the map -----------------------------------------------------------------------------------------
+// A wooden sign stands at the centre of every map (on the nearest bit of open, walkable ground), and reads out its message when you walk up.
+Actor* gSignActor = nullptr;
+royale::Vec2 gSignPos = {};
+bool gSignKnown = false;
+double gSignReadAt = -100.0;
+bool gSignRead = false;
+
+void Sign_Update(Actor* actor, PlayState*) { actor->focus.pos = actor->world.pos; }
+void Sign_Draw(Actor* actor, PlayState* play) {
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Sign, 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_Scale(1.35f, 1.35f, 1.35f, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+void Sign_Destroy(Actor* actor, PlayState*) { if (gSignActor == actor) gSignActor = nullptr; }
+
+// The spot for the sign: the walkable ground nearest the middle that is clear of walls, rocks and blocks.
+bool FindSignSpot(const royale::Circle& map, royale::Vec2* out) {
+    if (!gSession.Client()) return false;
+    const auto& props = gSession.Client()->Props();
+    auto clear = [&](royale::Vec2 p) {
+        if (!WalkableAt(p)) return false;
+        for (const royale::Prop& pr : props) {
+            const float r = royale::PropRadius(pr.kind);
+            if (r > 0.0f && royale::Distance(pr.pos, p) < r + 120.0f) return false;
+        }
+        return true;
+    };
+    for (float r = 0.0f; r <= 1100.0f; r += 70.0f) {
+        const int n = r < 1.0f ? 1 : std::max(8, static_cast<int>(r / 28.0f));
+        for (int i = 0; i < n; i++) {
+            const float a = i * 6.2831853f / n;
+            const royale::Vec2 p = { map.center.x + std::cos(a) * r, map.center.z + std::sin(a) * r };
+            if (clear(p)) { *out = p; return true; }
+        }
+    }
+    return false;
+}
+
+void ReconcileSign(const royale::HudState& hud) {
+    const bool want = gSession.Joined() && InField() && hud.map.radius > 0 &&
+                      (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch);
+    if (!want) {
+        if (gSignActor != nullptr) { Actor_Kill(gSignActor); gSignActor = nullptr; }
+        gSignKnown = false;
+        return;
+    }
+    if (gSignActor != nullptr) return;
+    if (!gSignKnown) { if (!FindSignSpot(hud.map, &gSignPos)) return; gSignKnown = true; }
+    float y = 0;
+    if (!FloorAt(gSignPos.x, gSignPos.z, &y)) return;
+    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, gSignPos.x, y, gSignPos.z, 0, 0x2000, 0, 0, false);
+    if (a == nullptr) return;
+    a->update = Sign_Update;
+    a->draw = Sign_Draw;
+    a->destroy = Sign_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
+    a->shape.shadowScale = 0.0f;
+    gSignActor = a;
+}
+
+// A label over the sign from a distance, and the message in a box at the bottom of the screen when you stand in front of it.
+void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    if (gSignActor == nullptr || !InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float d = std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z);
+    ImVec2 at;
+    if (d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {
+        const char* label = d < 260.0f ? "Sign" : "Sign (walk up to read)";
+        const float size = std::clamp(26.0f * scale * (1800.0f / (d + 900.0f)), 14.0f * scale, 30.0f * scale);
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 12, 4, 230), label);
+        dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 232, 160, 255), label);
+    }
+    if (d < 260.0f) {
+        if (!gSignRead) { gSignRead = true; Say(std::string("The sign reads: ") + royale::kMapSignText); }
+        const float wrap = ds.x * 0.62f, size = 27.0f * scale;
+        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, royale::kMapSignText);
+        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 22.0f * scale, ds.y * 0.70f - 12.0f * scale);
+        const ImVec2 end(box.x + tsz.x + 44.0f * scale, box.y + tsz.y + 56.0f * scale);
+        dl->AddRectFilled(box, end, IM_COL32(24, 16, 8, 225), 10.0f * scale);
+        dl->AddRect(box, end, IM_COL32(222, 178, 100, 255), 10.0f * scale, 0, 3.0f * scale);
+        dl->AddText(font, 18.0f * scale, ImVec2(box.x + 22.0f * scale, box.y + 8.0f * scale), IM_COL32(222, 178, 100, 255), "Sign");
+        dl->AddText(font, size, ImVec2(box.x + 22.0f * scale, box.y + 34.0f * scale), IM_COL32(255, 246, 224, 255), royale::kMapSignText, nullptr, wrap);
+    } else if (d > 420.0f) {
+        gSignRead = false;   // walk away and it can be read (and announced) again
+    }
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -4101,6 +4318,8 @@ void OnGameFrameUpdate() {
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
+    ReconcileSign(hud);
+    { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     ReconcileProjectileActor();
     DriveStormAlerts(hud);
     gStateNow = hud.state;
@@ -4177,6 +4396,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
 
     // Turn the Player actor we spawn for a remote player into a puppet *before* its init runs. Requires patches/0001.
     GameInteractor::Instance->RegisterGameHookForID<GameInteractor::ShouldActorInit>(
@@ -4225,6 +4445,7 @@ struct UiState {
     int weatherIntensity = 60;             // 0 = no weather (host)
     int weatherChange = 50;                // how often the weather changes (host)
     int weatherDensity = 100;              // particles drawn on this screen, per cent (local)
+    int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool showCustomize = false;
@@ -4263,6 +4484,8 @@ UiState& Ui() {
         ui.weatherChange = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherChange"), 50), 0, 100);
         ui.weatherDensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherDensity"), 100), 0, 200);
         gWeatherDensity = ui.weatherDensity / 100.0f;
+        ui.clothPhysics = std::clamp(CVarGetInteger(ROYALE_CVAR("ClothPhysics"), 100), 0, 200);
+        gClothScale = ui.clothPhysics / 100.0f;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
         gSession.SelectMap(ui.mapId);
         gSession.SetMajorBoss(ui.majorBoss);
@@ -4292,6 +4515,7 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("WeatherIntensity"), ui.weatherIntensity);
     CVarSetInteger(ROYALE_CVAR("WeatherChange"), ui.weatherChange);
     CVarSetInteger(ROYALE_CVAR("WeatherDensity"), ui.weatherDensity);
+    CVarSetInteger(ROYALE_CVAR("ClothPhysics"), ui.clothPhysics);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
@@ -4569,6 +4793,8 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         UiState& ui = Ui();
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Cloth and wind on hats and gliders (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
     }
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();

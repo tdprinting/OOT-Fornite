@@ -75,6 +75,9 @@ constexpr MapDef kMaps[] = {
     {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{2648.0f, 85.0f}, 4200.0f}, 5200.0f, Theme::Desert,
      {BossKind::Dune, BossKind::Stone}, BossKind::DragonSand},
 };
+// The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
+inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
+
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
