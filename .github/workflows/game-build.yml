@@ -32,6 +32,8 @@ jobs:
           ./scripts/link_mod.sh
           pip install pillow
           ./scripts/apply_logo.sh
+          echo "#define ROYALE_BUILD_VERSION \"0.${{ github.run_number }}\"" > mod/Royale/build_version.h
+          cat mod/Royale/build_version.h
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -8,6 +8,7 @@
 #include "RoyaleSession.h"
 #include "anim.h"
 #include "cloth.h"
+#include "build_version.h"
 #include "logo_data.h"
 #include "map.h"
 #include "meshes.h"
@@ -2747,6 +2748,12 @@ void DrawTitleLogo() {
         const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
         DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245, true);
     }
+    // the build number, small, bottom right
+    const std::string version = std::string("Version ") + ROYALE_BUILD_VERSION;
+    const float vs = std::clamp(ds.y / 720.0f, 0.8f, 2.2f) * 18.0f;
+    const ImVec2 vsz = ImGui::GetFont()->CalcTextSizeA(vs, FLT_MAX, 0.0f, version.c_str());
+    const ImU32 vcol = mode == GAMEMODE_TITLE_SCREEN ? IM_COL32(60, 50, 40, 255) : IM_COL32(255, 255, 255, 235);
+    dl->AddText(ImGui::GetFont(), vs, ImVec2(ds.x - vsz.x - 14.0f, ds.y - vsz.y - 10.0f), vcol, version.c_str());
 }
 
 void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float secondsIn) {
@@ -5721,6 +5728,7 @@ void DrawRoyaleUi() {
             ImGui::Image(tex, ImVec2(width, height));
             ImGui::Spacing();
         }
+        ImGui::TextColored(kGrey, "Version %s", ROYALE_BUILD_VERSION);
     }
 
     if (h.mode == royale::HudState::Mode::Idle) {
