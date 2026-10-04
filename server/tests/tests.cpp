@@ -43,15 +43,18 @@ static void StormDeterministic() {
 static void StormTimeline() {
     Storm s(7, MapCircle());
     CHECK(s.SafeZoneAt(0).radius == 2000.0f);
-    CHECK(s.SafeZoneAt(39).radius == 2000.0f);   // still waiting in phase 1
-    CHECK(s.SafeZoneAt(40 + 50).radius < 1200.5f && s.SafeZoneAt(40 + 50).radius > 1199.5f); // 60%
+    const float wait0 = kStormPhases[0].waitSec, close0 = kStormPhases[0].closeSec;
+    CHECK(s.SafeZoneAt(wait0 - 1).radius == 2000.0f);   // still waiting in phase 1
+    CHECK(s.SafeZoneAt(wait0 + close0).radius < 1200.5f && s.SafeZoneAt(wait0 + close0).radius > 1199.5f); // 60%
     CHECK(s.SafeZoneAt(s.TotalDuration() + 100).radius == 0.0f);
     CHECK(s.PhaseAt(0) == 0 && s.PhaseAt(s.TotalDuration() + 1) == kStormPhaseCount);
     // Safe zone never grows.
     float last = 1e9f;
     for (float t = 0; t < s.TotalDuration(); t += 1.0f) { float r = s.SafeZoneAt(t).radius; CHECK(r <= last + 1e-3f); last = r; }
     CHECK(s.DamagePerSecond({1999, 0}, 0) == 0.0f);     // inside the map, phase 1 holds
-    CHECK(s.DamagePerSecond({5000, 0}, 0) == 0.5f);     // outside the map
+    CHECK(std::abs(s.DamagePerSecond({5000, 0}, 0) - 0.5f * (2000.0f / 3500.0f)) < 1e-4f);     // outside the map (a small map's storm hurts a little less)
+    Storm big(7, {{0, 0}, 5000});
+    CHECK(big.DamagePerSecond({9000, 0}, 0) == 0.5f);
 }
 static void LootDeterministicAndValid() {
     auto a = GenerateLoot(99, MapCircle(), 400, 0.15f), b = GenerateLoot(99, MapCircle(), 400, 0.15f);
@@ -403,12 +406,13 @@ static void ValidatorThatRejectsEverythingStillTerminates() {
 static void StormPhaseInfo() {
     Storm s(7, MapCircle());
     auto a = s.InfoAt(0);
-    CHECK(a.phase == 0 && !a.shrinking && std::abs(a.secondsLeft - 40.0f) < 0.01f);   // holding for 40 s
-    auto b = s.InfoAt(39);
+    const float wait0 = kStormPhases[0].waitSec, close0 = kStormPhases[0].closeSec;
+    CHECK(a.phase == 0 && !a.shrinking && std::abs(a.secondsLeft - wait0) < 0.01f);   // holding for its wait
+    auto b = s.InfoAt(wait0 - 1);
     CHECK(b.phase == 0 && !b.shrinking && std::abs(b.secondsLeft - 1.0f) < 0.01f);
-    auto c = s.InfoAt(45);
-    CHECK(c.phase == 0 && c.shrinking && std::abs(c.secondsLeft - 45.0f) < 0.01f);     // 50 s shrink, 5 s in
-    auto d = s.InfoAt(40 + 50 + 1);
+    auto c = s.InfoAt(wait0 + 5);
+    CHECK(c.phase == 0 && c.shrinking && std::abs(c.secondsLeft - (close0 - 5.0f)) < 0.01f);     // 5 s into the shrink
+    auto d = s.InfoAt(wait0 + close0 + 1);
     CHECK(d.phase == 1 && !d.shrinking);                                              // phase 2 holds
     auto e = s.InfoAt(s.TotalDuration() + 5);
     CHECK(e.phase == kStormPhaseCount && !e.shrinking && e.secondsLeft == 0);

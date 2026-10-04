@@ -98,7 +98,8 @@ class GameServer {
         sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
-        sim.match.SetBossCount(bossCount);
+        // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
+        sim.match.SetBossCount((std::min)(bossCount, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);

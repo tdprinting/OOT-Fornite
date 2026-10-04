@@ -81,12 +81,12 @@ struct StormPhaseDef {
 
 constexpr int kStormPhaseCount = 6;
 constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
-    {40, 50, 0.60f, 0.5f},
-    {30, 40, 0.38f, 1.0f},
-    {25, 35, 0.22f, 1.5f},
-    {20, 30, 0.12f, 2.0f},
-    {15, 25, 0.05f, 3.0f},
-    {0, 20, 0.00f, 5.0f},
+    {55, 55, 0.60f, 0.5f},
+    {45, 45, 0.38f, 1.0f},
+    {35, 40, 0.22f, 1.5f},
+    {28, 35, 0.12f, 2.0f},
+    {20, 30, 0.05f, 3.0f},
+    {0, 22, 0.00f, 5.0f},
 }};
 
 } // namespace royale

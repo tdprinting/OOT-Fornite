@@ -1,6 +1,7 @@
 #pragma once
 #include "balance.h"
 #include "rng.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -84,7 +85,9 @@ class Storm {
     float DamagePerSecond(Vec2 p, float t) const {
         int phase = PhaseAt(t);
         int idx = phase >= kStormPhaseCount ? kStormPhaseCount - 1 : phase;
-        return SafeZoneAt(t).Contains(p) ? 0.0f : kStormPhases[idx].damagePerSec;
+        // A small map has a small storm to run from, so it hurts a little less (down to 55 per cent on the smallest).
+        const float sizeScale = (std::max)(0.55f, (std::min)(1.0f, start[0].radius / 3500.0f));
+        return SafeZoneAt(t).Contains(p) ? 0.0f : kStormPhases[idx].damagePerSec * sizeScale;
     }
 
     // For the HUD: is the zone shrinking right now, and how many seconds until that changes (hold ends / shrink ends).

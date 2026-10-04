@@ -70,7 +70,7 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - **D-pad Up** uses your ability, then it recharges. The slot shows the countdown.
 - Gear works on its own once you pick it up. Heart Pieces and Heart Containers raise your maximum hearts.
 - **Other players** wear a nameplate with their name, hearts left and weapon, colour coded by rarity, so you can size them up. The map (bottom left) shows the field, the safe zone, chests, other players and you.
-- **The storm** is a wall of purple rain standing on the edge of the safe zone. Outside it the screen goes dark and rainy with lightning, and it hurts. The map shows it in purple. An arrow top right points to the safe zone.
+- **The storm** has no wall to see (a wall drawn over the game showed through hills and buildings). The edge is on the map (purple outside, white circle inside), the timer top left says when it closes, and an arrow points to the safe zone. Outside it the sky goes dark, a violet haze, rain, wind streaks and lightning fill the screen, and it hurts. Each match the circles are different, and small maps have a slightly gentler storm.
 - **Towns.** The field has up to twelve named points of interest with silly rhyming names (Deku Dew Zoo, Goron Groove Lagoon, Zora Snore Shore, Navi Gravy Bay and more), laid out like a battle royale map: a big landmark in the middle (Hylian Billion Pavilion), a ring of towns around it and a wider ring near the edge. Each has a walled stone building with a roof and a door, a small cave (a horseshoe of boulders) and some ruins, and most of the chests are inside them. A few are scattered between towns. Town names float over each place (big enough to read while you skydive), show on the map, and a message tells you when you walk in.
 - The open ground between towns has rocks, boulders and bushes to hide behind. The same ones appear for everyone, and bots path around the solid ones and through the doors.
 - **Mini bosses.** Up to five golems (Stone Moan, Lava Java, Frost Lost) guard the caves, bigger and tougher in that order. They notice you at a distance, chase you slower than you run, smash you for a heart or more and give up if you get far away. Hit them with **B** like any player (you can hit them from a little further off, because they are big). A health bar floats over each, and they show as purple diamonds on the map. When one falls it drops three to five Epic and Legendary chests around it, you score 400 points for the last hit, and bots go after them too if they are strong enough (weak ones keep away).
@@ -96,9 +96,9 @@ You score points for damage dealt (100 per heart), kills (500), chests opened (2
 Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It lists every item, the rarity tiers and the scenery, and shows a sample map. To see a real map: in a lobby, open **Battle Royale, Developer tools, Export map data**. That writes `royale-map.json` into the game's data folder; load it in the viewer to see the field, the storm circles, every chest (hover to see what is inside), the scenery and the players.
 
 ## What works in this build, and what doesn't yet
-- Everything above is written and compiled, and the server side is unit-tested, but **none of it has been played**. Expect rough edges.
+- Everything is written and compiled, and the server side is unit-tested (and a bot-only match simulator, `royale_balance`, is used to tune it), but the game side has only been played a little. Expect rough edges.
 - The map size is measured automatically when the host presses Start (the host is taken to Hyrule Field first), and loot, spawn points and the storm are kept on ground that exists. Bots walk in straight lines, so they can walk through walls and water.
-- Not in yet: shields and gear are not drawn on other players, there is no minimap, and the item list is long (83 items), so expect balance problems. Bombs and arrows act as instant hits at range; there is no flying projectile yet.
+- Weapons are drawn in other players' hands and arrows, bombs and shots fly; shields and gear are still not drawn on other players. The item list is long (90 items), so expect balance problems.
 - Bots now find their way around obstacles in Hyrule Field if the map probe found them, strafe and dodge in fights, flee losing fights, use abilities and hunt in the endgame. They still can't see the difference between a ledge and a cliff, and they see through walls.
 
 
@@ -106,3 +106,21 @@ Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It li
 
 - **Weapon glow:** whatever weapon a player holds gives off glints in its rarity colour (grey, green, blue, purple, gold), more of them the rarer it is. It is on for other players by default; "Glow on your own weapon too" is off by default. Both are checkboxes under "Minimap and game options" in the Royale menu.
 - **Lobby music:** put `.wav` files in the `music` folder inside the game's data folder (it is created the first time you reach a lobby). They play shuffled while you wait in the lobby and stop when the countdown starts. Only WAV files work (the game has no MP3/OGG decoder). Turn it off with "Play songs from the music folder in the lobby".
+
+
+## Maps
+The host picks the place in the lobby: **Hyrule Field** (a huge arena with places of its own: a ruined castle, ranch, great wall, ravine, stone circle, graveyard, windmill hill and a raised causeway), **Lake Hylia**, **Kakariko Village**, **Death Mountain Crater** and **Desert Colossus**. Each has its own themed mini bosses (golems of stone, moss, tide, frost, shade, lava or dune), its own dragon, and 24 silly place names. The sizes come from the game's real collision data (see `docs/MAPS.md`). You cannot walk out of the map: every door, cave mouth and map edge that would load another scene is sealed.
+
+## Everything else that is in
+- **Seasons and weather.** The host chooses a season (or random), how strong the weather is and how often it changes. Each map has weather of its own: rain, thunderstorms (lightning strikes at marked circles), fog, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, ash feeds it. Everyone can turn the screen effects down or off ("Weather effects on my screen").
+- **Economy.** Rupees and ammo come from bushes and rocks and from eliminated players (about half their items and 60% of their money and ammo). You start with a basic sword (weak but free). Bows, slingshots, bombs, bombchus and nuts need ammo. Supply drops announce themselves and land a crate of Legendary loot where the safe zone will still be.
+- **Special weapons.** Triple Slingshot (three shots), Giant's Hammer (a big blow with a wide radius), purple Homing Bombchus that chase people.
+- **Hireable allies.** A Kokiri slinger (40 rupees), a Zora tidecaller who heals you (70), a Goron brawler (90) and a Gerudo archer (110) wait around the map. Walk up and press **A** to hire one (two at most). They follow you and fight for you until you are eliminated, then they are free again.
+- **Magic.** A green bar under your shield bar. Abilities cost magic (the white tick shows what yours costs), it refills slowly, and Magic Jars top it up.
+- **Heart Container chests.** A few hidden and climb chests are pink and hold an extra heart. **Adult Power**, a very rare Legendary find, makes you bigger for a minute: you hit harder, take less and run faster.
+- **Climbs.** Stone block staircases (jump and clamber) with the best chest on top; some chests are hidden behind boulders.
+- **Cloth and wind.** The glider's canopy is simulated cloth and Link's cap swings in the wind. There is a slider in the lobby for how much.
+- **The sign and Maya.** A sign stands in the middle of every map and a little Kokiri called Maya somewhere on it: walk up to the sign to read it, press **A** next to Maya to talk to her.
+- **Match replay.** When a match ends, a top-down replay of it plays beside the results.
+- **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
+- **Controls added:** **C-Left** drinks a shield potion, **C-Up** jumps, **C-Right** emotes, **A** also hires allies and talks.

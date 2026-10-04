@@ -61,10 +61,10 @@ constexpr float kDragonAggroRange = 1300.0f;
 constexpr float kDragonBreathRange = 650.0f;
 constexpr float kDragonBreathHalfAngle = 0.5f;  // radians either side of where it faces
 constexpr float kDragonBreathSeconds = 1.8f;
-constexpr float kDragonBreathDps = 0.8f;        // hearts a second to anyone in the cone
+constexpr float kDragonBreathDps = 0.6f;        // hearts a second to anyone in the cone
 constexpr float kDragonStrikeRadius = 150.0f;
 constexpr float kDragonStrikeDelay = 1.3f;      // seconds between the warning circle and the blast
-constexpr float kDragonStrikeDamage = 1.3f;
+constexpr float kDragonStrikeDamage = 1.0f;
 constexpr float kDragonLandedSeconds = 5.0f;
 constexpr float kDragonBodyRadius = 150.0f;
 enum class DragonMode : uint8_t { Patrol, Chase, Breath, Cast, Swoop, Landed, Climb };
