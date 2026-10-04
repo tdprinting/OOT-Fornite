@@ -97,6 +97,7 @@ class GameServer {
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
         broken.assign(props.size(), false);
+        sim.bots.SetProps(props);
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
@@ -144,6 +145,7 @@ class GameServer {
         if (!p || !p->alive || (sim.match.State() != MatchState::InMatch && sim.match.State() != MatchState::Drop)) return false;
         if (Distance(p->pos, prop.pos) > kSmashReach) return false;
         broken[index] = true;
+        sim.bots.PropGone(index);
         const Match::PropDrop drop = sim.match.GrantPropLoot(playerId, prop.kind, index);
         net::EvPropBroken ev;
         ev.index = static_cast<uint16_t>(index);
@@ -313,7 +315,7 @@ class GameServer {
             case net::MsgType::AttackReport: {
                 net::AttackReport m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.Attack(c->playerId, m.target, m.hit).ok) stats.rejectedActions++;
+                if (!sim.match.Attack(c->playerId, m.target, m.hit, static_cast<AttackStyle>(m.style)).ok) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PickupRequest: {
@@ -467,7 +469,7 @@ class GameServer {
         p->y = in.y;
         p->rot = in.rot;
         p->anim = in.anim;
-        if (in.anim == static_cast<uint8_t>(Anim::Roll) && sim.match.CanRoll(*p)) sim.match.StartRoll(p->id); // a human's roll counts from the moment it starts
+        if (IsDodge(in.anim) && sim.match.CanRoll(*p)) sim.match.StartRoll(p->id); // a human's roll (or side hop or back flip) counts from the moment it starts
         p->scene = in.scene;
     }
 
@@ -492,6 +494,7 @@ class GameServer {
             if (lobbyElapsed >= autoStartSec + kLobbyStartGraceSec) StartMatch();
         }
         sim.Tick(kStep);
+        for (const auto& [bot, index] : sim.bots.DrainSmashes()) SmashProp(bot, index);   // the bushes and rocks the bots cut and broke
         clock += kStep;
         tick++;
         BroadcastEvents();

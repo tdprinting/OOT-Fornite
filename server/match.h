@@ -1,6 +1,7 @@
 #pragma once
 #include "../shared/balance.h"
 #include "../shared/ally.h"
+#include "../shared/anim.h"
 #include "../shared/boss.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
@@ -135,7 +136,10 @@ struct AttackResult {
     float damage = 0;
     bool killed = false;
     bool dodged = false; // the target was rolling: the attack was spent but missed
+    bool blocked = false; // the target took it on a raised shield
+    int extraHits = 0;    // a spin attack: everyone else it caught
 };
+
 
 // What a player's gear adds up to right now.
 struct GearTotals {
@@ -385,7 +389,18 @@ class Match {
     bool Rolling(const PlayerState& p) const { return clock < p.rollUntil; }
     bool CanRoll(const PlayerState& p) const { return p.alive && clock >= p.rollReadyAt && !Stunned(p); }
 
-    AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true) {
+    // Whether `t` has its shield up towards `from` against this weapon.
+    static bool Guards(const PlayerState& t, Vec2 from, const WeaponStats& w) {
+        if (t.anim != static_cast<uint8_t>(Anim::Guard) || !t.hasShield || IsTwoHanded(t.weapon.item)) return false;
+        if (w.effect == WeaponEffect::PierceShield || (w.splashRadius > 0 && w.ranged)) return false;
+        const float face = static_cast<float>(t.rot) * (3.14159265f / 32768.0f);
+        float off = std::atan2(from.x - t.pos.x, from.z - t.pos.z) - face;
+        while (off > 3.14159265f) off -= 6.2831853f;
+        while (off < -3.14159265f) off += 6.2831853f;
+        return std::fabs(off) <= kGuardHalfAngle;
+    }
+
+    AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
         if (IsBossId(targetId)) return AttackBoss(attackerId, targetId, hit);
@@ -397,21 +412,37 @@ class Match {
         if (w.damage <= 0 || clock < a->attackReadyAt) return r;
         if (clock < a->stunUntil || clock < a->frozenUntil) return r;
         if (Distance(a->pos, t->pos) > w.range * 1.1f) return r;
-        a->attackReadyAt = clock + w.cooldown;
+        if (w.ranged) style = AttackStyle::Normal;   // only blades and hammers jump slash and spin
+        a->attackReadyAt = clock + w.cooldown * (style == AttackStyle::Spin ? kSpinRecovery : style == AttackStyle::JumpSlash ? kJumpSlashRecovery : 1.0f);
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
         const GearTotals ag = TotalsOf(*a);
-        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, t->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
-        float reduction = 0.0f;
-        if (w.effect != WeaponEffect::PierceShield && t->hasShield) reduction = ShieldReduction(t->shield.item, t->shield.rarity);
-        r.damage = base * (1.0f - reduction);
+        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, t->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f) *
+                           (style == AttackStyle::JumpSlash ? kJumpSlashDamage : 1.0f);
+        auto dealt = [&](const PlayerState& victim, float amount, bool* blocked) {
+            float reduction = 0.0f;
+            if (w.effect != WeaponEffect::PierceShield && victim.hasShield) reduction = ShieldReduction(victim.shield.item, victim.shield.rarity);
+            *blocked = Guards(victim, a->pos, w);
+            return amount * (1.0f - reduction) * (*blocked ? 1.0f - kGuardBlock : 1.0f);
+        };
+        r.damage = dealt(*t, base, &r.blocked);
         r.hit = true;
         r.killed = Damage(targetId, r.damage, attackerId, w.splashRadius > 0 && w.ranged ? DamageKind::Explosion : DamageKind::Normal);
+        if (style == AttackStyle::Spin) {   // the spin catches everyone else within reach too
+            const float reach = w.range * 1.1f + kSpinReachBonus;
+            for (auto& o : players) {
+                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil) continue;
+                bool blocked = false;
+                const float amount = dealt(o, base, &blocked);
+                Damage(o.id, amount, attackerId, DamageKind::Normal);
+                r.extraHits++;
+            }
+        }
 
-        if (!r.killed && t->alive) {
+        if (!r.killed && t->alive && !r.blocked) {   // a shield taken hit doesn't burn, freeze or stun
             const bool immune = TotalsOf(*t).stunImmune;
             const float seconds = w.effectSeconds * RarityScale(a->weapon.rarity);
             switch (w.effect) {

@@ -1,9 +1,11 @@
 #pragma once
 #include "../shared/anim.h"
+#include "../shared/props.h"
 #include "match.h"
 #include "nav.h"
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -41,6 +43,11 @@ class BotController {
     explicit BotController(uint64_t seed) : rng(seed ^ 0x626F74ull) {} // "bot"
 
     void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); }
+    // The scenery, so bots cut bushes and break rocks for rupees and ammo the way players do. The server breaks the prop (SmashProp) for
+    // each request DrainSmashes() hands it, and tells the bots about every prop anybody breaks (PropGone).
+    void SetProps(std::vector<Prop> list) { props = std::move(list); propGone.assign(props.size(), false); smashes.clear(); }
+    void PropGone(size_t index) { if (index < propGone.size()) propGone[index] = true; }
+    std::vector<std::pair<uint32_t, size_t>> DrainSmashes() { std::vector<std::pair<uint32_t, size_t>> out; out.swap(smashes); return out; }
     bool HasNav() const { return nav != nullptr; }
     void SetDifficulty(BotDifficulty d) { difficulty = d; memory.clear(); } // bots re-roll their personalities
     BotDifficulty Difficulty() const { return difficulty; }
@@ -56,6 +63,12 @@ class BotController {
             if (p.isBot && p.alive) {
                 Act(m, p, soon, dt);
                 const Memory& mem = Mem(p.id);
+                Memory& mm = Mem(p.id);
+                if (m.Clock() >= mm.actUntil && mm.queuedFor > 0 && !m.Stunned(p)) {   // the chest is open: hold up what was inside
+                    ShowPose(m, mm, mm.queuedAnim, mm.queuedFor);
+                    mm.busyUntil = (std::max)(mm.busyUntil, mm.actUntil);
+                    mm.queuedFor = 0;
+                }
                 if (m.Clock() < mem.actUntil && !m.Stunned(p)) p.anim = static_cast<uint8_t>(mem.actAnim);   // it just used something: show it
             }
         }
@@ -211,6 +224,18 @@ class BotController {
         float hazardNoticeAt = -1;     // when the bot will have noticed the blast ring or fire cone it is standing in
         Anim actAnim = Anim::Idle;      // the pose of the item it just used, held for a moment over whatever it is doing
         float actUntil = 0;
+        // playing like a person
+        Anim rollAnim = Anim::Roll;    // which dodge it is doing: a roll, a side hop or a back flip
+        float busyUntil = 0;           // standing still for a chest, a find held up, a look round or a taunt
+        Anim queuedAnim = Anim::Idle;  // a pose to show once the current one ends (a chest's find, held up)
+        float queuedFor = 0;
+        int combo = 0;                 // swings in a row, for the finishing spin
+        float lastSwingAt = -10;
+        int kills = 0;                 // to notice a fresh elimination (and maybe celebrate it)
+        float nextHopAt = 0;           // the earliest it jumps again
+        int propIdx = -1;              // the bush or rock it is walking to
+        float propEvalAt = 0;
+        bool paused = false;           // wandering: stopping for a look round at each spot
     };
 
     Rng rng;
@@ -218,6 +243,9 @@ class BotController {
     std::shared_ptr<const NavGrid> nav;
     std::unordered_map<uint32_t, Memory> memory;
     int repathBudget = 0;
+    std::vector<Prop> props;                          // the scenery (SetProps)
+    std::vector<bool> propGone;                       // broken by somebody, or about to be by a bot
+    std::vector<std::pair<uint32_t, size_t>> smashes; // bot id, prop index: waiting for the server to break them
 
     Memory& Mem(uint32_t id) {
         auto it = memory.find(id);
@@ -242,13 +270,41 @@ class BotController {
         return (a == AmmoKind::Arrows || a == AmmoKind::Seeds) ? Anim::Shoot : Anim::Throw;
     }
     void ShowPose(Match& m, Memory& mem, Anim pose, float seconds = 0.45f) { mem.actAnim = pose; mem.actUntil = m.Clock() + seconds; }
-    // Attack, and show the right pose if the attack was allowed.
-    AttackResult BotAttack(Match& m, PlayerState& p, Memory& mem, uint32_t target, bool hit) {
+    // Attack, and show the right pose if the attack was allowed. Swords are swung the ways a player swings them: a leaping jump slash to
+    // open a fight, ordinary slashes after that, and a spin attack when it is surrounded or to finish a combo. `dist` is how far the target is.
+    AttackResult BotAttack(Match& m, PlayerState& p, Memory& mem, uint32_t target, bool hit, float dist = 0.0f) {
         const WeaponStats w = Match::StatsOf(p);
         const ItemId item = p.weapon.item;
-        const AttackResult r = m.Attack(p.id, target, hit);
-        if (r.ok) ShowPose(m, mem, PoseForWeapon(w, item));
+        if (m.Clock() < p.attackReadyAt) return {};
+        // Pick the move first: a spin attack really catches everyone close, and a jump slash really hits harder.
+        Anim pose = PoseForWeapon(w, item);
+        float seconds = 0.45f;
+        AttackStyle style = AttackStyle::Normal;
+        const int combo = m.Clock() - mem.lastSwingAt > 1.4f ? 0 : mem.combo + 1;   // 0: the first swing of an exchange
+        if (pose == Anim::Attack) {
+            int crowd = 0;
+            for (const auto& o : m.Players()) if (o.alive && o.id != p.id && Distance(o.pos, p.pos) <= w.range * 1.1f) crowd++;
+            if (crowd >= 2 && rng.Unit() < 0.55f * mem.skill + 0.2f) { pose = Anim::SpinAttack; style = AttackStyle::Spin; seconds = 0.75f; }
+            else if (combo == 0 && dist > w.range * 0.5f && rng.Unit() < 0.25f + 0.4f * mem.aggression) { pose = Anim::JumpSlash; style = AttackStyle::JumpSlash; seconds = 0.7f; }
+            else if (combo >= 3 && rng.Unit() < 0.3f * mem.skill) { pose = Anim::SpinAttack; style = AttackStyle::Spin; seconds = 0.75f; }
+        }
+        const AttackResult r = m.Attack(p.id, target, hit, style);
+        if (!r.ok) return r;
+        if (pose == Anim::Attack || pose == Anim::JumpSlash || pose == Anim::SpinAttack) {
+            mem.combo = style == AttackStyle::Spin ? 0 : combo;
+            mem.lastSwingAt = m.Clock();
+        }
+        ShowPose(m, mem, pose, seconds);
         return r;
+    }
+
+    // Which way a dodge across the foe's line goes, as the game shows it: a side hop (left or right of where the bot faces), now and then a back
+    // flip when it is getting away, otherwise a roll.
+    Anim DodgeAnimFor(const Memory& mem, bool away) {
+        const double r = rng.Unit();
+        if (away && r < 0.45) return Anim::Backflip;
+        if (r < 0.75) return mem.strafeDir > 0 ? Anim::HopR : Anim::HopL;
+        return Anim::Roll;
     }
 
     // ---- small helpers -----------------------------------------------------------------------------------------------
@@ -364,6 +420,7 @@ class BotController {
         const bool moved = Advance(m, p, dx, dz, (std::min)(step, std::hypot(dx, dz)));
         p.rot = face ? FaceAngle(p.pos, *face) : FaceAngle(p.pos, aim);
         p.anim = static_cast<uint8_t>(moved ? (speedScale < 0.9f ? Anim::Walk : Anim::Run) : Anim::Idle);
+        if (moved && speedScale >= 0.9f && m.Clock() >= mem.nextHopAt && rng.Unit() < 0.0015f + 0.002f * mem.aggression) Hop(m, mem);
 
         // Stuck check: wanted to move for a second but barely got anywhere (a wall the grid doesn't know about): pick a new heading.
         if (mem.progressAt < 0) {
@@ -375,6 +432,7 @@ class BotController {
                 mem.unstickDir = {std::sin(a), std::cos(a)};
                 mem.unstickUntil = m.Clock() + 0.6f;
                 mem.path.clear();
+                Hop(m, mem);   // what a player does at something in the way
             }
             mem.progressPos = p.pos;
             mem.progressAt = m.Clock();
@@ -419,6 +477,8 @@ class BotController {
         if (len < 1e-4f || !m.StartRoll(p.id)) return false;
         mem.rollDir = {dx / len, dz / len};
         mem.rollUntil = m.Clock() + Match::kRollSeconds;
+        mem.rollAnim = Anim::Roll;
+        mem.actUntil = 0;   // a dodge cancels whatever pose was showing
         return true;
     }
 
@@ -577,6 +637,78 @@ class BotController {
         return best;
     }
 
+    // A player stops at a chest to kick it open and holds up what was inside; a good find off the ground is held up too.
+    void ShowFind(Match& m, PlayerState& p, Memory& mem, const LootSpawn& got) {
+        p.rot = FaceAngle(p.pos, got.pos);
+        const ItemKind kind = KindOf(got.item);
+        const bool notable = got.rarity >= Rarity::Rare && (kind == ItemKind::Weapon || kind == ItemKind::Shield || kind == ItemKind::Ability);
+        if (got.container) {
+            ShowPose(m, mem, Anim::OpenChest, 1.0f);
+            mem.queuedAnim = Anim::ItemGet;
+            mem.queuedFor = 0.9f;
+            mem.busyUntil = m.Clock() + 1.0f;
+        } else if (notable || got.item == ItemId::HeartContainer) {
+            ShowPose(m, mem, Anim::ItemGet, 0.8f);
+            mem.busyUntil = m.Clock() + 0.8f;
+        }
+    }
+
+    // How much a bot wants what bushes and rocks give: ammo for what it carries, and rupees (allies cost rupees).
+    float SmashWant(const PlayerState& p, const Memory& mem) const {
+        float want = 0;
+        for (int k = 0; k < static_cast<int>(AmmoKind::None); k++) {
+            want = (std::max)(want, AmmoWant(p, static_cast<AmmoKind>(k)));
+        }
+        if (p.rupees < 40) want = (std::max)(want, 0.3f + 0.4f * mem.greed);
+        return want;
+    }
+
+    bool CanBreak(const PlayerState& p, PropKind kind) const {
+        if (kind == PropKind::Bush || kind == PropKind::Rock) return true;
+        if (kind != PropKind::Boulder) return false;
+        const WeaponStats w = Match::StatsOf(p);
+        return w.damage >= 1.5f || w.splashRadius > 0;   // a boulder needs something heavy or explosive, as for players
+    }
+
+    bool SmashProps(Match& m, PlayerState& p, Memory& mem, const Circle& soon, float dt) {
+        if (props.empty() || m.State() != MatchState::InMatch) return false;
+        const float now = m.Clock();
+        if (mem.propIdx >= 0 && (static_cast<size_t>(mem.propIdx) >= props.size() || propGone[static_cast<size_t>(mem.propIdx)])) mem.propIdx = -1;
+        if (mem.propIdx < 0) {
+            if (now < mem.propEvalAt) return false;
+            mem.propEvalAt = now + 1.0f + static_cast<float>(rng.Unit());
+            if (SmashWant(p, mem) < 0.3f) return false;
+            const float radius = 260.0f + 260.0f * mem.greed;
+            const Circle safe = {soon.center, soon.radius * 0.9f};
+            float best = radius;
+            for (size_t i = 0; i < props.size(); i++) {
+                if (propGone[i] || !CanBreak(p, props[i].kind) || !safe.Contains(props[i].pos)) continue;
+                const float d = Distance(p.pos, props[i].pos);
+                if (d < best) { best = d; mem.propIdx = static_cast<int>(i); }
+            }
+            if (mem.propIdx < 0) return false;
+        }
+        const size_t i = static_cast<size_t>(mem.propIdx);
+        const Vec2 at = props[i].pos;
+        const float reach = PropRadius(props[i].kind) + 70.0f;
+        if (Distance(p.pos, at) > reach) {
+            // Walk up to it, aiming for the near side (the solid ones block the middle).
+            const Vec2 stand = Away(at, p.pos, -PropRadius(props[i].kind) - 40.0f);
+            Steer(m, p, mem, Distance(p.pos, at) > reach + 80.0f ? stand : at, dt, 1.0f, nullptr);
+            return true;
+        }
+        p.rot = FaceAngle(p.pos, at);
+        if (now - mem.lastSwingAt < 0.5f || now < p.attackReadyAt) return true;
+        const WeaponStats w = Match::StatsOf(p);
+        ShowPose(m, mem, w.ranged ? PoseForWeapon(w, p.weapon.item) : Anim::Attack, 0.45f);
+        mem.lastSwingAt = now;
+        smashes.push_back({p.id, i});
+        propGone[i] = true;
+        mem.propIdx = -1;
+        mem.propEvalAt = now + 0.4f;
+        return true;
+    }
+
     // ---- abilities and consumables --------------------------------------------------------------------------------------------
 
     struct Situation {
@@ -684,8 +816,8 @@ class BotController {
         if (m.Stunned(p)) return;                  // frozen in place
         if (now < mem.rollUntil) {                  // mid-roll: tumble on in the chosen direction
             Advance(m, p, mem.rollDir.x, mem.rollDir.z, kRunSpeed * 3.4f * dt);
-            p.rot = FaceAngle(p.pos, {p.pos.x + mem.rollDir.x, p.pos.z + mem.rollDir.z});
-            p.anim = static_cast<uint8_t>(Anim::Roll);
+            if (mem.rollAnim == Anim::Roll) p.rot = FaceAngle(p.pos, {p.pos.x + mem.rollDir.x, p.pos.z + mem.rollDir.z});   // hops and flips keep facing the foe
+            p.anim = static_cast<uint8_t>(mem.rollAnim);
             return;
         }
 
@@ -714,6 +846,25 @@ class BotController {
         // A new target isn't engaged until the reaction time has passed (they can still be fled from).
         const bool engaged = foe && now - mem.acquiredAt >= mem.reaction;
         const float dist = foe ? Distance(p.pos, foe->pos) : 1e9f;
+
+        // Standing still for a moment (a chest, a find held up, a look round, a taunt) is dropped the moment there is trouble.
+        if (now < mem.busyUntil) {
+            const bool trouble = (foe && dist < 450.0f) || now < mem.alertUntil || m.GetStorm().DamagePerSecond(p.pos, m.StormTime()) > 0;
+            if (!trouble) return;
+            mem.busyUntil = 0; mem.actUntil = 0; mem.queuedFor = 0;
+        }
+        // A fresh elimination: with nobody else about, a player often celebrates it.
+        if (p.kills > mem.kills) {
+            mem.kills = p.kills;
+            if ((!foe || dist > 700.0f) && rng.Unit() < 0.4f) {
+                static const int kCheers[] = {0, 3, 0, 3, 2, 4};   // Wow!, admire the sword, look to the sky, and now and then the chicken dance
+                const int emote = kCheers[rng.Below(6)];
+                const float seconds = emote == kChickenDanceEmote ? 3.0f : 1.8f;
+                ShowPose(m, mem, static_cast<Anim>(EmoteAnim(emote)), seconds);
+                mem.busyUntil = now + seconds;
+                return;
+            }
+        }
 
         Situation s;
         s.foe = foe;
@@ -805,14 +956,18 @@ class BotController {
             if (idx >= 0) {
                 const Vec2 where = m.Loot()[static_cast<size_t>(idx)].spawn.pos;
                 if (Distance(p.pos, where) <= kPickupRange * 0.8f) {
+                    const LootSpawn got = m.Loot()[static_cast<size_t>(idx)].spawn;
                     if (!m.PickUp(p.id, static_cast<size_t>(idx))) mem.lootIdx = -1;
-                    else { mem.lootIdx = -1; mem.lootEvalAt = 0; }
+                    else { mem.lootIdx = -1; mem.lootEvalAt = 0; ShowFind(m, p, mem, got); }
                 } else {
                     Steer(m, p, mem, where, dt);
                 }
                 return;
             }
         }
+
+        // 4b. Cut bushes and break rocks for rupees and ammo when there is nothing better to pick up.
+        if ((!foe || dist > 800.0f) && SmashProps(m, p, mem, soon, dt)) return;
 
         // 5. Hunt: go where the last target was seen (aggressive, healthy bots), or close in on a visible but distant enemy.
         const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !GearFirst();   // with just the starting sword, nobody goes hunting
@@ -842,8 +997,9 @@ class BotController {
             }
         }
 
-        // 7. Wander inside the zone.
+        // 7. Wander inside the zone, stopping now and then to look round.
         if (!mem.hasWander || Distance(p.pos, {soon.center.x + mem.wander.x, soon.center.z + mem.wander.z}) < 60.0f) {
+            if (mem.hasWander && rng.Unit() < 0.45f) mem.busyUntil = now + 1.0f + 1.5f * static_cast<float>(rng.Unit());
             Vec2 pick = soon.center;
             for (int tries = 0; tries < 8; tries++) {
                 const float a = static_cast<float>(rng.Unit() * 6.283185307179586);
@@ -908,17 +1064,34 @@ class BotController {
         if (foeWillAttack && mem.dodgeThisSwing) {
             mem.dodgeThisSwing = false;
             const float toX = foe.pos.x - p.pos.x, toZ = foe.pos.z - p.pos.z;
-            if (m.CanRoll(p) && RollToward(m, p, mem, -toZ * mem.strafeDir, toX * mem.strafeDir)) {
-                p.anim = static_cast<uint8_t>(Anim::Roll);
+            const bool away = mine.ranged && dist < want;   // a bow wants distance: flip backwards out of reach
+            float dx = -toZ * mem.strafeDir, dz = toX * mem.strafeDir;
+            const Anim dodge = DodgeAnimFor(mem, away);
+            if (dodge == Anim::Backflip) { dx = -toX; dz = -toZ; }
+            if (m.CanRoll(p) && RollToward(m, p, mem, dx, dz)) {
+                mem.rollAnim = dodge;
+                p.anim = static_cast<uint8_t>(dodge);
                 p.rot = FaceAngle(p.pos, foe.pos);
-                if (m.Clock() >= p.attackReadyAt && dist <= mine.range) BotAttack(m, p, mem, foe.id, rng.Unit() < mem.skill * 0.8f); // and swing back before rolling off
+                if (dodge == Anim::Roll && m.Clock() >= p.attackReadyAt && dist <= mine.range) BotAttack(m, p, mem, foe.id, rng.Unit() < mem.skill * 0.8f, dist); // and swing back before rolling off
                 return;
             }
             mem.strafeDir = -mem.strafeDir;
             mem.strafeFlipAt = m.Clock() + 0.5f;
+        } else if (foeWillAttack && p.hasShield && !mine.ranged && !IsTwoHanded(p.weapon.item) && m.Clock() >= mem.actUntil && rng.Unit() < 0.25f + 0.5f * mem.caution) {
+            ShowPose(m, mem, Anim::Guard, 0.4f);   // no dodge this time: shield up, as a player holds R
         }
         Fight(m, p, mem, foe, dist, want, dt, 1.0f);
+        // Hop in when closing on a foe from a little way off, the way players jump about in a fight.
+        if (dist > want + 60.0f && dist < 520.0f && m.Clock() >= mem.nextHopAt && rng.Unit() < 0.04f * (0.5f + mem.aggression)) Hop(m, mem);
         TryAttack(m, p, mem, foe, dist);
+    }
+
+
+    // A jump (C-Up). Bots move on flat ground, so it is only seen: every client lifts the bot in an arc while it shows the jump.
+    void Hop(Match& m, Memory& mem) {
+        if (m.Clock() < mem.actUntil) return;
+        ShowPose(m, mem, Anim::Jump, 0.55f);
+        mem.nextHopAt = m.Clock() + 2.5f + static_cast<float>(rng.Unit()) * 4.0f;
     }
 
     // Swing or shoot if the foe is in range and the weapon is ready. Accuracy falls off with distance for ranged weapons.
@@ -935,7 +1108,7 @@ class BotController {
         }
         if (m.Stunned(foe)) chance = (std::min)(1.0f, chance + 0.25f);
         if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
-        BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance));
+        BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance), dist);
     }
 };
 

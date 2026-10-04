@@ -22,7 +22,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 19; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 20; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -83,8 +83,9 @@ struct AttackReport {
     static constexpr MsgType kType = MsgType::AttackReport;
     uint16_t target = 0;
     bool hit = false;
-    void Write(ByteWriter& w) const { w.U16(target); w.U8(hit ? 1 : 0); }
-    bool Read(ByteReader& r) { target = r.U16(); uint8_t h = r.U8(); hit = h == 1; return r.ok && h <= 1; }
+    uint8_t style = 0;   // AttackStyle: an ordinary swing, a jump slash or a spin attack
+    void Write(ByteWriter& w) const { w.U16(target); w.U8(hit ? 1 : 0); w.U8(style); }
+    bool Read(ByteReader& r) { target = r.U16(); uint8_t h = r.U8(); hit = h == 1; style = r.U8(); return r.ok && h <= 1 && style <= 2; }
 };
 
 struct PickupRequest {
