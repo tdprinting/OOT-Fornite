@@ -22,6 +22,7 @@ struct PlayerState {
     bool isBot = false;
     bool alive = true;
     float health = kMaxHealth; // hearts
+    float armor = 0;           // the shield bar: soaks up damage before health does (not the storm), 0 to kMaxShield
     float maxHealth = kMaxHealth;
     int heartPieces = 0;
     Vec2 pos = {};
@@ -69,7 +70,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -94,8 +95,24 @@ struct MiniBoss {
     bool alive = true;
     float attackReadyAt = 0;
     float lastSmashAt = -10;   // for the animation
+    // The dragon only:
+    float y = 0;               // height above the ground
+    DragonMode mode = DragonMode::Patrol;
+    float modeUntil = 0;
+    Vec2 waypoint = {};
+    float swoopReadyAt = 0;
+    Vec2 swoopAt = {};
     uint32_t target = 0xFFFFFFFFu;
     float lostTargetAt = 0;
+};
+
+// A blast that lands at a marked spot a moment after it is announced (the dragon's fireballs, meteors and swoop).
+struct Strike {
+    Vec2 at;
+    float radius = 0, damage = 0;
+    float hitAt = 0;
+    uint32_t by = 0;
+    bool applied = false;
 };
 
 struct AttackResult {
@@ -233,7 +250,15 @@ class Match {
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
         hearts *= mult;
 
-        const float dealt = (std::min)(hearts, p->health);
+        // The shield bar takes the hit first (the storm goes straight through it).
+        float soaked = 0;
+        if (kind != DamageKind::Storm && p->armor > 0) {
+            soaked = (std::min)(p->armor, hearts);
+            p->armor -= soaked;
+            hearts -= soaked;
+            p->dirty = true;
+        }
+        const float dealt = soaked + (std::min)(hearts, p->health);
         p->health -= hearts;
         bool killed = p->health <= 0;
         if (killed && TryFairy(*p)) killed = false;
@@ -244,7 +269,7 @@ class Match {
         // Storm ticks are not announced: health travels in snapshots, only the elimination is an event.
         if (attacker != kNoPlayer && announce) {
             MatchEvent e{MatchEvent::Type::Damaged};
-            e.a = id; e.b = attacker; e.amount = hearts; e.health = p->health;
+            e.a = id; e.b = attacker; e.amount = hearts + soaked; e.health = p->health;
             events.push_back(e);
         }
         if (killed) Eliminate(*p, attacker);
@@ -468,6 +493,28 @@ class Match {
         return true;
     }
 
+    // Drink a shield potion: the one that fills the bar best without wasting much (the biggest that fits, or the smallest if none does).
+    // A small potion only works while the bar is below half; the big one fills it. Fails if the bag has none or the bar is already full enough.
+    bool UseShield(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        int best = -1;
+        float bestFit = 0;
+        for (size_t i = 0; i < p->potions.size(); i++) {
+            const PotionDef d = PotionOf(p->potions[i].item);
+            if (d.shield <= 0 || p->armor >= d.shieldCap - 0.01f) continue;
+            const float room = d.shieldCap - p->armor;
+            const float fit = d.shield <= room ? d.shield : -d.shield; // fits entirely: prefer the largest; otherwise the smallest
+            if (best < 0 || (fit > 0 && (bestFit < 0 || fit > bestFit)) || (fit < 0 && bestFit < 0 && fit > bestFit)) { best = static_cast<int>(i); bestFit = fit; }
+        }
+        if (best < 0) return false;
+        const PotionDef d = PotionOf(p->potions[static_cast<size_t>(best)].item);
+        p->armor = (std::min)(d.shieldCap, p->armor + d.shield);
+        p->potions.erase(p->potions.begin() + best);
+        p->dirty = true;
+        return true;
+    }
+
     // Use the ability slot. Fails (and costs nothing) if there is no ability, it is still recharging, the player is stunned, or the
     // ability needs a target that isn't there (Hookshot with nobody in front). Farore's Wind marks a spot the first time and jumps back
     // to it the second time.
@@ -573,12 +620,16 @@ class Match {
         if (!a || !b || !a->alive || !b->alive) return r;
         const WeaponStats w = WeaponOf(a->weapon.item);
         if (w.damage <= 0 || clock < a->attackReadyAt || clock < a->stunUntil || clock < a->frozenUntil) return r;
-        if (Distance(a->pos, b->pos) > w.range * 1.1f + kBossBodyRadius) return r; // it is big: you can hit it from further off
+        const bool dragon = b->kind == BossKind::Dragon;
+        const bool airborne = dragon && b->y > kDragonAirborneAbove;
+        if (airborne && !w.ranged) return r;                                           // up in the sky: only arrows and the like reach it
+        if (Distance(a->pos, b->pos) > w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius)) return r; // it is big: you can hit it from further off
         a->attackReadyAt = clock + w.cooldown;
         r.ok = true;
         if (!hit) return r;
         const GearTotals ag = TotalsOf(*a);
         r.damage = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);
+        if (dragon) r.damage *= airborne ? 0.75f : (b->mode == DragonMode::Landed ? 1.25f : 1.0f); // landed: it is dazed and takes extra
         r.hit = true;
         const float dealt = (std::min)(r.damage, b->health);
         b->health -= r.damage;
@@ -615,14 +666,196 @@ class Match {
             if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = b.pos;
             AddLoot({at, item, t, true, true});
         }
+        if (b.kind == BossKind::Dragon) { // the big one also leaves heart containers
+            for (int i = 0; i < 2; i++) {
+                const float angle = 6.2831853f * (i + 0.5f) / 2.0f + 0.4f;
+                Vec2 at = {b.pos.x + std::cos(angle) * 230.0f, b.pos.z + std::sin(angle) * 230.0f};
+                if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = b.pos;
+                LootSpawn heart = {at, ItemId::HeartContainer, Rarity::Legendary, true, true};
+                heart.special = true;
+                AddLoot(heart);
+            }
+        }
         MatchEvent e{MatchEvent::Type::BossDown};
         e.a = b.id; e.b = killer.id; e.x = b.pos.x; e.z = b.pos.z;
         events.push_back(e);
     }
 
+    void SetMajorBoss(bool on) { majorBoss = on; }
+    bool MajorBossEnabled() const { return majorBoss; }
+    const std::vector<Strike>& Strikes() const { return strikes; }
+
+    // The fire dragon arrives halfway through the storm timeline, somewhere inside the safe zone, and everybody is told.
+    void MaybeSpawnDragon() {
+        if (!majorBoss || dragonSpawned || stormTime < DragonSpawnTime()) return;
+        dragonSpawned = true;
+        Rng rng(seed ^ 0x647261676Full); // "drago"
+        const Circle zone = storm.SafeZoneAt(stormTime);
+        Vec2 at = zone.center;
+        for (int attempt = 0; attempt < 40; attempt++) {
+            const Vec2 c = RandomPointIn(rng, zone, placement, 0.7f);
+            at = c;
+            if (!placement || placement(c)) break;
+        }
+        MiniBoss d;
+        d.id = kDragonId;
+        d.kind = BossKind::Dragon;
+        d.home = d.pos = at;
+        d.maxHealth = d.health = BossOf(BossKind::Dragon).health;
+        d.y = kDragonAltitude;
+        d.waypoint = at;
+        d.swoopReadyAt = clock + 8.0f;
+        bosses.push_back(d);
+        MatchEvent e{MatchEvent::Type::BossSpawned};
+        e.a = d.id; e.x = at.x; e.z = at.z;
+        events.push_back(e);
+    }
+    float DragonSpawnTime() const {
+        float total = 0;
+        for (const auto& ph : kStormPhases) total += ph.waitSec + ph.closeSec;
+        return total * 0.5f;
+    }
+
+    void AddStrike(Vec2 at, float radius, float damage, float delay, uint32_t by) {
+        Strike s;
+        s.at = at; s.radius = radius; s.damage = damage; s.hitAt = clock + delay; s.by = by;
+        strikes.push_back(s);
+        MatchEvent e{MatchEvent::Type::Strike};
+        e.a = by; e.x = at.x; e.z = at.z; e.amount = radius; e.health = delay;
+        events.push_back(e);
+    }
+
+    void ApplyBurn(PlayerState& p, uint32_t by, float seconds, float dps) {
+        p.burnUntil = (std::max)(p.burnUntil, clock + seconds);
+        p.burnDps = (std::max)(clock < p.burnUntil ? p.burnDps : 0.0f, dps);
+        p.burnBy = by;
+        p.dirty = true;
+    }
+
+    void TickStrikes() {
+        for (auto& s : strikes) {
+            if (s.applied || clock < s.hitAt) continue;
+            s.applied = true;
+            for (auto& p : players) {
+                if (!p.alive || Distance(p.pos, s.at) > s.radius) continue;
+                Damage(p.id, s.damage, s.by, DamageKind::Fire);
+                if (p.alive) ApplyBurn(p, s.by, 3.0f, 0.3f);
+            }
+        }
+        strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [&](const Strike& s) { return s.applied && clock > s.hitAt + 1.0f; }), strikes.end());
+    }
+
+    void TickDragon(MiniBoss& b, float dt) {
+        const BossDef def = BossOf(b.kind);
+        auto face = [&](Vec2 to) { b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(to.x - b.pos.x, to.z - b.pos.z) * (32768.0f / 3.14159265358979f))); };
+        auto fly = [&](Vec2 to, float speed) {
+            const float dx = to.x - b.pos.x, dz = to.z - b.pos.z, d = std::hypot(dx, dz);
+            if (d > 1.0f) { const float step = (std::min)(d, speed * dt); b.pos.x += dx / d * step; b.pos.z += dz / d * step; }
+            return d;
+        };
+        auto climbTo = [&](float alt, float rate) { b.y += (std::max)(-rate * dt, (std::min)(rate * dt, alt - b.y)); };
+        // Pick the nearest living player in range as the target.
+        PlayerState* target = nullptr;
+        float best = kDragonAggroRange;
+        for (auto& p : players) {
+            if (!p.alive || clock < p.invulnUntil) continue;
+            const float d = Distance(p.pos, b.pos);
+            if (d < best) { best = d; target = &p; }
+        }
+        if (target) { b.target = target->id; b.lostTargetAt = clock; } else b.target = kNoPlayer;
+        const float hpFrac = b.health / b.maxHealth;
+
+        switch (b.mode) {
+            case DragonMode::Landed:
+                climbTo(0.0f, 300.0f);
+                if (clock >= b.modeUntil) b.mode = DragonMode::Climb;
+                return;
+            case DragonMode::Climb:
+                climbTo(kDragonAltitude, 160.0f);
+                if (b.y >= kDragonAltitude - 5.0f) b.mode = DragonMode::Chase;
+                return;
+            case DragonMode::Swoop: {
+                const float t = (std::min)(1.0f, 1.0f - (b.modeUntil - clock) / kDragonStrikeDelay);
+                b.y = kDragonAltitude * (1.0f - t);
+                fly(b.swoopAt, def.speed * 2.2f);
+                face(b.swoopAt);
+                if (clock >= b.modeUntil) { // it hits the ground and sits there, dazed
+                    b.pos = b.swoopAt;
+                    b.y = 0;
+                    b.mode = DragonMode::Landed;
+                    b.modeUntil = clock + kDragonLandedSeconds;
+                    b.lastSmashAt = clock;
+                }
+                return;
+            }
+            case DragonMode::Breath:
+                b.lastSmashAt = clock; // keeps the animation going
+                if (target) face(target->pos);
+                for (auto& p : players) {
+                    if (!p.alive) continue;
+                    const float dx = p.pos.x - b.pos.x, dz = p.pos.z - b.pos.z, d = std::hypot(dx, dz);
+                    if (d > kDragonBreathRange) continue;
+                    float off = std::atan2(dx, dz) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
+                    while (off > 3.14159265f) off -= 6.2831853f;
+                    while (off < -3.14159265f) off += 6.2831853f;
+                    if (std::fabs(off) > kDragonBreathHalfAngle) continue;
+                    Damage(p.id, kDragonBreathDps * dt, b.id, DamageKind::Fire, false);
+                    if (p.alive) ApplyBurn(p, b.id, 2.5f, 0.3f);
+                }
+                if (clock >= b.modeUntil) b.mode = DragonMode::Chase;
+                return;
+            case DragonMode::Cast:
+                if (target) face(target->pos);
+                if (clock >= b.modeUntil) b.mode = DragonMode::Chase;
+                return;
+            default: break;
+        }
+        climbTo(kDragonAltitude + 30.0f * std::sin(clock * 1.6f), 120.0f);
+        if (!target) { // nobody near: cruise between spots in the safe zone
+            b.mode = DragonMode::Patrol;
+            if (fly(b.waypoint, 110.0f) < 90.0f) {
+                Rng rng(seed ^ static_cast<uint64_t>(clock * 1000.0f) ^ 0x70617472ull);
+                b.waypoint = RandomPointIn(rng, storm.SafeZoneAt(stormTime), placement, 0.8f);
+            }
+            face(b.waypoint);
+            return;
+        }
+        b.mode = DragonMode::Chase;
+        const float d = Distance(b.pos, target->pos);
+        face(target->pos);
+        if (d > 480.0f) fly(target->pos, def.speed);              // close in to about 480 units and hover
+        if (clock < b.attackReadyAt) return;
+        Rng rng(seed ^ static_cast<uint64_t>(clock * 977.0f) ^ b.id);
+        if (clock >= b.swoopReadyAt && rng.Unit() < 0.4) {         // dive at them
+            b.mode = DragonMode::Swoop;
+            b.modeUntil = clock + kDragonStrikeDelay;
+            b.swoopAt = target->pos;
+            b.swoopReadyAt = clock + 15.0f;
+            b.attackReadyAt = clock + 2.0f;
+            AddStrike(b.swoopAt, 140.0f, 1.6f, kDragonStrikeDelay, b.id);
+        } else if (d < kDragonBreathRange * 0.9f) {                // close: breathe fire
+            b.mode = DragonMode::Breath;
+            b.modeUntil = clock + kDragonBreathSeconds;
+            b.attackReadyAt = clock + def.cooldown + kDragonBreathSeconds;
+        } else {                                                    // far: fireballs, and meteors when it is hurt
+            b.mode = DragonMode::Cast;
+            b.modeUntil = clock + 1.0f;
+            b.attackReadyAt = clock + def.cooldown + 1.0f;
+            AddStrike(target->pos, kDragonStrikeRadius, kDragonStrikeDamage, kDragonStrikeDelay, b.id);
+            const int extra = hpFrac < 0.5f ? 6 : 2;
+            for (int i = 0; i < extra; i++) {
+                const float a = static_cast<float>(rng.Unit() * 6.2831853), dist = 80.0f + static_cast<float>(rng.Unit()) * (hpFrac < 0.5f ? 520.0f : 260.0f);
+                AddStrike({target->pos.x + std::cos(a) * dist, target->pos.z + std::sin(a) * dist}, kDragonStrikeRadius * 0.8f, kDragonStrikeDamage * 0.8f, kDragonStrikeDelay + 0.1f * i, b.id);
+            }
+        }
+    }
+
     void TickBosses(float dt) {
+        MaybeSpawnDragon();
+        TickStrikes();
         for (auto& b : bosses) {
             if (!b.alive) continue;
+            if (b.kind == BossKind::Dragon) { TickDragon(b, dt); continue; }
             const BossDef def = BossOf(b.kind);
             // Notice the nearest player in range (the current target is kept while it stays in reach).
             PlayerState* target = Find(b.target);
@@ -974,6 +1207,9 @@ class Match {
     std::vector<Vec2> lootSpots;
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
+    std::vector<Strike> strikes;
+    bool majorBoss = false;
+    bool dragonSpawned = false;
     int bossCount = 0;
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };

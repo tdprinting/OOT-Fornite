@@ -29,6 +29,7 @@ struct ClientEvent {
 // the local clock between reports; use the accessors on GameClient rather than reading them raw.
 struct InventoryInfo {
     float maxHealth = kMaxHealth;
+    float shield = 0; // the shield bar, 0 to kMaxShield
     int heartPieces = 0;
     std::vector<net::ItemRef> potions;
     std::vector<net::ItemRef> reserve; // backup weapons (hotbar slots 2 and 3)
@@ -104,6 +105,8 @@ class GameClient {
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
+    // Drink a shield potion.
+    void UseShield() { SendIfJoined(net::UseShieldRequest{}); }
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
     // The mini bosses in the latest snapshot (the ones near you).
@@ -306,7 +309,7 @@ class GameClient {
             case net::MsgType::EvInventory: {
                 net::EvInventory m;
                 if (!net::Decode(data, m)) break;
-                inventory.maxHealth = m.maxHealth; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
+                inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
                 inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
                 inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
                 inventory.invulnLeft = m.invulnLeft; inventory.speedLeft = m.speedLeft; inventory.speedMult = m.speedMult;

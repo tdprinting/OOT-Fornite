@@ -20,7 +20,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 10; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 11; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -28,7 +28,7 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81,
@@ -106,6 +106,13 @@ struct SelectWeaponRequest {
     uint8_t slot = 1;
     void Write(ByteWriter& w) const { w.U8(slot); }
     bool Read(ByteReader& r) { slot = r.U8(); return r.ok && slot >= 1 && slot <= kMaxReserveWeapons; }
+};
+
+// Drink a shield potion from the bag (the server picks the one that fits best).
+struct UseShieldRequest {
+    static constexpr MsgType kType = MsgType::UseShieldRequest;
+    void Write(ByteWriter&) const {}
+    bool Read(ByteReader& r) { return r.ok; }
 };
 
 // The host asks for another match with everyone who is still connected, straight from the results screen.
@@ -438,6 +445,7 @@ struct EvResults {
 struct EvInventory {
     static constexpr MsgType kType = MsgType::EvInventory;
     float maxHealth = kMaxHealth;
+    float shield = 0;                       // the shield bar, 0 to kMaxShield
     uint8_t heartPieces = 0;
     std::vector<ItemRef> potions;           // the bag, at most kMaxPotions
     std::vector<ItemRef> reserve;           // backup weapons, at most kMaxReserveWeapons
@@ -450,7 +458,7 @@ struct EvInventory {
     float invulnLeft = 0, speedLeft = 0, speedMult = 1, revealLeft = 0, stunLeft = 0, burnLeft = 0, regenLeft = 0, shieldLeft = 0;
 
     void Write(ByteWriter& w) const {
-        w.F32(maxHealth); w.U8(heartPieces);
+        w.F32(maxHealth); w.F32(shield); w.U8(heartPieces);
         w.U8(static_cast<uint8_t>(potions.size()));
         for (const auto& p : potions) { w.U8(p.item); w.U8(p.rarity); }
         w.U8(static_cast<uint8_t>(reserve.size()));
@@ -463,7 +471,8 @@ struct EvInventory {
         w.F32(stunLeft); w.F32(burnLeft); w.F32(regenLeft); w.F32(shieldLeft);
     }
     bool Read(ByteReader& r) {
-        maxHealth = r.F32(); heartPieces = r.U8();
+        maxHealth = r.F32(); shield = r.F32(); heartPieces = r.U8();
+        if (!Finite(shield) || shield < 0 || shield > kMaxShield + 0.001f) return false;
         size_t n = r.U8();
         if (n > static_cast<size_t>(kMaxPotions)) return false;
         potions.assign(n, {});

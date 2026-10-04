@@ -327,6 +327,7 @@ class BotController {
             }
             case ItemKind::Consumable: {
                 if (PotionOf(s.item).revive) return HasFairy(p) ? 0.0f : 1.3f;
+                if (PotionOf(s.item).shield > 0) return p.armor < PotionOf(s.item).shieldCap - 0.3f && static_cast<int>(p.potions.size()) < kMaxPotions ? 0.55f : 0.0f;
                 if (static_cast<int>(p.potions.size()) >= kMaxPotions) return 0.0f;
                 const float need = 1.0f + (p.maxHealth - p.health) * 0.3f;
                 return (PotionHeal(s.item, s.rarity) * 0.5f + 0.3f) * need;
@@ -459,11 +460,21 @@ class BotController {
     bool TryHeal(Match& m, PlayerState& p, const Situation& s) {
         if (p.potions.empty()) return false;
         bool useful = false;
-        for (const Equipped& e : p.potions) if (!PotionOf(e.item).revive) useful = true;
+        for (const Equipped& e : p.potions) if (!PotionOf(e.item).revive && PotionOf(e.item).shield <= 0) useful = true;
         if (!useful) return false;
         const bool critical = p.health <= 1.2f;
         const bool safe = !s.foe || s.dist > 260.0f;
         if (critical || (safe && s.deficit >= 1.0f) || (s.burning && p.health < p.maxHealth * 0.7f)) return m.UsePotion(p.id);
+        return false;
+    }
+
+    // Drink a shield potion when nobody is close and the bar is low.
+    bool TryShield(Match& m, PlayerState& p, const Situation& s) {
+        bool has = false;
+        for (const Equipped& e : p.potions) has |= PotionOf(e.item).shield > 0;
+        if (!has) return false;
+        const bool safe = !s.foe || s.dist > 260.0f;
+        if (safe && p.armor < kMaxShield * 0.55f) return m.UseShield(p.id);
         return false;
     }
 
@@ -515,6 +526,7 @@ class BotController {
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
         if (TryHeal(m, p, s)) return;
+        if (TryShield(m, p, s)) return;
         TryAbility(m, p, mem, s);
 
         // 1. Storm: stay inside 90% of where the zone will be shortly. Shoot while running but never turn to fight.

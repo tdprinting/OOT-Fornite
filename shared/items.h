@@ -27,7 +27,7 @@ enum class ItemId : uint8_t {
     // ---- shields
     DekuShield, HylianShield, MirrorShield,
     // ---- consumables (bottle contents and potions)
-    GreenPotion, RedPotion, BluePotion, Fairy, Milk, Fish, BlueFire, Bug, Poe,
+    GreenPotion, RedPotion, BluePotion, Fairy, Milk, Fish, BlueFire, Bug, Poe, SmallShieldPotion, LargeShieldPotion,
     // ---- instant
     RecoveryHeart, HeartPiece, HeartContainer, MagicJar,
     // ---- abilities
@@ -101,6 +101,8 @@ constexpr ItemDef kItems[] = {
     {ItemId::BlueFire, "Blue Fire", kConsumable, rU, rR, "Heals half a heart and puts out fire"},
     {ItemId::Bug, "Bugs", kConsumable, rC, rU, "Heals a little and cures fire and stun"},
     {ItemId::Poe, "Poe", kConsumable, rR, rE, "Take half damage for 6 seconds"},
+    {ItemId::SmallShieldPotion, "Small Shield Potion", kConsumable, rC, rU, "Adds a third of a shield bar, up to half of it"},
+    {ItemId::LargeShieldPotion, "Large Shield Potion", kConsumable, rR, rL, "Adds two thirds of a shield bar, up to all of it"},
     // instant
     {ItemId::RecoveryHeart, "Recovery Heart", kInstant, rC, rU, "Heals 1 heart on the spot"},
     {ItemId::HeartPiece, "Piece of Heart", kInstant, rU, rR, "Four make a Heart Container"},
@@ -244,6 +246,8 @@ struct PotionDef {
     float damageTaken = 1;   // temporary damage multiplier (Poe)
     float seconds = 0;       // how long that lasts
     bool revive = false;     // Fairy: used automatically on a lethal hit, never drunk
+    float shield = 0;        // shield bar points added (in hearts' worth of damage), drunk with its own button
+    float shieldCap = 0;     // it can't raise the shield bar above this
 };
 
 constexpr PotionDef PotionOf(ItemId id) {
@@ -257,6 +261,8 @@ constexpr PotionDef PotionOf(ItemId id) {
         case ItemId::BlueFire:    return {0.5f, true};
         case ItemId::Bug:         return {0.3f, true};
         case ItemId::Poe:         return {0, false, 0.5f, 6.0f};
+        case ItemId::SmallShieldPotion: return {0, false, 1, 0, false, 1.0f, 1.5f};
+        case ItemId::LargeShieldPotion: return {0, false, 1, 0, false, 2.0f, 3.0f};
         default:                  return {};
     }
 }

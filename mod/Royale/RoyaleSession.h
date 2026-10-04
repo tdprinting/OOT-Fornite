@@ -177,6 +177,7 @@ class RoyaleSession {
     void RequestPickup(uint32_t lootIndex, bool force = false) { if (Joined()) client->RequestPickup(lootIndex, force); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
+    void UseShield() { if (Joined()) client->UseShield(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
     // Host only: another match right away with everyone who is connected.
     void RequestPlayAgain() { if (Joined()) client->RequestRematch(); }

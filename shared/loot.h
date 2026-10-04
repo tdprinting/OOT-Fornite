@@ -14,6 +14,7 @@ struct LootSpawn {
     Rarity rarity;
     bool fromChest;           // rolled on the higher chest tiers
     bool container = false;   // shown as a treasure chest that has to be opened; false for items dropped by players
+    bool special = false;     // a heart container chest: extra rare, drawn differently
 };
 
 inline Rarity RollRarity(Rng& rng, bool chest) {

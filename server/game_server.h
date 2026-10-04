@@ -269,6 +269,12 @@ class GameServer {
                 if (!c->isHost || !PlayAgain()) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::UseShieldRequest: {
+                net::UseShieldRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.UseShield(c->playerId)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::SelectWeaponRequest: {
                 net::SelectWeaponRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -529,6 +535,7 @@ class GameServer {
             inv.stunLeft = (std::max)(0.0f, (std::max)(p->stunUntil, p->frozenUntil) - now);
             inv.burnLeft = (std::max)(0.0f, p->burnUntil - now);
             inv.regenLeft = (std::max)(0.0f, p->regenUntil - now);
+            inv.shield = p->armor;
             inv.shieldLeft = (std::max)(0.0f, p->dmgTakenUntil - now);
             SendTo(c, inv);
         }

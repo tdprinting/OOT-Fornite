@@ -117,6 +117,9 @@ static void MessagesRoundTrip() {
     { Snapshot a, b; BossNet n; n.index = 3; n.kind = 2; n.x = 10; n.z = -4; n.rot = -123; n.hp = 77; n.smashing = true; a.bosses = {n};
       CHECK(RoundTrips(a, b) && b.bosses.size() == 1 && b.bosses[0].Id() == kBossIdBase + 3 && b.bosses[0].kind == 2 && b.bosses[0].rot == -123 && b.bosses[0].hp == 77 && b.bosses[0].smashing); }
     { Snapshot bad, out; BossNet n; n.index = 9; bad.bosses = {n}; CHECK(!RoundTrips(bad, out)); }   // index out of range
+    { UseShieldRequest a, b; CHECK(RoundTrips(a, b)); }
+    { EvInventory a, b; a.shield = 2.5f; CHECK(RoundTrips(a, b) && b.shield == 2.5f); }
+    { EvInventory bad, out; bad.shield = 9.0f; CHECK(!RoundTrips(bad, out)); }
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
     { SelectWeaponRequest a, b; a.slot = 2; CHECK(RoundTrips(a, b) && b.slot == 2); }
     { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
@@ -689,6 +692,28 @@ static void LobbyTimer() {
     CHECK(b.LobbyLeft() < 0);
 }
 
+static void ShieldOverTheWire() {
+    Rig rig(61, 20);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    rig.M().Find(1)->pos = {0, 0};
+    rig.M().Find(2)->pos = {1800, 0};
+    rig.M().Find(1)->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
+    rig.Run(0.4f);
+    CHECK(a.Inventory().shield == 0);
+    a.UseShield();
+    rig.Run(0.5f);
+    CHECK(std::fabs(a.Inventory().shield - 2.0f) < 0.001f && a.Inventory().potions.empty());       // the owner sees the bar fill
+    CHECK(b.Inventory().shield == 0);                                                              // and nobody else gets it
+    const uint64_t rejected = rig.server.GetStats().rejectedActions;
+    a.UseShield();                                                                                  // nothing left to drink
+    rig.Run(0.3f);
+    CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
+}
+
 static void DisconnectHandling() {
     {   // In the lobby the player just disappears.
         Rig rig;
@@ -1165,7 +1190,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    ShieldOverTheWire(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

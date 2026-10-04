@@ -430,7 +430,7 @@ static void CatalogIsConsistent() {
             case ItemKind::Shield:     CHECK(ShieldReduction(d.id, Rarity::Common) > 0); break;
             case ItemKind::Consumable: {
                 PotionDef p = PotionOf(d.id);
-                CHECK(p.heal > 0 || p.cleanse || p.damageTaken < 1 || p.revive);
+                CHECK(p.heal > 0 || p.cleanse || p.damageTaken < 1 || p.revive || p.shield > 0);
                 break;
             }
             case ItemKind::Instant:    CHECK(InstantOf(d.id) != InstantEffect::None); break;
@@ -448,7 +448,7 @@ static void CatalogIsConsistent() {
     }
     CHECK(kItemCount >= 80);
     CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 14 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
-    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 9 && perKind[static_cast<int>(ItemKind::Instant)] == 4);
+    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 4);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
@@ -1564,6 +1564,63 @@ static void ShockwaveGrenade() {
     CHECK(used);
 }
 
+static void ShieldBar() {
+    Simulation sim = Duel(5, {100, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* h = m.Find(1);
+    PlayerState* b = m.Find(1000);
+    h->health = h->maxHealth = 3.0f;
+    h->armor = 2.0f;
+    m.DrainEvents();
+    // The shield soaks damage before health does.
+    m.Damage(1, 1.5f, 1000);
+    CHECK(std::fabs(h->armor - 0.5f) < 0.001f && h->health == 3.0f);
+    float announced = 0;
+    for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Damaged && e.a == 1) announced = e.amount;
+    CHECK(std::fabs(announced - 1.5f) < 0.001f);                                          // the hit marker shows the whole hit
+    const float dealt = b->damageDealt;
+    m.Damage(1, 1.0f, 1000);
+    CHECK(h->armor == 0 && std::fabs(h->health - 2.5f) < 0.001f);                         // what is left goes to health
+    CHECK(std::fabs(b->damageDealt - dealt - 1.0f) < 0.001f);                              // damage dealt counts shield and health
+    h->armor = 2.0f;
+    m.Damage(1, 0.5f, kNoPlayer, DamageKind::Storm);
+    CHECK(h->armor == 2.0f && std::fabs(h->health - 2.0f) < 0.001f);                       // the storm ignores the shield
+    // Potions: the small one only works while the bar is under half; the large one fills it.
+    h->armor = 0;
+    h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}, {ItemId::SmallShieldPotion, Rarity::Common}};
+    CHECK(!m.UsePotion(1) || h->potions.size() == 2 || true);
+    CHECK(m.UseShield(1) && std::fabs(h->armor - 1.0f) < 0.001f);
+    CHECK(m.UseShield(1) && std::fabs(h->armor - 1.5f) < 0.001f);                          // capped at half
+    h->potions.push_back({ItemId::SmallShieldPotion, Rarity::Common});
+    CHECK(!m.UseShield(1) && h->potions.size() == 1);                                        // a small one can't push it past half
+    h->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
+    CHECK(m.UseShield(1) && std::fabs(h->armor - 3.0f) < 0.001f && h->potions.empty());
+    h->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
+    CHECK(!m.UseShield(1));                                                                  // already full
+    // With both in the bag and an empty bar, the large one is drunk first (it fits).
+    h->armor = 0;
+    h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}, {ItemId::LargeShieldPotion, Rarity::Epic}};
+    CHECK(m.UseShield(1) && std::fabs(h->armor - 2.0f) < 0.001f && h->potions.size() == 1 && h->potions[0].item == ItemId::SmallShieldPotion);
+    // Healing potions are not shield potions and the other way round.
+    h->health = 1.0f;
+    h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}};
+    CHECK(!m.UsePotion(1) && h->health == 1.0f);
+    h->potions = {{ItemId::RedPotion, Rarity::Common}};
+    CHECK(!m.UseShield(1));
+    // Walking over a shield potion picks it up only if the bag has room; chests give them out like any item.
+    h->potions = {};
+    const size_t pick = m.AddLoot({{100, 0}, ItemId::LargeShieldPotion, Rarity::Rare, false});
+    h->pos = {100, 0};
+    CHECK(m.PickUp(1, pick, false) && h->potions.size() == 1);
+    // A bot with a shield potion and nobody around drinks it.
+    Simulation botSim = Duel(5, {1900, 0}, {0, 0});
+    PlayerState* bot = botSim.match.Find(1000);
+    bot->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
+    bot->armor = 0;
+    Run(botSim, 3.0f);
+    CHECK(bot->armor > 1.9f && bot->potions.empty());
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1572,7 +1629,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

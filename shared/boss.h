@@ -6,7 +6,7 @@ namespace royale {
 
 // Mini bosses: big golems that guard the caves (and wild spots) of the map. They chase and smash players who come close, take damage
 // like anyone else, and drop several Epic and Legendary chests when they fall. The server runs them; clients just draw what they are told.
-enum class BossKind : uint8_t { Stone, Lava, Frost, Count };
+enum class BossKind : uint8_t { Stone, Lava, Frost, Dragon, Count }; // Dragon: the one major boss, a fire dragon that flies
 
 struct BossDef {
     const char* name;
@@ -22,6 +22,7 @@ constexpr BossDef kBossDefs[] = {
     {"Stone Moan Golem", 16.0f, 0.8f, 1.5f, 60.0f, 1.0f, 3},
     {"Lava Java Golem", 22.0f, 1.0f, 1.4f, 68.0f, 1.15f, 4},
     {"Frost Lost Golem", 28.0f, 1.2f, 1.3f, 75.0f, 1.3f, 5},
+    {"Scorch Torch Dragon", 80.0f, 1.0f, 3.0f, 150.0f, 2.4f, 9}, // damage is per attack; it flies at 150 and has its own attacks
 };
 constexpr int kBossKindCount = sizeof(kBossDefs) / sizeof(kBossDefs[0]);
 constexpr BossDef BossOf(BossKind k) { return kBossDefs[static_cast<int>(k) < kBossKindCount ? static_cast<int>(k) : 0]; }
@@ -35,5 +36,25 @@ constexpr float kBossBodyRadius = 70.0f;     // players hit it from this much fu
 constexpr int kPointsPerBossKill = 400;      // for landing the last hit
 
 constexpr bool IsBossId(uint32_t id) { return id >= kBossIdBase && id < kBossIdBase + kMaxBosses; }
+
+// The fire dragon. It spawns halfway through the match (if the host leaves that on), flies around the safe zone, and fights with:
+//   fire breath  a cone in front of it, burning anyone in it,
+//   fireballs    ground strikes that land at a marked spot a moment later (and meteors when it is hurt): step out of the circle,
+//   a swoop      a dive at someone, after which it lands and is vulnerable to everything for a few seconds.
+// While it is in the air only ranged weapons reach it.
+constexpr uint32_t kDragonId = kBossIdBase + kMaxBosses - 1;
+constexpr float kDragonAltitude = 380.0f;       // cruising height above the ground
+constexpr float kDragonAirborneAbove = 140.0f;  // above this only ranged weapons can hit it
+constexpr float kDragonAggroRange = 1300.0f;
+constexpr float kDragonBreathRange = 650.0f;
+constexpr float kDragonBreathHalfAngle = 0.5f;  // radians either side of where it faces
+constexpr float kDragonBreathSeconds = 1.8f;
+constexpr float kDragonBreathDps = 0.8f;        // hearts a second to anyone in the cone
+constexpr float kDragonStrikeRadius = 150.0f;
+constexpr float kDragonStrikeDelay = 1.3f;      // seconds between the warning circle and the blast
+constexpr float kDragonStrikeDamage = 1.3f;
+constexpr float kDragonLandedSeconds = 5.0f;
+constexpr float kDragonBodyRadius = 150.0f;
+enum class DragonMode : uint8_t { Patrol, Chase, Breath, Cast, Swoop, Landed, Climb };
 
 } // namespace royale

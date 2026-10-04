@@ -20,6 +20,7 @@ constexpr float kMaxHealth = 3.0f; // hearts
 constexpr int kMaxPotions = 3;
 constexpr float kLobbyAutoStartSec = 120.0f; // the lobby starts the match by itself after this long (the host can turn it off)
 constexpr float kLobbyStartGraceSec = 30.0f; // if the host's game hasn't started it by then, the server does
+constexpr float kMaxShield = 3.0f;   // the shield bar under the hearts, in hearts' worth of damage it soaks up (shown as 0 to 100)
 constexpr int kMinPlayers = 2;        // the host's player-count slider runs from kMinPlayers to kMaxPlayers
 constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
 constexpr int kMaxProps = 1200;
