@@ -264,14 +264,25 @@ a host's game must stay in the foreground (plus a wake lock) or players will tim
 Remaining network work: wire `GameClient` and `GameServer` into the mod (Milestone 3), join codes and STUN
 hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
 
-### 5.3 Client mod
-- `RoyaleMod` registers hooks: `OnGameFrameUpdate` (network tick), `OnPlayerHealthChange` (route damage through the
-  server), `OnVanillaBehavior` (block item and story flows), `ShouldActorUpdate` / `OnActorSpawn` (strip enemies
-  and NPCs), `OnSceneInit` (spawn puppets and loot actors).
-- Puppets: extend Anchor's `DummyPlayer` into a `RemotePlayer` actor with interpolation (100 ms buffer).
-- Loot pickups: a single custom actor type that mirrors server loot entries.
-- HUD: players alive counter, kill feed, storm timer and map ring, spectator mode after elimination.
-- Cheats and enhancements that break the game (the Cheats menu, Warping, speed modifiers) are disabled in match.
+### 5.3 Client mod (`mod/Royale/`, glue compiled against the fork, not yet run)
+- **`RoyaleSession`** (pure C++, unit-tested): owns the ENet transports, the host's `GameServer`, and the local `GameClient`.
+  Gives the game plain-data views: `Puppets()` (interpolated remote players) and `Hud()`.
+- **`RoyaleMod.cpp`** (game glue, copied into the fork):
+  - An "OOT Royale" window under Enhancements: name, port, Host, Join by address, Start (host only), roster, match state,
+    health and storm readouts, and a "show Link position" tool for measuring the real map size.
+  - `OnPlayerUpdate`: sends Link's position, rotation and a coarse animation state; on the match-start teleport it
+    drops Link onto the ground at the server's spawn point; while a match is live it overwrites health with the server's
+    (and restores the player's real hearts afterwards).
+  - Puppets: remote players are `Player` actors spawned through the new `ShouldActorInit` hook (patch 0001), re-labelled so
+    they don't count as the real player, drawn with Link's own model and the matching idle or run animation. Bots are put
+    on the real floor with a raycast. Names use the engine's name tag system.
+  - Enemies are not allowed to spawn during a match, and existing ones are removed at countdown.
+- **Not yet built:** weapon models on puppets, attack/hurt/death poses, drawing ground loot and sending pickup, attack and
+  potion requests, a real HUD (alive count, kill feed, storm ring on the minimap), spectating, a lobby scene (for now the
+  lobby is Hyrule Field itself), and disabling cheats and warps during a match.
+- Patches to the fork (`patches/`): 0001 `ShouldActorInit` hook, 0002 CMake hook, 0003 window and menu entry, and
+  `patches/libultraship/0001`, a one-character fix for a missing semicolon in the fork's libultraship that stops it
+  compiling on every non-Android platform.
 
 ### 5.4 Server
 - Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
@@ -356,10 +367,10 @@ Android is pulled forward as a feasibility spike because it could change the who
 | # | Goal | Done when |
 |---|---|---|
 | 0 | This document | Reviewed |
-| 1 | Android fork as submodule (done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
+| 1 | Android fork as submodule (done), patches (done), Windows and Android builds of the whole game (CI), stub logging mod (replaced by the real glue) | Boots with a user ROM |
 | 1b | **Android spike**: the unmodified fork APK running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
 | 2 | `server/` library (done: storm, loot, match, bot AI, network layer over loopback and real UDP) plus puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
-| 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
+| 3 | Host-a-game flow in the game: Host and Join in the window, puppets, server-owned health (written and compiled, **not yet run**) | Two players and bots in Hyrule Field, one winner |
 | 4 | Loot, weapons and pickups | Players can arm themselves and fight |
 | 5 | Lobby, HUD, minimap, spectator | Playable end to end with friends |
 | 6 | Join codes and relay, bots, balance | Cross-network play between Windows and Android |
