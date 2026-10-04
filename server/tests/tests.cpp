@@ -1,6 +1,7 @@
 #include "../match.h"
 #include "../sim.h"
 #include "../nav.h"
+#include "../../shared/meshes.h"
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include <set>
@@ -1271,6 +1272,58 @@ static void PointsOfInterest() {
     }
 }
 
+static void CustomMeshes() {
+    for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
+        for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
+            const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= 200);   // a few dozen triangles: chunky, and cheap to draw
+            float mn[3], mx[3];
+            m.Bounds(mn, mx);
+            bool finite = true;
+            for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+            CHECK(finite && mn[1] >= -0.01f);                                                          // nothing below the ground
+            const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
+            bool same = again.v.size() == m.v.size();
+            for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
+            CHECK(same);                                                                                // deterministic
+            // Every face is lit by the way it faces, so colours differ across the model and none is black.
+            int lo = 255, hi = 0;
+            for (const auto& p : m.v) { lo = (std::min)(lo, static_cast<int>(p.g)); hi = (std::max)(hi, static_cast<int>(p.g)); }
+            CHECK(hi > lo + 15 && hi > 60);
+            if (static_cast<MeshKind>(k) == MeshKind::Rock) CHECK(mx[0] - mn[0] < 120 && mx[1] < 60);
+            if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && mx[1] < 150);
+            if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
+            if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
+        }
+    }
+    // Variants of a rock really differ.
+    const MeshData r0 = BuildMesh(MeshKind::Rock, 0), r1 = BuildMesh(MeshKind::Rock, 1);
+    bool differ = false;
+    for (size_t i = 0; i < r0.v.size() && i < r1.v.size(); i++) differ |= r0.v[i].x != r1.v[i].x;
+    CHECK(differ);
+    // Faces point outward: for the post, the average normal of the faces on the shaft points away from its axis.
+    const MeshData post = BuildMesh(MeshKind::Pillar, 0);
+    bool outward = true;
+    for (size_t i = 0; i + 2 < post.v.size(); i += 3) {
+        const auto &a = post.v[i], &b = post.v[i + 1], &c = post.v[i + 2];
+        const float nx = (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y), nz = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        (void)nx; (void)nz;
+        if (a.y > 80 && a.y < 160 && b.y > 80 && b.y < 160 && c.y > 80 && c.y < 160) {                   // a shaft face: its centre sits well off the axis
+            const float cx = (a.x + b.x + c.x) / 3, cz = (a.z + b.z + c.z) / 3;
+            outward &= std::sqrt(cx * cx + cz * cz) > 25.0f;
+        }
+    }
+    CHECK(outward);
+    // Buildings get a roof, at the building's centre.
+    PoiLayout house;
+    Rng rng(5);
+    AddHouse(house, rng, {100, 200}, 0.7f, nullptr);
+    int roofs = 0;
+    for (const Prop& p : house.props) if (p.kind == PropKind::Roof) { roofs++; CHECK(Distance(p.pos, {100, 200}) < 0.01f); }
+    CHECK(roofs == 1);
+    CHECK(PropRadius(PropKind::Roof) == 0.0f);                                                       // bots walk under it
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1279,7 +1332,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

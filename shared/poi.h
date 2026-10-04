@@ -47,6 +47,8 @@ inline void AddHouse(PoiLayout& out, Rng& rng, Vec2 at, float angle, const Place
         if (std::fabs(t) >= 100.0f) piece(t, d * 0.5f); // front wall, with a door gap in the middle
     }
     for (float t = -d * 0.5f + step; t < d * 0.5f - 1.0f; t += step) { piece(-w * 0.5f, t); piece(w * 0.5f, t); }
+    // The roof stands on the posts. Its rotation is the building's, as the game's Y rotation turns the opposite way to ours.
+    if (!valid || valid(at)) out.props.push_back({at, PropKind::Roof, poi_detail::BinAngle(-angle)});
     const Vec2 spots[] = {{-110, -70}, {110, -70}, {0, 20}, {-100, 70}};
     for (const Vec2& s : spots) out.lootSpots.push_back(poi_detail::Rotated(s, angle, at));
 }

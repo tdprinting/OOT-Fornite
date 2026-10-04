@@ -182,6 +182,12 @@ Not included (they have no sensible meaning in a battle royale): quest items, tr
 - **Scenery.** `shared/props.h` generates rocks, boulders, bushes and standing stones from the match seed; the host sends the list so every client agrees. Solid ones block the bots' navigation grid.
 - **Scoring.** `ScorePoints` in `shared/balance.h`. The server sends `EvResults` when the match ends; the host's `RematchRequest` rebuilds the world with a new seed and starts the countdown at once (`GameServer::PlayAgain`).
 
+### 4.2.3 Points of interest and custom models
+
+- `shared/poi.h` lays out the map from the match seed: a landmark in the middle, five towns on an inner ring (about half the radius), six on an outer ring (about 0.8). Each town is a walled building (a ring of stone posts with a door gap), a cave (a horseshoe of boulders) and ruins. Every piece is a prop, so it goes to clients in the same message and the bots' navigation grid blocks the walls but leaves the door open. A chest spot is defined for each room; those chests are always on the better tiers, and only about 150 chests are scattered elsewhere.
+- Names are an index into `kPoiNames` (sixteen rhyming names, shuffled per match, the centre always "Hylian Billion Pavilion").
+- `shared/meshes.h` builds our own models in code (rocks, boulders, an eight-sided stone post, a gabled cottage roof) as flat-shaded triangles with baked light. The game layer converts them to vertices and display lists and draws them from the props' stand-in actors, with the game's own rock kept as the invisible solid part. This avoids shipping binary model files and keeps the geometry unit-testable. A real new Hyrule Field scene (terrain mesh, collision, textures) would need a different pipeline (authoring tools and the game's resource format) and is not part of this build.
+
 ### 4.3 Loot and rarity tiers
 
 Every weapon, shield and consumable has a rarity tier, as in Fortnite. Tier sets damage or effect strength, spawn

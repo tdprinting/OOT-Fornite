@@ -54,6 +54,7 @@
       <label><input type="checkbox" id="lStorm" checked> Storm circles</label>
       <label><input type="checkbox" id="lChests" checked> Chests</label>
       <label><input type="checkbox" id="lProps" checked> Scenery</label>
+      <label><input type="checkbox" id="lPois" checked> Town names</label>
       <label><input type="checkbox" id="lPlayers" checked> Players</label>
       <label><input type="checkbox" id="lTaken"> Show opened chests</label>
       <label>Only chests with this item<input type="text" id="find" placeholder="e.g. Master Sword"></label>
@@ -191,7 +192,8 @@ const PROPS = {
   rock:    {color:"#8c8a82", r:28, note:"Small rock. Solid cover to duck behind."},
   boulder: {color:"#6d6b66", r:75, note:"Large boulder. Blocks movement and bots path around it."},
   bush:    {color:"#3f9a4a", r:0,  note:"Bush. Walk-through scenery; breaks if hit."},
-  pillar:  {color:"#a99f8a", r:40, note:"Tall standing stone."}
+  pillar:  {color:"#a99f8a", r:40, note:"Round stone post. Rows of them are the walls of the buildings."},
+  roof:    {color:"#b24c36", r:0,  note:"Cottage roof over a building. You can walk under it; the door is in the front wall."}
 };
 const $ = id => document.getElementById(id);
 let data = null;
@@ -227,7 +229,7 @@ function summary(d){
   const byR = RARITY.map((r,i)=>`<div><span class="swatch" style="background:${r.color}"></span>${r.name}: ${chests.filter(l=>l.rarity===i && !l.taken).length}</div>`).join("");
   const pc = {}; (d.props||[]).forEach(p => pc[p.kind]=(pc[p.kind]||0)+1);
   return `<b>Field radius</b> ${Math.round(d.map.radius)} units<br><b>Chests</b> ${chests.length} (${open} opened)<br>${byR}`
-       + `<b>Scenery</b> ${(d.props||[]).length} (${Object.entries(pc).map(([k,v])=>k+" "+v).join(", ")})<br><b>Players</b> ${(d.players||[]).length}`;
+       + `<b>Towns</b> ${(d.pois||[]).length}<br><b>Scenery</b> ${(d.props||[]).length} (${Object.entries(pc).map(([k,v])=>k+" "+v).join(", ")})<br><b>Players</b> ${(d.players||[]).length}`;
 }
 
 // A made-up map so the viewer is useful before the game has exported anything.
@@ -242,8 +244,13 @@ function sampleMap(){
   const props = Array.from({length:420}, () => { const p = pt(0.97); return {x:p.x, z:p.z, kind:kinds[Math.floor(rnd()*kinds.length)]}; });
   const storm = []; let c = {x:0,z:0}, r = R;
   for (const f of [0.62,0.42,0.26,0.15,0.08,0.03]) { r = R*f; const a = rnd()*6.283, d = (storm.length? storm[storm.length-1].radius : R)*0.4*rnd(); c = {x:(storm.length?storm[storm.length-1].x:0)+Math.cos(a)*d, z:(storm.length?storm[storm.length-1].z:0)+Math.sin(a)*d}; storm.push({x:c.x,z:c.z,radius:r}); }
+  const names = ["Hylian Billion Pavilion","Deku Dew Zoo","Goron Groove Lagoon","Zora Snore Shore","Gerudo Voodoo Rendezvous","Kokiri Breezy Wheezy","Skulltula Hullabaloo","Bombchu Kaboom Room","Poe Show Shack","Octorok Rock Dock","Cucco Mucky Plucky","Navi Gravy Bay"];
+  const pois = names.map((n,i) => { const ring = i===0 ? 0 : (i<=5 ? 0.5 : 0.8), a = (i<=5 ? i : i-6)*(i<=5?1.2566:1.0472) + (i>5?0.5:0);
+    return {name:n, x:Math.cos(a)*R*ring, z:Math.sin(a)*R*ring, radius:480}; });
+  for (const q of pois) { props.push({x:q.x, z:q.z, kind:"roof"}); for (let k=0;k<16;k++) { const t=k/16*6.283; props.push({x:q.x+Math.cos(t)*190, z:q.z+Math.sin(t)*150, kind:"pillar"}); }
+    for (let k=0;k<3;k++) loot.push({x:q.x+(rnd()-.5)*240, z:q.z+(rnd()-.5)*200, item:items[Math.floor(rnd()*items.length)].name, rarity:2+Math.floor(rnd()*3), chest:true, taken:false}); }
   const players = Array.from({length:32}, (_,i) => ({...pt(0.9), bot:i>0}));
-  return {map:{x:0,z:0,radius:R}, storm, loot, props, players, you:{x:players[0].x, z:players[0].z}};
+  return {map:{x:0,z:0,radius:R}, storm, loot, props, pois, players, you:{x:players[0].x, z:players[0].z}};
 }
 
 // ---- drawing
@@ -263,6 +270,12 @@ function draw(){
     const def = PROPS[p.kind]||PROPS.rock, [x,z] = toScreen(p.x,p.z), r = Math.max(2.5, (def.r||14)*view.scale);
     ctx.beginPath(); ctx.arc(x,z,r,0,6.283); ctx.fillStyle = def.color; ctx.globalAlpha = p.kind==="bush"?0.6:0.95; ctx.fill(); ctx.globalAlpha=1;
   }
+  if (layer("lPois")) for (const q of data.pois||[]) {
+    const [x,z] = toScreen(q.x,q.z);
+    ctx.beginPath(); ctx.arc(x,z,q.radius*view.scale,0,6.283); ctx.strokeStyle="rgba(255,210,90,.55)"; ctx.lineWidth=2; ctx.setLineDash([4,6]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font="bold "+Math.max(11, Math.min(18, 330*view.scale))+"px Georgia"; ctx.textAlign="center"; ctx.lineWidth=4; ctx.strokeStyle="#0a1210"; ctx.strokeText(q.name,x,z);
+    ctx.fillStyle="#ffde6e"; ctx.fillText(q.name,x,z);
+  }
   if (layer("lStorm")) (data.storm||[]).forEach((c,i) => {
     const [x,z] = toScreen(c.x,c.z); ctx.beginPath(); ctx.arc(x,z,c.radius*view.scale,0,6.283);
     ctx.strokeStyle="rgba(190,140,255,"+(0.9-i*0.1)+")"; ctx.lineWidth=2.5; ctx.setLineDash([10,7]); ctx.stroke(); ctx.setLineDash([]);
@@ -278,7 +291,7 @@ function draw(){
   }
   if (data.you) { const [x,z] = toScreen(data.you.x,data.you.z); ctx.beginPath(); ctx.moveTo(x,z-11); ctx.lineTo(x+8,z+8); ctx.lineTo(x-8,z+8); ctx.closePath(); ctx.fillStyle="#78ff8c"; ctx.fill(); ctx.strokeStyle="#000"; ctx.stroke(); }
 }
-for (const id of ["lStorm","lChests","lProps","lPlayers","lTaken","find","rarSel"]) $(id).addEventListener("input", draw);
+for (const id of ["lStorm","lChests","lProps","lPois","lPlayers","lTaken","find","rarSel"]) $(id).addEventListener("input", draw);
 
 // pan, zoom, hover
 let drag = null;

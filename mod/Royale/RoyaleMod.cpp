@@ -8,6 +8,7 @@
 #include "RoyaleSession.h"
 #include "anim.h"
 #include "map.h"
+#include "meshes.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -530,16 +531,89 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
 
 // ---- scenery -----------------------------------------------------------------------------------------------------------------
 
+// ---- our own models, drawn instead of the game's rocks -----------------------------------------------------------------------
+
+// A mesh from shared/meshes.h turned into the game's vertex and display-list format. The vectors never grow after building, so the
+// pointers inside the display list stay valid.
+struct GpuMesh {
+    std::vector<Vtx> vtx;
+    std::vector<Gfx> dl;
+};
+GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariants];
+bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariants] = {};
+
+const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
+    const int k = static_cast<int>(kind);
+    variant %= royale::kMeshVariants;
+    GpuMesh& m = gGpuMeshes[k][variant];
+    if (gGpuBuilt[k][variant]) return &m;
+    const royale::MeshData data = royale::BuildMesh(kind, variant);
+    if (data.v.empty()) return nullptr;
+    m.vtx.resize(data.v.size());
+    for (size_t i = 0; i < data.v.size(); i++) {
+        Vtx& v = m.vtx[i];
+        v.v.ob[0] = static_cast<s16>(std::lround(data.v[i].x));
+        v.v.ob[1] = static_cast<s16>(std::lround(data.v[i].y));
+        v.v.ob[2] = static_cast<s16>(std::lround(data.v[i].z));
+        v.v.flag = 0;
+        v.v.tc[0] = v.v.tc[1] = 0;
+        v.v.cn[0] = data.v[i].r;
+        v.v.cn[1] = data.v[i].g;
+        v.v.cn[2] = data.v[i].b;
+        v.v.cn[3] = 255;
+    }
+    // The graphics chip takes up to 32 vertices at a time; each triangle has its own three, so ten triangles per batch.
+    const size_t batches = (data.v.size() / 3 + 9) / 10;
+    m.dl.assign(data.v.size() / 3 + batches + 1, Gfx{});
+    Gfx* g = m.dl.data();
+    for (size_t first = 0; first < data.v.size(); first += 30) {
+        const size_t count = std::min<size_t>(30, data.v.size() - first);
+        gSPVertex(g++, &m.vtx[first], static_cast<int>(count), 0);
+        for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+    }
+    gSPEndDisplayList(g++);
+    m.dl.resize(static_cast<size_t>(g - m.dl.data())); // exactly what was written (the size only shrinks, so nothing moves)
+    gGpuBuilt[k][variant] = true;
+    return &m;
+}
+
 struct PropActor {
     Actor* actor = nullptr;
     ActorFunc origDestroy = nullptr;
+    int meshKind = -1;     // royale::MeshKind drawn in place of the game's model, or -1 to leave the game's own
+    uint32_t variant = 0;
 };
 std::unordered_map<size_t, PropActor> gProps;        // prop index -> its actor
 std::unordered_map<const Actor*, size_t> gPropOf;
 std::unordered_set<size_t> gBrokenProps;              // rocks and bushes players smashed; they stay gone
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
-constexpr size_t kMaxPropActors = 80;
+constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
+
+void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
+
+void Prop_DrawCustom(Actor* actor, PlayState* play) {
+    auto idx = gPropOf.find(actor);
+    if (idx == gPropOf.end()) return;
+    auto pa = gProps.find(idx->second);
+    if (pa == gProps.end() || pa->second.meshKind < 0) return;
+    const GpuMesh* mesh = GpuMeshFor(static_cast<royale::MeshKind>(pa->second.meshKind), pa->second.variant);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK); // colours are baked into the vertices; draw both sides of every face
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, mesh->dl.data());
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+bool CustomSceneryOn() {
+    return CVarGetInteger(CVAR_SETTING("Royale.CustomScenery"), 1) != 0;
+}
+bool gSceneryWasCustom = true; // the setting the current props were spawned with
 
 void Prop_Destroy(Actor* actor, PlayState* play) {
     ActorFunc orig = nullptr;
@@ -562,17 +636,37 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
         case royale::PropKind::Boulder: id = ACTOR_EN_ISHI; params = 0x3CC1; break; // large rock; switch flag 0x3F so it is never "already smashed"
         case royale::PropKind::Pillar: id = ACTOR_EN_ISHI; params = 0x3CC1; break;
         case royale::PropKind::Bush: id = ACTOR_EN_KUSA; params = 0; break;
+        case royale::PropKind::Roof: id = ACTOR_EN_ISHI; params = 0; break; // a stand-in actor to hang our roof model on
         default: return;
     }
+    int meshKind = -1;
+    if (CustomSceneryOn()) {
+        switch (p.kind) {
+            case royale::PropKind::Rock: meshKind = static_cast<int>(royale::MeshKind::Rock); break;
+            case royale::PropKind::Boulder: meshKind = static_cast<int>(royale::MeshKind::Boulder); break;
+            case royale::PropKind::Pillar: meshKind = static_cast<int>(royale::MeshKind::Pillar); break;
+            case royale::PropKind::Roof: meshKind = static_cast<int>(royale::MeshKind::Roof); break;
+            default: break;
+        }
+    }
+    if (p.kind == royale::PropKind::Roof && meshKind < 0) return; // a roof only exists as our own model
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, id, p.pos.x, groundY, p.pos.z, 0, static_cast<s16>(p.rot), 0, params, false);
     if (actor == nullptr) return; // the scene didn't have the object loaded for this one; skip it
-    if (p.kind == royale::PropKind::Pillar) actor->scale.y *= 2.2f; // tall standing stones
+    if (p.kind == royale::PropKind::Pillar && meshKind < 0) actor->scale.y *= 2.2f; // tall standing stones (the game's own rock, stretched)
     PropActor pa;
     pa.actor = actor;
     pa.origDestroy = actor->destroy;
+    pa.meshKind = meshKind;
+    pa.variant = p.rot >> 4;
     gProps[index] = pa;
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
+    if (meshKind >= 0) actor->draw = Prop_DrawCustom; // the game's rock stays as the solid part, unseen; our model is what you see
+    if (p.kind == royale::PropKind::Roof) {
+        actor->update = Prop_NoUpdate;                // floating stand-in: no collision, no breaking
+        actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
+        actor->uncullZoneForward = 3000.0f; actor->uncullZoneScale = 1200.0f; actor->uncullZoneDownward = 1200.0f;
+    }
 }
 
 void ClearProps() {
@@ -586,13 +680,18 @@ void ReconcileProps(const royale::HudState& hud) {
     const auto& props = gSession.Client()->Props();
     Player* player = GET_PLAYER(gPlayState);
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    if (CustomSceneryOn() != gSceneryWasCustom) { // the player flipped the setting: respawn everything the other way
+        gSceneryWasCustom = CustomSceneryOn();
+        ClearProps();
+        return;
+    }
     for (auto& [i, pa] : gProps) {
         const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
         if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
     }
     if (gProps.size() >= kMaxPropActors) return;
     int spawned = 0;
-    for (size_t i = 0; i < props.size() && spawned < 3 && gProps.size() < kMaxPropActors; i++) {
+    for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
         if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
         const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
         if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
@@ -757,6 +856,30 @@ void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h
     }
 }
 
+// Town names hanging over each point of interest, big enough to read from the sky while you skydive.
+void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!gSession.Client() || !InField()) return;
+    (void)h;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float reach = gSkydiving ? 14000.0f : 5000.0f;
+    for (const royale::Poi& p : gSession.Client()->Pois()) {
+        const float dx = p.center.x - pl->actor.world.pos.x, dz = p.center.z - pl->actor.world.pos.z;
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d > reach) continue;
+        float y = pl->actor.world.pos.y;
+        FloorAt(p.center.x, p.center.z, &y);
+        ImVec2 at;
+        if (!WorldToScreen(p.center.x, y + 650.0f, p.center.z, &at)) continue;
+        const int alpha = static_cast<int>(255.0f * std::min(1.0f, (reach - d) / (reach * 0.4f)));
+        const float size = std::clamp(34.0f * scale * (2400.0f / (d + 1200.0f)), 15.0f * scale, 38.0f * scale);
+        const char* name = royale::kPoiNames[p.name];
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name);
+        const ImVec2 pos(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
+        dl->AddText(font, size, ImVec2(pos.x + 2.0f, pos.y + 2.0f), IM_COL32(10, 14, 8, alpha), name);
+        dl->AddText(font, size, pos, IM_COL32(255, 222, 110, alpha), name);
+    }
+}
+
 // Bottom-left map of the whole field: the storm in purple, the safe zone, chests by rarity, other players and you.
 void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.map.radius <= 0 || !InField()) return;
@@ -782,6 +905,15 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
             const ImVec2 p = toMap(l.x, l.z);
             if (!inside(p)) continue;
             dl->AddRectFilled(ImVec2(p.x - 2.0f * scale, p.y - 2.0f * scale), ImVec2(p.x + 2.0f * scale, p.y + 2.0f * scale), RarityU32(static_cast<royale::Rarity>(l.rarity)));
+        }
+    }
+    if (gSession.Client()) {
+        for (const royale::Poi& poi : gSession.Client()->Pois()) {
+            const ImVec2 p = toMap(poi.center.x, poi.center.z);
+            if (!inside(p)) continue;
+            const float u = 4.0f * scale;
+            dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(255, 222, 110, 255));
+            dl->AddText(ImGui::GetFont(), 10.5f * scale, ImVec2(p.x + u + 2.0f, p.y - 6.0f * scale), IM_COL32(255, 240, 190, 235), royale::kPoiNames[poi.name]);
         }
     }
     for (const auto& st : gSession.Puppets()) {
@@ -1027,6 +1159,7 @@ void DrawOverlay() {
         centered(ds.y * 0.58f, col, 30 * scale, gBannerText);
     }
     DrawStorm(dl, ds, scale, h);
+    DrawPoiLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
 
@@ -1152,6 +1285,20 @@ void Say(const std::string& text) {
 
 // B attacks with the weapon the server says you hold; D-pad Down drinks a potion. Damage, range, cooldown and healing are
 // decided by the server, so this only chooses a target: the nearest living player in front of Link and within weapon range.
+int gCurrentPoi = -1;        // which point of interest the player is standing in, -1 for none
+
+// "Entering ..." when you walk into a town.
+void NoticePoi(Player* player, const royale::HudState& hud) {
+    if (!gSession.Client() || !InField() || !(hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch) || gSkydiving) { gCurrentPoi = -1; return; }
+    int now = -1;
+    for (const royale::Poi& p : gSession.Client()->Pois()) {
+        const float dx = p.center.x - player->actor.world.pos.x, dz = p.center.z - player->actor.world.pos.z;
+        if (dx * dx + dz * dz < p.radius * p.radius) { now = p.name; break; }
+    }
+    if (now != gCurrentPoi && now >= 0) Say(std::string("Entering ") + royale::kPoiNames[now]);
+    gCurrentPoi = now;
+}
+
 int gNextWeaponSlot = 1;     // which backup slot D-pad Left swaps in next
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
@@ -1300,6 +1447,7 @@ void OnPlayerUpdate() {
     }
 
     UpdateSkydive(player, hud);
+    NoticePoi(player, hud);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     ApplySpeedBuffs(player, hud);
@@ -1597,6 +1745,14 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     ImGui::Text("Your name");
     ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
     ImGui::Checkbox("Wait in the Temple of Time while the lobby fills", &ui.waitingRoom);
+    {
+        bool custom = CustomSceneryOn();
+        if (ImGui::Checkbox("Custom rocks and buildings (experimental)", &custom)) {
+            CVarSetInteger(CVAR_SETTING("Royale.CustomScenery"), custom ? 1 : 0);
+            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+        }
+        ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
+    }
     ImGui::Spacing();
 
     ImGui::BeginDisabled(!InGame());
@@ -1785,6 +1941,13 @@ std::string ExportMapJson() {
             json += buf;
         }
     }
+    json += "],\n  \"pois\": [";
+    bool firstPoi = true;
+    for (const auto& poi : c.Pois()) {
+        std::snprintf(buf, sizeof(buf), "%s{\"name\": \"%s\", \"x\": %.1f, \"z\": %.1f, \"radius\": %.1f}", firstPoi ? "" : ", ", royale::kPoiNames[poi.name], poi.center.x, poi.center.z, poi.radius);
+        json += buf;
+        firstPoi = false;
+    }
     json += "],\n  \"loot\": [";
     bool first = true;
     for (const auto& l : c.Loot()) {
@@ -1795,7 +1958,7 @@ std::string ExportMapJson() {
     }
     json += "\n  ],\n  \"props\": [";
     first = true;
-    static const char* kKinds[] = { "rock", "boulder", "bush", "pillar" };
+    static const char* kKinds[] = { "rock", "boulder", "bush", "pillar", "roof" };
     for (const auto& p : c.Props()) {
         std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"kind\": \"%s\"}", first ? "" : ", ", p.pos.x, p.pos.z, kKinds[static_cast<int>(p.kind)]);
         json += buf;

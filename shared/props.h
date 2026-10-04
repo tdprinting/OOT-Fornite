@@ -7,7 +7,7 @@ namespace royale {
 // Scenery scattered over the map to make it denser to fight in: rocks and boulders to hide behind, bushes, stumps. Generated from
 // the match seed so the host, every client and the bots' navigation grid agree on exactly where each one is. The game decides
 // how to draw each kind; the server only needs the footprint (to keep bots from walking through them).
-enum class PropKind : uint8_t { Rock, Boulder, Bush, Pillar, Count };
+enum class PropKind : uint8_t { Rock, Boulder, Bush, Pillar, Roof, Count }; // Roof: a cottage roof (no collision), part of a building
 
 struct Prop {
     Vec2 pos;

@@ -63,7 +63,9 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 - Gear works on its own once you pick it up. Heart Pieces and Heart Containers raise your maximum hearts.
 - **Other players** wear a nameplate with their name, hearts left and weapon, colour coded by rarity, so you can size them up. The map (bottom left) shows the field, the safe zone, chests, other players and you.
 - **The storm** is a wall of purple rain standing on the edge of the safe zone. Outside it the screen goes dark and rainy with lightning, and it hurts. The map shows it in purple. An arrow top right points to the safe zone.
-- The field has rocks, boulders, bushes and standing stones to hide behind. The same ones appear for everyone, and bots path around the solid ones.
+- **Towns.** The field has up to twelve named points of interest with silly rhyming names (Deku Dew Zoo, Goron Groove Lagoon, Zora Snore Shore, Navi Gravy Bay and more), laid out like a battle royale map: a big landmark in the middle (Hylian Billion Pavilion), a ring of towns around it and a wider ring near the edge. Each has a walled stone building with a roof and a door, a small cave (a horseshoe of boulders) and some ruins, and most of the chests are inside them. A few are scattered between towns. Town names float over each place (big enough to read while you skydive), show on the map, and a message tells you when you walk in.
+- The open ground between towns has rocks, boulders and bushes to hide behind. The same ones appear for everyone, and bots path around the solid ones and through the doors.
+- **Custom models.** The stone posts, boulders, rocks and cottage roofs are drawn from low-poly models made for this mod, in the flat chunky Ocarina of Time style, instead of the game's own rock models. There is a checkbox in the Battle Royale menu ("Custom rocks and buildings"). If the game ever crashes or the scenery looks wrong when a match starts, turn it off and tell me.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
 
 ## Points and playing again
