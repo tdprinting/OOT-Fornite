@@ -2836,9 +2836,9 @@ double gBannerUntil = 0;
 void NotePickup(const std::string& label, royale::Rarity rarity, bool fromChest) {
     gPickupLog.push_front({ (fromChest ? "Chest: " : "") + label, rarity });
     while (gPickupLog.size() > 10) gPickupLog.pop_back();
-    gBannerText = (fromChest ? "CHEST OPENED  " : "GOT  ") + label;
+    gBannerText = label;
     gBannerRarity = rarity;
-    gBannerUntil = ImGui::GetTime() + 3.5;
+    gBannerUntil = ImGui::GetTime() + 2.5;
 }
 
 std::string ShortName(royale::ItemId id) {
@@ -3511,33 +3511,33 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
-    slots.push_back({ ShortName(h.weapon), h.weapon == royale::ItemId::BasicSword ? std::string("Starter") : std::string(RarityName(h.weaponRarity)), RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
+    slots.push_back({ ShortName(h.weapon), "", RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
     for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
         if (i < static_cast<int>(h.inv.reserve.size())) {
             const auto& r = h.inv.reserve[i];
             const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            slots.push_back({ ShortName(id), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
+            slots.push_back({ "", "", RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
         } else {
             slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
         }
     }
-    if (h.hasShield) slots.push_back({ ShortName(h.shield), RarityName(h.shieldRarity), RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
-    else slots.push_back({ "", "Shield", grey, false, false, 0.0f, 0, none });
+    if (h.hasShield) slots.push_back({ "", "", RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
+    else slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
     if (!h.inv.potions.empty()) {
         const auto& p = h.inv.potions.front();
         const royale::ItemId id = static_cast<royale::ItemId>(p.item);
-        slots.push_back({ ShortName(id), "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
+        slots.push_back({ "", "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
     } else {
-        slots.push_back({ "", "Potions", grey, false, false, 0.0f, 10, none });
+        slots.push_back({ "", "", grey, false, false, 0.0f, 10, none });
     }
     if (h.inv.hasAbility) {
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
         const float cd = royale::AbilityOf(id).cooldown;
         const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
-        slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
+        slots.push_back({ "", h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
                           cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id });
     } else {
-        slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11, none });
+        slots.push_back({ "", "", grey, false, false, 0.0f, 11, none });
     }
 
     const float w = 84.0f * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
@@ -3553,7 +3553,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
-        {   // which button uses the slot
+        if (sl.filled) {   // which button uses the slot
             const int nres = royale::kMaxReserveWeapons;
             const char* hint = i == 0 ? "B" : static_cast<int>(i) <= nres ? "D-pad L/R" : static_cast<int>(i) == nres + 1 ? "C-Left" : static_cast<int>(i) == nres + 2 ? "D-pad Dn" : "D-pad Up";
             const float hs = 12.5f * scale;
@@ -3950,7 +3950,7 @@ std::vector<Banner> gBanners;
 void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
     const double now = ImGui::GetTime();
     gBanners.push_back({ text, colour, now + seconds, now });
-    if (gBanners.size() > 3) gBanners.erase(gBanners.begin());
+    if (gBanners.size() > 2) gBanners.erase(gBanners.begin());
 }
 
 // Small "+5 Rupees" lines that float up on the right when something drops out of a rock or bush.
@@ -3959,15 +3959,15 @@ struct FeedLine { std::string text; ImU32 colour; double at; };
 std::vector<FeedLine> gFeed;
 void AddFeed(const std::string& text, ImU32 colour) {
     gFeed.push_back({ text, colour, ImGui::GetTime() });
-    if (gFeed.size() > 6) gFeed.erase(gFeed.begin());
+    if (gFeed.size() > 4) gFeed.erase(gFeed.begin());
 }
 void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
     float y = 14.0f * scale;
     for (const FeedLine& f : gFeed) {
         const double age = now - f.at;
-        if (age > 7.0) continue;
-        const float a = static_cast<float>(std::min(1.0, (7.0 - age) / 1.0));
+        if (age > 5.0) continue;
+        const float a = static_cast<float>(std::min(1.0, (5.0 - age) / 1.0));
         const float size = 17.0f * scale;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, f.text.c_str());
         const ImVec2 pos(ds.x - sz.x - 18.0f * scale, y);
@@ -3975,7 +3975,7 @@ void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddText(font, size, pos, (f.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), f.text.c_str());
         y += sz.y + 7.0f * scale;
     }
-    gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 7.0; }), gFeed.end());
+    gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 5.0; }), gFeed.end());
 }
 
 struct Gain { std::string text; ImU32 colour; double at; };
@@ -4254,10 +4254,7 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop) {
-        centered(ds.y * 0.2f, green, 30 * scale, gSkydiving ? "SKYDIVE - stick steers, hold Z to dive faster" : "DROP - you are protected for a moment");
-    }
-    if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
+    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive");
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
@@ -4270,31 +4267,34 @@ void DrawOverlay() {
     if (!live || !h.haveSelf) return;
 
     // What is at your feet: chests say how rare they are (not what is inside); items on the ground say what they are.
+    // One line: a green A button, then what pressing it does.
+    auto prompt = [&](ImU32 col, const std::string& t) {
+        const float size = 24 * scale, btn = 13 * scale, gap = 8 * scale, y = ds.y * 0.66f;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
+        const float x = (ds.x - sz.x - btn * 2 - gap) * 0.5f;
+        const ImVec2 c(x + btn, y + sz.y * 0.5f);
+        dl->AddCircleFilled(ImVec2(c.x + 1.5f, c.y + 1.5f), btn, IM_COL32(0, 0, 0, 200), 20);
+        dl->AddCircleFilled(c, btn, IM_COL32(70, 200, 90, 255), 20);
+        const ImVec2 asz = font->CalcTextSizeA(btn * 1.4f, FLT_MAX, 0.0f, "A");
+        dl->AddText(font, btn * 1.4f, ImVec2(c.x - asz.x * 0.5f, c.y - asz.y * 0.5f), white, "A");
+        text(x + btn * 2 + gap, y, col, size, t);
+    };
     if (InField() && h.selfAlive && gSession.Client()) {
         const size_t near = NearestLootIndex();
         const auto& loot = gSession.Client()->Loot();
         if (near != kNoLoot && near < loot.size()) {
             const royale::Rarity r = static_cast<royale::Rarity>(loot[near].rarity);
-            if (loot[near].chest) {
-                centered(ds.y * 0.66f, loot[near].special ? IM_COL32(255, 130, 190, 255) : RarityU32(r), 26 * scale, loot[near].special ? std::string("Heart Container Chest") : std::string(RarityName(r)) + " Chest");
-                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: open");
-            } else {
-                centered(ds.y * 0.66f, RarityU32(r), 26 * scale, ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
-                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: take or swap");
-            }
+            if (loot[near].chest) prompt(loot[near].special ? IM_COL32(255, 130, 190, 255) : RarityU32(r), loot[near].special ? std::string("Heart Container Chest") : std::string(RarityName(r)) + " Chest");
+            else prompt(RarityU32(r), ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
         }
         else if (const int ally = NearbyFreeAlly(); ally >= 0) {
             const royale::AllyDef& def = royale::kAllyDefs[ally];
             const bool afford = h.rupees >= def.price;
-            centered(ds.y * 0.66f, IM_COL32(255, 222, 110, 255), 26 * scale, std::string(def.name) + " " + def.title);
-            centered(ds.y * 0.66f + 31 * scale, afford ? white : IM_COL32(255, 130, 120, 255), 20 * scale,
-                     afford ? "A: hire for " + std::to_string(def.price) + " rupees" : "Needs " + std::to_string(def.price) + " rupees (you have " + std::to_string(h.rupees) + ")");
+            prompt(afford ? IM_COL32(255, 222, 110, 255) : IM_COL32(255, 130, 120, 255), "Hire " + std::string(def.name) + " (" + std::to_string(def.price) + " rupees)");
         } else if (MayaNear()) {
-            centered(ds.y * 0.66f, IM_COL32(255, 170, 215, 255), 26 * scale, "Maya");
-            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk");
+            prompt(IM_COL32(255, 170, 215, 255), "Talk to Maya");
         } else if (LiloNear()) {
-            centered(ds.y * 0.66f, IM_COL32(235, 235, 230, 255), 26 * scale, "Lilo");
-            centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: talk to the cat");
+            prompt(IM_COL32(235, 235, 230, 255), "Pet Lilo");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -4346,7 +4346,7 @@ void DrawOverlay() {
     }
 
     // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
-    // under the safe-zone compass: how many are left, the zone, the weather and anything that is affecting you.
+    // under the safe-zone compass: how many are left, the zone timer and anything that is affecting you.
     {
         const float rx = ds.x - 16 * scale, line = 24 * scale;
         float y = 150 * scale;
@@ -4355,30 +4355,19 @@ void DrawOverlay() {
             text(rx - sz.x, y, col, size, t);
             y += size + 4 * scale;
         };
-        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
-        if (h.stormPhase >= royale::kStormPhaseCount) {
-            textR(red, 20 * scale, "FINAL ZONE");
-        } else {
-            textR(h.stormShrinking ? red : white, 20 * scale, "Zone " + std::to_string(h.stormPhase + 1) + "/" + std::to_string(royale::kStormPhaseCount) + (h.stormShrinking ? "  CLOSING " : "  holds ") + ClockText(h.stormSecondsLeft));
-        }
-        if (h.stormDamagePerSecond > 0) textR(red, 22 * scale, "IN THE STORM!");
-        static const char* kSeasonName[4] = { "Spring", "Summer", "Autumn", "Winter" };
-        static const char* kSkyName[7] = { "Clear", "Rain", "Thunder", "Fog", "Snow", "Ash", "Sandstorm" };
-        textR(grey, 17 * scale, std::string(CurrentMap().name) + "  -  " + kSeasonName[static_cast<int>(h.weather.season) & 3] + ", " + kSkyName[static_cast<int>(h.weather.sky) % 7]);
+        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive));
+        if (h.stormPhase >= royale::kStormPhaseCount) textR(red, 20 * scale, "Final zone");
+        else textR(h.stormShrinking || h.stormSecondsLeft <= 5.0f ? red : h.stormSecondsLeft <= 15.0f ? gold : white, 20 * scale, (h.stormShrinking ? "Closing " : "Zone ") + ClockText(h.stormSecondsLeft));
+        // Only what is happening to you right now, short. Gear is already shown as icons above the item bar, the weather is on the screen itself.
         if (h.selfAlive) {
-            if (h.adultLeft > 0.0f) textR(gold, 20 * scale, "ADULT POWER  " + ClockText(h.adultLeft));
-            if (h.inv.hasMark) textR(green, 17 * scale, "Farore's Wind marked");
-            if (h.invulnLeft > 0) textR(gold, 18 * scale, "INVULNERABLE " + ClockText(h.invulnLeft));
-            if (h.speedLeft > 0) textR(green, 18 * scale, "SPEED UP " + ClockText(h.speedLeft));
-            if (h.revealLeft > 0) textR(green, 18 * scale, "REVEALING " + ClockText(h.revealLeft));
-            if (h.burnLeft > 0) textR(red, 18 * scale, "BURNING");
-            if (h.stunLeft > 0) textR(red, 18 * scale, "STUNNED");
-            if (h.shieldLeft > 0) textR(green, 18 * scale, "DAMAGE REDUCED " + ClockText(h.shieldLeft));
-            for (int slot = 0; slot < royale::kGearSlots; slot++) {   // what you are wearing
-                if (!(h.inv.gearMask & (1 << slot))) continue;
-                const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
-                textR(RarityU32(gr), 16 * scale, ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr));
-            }
+            if (h.adultLeft > 0.0f) textR(gold, 18 * scale, "Adult " + ClockText(h.adultLeft));
+            if (h.invulnLeft > 0) textR(gold, 18 * scale, "Invulnerable " + ClockText(h.invulnLeft));
+            if (h.speedLeft > 0) textR(green, 18 * scale, "Speed " + ClockText(h.speedLeft));
+            if (h.revealLeft > 0) textR(green, 18 * scale, "Reveal " + ClockText(h.revealLeft));
+            if (h.shieldLeft > 0) textR(green, 18 * scale, "Guard " + ClockText(h.shieldLeft));
+            if (h.burnLeft > 0) textR(red, 18 * scale, "Burning");
+            if (h.stunLeft > 0) textR(red, 18 * scale, "Stunned");
+            if (h.inv.hasMark) textR(green, 16 * scale, "Farore's Wind set");
         }
     }
 
@@ -4393,8 +4382,10 @@ void DrawOverlay() {
         auto pt = [&](float angle, float len) { return ImVec2(c.x + std::sin(angle) * len, c.y - std::cos(angle) * len); };
         dl->AddCircleFilled(c, r + 10 * scale, IM_COL32(0, 0, 0, 120));
         dl->AddTriangleFilled(pt(rel, r), pt(rel + 2.5f, r * 0.75f), pt(rel - 2.5f, r * 0.75f), outside ? red : green);
-        ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, outside ? "SAFE ZONE" : "inside");
-        text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, outside ? red : green, 16 * scale, outside ? "SAFE ZONE" : "inside");
+        if (outside) {
+            ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, "SAFE ZONE");
+            text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, red, 16 * scale, "SAFE ZONE");
+        }
     }
 }
 
@@ -5226,13 +5217,11 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
                     const std::string label = LootLabel(l);
-                    Say((l.chest ? "Opened a chest: " : "Picked up ") + label);
                     NotePickup(label, got, l.chest);
                     const royale::ItemId itemId = static_cast<royale::ItemId>(l.item);
                     float py = 0;
                     if (!FloorAt(l.x, l.z, &py)) py = GET_PLAYER(gPlayState)->actor.world.pos.y;
                     gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
-                    ShowBanner((l.chest ? "You got: " : "Picked up: ") + label, RarityU32(got), got >= royale::Rarity::Epic ? 3.2f : 2.2f);
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
                         Vec3f at = { l.x, py + 30.0f, l.z };
@@ -5247,12 +5236,11 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::BossDown: {
                 const int kind = gBossKindSeen.count(e.id) ? gBossKindSeen[e.id] : 0;
                 const std::string killer = e.other == hud.selfId ? std::string("You") : nameOf(e.other);
-                Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
+                AddFeed(killer + " defeated the " + royale::kBossDefs[kind].name, IM_COL32(255, 200, 120, 255));
                 break;
             }
             case royale::ClientEvent::Type::SupplyDrop: {
-                ShowBanner("SUPPLY DROP INCOMING!  Marked on your map", IM_COL32(255, 150, 60, 255), 3.6f);
-                Say("A supply drop is coming down: a crate of Legendary loot. It is marked on the map");
+                ShowBanner("Supply drop incoming", IM_COL32(255, 150, 60, 255), 3.0f);
                 gSupplyMarks.push_back({ e.x, e.z, ImGui::GetTime() + 60.0 });
                 Audio_PlaySoundGeneral(NA_SE_EV_FIRE_PILLAR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
@@ -5273,8 +5261,7 @@ void ReportEvents(const royale::HudState& hud) {
             }
             case royale::ClientEvent::Type::BossSpawned: {
                 const char* name = royale::kBossDefs[std::min<int>(e.item, royale::kBossKindCount - 1)].name;
-                Say(std::string("The ") + name + " has arrived! Ranged weapons reach it in the air; it lands after a dive");
-                ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 4.0f);
+                ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 3.4f);
                 Audio_PlaySoundGeneral(NA_SE_EN_VALVAISA_FIRE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
@@ -5284,12 +5271,8 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::AllyChanged: {
                 const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
                 if (e.item == 0) {
-                    if (e.id == hud.selfId) { ShowBanner(std::string("The ") + name + " joins you!", IM_COL32(130, 255, 150, 255), 2.8f); Say(std::string("You hired the ") + name + ": they follow you and fight for you"); }
-                    else Say(std::string("Somebody hired the ") + name);
-                } else if (e.item == 1) {
-                    Say(std::string("The ") + name + " is free to hire again");
-                } else {
-                    Say(std::string("The ") + name + " has fallen");
+                    if (e.id == hud.selfId) ShowBanner(std::string("The ") + name + " joins you!", IM_COL32(130, 255, 150, 255), 2.4f);
+                } else if (e.item != 1) {
                     auto it = gAllies.find(static_cast<uint8_t>(e.index));
                     if (it != gAllies.end() && it->second.actor != nullptr && gPlayState != nullptr)
                         SparkBurst(gPlayState, it->second.x, it->second.actor->world.pos.y + 60.0f, it->second.z, { 220, 220, 255, 255 }, 24, 5.0f);
@@ -5310,8 +5293,6 @@ void ReportEvents(const royale::HudState& hud) {
                 } else {
                     ShowBanner("The sky clears", IM_COL32(255, 235, 170, 255), 2.4f);
                 }
-                if (sky == royale::Sky::Fog || sky == royale::Sky::Sandstorm) Say(std::string(royale::SkyName(sky)) + ": bots (and you) see less far");
-                if (sky == royale::Sky::Thunder) Say("Thunderstorm: watch the marked circles, lightning is about to strike");
                 break;
             }
             case royale::ClientEvent::Type::MapChanged:
@@ -5321,11 +5302,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
                 if (e.item == royale::net::kRevivedItem) {
-                    Say(e.id == hud.selfId ? "A Fairy saved you!" : nameOf(e.id) + " was revived by a Fairy");
-                } else if (e.item < royale::kItemCount) {
-                    const std::string what = ItemName(static_cast<royale::ItemId>(e.item));
-                    if (e.id == hud.selfId) Say("You used " + what);
-                    else if (hud.haveSelf && std::hypot(e.x - hud.selfX, e.z - hud.selfZ) < 700.0f) Say(nameOf(e.id) + " used " + what);
+                    if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
                 break;
             case royale::ClientEvent::Type::Eliminated: {
@@ -5337,24 +5314,14 @@ void ReportEvents(const royale::HudState& hud) {
                 else line = (mine ? std::string("You") : nameOf(e.other)) + " eliminated " + victim;
                 AddFeed(line, me ? IM_COL32(255, 110, 110, 255) : mine ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 235, 255));
                 if (me) {
-                    Say("You were eliminated. Spectating until the match ends");
                     ShowBanner("ELIMINATED  -  #" + std::to_string(std::max(1, hud.alive)), IM_COL32(255, 110, 110, 255), 4.0f);
                     gSpectateTarget = kSpectateSelf;
                     for (const auto& st : gSession.Puppets()) if (st.alive && st.id == e.other) gSpectateTarget = st.id;   // watch whoever got you
-                } else if (mine) {
-                    Say("You eliminated " + victim);
                 }
                 break;
             }
             case royale::ClientEvent::Type::StateChanged:
-                if (e.state == royale::MatchState::Drop) Say("Drop! Skydive to the ground. Z dives faster");
-                else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone! Mini bosses guard the caves and drop Legendary loot");
-                else if (e.state == royale::MatchState::Ending) {
-                    if (hud.winnerId == hud.selfId) Say("VICTORY ROYALE! You won!");
-                    else if (!hud.winnerName.empty()) Say("Match over. Winner: " + hud.winnerName);
-                    else Say("Match over");
-                }
-                break;
+                break;   // the big centre text already says what happened (see DrawOverlay)
             default:
                 break;
         }
@@ -5372,9 +5339,6 @@ void DriveStart(const royale::HudState& hud) {
     royale::Circle measured;
     if (MeasureField(&measured)) {
         gSession.ConfigureMap(measured, WalkableAt);
-        Say("Map measured: radius " + std::to_string(static_cast<int>(measured.radius)));
-    } else {
-        Say("Could not measure the map, using the default size");
     }
     gSession.StartMatch();
     gPendingStart = false;
@@ -5535,11 +5499,9 @@ void DriveStormAlerts(const royale::HudState& hud) {
         if (hud.stormPhase >= royale::kStormPhaseCount) {
             ShowBanner("THE STORM HAS TAKEN THE MAP", IM_COL32(190, 120, 255, 255), 3.2f);
         } else if (hud.stormShrinking) {
-            ShowBanner("THE STORM IS CLOSING IN!", IM_COL32(190, 120, 255, 255), 3.4f);
-            Say("The storm is closing in: get inside the white circle on the map");
+            ShowBanner("The storm is closing in!", IM_COL32(190, 120, 255, 255), 3.0f);
         } else {
-            ShowBanner("The storm holds. A new safe zone is marked", IM_COL32(210, 190, 255, 255), 2.8f);
-            Say("Zone " + std::to_string(hud.stormPhase + 1) + ": the storm holds for " + std::to_string(static_cast<int>(hud.stormSecondsLeft)) + " seconds");
+            ShowBanner("New safe zone marked", IM_COL32(210, 190, 255, 255), 2.4f);
         }
         PlayOneShot(1);
         warned = -1;
@@ -5550,18 +5512,16 @@ void DriveStormAlerts(const royale::HudState& hud) {
         const int left = static_cast<int>(std::ceil(hud.stormSecondsLeft));
         if (left <= 15 && left > 5 && warned < 15) {
             warned = 15;
-            ShowBanner("The storm closes in 15 seconds", IM_COL32(255, 200, 90, 255), 2.4f);
-            PlayOneShot(0);
+            PlayOneShot(0);   // the zone timer (top right) shows the seconds; the sound is the warning
         } else if (left <= 5 && left > 0 && warned < 5) {
             warned = 5;
             ShowBanner("The storm closes in 5 seconds!", IM_COL32(255, 110, 90, 255), 2.2f);
             PlayOneShot(0);
         }
     }
-    if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging
+    if (hud.selfAlive && hud.stormDamagePerSecond > 0 && now >= nextOutsideSiren) { // you are in it: keep nagging (the haze and the red compass say where; no text)
         nextOutsideSiren = now + 4.0;
         PlayOneShot(0);
-        Say("You are in the storm! Run for the safe zone");
     }
 }
 
@@ -5657,7 +5617,6 @@ bool MayaNear() {
 
 void TalkToMaya() {
     gMayaTalkStart = ImGui::GetTime();
-    Say(std::string(royale::kMayaName) + ": " + royale::kMayaGreeting);
     if (gPlayState != nullptr && gMayaActor != nullptr)
         SparkBurst(gPlayState, gMayaPos.x, gMayaActor->world.pos.y + 90.0f, gMayaPos.z, { 255, 190, 220, 255 }, 16, 3.0f);
     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
@@ -6064,7 +6023,6 @@ bool LiloNear() {
 void TalkToLilo() {
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
-    Say(std::string(royale::kLiloName) + ": " + royale::kLiloLine);
     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
@@ -6493,7 +6451,6 @@ void ForgetOldHats() {
 // A wooden sign stands at the centre of every map (on the nearest bit of open, walkable ground), and reads out its message when you walk up.
 Actor* gSignActor = nullptr;
 double gSignReadAt = -100.0;
-bool gSignRead = false;
 
 void Sign_Update(Actor* actor, PlayState*) { actor->focus.pos = actor->world.pos; }
 void Sign_Draw(Actor* actor, PlayState* play) {
@@ -6564,15 +6521,14 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z);
     ImVec2 at;
-    if (d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {
-        const char* label = d < 260.0f ? "Sign" : "Sign (walk up to read)";
+    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close the board below says it
+        const char* label = "Sign";
         const float size = std::clamp(26.0f * scale * (1800.0f / (d + 900.0f)), 14.0f * scale, 30.0f * scale);
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 12, 4, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 232, 160, 255), label);
     }
     if (d < 260.0f) {
-        if (!gSignRead) { gSignRead = true; Say(std::string("The sign reads: ") + royale::kMapSignText); }
         const float wrap = ds.x * 0.62f, size = 27.0f * scale;
         const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, royale::kMapSignText);
         const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 22.0f * scale, ds.y * 0.70f - 12.0f * scale);
@@ -6581,8 +6537,6 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddRect(box, end, IM_COL32(222, 178, 100, 255), 10.0f * scale, 0, 3.0f * scale);
         dl->AddText(font, 18.0f * scale, ImVec2(box.x + 22.0f * scale, box.y + 8.0f * scale), IM_COL32(222, 178, 100, 255), "Sign");
         dl->AddText(font, size, ImVec2(box.x + 22.0f * scale, box.y + 34.0f * scale), IM_COL32(255, 246, 224, 255), royale::kMapSignText, nullptr, wrap);
-    } else if (d > 420.0f) {
-        gSignRead = false;   // walk away and it can be read (and announced) again
     }
 }
 
