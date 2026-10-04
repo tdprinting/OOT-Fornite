@@ -349,10 +349,55 @@ static void FullMatchWithBots() {
     CHECK(a.winnerId == b.winnerId && a.totalKills == b.totalKills); // same seed, same match on this machine
 }
 
+static void PlacementValidatorKeepsLootAndSpawnsOnWalkableGround() {
+    // Pretend everything west of x = 0 is water.
+    PlacementFn east = [](Vec2 p) { return p.x >= 0; };
+    auto loot = GenerateLoot(21, MapCircle(), 300, 0.15f, east);
+    CHECK(loot.size() == 300);
+    int bad = 0;
+    for (auto& l : loot) bad += l.pos.x < 0;
+    CHECK(bad == 0);                                   // 40 tries each makes a miss astronomically unlikely
+    // Without a validator about half of them land in the "water".
+    auto unfiltered = GenerateLoot(21, MapCircle(), 300, 0.15f);
+    int wet = 0;
+    for (auto& l : unfiltered) wet += l.pos.x < 0;
+    CHECK(wet > 90);
+
+    Match m(5, MapCircle(), 0);
+    m.SetPlacementValidator(east);
+    m.RegenerateLoot(250);
+    CHECK(m.Loot().size() == 250);
+    for (auto& e : m.Loot()) CHECK(e.spawn.pos.x >= 0);
+    m.AddHuman(1);
+    CHECK(m.Start());
+    for (auto& p : m.Players()) CHECK(p.pos.x >= 0);   // spawn points too
+}
+static void ValidatorThatRejectsEverythingStillTerminates() {
+    PlacementFn never = [](Vec2) { return false; };
+    auto loot = GenerateLoot(1, MapCircle(), 50, 0.1f, never);
+    CHECK(loot.size() == 50);                          // falls back to the last candidate instead of looping forever
+}
+static void StormPhaseInfo() {
+    Storm s(7, MapCircle());
+    auto a = s.InfoAt(0);
+    CHECK(a.phase == 0 && !a.shrinking && std::abs(a.secondsLeft - 120.0f) < 0.01f);   // holding for 120 s
+    auto b = s.InfoAt(119);
+    CHECK(b.phase == 0 && !b.shrinking && std::abs(b.secondsLeft - 1.0f) < 0.01f);
+    auto c = s.InfoAt(125);
+    CHECK(c.phase == 0 && c.shrinking && std::abs(c.secondsLeft - 85.0f) < 0.01f);     // 90 s shrink, 5 s in
+    auto d = s.InfoAt(120 + 90 + 1);
+    CHECK(d.phase == 1 && !d.shrinking);                                              // phase 2 holds
+    auto e = s.InfoAt(s.TotalDuration() + 5);
+    CHECK(e.phase == kStormPhaseCount && !e.shrinking && e.secondsLeft == 0);
+    auto f = s.InfoAt(-3);
+    CHECK(f.phase == 0 && !f.shrinking);                                              // before the storm starts
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
+    PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

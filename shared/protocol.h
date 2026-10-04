@@ -27,7 +27,7 @@ enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76,
+    EvReady = 76, EvMapConfig = 77,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -169,7 +169,7 @@ struct MatchStateMsg {
     bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); return r.ok && state <= 4; }
 };
 
-// One player as seen in a snapshot. 23 bytes.
+// One player as seen in a snapshot. 25 bytes.
 struct PlayerNet {
     static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4;
     uint16_t id = 0;
@@ -181,6 +181,7 @@ struct PlayerNet {
     uint8_t potions = 0;
     uint8_t anim = 0;
     uint8_t scene = 0;
+    uint8_t shield = 0, shieldRarity = 0; // valid when kShield is set
     static uint8_t QuantizeHealth(float h) {
         float v = h / kMaxHealth * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -188,13 +189,14 @@ struct PlayerNet {
     float Health() const { return health / 255.0f * kMaxHealth; }
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
-        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene);
+        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity);
     }
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
-        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8();
+        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8();
         return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 7 && weapon < static_cast<uint8_t>(ItemId::Count) &&
-               weaponRarity < kRarityCount;
+               weaponRarity < kRarityCount &&
+               shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount;
     }
 };
 
@@ -267,6 +269,29 @@ struct EvReady {
     bool ready = false;
     void Write(ByteWriter& w) const { w.U16(id); w.U8(ready ? 1 : 0); }
     bool Read(ByteReader& r) { id = r.U16(); uint8_t v = r.U8(); ready = v == 1; return r.ok && v <= 1; }
+};
+
+// The host measured the real map and rebuilt the lobby's world: new map circle, storm circles and loot. Lobby only.
+struct EvMapConfig {
+    static constexpr MsgType kType = MsgType::EvMapConfig;
+    Circle map;
+    std::array<Circle, kStormPhaseCount> stormEnds;
+    std::vector<LootNet> loot;
+    void Write(ByteWriter& w) const {
+        WriteCircle(w, map);
+        for (const auto& c : stormEnds) WriteCircle(w, c);
+        w.U16(static_cast<uint16_t>(loot.size()));
+        for (const auto& l : loot) l.Write(w);
+    }
+    bool Read(ByteReader& r) {
+        map = ReadCircle(r);
+        for (auto& c : stormEnds) c = ReadCircle(r);
+        size_t n = r.U16();
+        if (n > kMaxLoot) return false;
+        loot.assign(n, {});
+        for (auto& l : loot) if (!l.Read(r)) return false;
+        return r.ok;
+    }
 };
 
 struct EvPlayerLeft {

@@ -87,6 +87,21 @@ class Storm {
         return SafeZoneAt(t).Contains(p) ? 0.0f : kStormPhases[idx].damagePerSec;
     }
 
+    // For the HUD: is the zone shrinking right now, and how many seconds until that changes (hold ends / shrink ends).
+    struct PhaseInfo {
+        int phase;          // 0-based, kStormPhaseCount once finished
+        bool shrinking;
+        float secondsLeft;  // until the current hold ends or the current shrink ends
+    };
+    PhaseInfo InfoAt(float t) const {
+        int p = PhaseAt(t < 0 ? 0 : t);
+        if (p >= kStormPhaseCount) return {p, false, 0.0f};
+        float local = (t < 0 ? 0 : t) - phaseStart[p];
+        const auto& def = kStormPhases[p];
+        if (local < def.waitSec) return {p, false, def.waitSec - local};
+        return {p, true, def.waitSec + def.closeSec - local};
+    }
+
     float TotalDuration() const { return total; }
     const Circle& PhaseEnd(int i) const { return end[i]; }
 

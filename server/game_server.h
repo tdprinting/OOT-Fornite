@@ -33,6 +33,37 @@ class GameServer {
     // the server can tell which connected player is the host without trusting addresses or join order.
     void SetHostToken(uint64_t token) { hostToken = token; }
 
+    // The host measured the real playable area and wants the lobby's world rebuilt on it: new map circle, loot and storm placed only
+    // on positions `valid` accepts (e.g. "there is floor here"). Lobby only; players, ready flags and connections are kept.
+    // Everyone is sent the new map, storm circles and loot in one reliable message.
+    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 400) {
+        if (sim.match.State() != MatchState::Lobby || map.radius <= 0) return false;
+        const uint64_t baseSeed = sim.match.Seed();
+        // Prefer a storm whose six circle centres are all on walkable ground; give up after 200 tries and take the last one.
+        uint64_t seed = baseSeed;
+        for (uint64_t k = 0; k < 200; k++) {
+            seed = baseSeed + k * 7919;
+            Storm candidate(seed, map);
+            bool ok = true;
+            if (valid) for (int i = 0; i < kStormPhaseCount; i++) ok = ok && valid(candidate.PhaseEnd(i).center);
+            if (ok) break;
+        }
+        std::vector<uint32_t> humans;
+        for (const auto& p : sim.match.Players()) humans.push_back(p.id);
+        sim = Simulation(seed, map, 0);
+        sim.match.SetPlacementValidator(valid);
+        sim.match.RegenerateLoot(lootCount);
+        for (uint32_t id : humans) sim.match.AddHuman(id);
+        mapCircle = map;
+
+        net::EvMapConfig cfg;
+        cfg.map = map;
+        cfg.stormEnds = sim.match.GetStorm().PhaseEnds();
+        for (const auto& l : sim.match.Loot()) cfg.loot.push_back(ToNet(l));
+        Broadcast(cfg);
+        return true;
+    }
+
     // Host presses "Start". Needs at least one human in the lobby; the remaining slots fill with bots.
     bool StartMatch() {
         if (!sim.match.Start()) return false;
@@ -355,6 +386,8 @@ class GameServer {
         n.potions = static_cast<uint8_t>(p.potions.size());
         n.anim = p.anim;
         n.scene = p.scene;
+        n.shield = static_cast<uint8_t>(p.shield.item);
+        n.shieldRarity = static_cast<uint8_t>(p.shield.rarity);
         return n;
     }
 

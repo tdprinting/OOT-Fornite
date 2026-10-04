@@ -52,6 +52,15 @@ struct HudState {
     Circle map;
     Circle safeZone;
     float stormDamagePerSecond = 0;      // at the local player's position
+    int stormPhase = 0;                  // 0-based; kStormPhaseCount once the storm has finished
+    bool stormShrinking = false;
+    float stormSecondsLeft = 0;          // until the hold ends / the shrink ends
+    ItemId weapon = ItemId::DekuStick;   // what the local player holds (from the server)
+    Rarity weaponRarity = Rarity::Common;
+    bool hasShield = false;
+    ItemId shield = ItemId::DekuShield;
+    Rarity shieldRarity = Rarity::Common;
+    float selfX = 0, selfZ = 0;          // the server's view of where you are
     std::vector<RosterRow> roster;
     uint16_t hostPort = 0;
     int humanCount = 0;           // people in the lobby (hosts count the server's view)
@@ -107,6 +116,9 @@ class RoyaleSession {
         hostTransport.reset();
         mode = Mode::Idle;
     }
+
+    // Host only, lobby only: rebuild the world on the measured map (see GameServer::Reconfigure).
+    bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid)); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
     bool StartMatch() { return mode == Mode::Hosting && server && server->StartMatch(); }
@@ -173,6 +185,12 @@ class RoyaleSession {
         h.selfId = client->PlayerId();
         h.map = client->Map();
         h.safeZone = client->SafeZone();
+        {
+            auto info = client->StormInfo();
+            h.stormPhase = info.phase;
+            h.stormShrinking = info.shrinking;
+            h.stormSecondsLeft = info.secondsLeft;
+        }
         for (const auto& [id, info] : client->Roster()) {
             RosterRow row;
             row.id = id; row.name = info.name; row.host = info.host; row.ready = info.ready; row.self = id == client->PlayerId();
@@ -193,6 +211,13 @@ class RoyaleSession {
             h.selfHealth = self->Health();
             h.selfAlive = self->flags & net::PlayerNet::kAlive;
             h.potions = self->potions;
+            h.weapon = static_cast<ItemId>(self->weapon);
+            h.weaponRarity = static_cast<Rarity>(self->weaponRarity);
+            h.hasShield = (self->flags & net::PlayerNet::kShield) != 0;
+            h.shield = static_cast<ItemId>(self->shield);
+            h.shieldRarity = static_cast<Rarity>(self->shieldRarity);
+            h.selfX = self->x;
+            h.selfZ = self->z;
             h.stormDamagePerSecond = client->StormDamagePerSecond({self->x, self->z});
         }
         return h;

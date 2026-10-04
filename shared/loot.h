@@ -2,6 +2,7 @@
 #include "balance.h"
 #include "rng.h"
 #include "storm.h"
+#include <functional>
 #include <vector>
 
 namespace royale {
@@ -79,7 +80,23 @@ inline Rarity RollRarity(Rng& rng, bool chest) {
 // Generate the match's loot from the seed. Every item is picked among those whose tier range contains the rolled tier,
 // and, if none match, the roll is clamped to the closest tier an item supports, so a roll never produces an invalid
 // (item, tier) pair.
-inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count, float chestFraction) {
+// `valid`, when given, rejects positions the map can't actually be walked at (e.g. no floor there); up to 40 positions are tried
+// per item before giving up and using the last one.
+using PlacementFn = std::function<bool(Vec2)>;
+
+inline Vec2 RandomPointIn(Rng& rng, const Circle& map, const PlacementFn& valid, float radiusFraction = 1.0f) {
+    Vec2 p{};
+    for (int attempt = 0; attempt < 40; attempt++) {
+        float angle = static_cast<float>(rng.Unit() * 6.283185307179586);
+        float dist = map.radius * radiusFraction * std::sqrt(static_cast<float>(rng.Unit()));
+        p = {map.center.x + dist * std::cos(angle), map.center.z + dist * std::sin(angle)};
+        if (!valid || valid(p)) break;
+    }
+    return p;
+}
+
+inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count, float chestFraction,
+                                           const PlacementFn& valid = nullptr) {
     Rng rng(seed ^ 0x6C6F6F74ull); // "loot"
     std::vector<LootSpawn> out;
     out.reserve(count);
@@ -100,10 +117,7 @@ inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count,
         if (tier < item.minRarity) tier = item.minRarity;
         if (tier > item.maxRarity) tier = item.maxRarity;
 
-        float angle = static_cast<float>(rng.Unit() * 6.283185307179586);
-        float dist = map.radius * std::sqrt(static_cast<float>(rng.Unit()));
-        out.push_back({{map.center.x + dist * std::cos(angle), map.center.z + dist * std::sin(angle)},
-                       item.id, tier, chest});
+        out.push_back({RandomPointIn(rng, map, valid), item.id, tier, chest});
     }
     return out;
 }

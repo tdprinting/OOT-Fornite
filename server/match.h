@@ -68,6 +68,14 @@ class Match {
         for (const LootSpawn& l : GenerateLoot(seed, map, lootCount, 0.15f)) loot.push_back({l, false});
     }
 
+    // Reject positions that can't be walked at (set by the host once it has measured the real map). Used for spawn points
+    // and for loot placed by RegenerateLoot.
+    void SetPlacementValidator(PlacementFn fn) { placement = std::move(fn); }
+    void RegenerateLoot(int count, float chestFraction = 0.15f) {
+        loot.clear();
+        for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement)) loot.push_back({l, false});
+    }
+
     // Add a human. Returns false if the lobby is full or the match already started.
     bool AddHuman(uint32_t id) {
         if (state != MatchState::Lobby || players.size() >= kMaxPlayers) return false;
@@ -82,11 +90,7 @@ class Match {
         uint32_t nextId = 1000;
         while (players.size() < kMaxPlayers) players.push_back(MakePlayer(nextId++, true));
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
-        for (auto& p : players) {
-            float a = static_cast<float>(spawn.Unit() * 6.283185307179586);
-            float d = map.radius * 0.9f * std::sqrt(static_cast<float>(spawn.Unit()));
-            p.pos = {map.center.x + d * std::cos(a), map.center.z + d * std::sin(a)};
-        }
+        for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         Enter(MatchState::Countdown);
         return true;
     }
@@ -302,6 +306,7 @@ class Match {
     std::vector<PlayerState> players;
     std::vector<LootEntry> loot;
     std::vector<MatchEvent> events;
+    PlacementFn placement;
 };
 
 } // namespace royale

@@ -12,7 +12,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -103,6 +103,8 @@ class GameClient {
     // Storm time as best estimated now (the server's value at the last snapshot plus the time since).
     float StormTime() const { return haveSnapshot ? stormTimeAtSnapshot + (localClock - snapshotArrival) : 0.0f; }
     Circle SafeZone() const { return storm ? storm->SafeZoneAt(StormTime()) : map; }
+    // Phase, whether the zone is shrinking, and seconds until that changes. Valid once joined.
+    Storm::PhaseInfo StormInfo() const { return storm ? storm->InfoAt(StormTime()) : Storm::PhaseInfo{0, false, 0.0f}; }
     float StormDamagePerSecond(Vec2 p) const { return storm ? storm->DamagePerSecond(p, StormTime()) : 0.0f; }
 
     // The server's latest view of the local player.
@@ -250,6 +252,16 @@ class GameClient {
                 ClientEvent e{ClientEvent::Type::ReadyChanged};
                 e.id = m.id;
                 e.ready = m.ready;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvMapConfig: {
+                net::EvMapConfig m;
+                if (!net::Decode(data, m)) break;
+                map = m.map;
+                storm = std::make_unique<Storm>(m.map, m.stormEnds);
+                loot = m.loot;
+                ClientEvent e{ClientEvent::Type::MapChanged};
                 events.push_back(e);
                 break;
             }

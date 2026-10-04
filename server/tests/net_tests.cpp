@@ -95,14 +95,16 @@ static void MessagesRoundTrip() {
     { Reject a, b; a.reason = RejectReason::LobbyFull; CHECK(RoundTrips(a, b) && b.reason == RejectReason::LobbyFull); }
     { MatchStateMsg a, b; a.state = 3; a.alive = 17; a.winner = 1003; CHECK(RoundTrips(a, b) && b.state == 3 && b.alive == 17 && b.winner == 1003); }
     { SetReady a, b; a.ready = true; CHECK(RoundTrips(a, b) && b.ready); }
+    { EvMapConfig a, b; a.map = {{5, -6}, 2500}; for (int i = 0; i < kStormPhaseCount; i++) a.stormEnds[i] = {{float(i), 1}, 100.0f - i}; a.loot = {{1, 2, 3, 1, true, false}};
+      CHECK(RoundTrips(a, b) && b.map.radius == 2500 && b.map.center.z == -6 && b.stormEnds[5].radius == 95 && b.loot.size() == 1 && b.loot[0].item == 3); }
     { EvReady a, b; a.id = 9; a.ready = true; CHECK(RoundTrips(a, b) && b.id == 9 && b.ready); }
     { Snapshot a, b; a.tick = 99; a.stormTime = 12.5f; a.state = 3; a.alive = 9; a.epoch = 2;
       PlayerNet p; p.id = 1031; p.x = 1; p.y = 2; p.z = 3; p.rot = -5; p.health = PlayerNet::QuantizeHealth(1.5f);
-      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7; p.scene = 0x51;
+      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7; p.scene = 0x51; p.shield = 17; p.shieldRarity = 3;
       a.players = {p, p};
-      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51);
+      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51 && b.players[0].shield == 17 && b.players[0].shieldRarity == 3);
       CHECK(std::abs(b.players[0].Health() - 1.5f) < 0.01f);
-      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 23); } // documented per-player size
+      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 25); } // documented per-player size
     { EvDamaged a, b; a.target = 1; a.attacker = 2; a.amount = 1.5f; a.health = 0.5f; CHECK(RoundTrips(a, b) && b.amount == 1.5f && b.attacker == 2); }
     { EvEliminated a, b; a.victim = 3; CHECK(RoundTrips(a, b) && b.victim == 3 && b.killer == kNoPlayer16); }
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
@@ -142,6 +144,7 @@ static void DecodeRejectsMangled() {
     EvPlayerJoined pj; pj.name = "x"; RejectsMangled(pj);
     SetReady sr; sr.ready = true; RejectsMangled(sr);
     EvReady er; RejectsMangled(er);
+    EvMapConfig mc; mc.loot = {{1, 2, 3, 1, true, false}}; RejectsMangled(mc);
     EvPlayerLeft pl; RejectsMangled(pl);
 }
 
@@ -905,6 +908,78 @@ static void CountdownElapsedTracksState() {
     CHECK(a.StateElapsed() < 1.0f);                                        // reset on the state change
 }
 
+static void ReconfigureRebuildsTheLobbyWorld() {
+    Rig rig(11);
+    GameClient& a = rig.Add("Host");
+    GameClient& b = rig.Add("Guest");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    b.SetReady(true);
+    rig.Run(0.5f);
+    Circle oldMap = a.Map();
+    CHECK(oldMap.radius == 2000);
+    a.DrainEvents(); b.DrainEvents();
+
+    // Walkable ground is a disc of radius 800 around (500, -300) that is smaller than the default map.
+    Circle real = {{500, -300}, 800};
+    PlacementFn walkable = [&](Vec2 p) { return Distance(p, real.center) <= real.radius; };
+    CHECK(rig.server.Reconfigure(real, walkable, 120));
+    rig.Run(0.5f);
+
+    for (GameClient* g : {&a, &b}) {
+        CHECK(g->Map().radius == 800 && g->Map().center.x == 500);
+        CHECK(g->Loot().size() == 120);
+        bool eventSeen = false;
+        for (auto& e : g->DrainEvents()) eventSeen |= e.type == ClientEvent::Type::MapChanged;
+        CHECK(eventSeen);
+        for (const auto& l : g->Loot()) CHECK(Distance({l.x, l.z}, real.center) <= 800.01f);   // loot only on walkable ground
+        // The client rebuilt the storm from the new circles, inside the new map, on walkable ground.
+        Circle zone = g->SafeZone();
+        CHECK(zone.radius == 800);
+    }
+    // The server's own storm agrees with what clients were sent, and its centres are walkable.
+    for (int i = 0; i < kStormPhaseCount; i++) CHECK(walkable(rig.M().GetStorm().PhaseEnd(i).center));
+    // Players, names and ready flags survive.
+    CHECK(rig.server.HumanCount() == 2 && a.Roster().size() == 2 && a.Roster().at(2).ready);
+    CHECK(rig.M().Find(1) && rig.M().Find(2) && rig.M().Players().size() == 2);
+    // A later joiner gets the new world in Welcome.
+    GameClient& c = rig.Add("Late");
+    CHECK(rig.RunUntil([&] { return c.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(c.Map().radius == 800 && c.Loot().size() == 120);
+    // Match start puts everyone on walkable ground.
+    CHECK(rig.server.StartMatch());
+    for (auto& p : rig.M().Players()) CHECK(walkable(p.pos));
+    // And it can no longer be reconfigured.
+    CHECK(!rig.server.Reconfigure({{0, 0}, 500}));
+    CHECK(!rig.server.Reconfigure({{0, 0}, 0}));
+}
+
+static void ReconfigureRejectedOnceTheMatchHasStarted() {
+    Rig rig(11);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    Circle before = a.Map();
+    CHECK(!rig.server.Reconfigure({{0, 0}, 300}));
+    rig.Run(0.3f);
+    CHECK(a.Map().radius == before.radius);
+}
+
+static void ShieldAndWeaponReachTheSnapshot() {
+    Rig rig(11, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    rig.StartAndGoLive();
+    PlayerState* p = rig.M().Find(1);
+    p->weapon = {ItemId::MasterSword, Rarity::Epic};
+    p->hasShield = true;
+    p->shield = {ItemId::MirrorShield, Rarity::Legendary};
+    rig.Run(0.5f);
+    const PlayerNet* self = a.Self();
+    CHECK(self && self->weapon == static_cast<uint8_t>(ItemId::MasterSword) && self->weaponRarity == static_cast<uint8_t>(Rarity::Epic));
+    CHECK(self && (self->flags & PlayerNet::kShield) && self->shield == static_cast<uint8_t>(ItemId::MirrorShield) &&
+          self->shieldRarity == static_cast<uint8_t>(Rarity::Legendary));
+}
+
 int main() {
     ByteReaderBounds(); MessagesRoundTrip(); DecodeRejectsMangled(); DecodeRejectsBadValues(); FuzzNeverCrashes();
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
@@ -913,6 +988,7 @@ int main() {
     AttackOverTheWire(); PickupAndPotionOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
+    ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
     OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
