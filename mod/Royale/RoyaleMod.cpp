@@ -99,6 +99,9 @@ bool InGame() {
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
 royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
+int gHatHookCalls = 0;       // how many times the game has asked us about the cap (shown in the menu, to prove the hook is wired)
+float gHatLastSwing = 0.0f;  // the last swing applied, in degrees
+int gGliderClothFrames = 0;  // frames the cloth glider was drawn
 float gStormWeather = 0.0f;         // 0 to 1: how far you are into the storm's dark weather
 double gBoltFlashUntil = 0;   // a lightning bolt has landed nearby: the screen flashes until then
 float gWeatherBlend = 0.0f;
@@ -1468,6 +1471,7 @@ std::unordered_map<uint32_t, GliderClothState> gGliderCloth;
 
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme) {
     const bool cloth = gClothScale > 0.01f;
+    if (cloth) gGliderClothFrames++;
     const GpuMesh* mesh = GpuMeshFor(cloth ? royale::MeshKind::GliderFrame : royale::MeshKind::Glider, cloth ? 0u : scheme);
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
@@ -5643,6 +5647,7 @@ struct HatState {
 std::unordered_map<const void*, HatState> gHats;
 
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
+    gHatHookCalls++;
     if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
     const Player* pl = static_cast<const Player*>(playerPtr);
     const double now = ImGui::GetTime();
@@ -5668,6 +5673,7 @@ void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
                       (accFore * 0.0035f + dvy * 0.0016f) * gClothScale, accSide * 0.0035f * gClothScale);
     }
     const float toBinary = 32768.0f / 3.14159265f;
+    gHatLastSwing = h.spring.fore * 57.2958f;
     rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.spring.fore * toBinary));   // fore and aft: the limb's pitch
     rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(h.spring.side * toBinary));   // sideways: its yaw
 }
@@ -6321,6 +6327,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         if (ui.clothOn) {
             ImGui::SetNextItemWidth(280);
             if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames", gHatHookCalls, gHatLastSwing, gGliderClothFrames);
         }
         static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
         ImGui::SetNextItemWidth(280);
