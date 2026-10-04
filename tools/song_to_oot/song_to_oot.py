@@ -6,13 +6,14 @@ SoundFont (an .sf2 file): use the Ocarina of Time one and it sounds like the gam
 
     python song_to_oot.py song.mp3 --soundfont oot.sf2
     python song_to_oot.py song.mp3 --soundfont oot.sf2 --melody ocarina --harmony harp --bass bass
+    python song_to_oot.py song.mp3 --soundfont "Ocarina of Time.z64"  (your ROM works too: the soundfont is made from it first)
     python song_to_oot.py --list-presets --soundfont oot.sf2       (shows the instruments in the soundfont)
     python song_to_oot.py                                            (no arguments: pick the files in a small window)
 
 Needs: Python 3.8+, numpy (pip install numpy), and ffmpeg on the PATH (to read and write mp3). No other packages.
 
 About the soundfont: the Ocarina of Time instruments are the game's own samples, so they come from your copy of the game, not from this program.
-Use an Ocarina of Time .sf2 you already have, or one made from your ROM's audio. Without --soundfont the tool still runs, with a plain built-in
+Use an Ocarina of Time .sf2 you already have, or give your ROM and oot_soundfont.py makes one from it. Without --soundfont the tool still runs, with a plain built-in
 ocarina-like sound so you can hear the transcription, but that is NOT the game's sound.
 
 How it works, honestly: finding the notes in a finished recording is hard (the computer has to un-mix the song). This does a good job on clear melodies
@@ -610,9 +611,23 @@ def pick_programs(font, args):
     return out
 
 
+def open_soundfont(path, sf2_dir, log=print):
+    """An .sf2, or an Ocarina of Time ROM: then oot.sf2 is made from it in sf2_dir (and reused next time while it is newer than the ROM)."""
+    import oot_soundfont
+    if not oot_soundfont.is_rom(path):
+        return SoundFont(path)
+    sf2 = os.path.join(sf2_dir or ".", "oot.sf2")
+    if os.path.exists(sf2) and os.path.getmtime(sf2) >= os.path.getmtime(path):
+        log("Using %s (made from the ROM earlier)." % sf2)
+    else:
+        log("Making the soundfont from your ROM...")
+        oot_soundfont.rom_to_sf2(path, sf2, log=lambda m: log("  " + m))
+    return SoundFont(sf2)
+
+
 def convert(path, out_base, soundfont=None, args=None, log=print):
     args = args or argparse.Namespace(melody=None, harmony=None, bass=None, reverb=0.25, voices=5, min_note_ms=90, sensitivity=0.22)
-    font = SoundFont(soundfont) if soundfont else None
+    font = open_soundfont(soundfont, os.path.dirname(os.path.abspath(out_base)), log) if soundfont else None
     if font is None:
         log("No soundfont given: using the plain built-in voice (NOT the Ocarina of Time sound). Pass --soundfont oot.sf2 for the real thing.")
     ext = os.path.splitext(path)[1].lower()
@@ -645,7 +660,8 @@ def gui():
     song = filedialog.askopenfilename(title="Pick a song", filetypes=[("Audio or MIDI", "*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.mid *.midi"), ("All files", "*.*")])
     if not song:
         return
-    sf = filedialog.askopenfilename(title="Pick the Ocarina of Time soundfont (.sf2) - Cancel to use the plain stand-in voice", filetypes=[("SoundFont", "*.sf2")])
+    sf = filedialog.askopenfilename(title="Pick the Ocarina of Time soundfont (.sf2) or your ROM - Cancel to use the plain stand-in voice",
+                                    filetypes=[("SoundFont or ROM", "*.sf2 *.z64 *.n64 *.v64")])
     base = os.path.splitext(song)[0] + "_oot"
     try:
         convert(song, base, sf or None)
@@ -658,7 +674,7 @@ def main():
     ap = argparse.ArgumentParser(description="Rebuild any song with the Ocarina of Time soundfont (see the top of this file).")
     ap.add_argument("song", nargs="?", help="the song (mp3, wav, flac, ogg, m4a or a MIDI file)")
     ap.add_argument("-o", "--out", help="output name without an extension (default: next to the song, ending _oot)")
-    ap.add_argument("--soundfont", help="the .sf2 to play it with (the Ocarina of Time one)")
+    ap.add_argument("--soundfont", help="the .sf2 to play it with (the Ocarina of Time one), or your Ocarina of Time ROM to make it from")
     ap.add_argument("--melody", help="instrument for the tune: a name, a number or bank:program (default: an ocarina if there is one)")
     ap.add_argument("--harmony", help="instrument for the chords and inner voices (default: a harp)")
     ap.add_argument("--bass", help="instrument for the low notes (default: a bass)")
@@ -671,7 +687,7 @@ def main():
     if args.list_presets:
         if not args.soundfont:
             sys.exit("--list-presets needs --soundfont")
-        for bank, prog, name in SoundFont(args.soundfont).presets():
+        for bank, prog, name in open_soundfont(args.soundfont, os.path.dirname(os.path.abspath(args.soundfont))).presets():
             print("%3d:%-3d %s" % (bank, prog, name))
         return
     if not args.song:

@@ -1,0 +1,10 @@
+# Game data stays on your machine: ROMs and anything made from them
+*.z64
+*.n64
+*.v64
+*.sf2
+*.otr
+*.o2r
+
+__pycache__/
+*.pyc
