@@ -25,6 +25,7 @@ struct PuppetState {
     uint8_t scene = 0; // game scene this player is in; only draw them if it matches yours
     bool alive = true;
     bool isBot = false;
+    bool adult = false;           // under the Adult Power: drawn bigger
     float health = kMaxHealth;
     ItemId weapon = ItemId::BasicSword;
     Rarity weaponRarity = Rarity::Common;
@@ -76,6 +77,7 @@ struct HudState {
     InventoryInfo inv;                   // bag, ability, gear and timed effects (raw; use the *Left fields below)
     float abilityReadyIn = 0;            // seconds until the ability can be used again (0 = ready)
     float magic = kMaxMagic;             // the magic meter now (0 to kMaxMagic); abilities spend it
+    float adultLeft = 0;                 // seconds of Adult Power left
     float invulnLeft = 0, speedLeft = 0, revealLeft = 0, stunLeft = 0, burnLeft = 0, shieldLeft = 0;
     float speedMult = 1;                 // movement speed multiplier from gear and songs (1 = normal)
     std::vector<RosterRow> roster;
@@ -213,6 +215,7 @@ class RoyaleSession {
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
+            s.adult = (p.flags & net::PlayerNet::kAdult) != 0;
             s.health = p.Health();
             s.weapon = static_cast<ItemId>(p.weapon);
             s.weaponRarity = static_cast<Rarity>(p.weaponRarity);
@@ -277,6 +280,7 @@ class RoyaleSession {
         h.maxHealth = h.inv.maxHealth;
         h.abilityReadyIn = client->AbilityReadyIn();
         h.magic = client->MagicNow();
+        h.adultLeft = client->Left(h.inv.adultLeft);
         h.invulnLeft = client->Left(h.inv.invulnLeft);
         h.speedLeft = client->Left(h.inv.speedLeft);
         h.revealLeft = client->Left(h.inv.revealLeft);

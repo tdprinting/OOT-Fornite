@@ -452,9 +452,9 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 88 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
     CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 17 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
-    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 4);
+    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
@@ -1289,6 +1289,59 @@ static void HireableAllies() {
     bool outside = m3.GetStorm().DamagePerSecond(lost.pos, m3.StormTime()) > 0;
     Run(s3, 2.0f);
     CHECK(!outside || lost.health < before || Distance(lost.pos, {m3.MapCircle().center.x + m3.MapCircle().radius * 0.95f, m3.MapCircle().center.z}) > 20.0f);   // it ran for cover or took damage
+}
+
+static void HeartChestsAndAdultPower() {
+    // A few of the hideaways and climbs hold a Heart Container in a pink (special) chest.
+    {
+        Simulation sim(31, {{0, 0}, 4000}, 0);
+        std::vector<ChestSite> sites;
+        for (int i = 0; i < 20; i++) sites.push_back({{-3000.0f + i * 300.0f, (i % 2) * 400.0f}, static_cast<uint8_t>(i % 3)});
+        sim.match.SetChestSites(sites);
+        sim.match.RegenerateLoot(10);
+        int special = 0;
+        for (const auto& l : sim.match.Loot()) {
+            if (!l.spawn.special) continue;
+            special++;
+            CHECK(l.spawn.item == ItemId::HeartContainer && l.spawn.container && l.spawn.rarity == Rarity::Legendary);
+        }
+        CHECK(special >= 2 && special <= 4);
+        Simulation again(31, {{0, 0}, 4000}, 0);
+        again.match.SetChestSites(sites);
+        again.match.RegenerateLoot(10);
+        int special2 = 0;
+        for (const auto& l : again.match.Loot()) special2 += l.spawn.special;
+        CHECK(special2 == special);                                                        // the same match always gets the same hearts
+    }
+    // Adult Power: Legendary only, grows you for a minute, and makes you hit harder, take less and run faster.
+    CHECK(DefOf(ItemId::AdultPower).minRarity == Rarity::Legendary && DefOf(ItemId::AdultPower).maxRarity == Rarity::Legendary && InPool(ItemId::AdultPower));
+    Simulation sim = Duel(21, {0, 0}, {45, 0});
+    Match& m = sim.match;
+    PlayerState* me = m.Find(1);
+    PlayerState* foe = m.Find(1000);
+    foe->stunUntil = 1e9f;
+    me->weapon = {ItemId::KokiriSword, Rarity::Common};
+    foe->health = foe->maxHealth;
+    const float plain = [&] { const AttackResult r = m.Attack(1, 1000); return r.damage; }();
+    CHECK(plain > 0);
+    for (int i = 0; i < 2 * kTickHz; i++) m.Tick(kDt);
+    const size_t power = m.AddLoot({{0, 0}, ItemId::AdultPower, Rarity::Legendary, true});
+    CHECK(m.PickUp(1, power, false));
+    CHECK(m.Clock() < me->adultUntil && me->adultUntil - m.Clock() > kAdultSeconds - 1.0f);
+    const AttackResult grown = m.Attack(1, 1000);
+    CHECK(grown.ok && grown.damage > plain * 1.3f);
+    CHECK(m.SpeedMultiplier(*me) > 1.09f);
+    const float hp = me->health;
+    me->invulnUntil = 0;
+    m.Damage(1, 0.5f, 1000);
+    CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken) < 0.01f);
+    // A second one straight away is not wasted; near the end it tops you up.
+    const size_t again = m.AddLoot({{0, 0}, ItemId::AdultPower, Rarity::Legendary, true});
+    CHECK(!m.PickUp(1, again, false));
+    for (int i = 0; i < 45 * kTickHz; i++) m.Tick(kDt);
+    CHECK(m.PickUp(1, again, false) && me->adultUntil - m.Clock() > kAdultSeconds - 1.0f);
+    for (int i = 0; i < 61 * kTickHz; i++) m.Tick(kDt);
+    CHECK(m.SpeedMultiplier(*me) < 1.01f);                                                  // and it wears off
 }
 
 static void MagicMeter() {
@@ -2526,7 +2579,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

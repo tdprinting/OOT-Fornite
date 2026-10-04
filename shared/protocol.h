@@ -21,7 +21,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 16; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 17; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -278,7 +278,7 @@ struct MatchStateMsg {
 
 // One player as seen in a snapshot. 25 bytes.
 struct PlayerNet {
-    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4;
+    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8;   // kAdult: under the Adult Power
     uint16_t id = 0;
     float x = 0, y = 0, z = 0;
     int16_t rot = 0;
@@ -301,7 +301,7 @@ struct PlayerNet {
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
         health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8();
-        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 7 && weapon < static_cast<uint8_t>(ItemId::Count) &&
+        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 15 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount &&
                shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount;
     }
@@ -584,6 +584,7 @@ struct EvInventory {
     std::array<ItemRef, kGearSlots> gear = {};
     float invulnLeft = 0, speedLeft = 0, speedMult = 1, revealLeft = 0, stunLeft = 0, burnLeft = 0, regenLeft = 0, shieldLeft = 0;
     float magic = kMaxMagic;                // the magic meter, 0 to kMaxMagic
+    float adultLeft = 0;                    // seconds of Adult Power left
 
     void Write(ByteWriter& w) const {
         w.F32(maxHealth); w.F32(shield); w.U8(heartPieces);
@@ -598,7 +599,7 @@ struct EvInventory {
         w.U8(gearMask);
         for (int i = 0; i < kGearSlots; i++) if (gearMask & (1 << i)) { w.U8(gear[i].item); w.U8(gear[i].rarity); }
         w.F32(invulnLeft); w.F32(speedLeft); w.F32(speedMult); w.F32(revealLeft);
-        w.F32(stunLeft); w.F32(burnLeft); w.F32(regenLeft); w.F32(shieldLeft); w.F32(magic);
+        w.F32(stunLeft); w.F32(burnLeft); w.F32(regenLeft); w.F32(shieldLeft); w.F32(magic); w.F32(adultLeft);
     }
     bool Read(ByteReader& r) {
         maxHealth = r.F32(); shield = r.F32(); heartPieces = r.U8();
@@ -624,8 +625,8 @@ struct EvInventory {
             if (gearMask & (1 << i)) { gear[i].item = r.U8(); gear[i].rarity = r.U8(); if (r.ok && !gear[i].Valid()) return false; }
         }
         invulnLeft = r.F32(); speedLeft = r.F32(); speedMult = r.F32(); revealLeft = r.F32();
-        stunLeft = r.F32(); burnLeft = r.F32(); regenLeft = r.F32(); shieldLeft = r.F32(); magic = r.F32();
-        return r.ok && Finite(magic) && magic >= 0 && magic <= kMaxMagic + 0.001f && Finite(maxHealth) && maxHealth >= 1 && maxHealth <= kMaxHealthCap && Finite(abilityReadyIn) && abilityReadyIn >= 0 &&
+        stunLeft = r.F32(); burnLeft = r.F32(); regenLeft = r.F32(); shieldLeft = r.F32(); magic = r.F32(); adultLeft = r.F32();
+        return r.ok && Finite(adultLeft) && adultLeft >= 0 && adultLeft <= kAdultSeconds + 1.0f && Finite(magic) && magic >= 0 && magic <= kMaxMagic + 0.001f && Finite(maxHealth) && maxHealth >= 1 && maxHealth <= kMaxHealthCap && Finite(abilityReadyIn) && abilityReadyIn >= 0 &&
                Finite(invulnLeft) && Finite(speedLeft) && Finite(speedMult) && speedMult > 0.1f && speedMult < 3 && Finite(revealLeft) &&
                Finite(stunLeft) && Finite(burnLeft) && Finite(regenLeft) && Finite(shieldLeft) && invulnLeft >= 0 && speedLeft >= 0 &&
                revealLeft >= 0 && stunLeft >= 0 && burnLeft >= 0 && regenLeft >= 0 && shieldLeft >= 0;

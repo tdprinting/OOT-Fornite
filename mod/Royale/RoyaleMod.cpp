@@ -95,6 +95,7 @@ bool gSeasonAnnounced = false;
 royale::Weather gWeatherShown;
 float gWeatherDensity = 1.0f;       // the local option, 0 to 2
 float gClothScale = 1.0f;           // the local option: cloth and wind physics on the hat and glider, 0 (off) to 2
+int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
 // The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
 // turning. Returns the wind in world units per second; `strength` is 0 to 1.
@@ -587,6 +588,12 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 
     player->currentTunic = PLAYER_TUNIC_KOKIRI; // the colour comes from the player's skin, not from whatever the local save wears
 
+    {   // Adult Power: drawn bigger (and back to size afterwards), easing between the two
+        const float target = 0.01f * (s.adult ? royale::kAdultScale : 1.0f);
+        const float k = actor->scale.x + (target - actor->scale.x) * 0.15f;
+        actor->scale.x = actor->scale.y = actor->scale.z = k;
+    }
+
     // Hold what the server says this player holds.
     Look look = LookFor(s.weapon);
     if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction) {
@@ -915,6 +922,7 @@ struct LootActor {
     bool killing = false;     // asked the game to remove it; it goes when the game next updates actors
     bool big = false;         // Epic and Legendary chests are the big kind
     bool supply = false;      // from a supply drop
+    bool special = false;     // a Heart Container chest: pink
     royale::Rarity rarity = royale::Rarity::Common;
     int gid = -1;             // the game's own model for this item (GetItemDrawID), or -1 to keep the stand-in's
     ActorFunc origUpdate = nullptr, origDestroy = nullptr;
@@ -1019,6 +1027,12 @@ void Chest_Update(Actor* actor, PlayState* play) {
     if (!la.opened) {
         box->alpha = 255; // the game's own update normally fades it in
         Sparkle(play, actor->world.pos, la.rarity);
+        if (la.special && play->gameplayFrames % 3 == 0) {   // a Heart Container chest: pink hearts of light drifting up
+            Vec3f pos = { actor->world.pos.x + (Rand_ZeroOne() - 0.5f) * 40.0f, actor->world.pos.y + 20.0f + Rand_ZeroOne() * 60.0f, actor->world.pos.z + (Rand_ZeroOne() - 0.5f) * 40.0f };
+            Vec3f vel = { 0.0f, 0.9f + Rand_ZeroOne() * 0.6f, 0.0f }, accel = { 0.0f, 0.0f, 0.0f };
+            Color_RGBA8 prim = { 255, 120, 190, 255 }, env = { 255, 40, 110, 255 };
+            EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 110, 30);
+        }
         if (la.supply) {   // a supply crate: a column of red and gold light
             for (int i = 0; i < 3; i++) {
                 Vec3f pos = { actor->world.pos.x + (Rand_ZeroOne() - 0.5f) * 30.0f, actor->world.pos.y + Rand_ZeroOne() * 420.0f, actor->world.pos.z + (Rand_ZeroOne() - 0.5f) * 30.0f };
@@ -1064,7 +1078,7 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
     ClearChestFlag();
     if (actor == nullptr) return;
     LootActor la;
-    la.actor = actor; la.baseY = groundY; la.chest = true; la.opened = l.taken; la.big = big; la.rarity = rarity; la.supply = l.supply;
+    la.actor = actor; la.baseY = groundY; la.chest = true; la.opened = l.taken; la.big = big; la.rarity = rarity; la.supply = l.supply; la.special = l.special;
     la.origUpdate = actor->update;
     la.origDestroy = actor->destroy;
     gLoot[index] = la;
@@ -1072,8 +1086,10 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
     actor->update = Chest_Update;
     actor->destroy = Chest_Destroy;
     if (!l.taken) {
-        std::string label = std::string(RarityName(rarity)) + " Chest";
-        NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", static_cast<int16_t>(big ? 50 : 34), RarityColor(rarity) });
+        std::string label = l.special ? std::string("Heart Container Chest") : std::string(RarityName(rarity)) + " Chest";
+        Color_RGBA8 labelColour = RarityColor(rarity);
+        if (l.special) labelColour = { 255, 130, 190, 255 };
+        NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", static_cast<int16_t>(big ? 50 : 34), labelColour });
     }
 }
 
@@ -2996,7 +3012,7 @@ void DrawOverlay() {
         if (near != kNoLoot && near < loot.size()) {
             const royale::Rarity r = static_cast<royale::Rarity>(loot[near].rarity);
             if (loot[near].chest) {
-                centered(ds.y * 0.66f, RarityU32(r), 26 * scale, std::string(RarityName(r)) + " Chest");
+                centered(ds.y * 0.66f, loot[near].special ? IM_COL32(255, 130, 190, 255) : RarityU32(r), 26 * scale, loot[near].special ? std::string("Heart Container Chest") : std::string(RarityName(r)) + " Chest");
                 centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: open");
             } else {
                 centered(ds.y * 0.66f, RarityU32(r), 26 * scale, ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
@@ -3070,6 +3086,7 @@ void DrawOverlay() {
     }
     y += line;
     if (h.stormDamagePerSecond > 0) { text(x, y, red, 22 * scale, "IN THE STORM!"); y += line; }
+    if (h.adultLeft > 0.0f && h.selfAlive) { text(x, y, gold, 22 * scale, "ADULT POWER  " + ClockText(h.adultLeft)); y += line; }
     if (h.selfAlive) {
         text(x, y, RarityU32(h.weaponRarity), 20 * scale, "B  " + ItemLabel(h.weapon, h.weaponRarity));
         y += line;
@@ -3299,13 +3316,14 @@ bool LoadNextTrack() {
     return false;
 }
 
-void UpdateLobbyMusic(bool inLobby) {
+// The music folder's songs play in the lobby (if that option is on) and, when "Match music" is set to Random, through the match too.
+void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     LobbyMusic& m = gLobbyMusic;
-    const bool want = inLobby && MapOption("LobbyMusic", true) && !m.failed;
+    const bool want = ((inLobby && MapOption("LobbyMusic", true)) || inMatchRandom) && !m.failed;
     if (!want) {
         if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
         m.playing = false;
-        if (!inLobby) m.scanned = false; // pick up newly added songs next time
+        if (!inLobby && !inMatchRandom) m.scanned = false; // pick up newly added songs next time
         return;
     }
     if (!m.scanned) ScanMusicFolder();
@@ -3320,7 +3338,7 @@ void UpdateLobbyMusic(bool inLobby) {
     if (SDL_GetQueuedAudioSize(m.device) > 44100 * 4 / 3) return; // about a third of a second queued is enough
     if (m.pcm.empty() || m.pos >= m.pcm.size()) {
         if (!LoadNextTrack()) { m.failed = true; return; }
-        Say("Lobby music: " + m.nowPlaying);
+        Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying);
     }
     const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.8f;
     const size_t chunk = std::min<size_t>(44100 / 2, m.pcm.size() - m.pos);
@@ -3735,6 +3753,11 @@ void OnPlayerUpdate() {
                                player->actor.shape.rot.y, ClassifyAnim(player), static_cast<uint8_t>(gPlayState->sceneNum));
     }
 
+    {   // Adult Power: you grow, and shrink back when it runs out
+        const float target = 0.01f * (hud.adultLeft > 0.0f ? royale::kAdultScale : 1.0f);
+        const float k = player->actor.scale.x + (target - player->actor.scale.x) * 0.15f;
+        player->actor.scale.x = player->actor.scale.y = player->actor.scale.z = k;
+    }
     UpdateSkydive(player, hud);
     ReconcileLocalGlider(gSkydiving);
     UpdateEmote(player, hud);
@@ -4523,6 +4546,27 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     }
 }
 
+// ---- match music ----------------------------------------------------------------------------------------------------------------
+// "Match music" in the lobby menu: 0 the game's own music as usual, 1 a random song from the music folder (with the game's music turned down),
+// 2 silence. The game's music volume is put back to the player's setting whenever a match is not on.
+bool gBgmMuted = false;
+void SetGameBgmVolume(bool muted) {
+    if (muted == gBgmMuted) return;
+    gBgmMuted = muted;
+    const float main = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
+    const float sub = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.SubMusic"), 100)) / 100.0f;
+    Audio_SetGameVolume(SEQ_PLAYER_BGM_MAIN, main);
+    Audio_SetGameVolume(SEQ_PLAYER_BGM_SUB, sub);
+}
+bool DriveMatchMusic(const royale::HudState& hud, bool joined) {
+    const bool live = joined && InField() && (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch);
+    const bool random = live && gMusicMode == 1;
+    if (random && !gLobbyMusic.scanned) ScanMusicFolder();
+    const bool haveSongs = !gLobbyMusic.tracks.empty();
+    SetGameBgmVolume(live && (gMusicMode == 2 || (gMusicMode == 1 && haveSongs)));
+    return random && haveSongs;
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -4537,7 +4581,7 @@ void OnGameFrameUpdate() {
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     UpdateChickenMusic();
-    UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby);
+    UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
@@ -4670,6 +4714,7 @@ struct UiState {
     int weatherChange = 50;                // how often the weather changes (host)
     int weatherDensity = 100;              // particles drawn on this screen, per cent (local)
     int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
+    int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool showCustomize = false;
@@ -4710,6 +4755,8 @@ UiState& Ui() {
         gWeatherDensity = ui.weatherDensity / 100.0f;
         ui.clothPhysics = std::clamp(CVarGetInteger(ROYALE_CVAR("ClothPhysics"), 100), 0, 200);
         gClothScale = ui.clothPhysics / 100.0f;
+        ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
+        gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
         gSession.SelectMap(ui.mapId);
         gSession.SetMajorBoss(ui.majorBoss);
@@ -4740,6 +4787,7 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("WeatherChange"), ui.weatherChange);
     CVarSetInteger(ROYALE_CVAR("WeatherDensity"), ui.weatherDensity);
     CVarSetInteger(ROYALE_CVAR("ClothPhysics"), ui.clothPhysics);
+    CVarSetInteger(ROYALE_CVAR("MusicMode"), ui.musicMode);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
@@ -5019,6 +5067,9 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Cloth and wind on hats and gliders (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+        static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
     }
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();

@@ -30,6 +30,13 @@ constexpr float kDeathDropShare = 0.5f;
 constexpr float kMaxMagic = 100.0f;
 constexpr float kMagicRegenPerSec = 1.2f;
 
+// Adult Power (a very rare Legendary find): you grow into adult Link for a while.
+constexpr float kAdultSeconds = 60.0f;
+constexpr float kAdultDamage = 1.4f;     // damage dealt
+constexpr float kAdultTaken = 0.8f;      // damage taken
+constexpr float kAdultSpeed = 1.1f;
+constexpr float kAdultScale = 1.35f;     // how much bigger Link is drawn
+
 constexpr int kMaxProps = 1200;
 
 // Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.

@@ -34,6 +34,7 @@ struct InventoryInfo {
     float maxHealth = kMaxHealth;
     float shield = 0; // the shield bar, 0 to kMaxShield
     float magic = kMaxMagic; // the magic meter as of receivedAt
+    float adultLeft = 0;     // Adult Power seconds left as of receivedAt
     int heartPieces = 0;
     int rupees = 0;
     std::array<uint8_t, kAmmoKinds> ammo = {};
@@ -327,7 +328,7 @@ class GameClient {
                 net::EvInventory m;
                 if (!net::Decode(data, m)) break;
                 inventory.rupees = m.rupees; inventory.ammo = m.ammo;
-                inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.magic = m.magic; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
+                inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.magic = m.magic; inventory.adultLeft = m.adultLeft; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
                 inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
                 inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
                 inventory.invulnLeft = m.invulnLeft; inventory.speedLeft = m.speedLeft; inventory.speedMult = m.speedMult;

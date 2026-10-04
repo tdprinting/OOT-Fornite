@@ -48,6 +48,7 @@ struct PlayerState {
     Equipped ability = {ItemId::DinsFire, Rarity::Common};
     bool hasAbility = false;
     float abilityReadyAt = 0;
+    float adultUntil = 0;                                  // Adult Power: bigger, stronger, tougher and faster until then
     float magic = kMaxMagic;                               // the magic meter as of magicStamp (it refills by itself; see Match::MagicNow)
     float magicStamp = 0;
     bool hasMark = false;                                  // Farore's Wind
@@ -189,7 +190,19 @@ class Match {
         for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
         for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
         Rng siteRng(seed ^ 0x73697465ull); // "site"
+        const size_t firstSite = loot.size();
         for (const ChestSite& s : chestSites) loot.push_back({SiteChest(siteRng, s.pos, s.bonus), false});
+        // A few of the hideaways and climbs hold a Heart Container instead: pink chests, one more heart for whoever finds one.
+        std::vector<size_t> good;
+        for (size_t i = 0; i < chestSites.size(); i++) if (chestSites[i].bonus >= 1) good.push_back(firstSite + i);
+        const int hearts = (std::min)(static_cast<int>(good.size()), 2 + static_cast<int>(map.radius / 3200.0f));
+        Rng heartRng(seed ^ 0x6865617274ull);   // "heart"
+        for (int n = 0; n < hearts; n++) {
+            const size_t pick = heartRng.Below(static_cast<uint32_t>(good.size()));
+            LootSpawn& l = loot[good[pick]].spawn;
+            l.item = ItemId::HeartContainer; l.rarity = Rarity::Legendary; l.fromChest = true; l.container = true; l.special = true;
+            good.erase(good.begin() + static_cast<long>(pick));
+        }
     }
 
     // Add a human. Returns false if the lobby is full or the match already started.
@@ -276,6 +289,7 @@ class Match {
         else if (kind == DamageKind::Fire) mult *= g.fire;
         else if (kind == DamageKind::Explosion) mult *= g.explosion;
         if (clock < p->dmgTakenUntil) mult *= p->dmgTakenMult;
+        if (clock < p->adultUntil) mult *= kAdultTaken;
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
         hearts *= mult;
 
@@ -385,7 +399,7 @@ class Match {
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
         const GearTotals ag = TotalsOf(*a);
-        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, t->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee);
+        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, t->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
         float reduction = 0.0f;
         if (w.effect != WeaponEffect::PierceShield && t->hasShield) reduction = ShieldReduction(t->shield.item, t->shield.rarity);
         r.damage = base * (1.0f - reduction);
@@ -760,7 +774,7 @@ class Match {
     }
 
     float SpeedMultiplier(const PlayerState& p) const {
-        return TotalsOf(p).speed * (clock < p.speedUntil ? p.speedMult : 1.0f);
+        return TotalsOf(p).speed * (clock < p.speedUntil ? p.speedMult : 1.0f) * (clock < p.adultUntil ? kAdultSpeed : 1.0f);
     }
     bool Revealing(const PlayerState& p) const { return clock < p.revealUntil; }
     bool Stunned(const PlayerState& p) const { return clock < p.stunUntil || clock < p.frozenUntil; }
@@ -858,7 +872,7 @@ class Match {
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (!hit) return r;
         const GearTotals ag = TotalsOf(*a);
-        r.damage = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, b->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee);
+        r.damage = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, b->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
         if (dragon) r.damage *= airborne ? 0.75f : (b->mode == DragonMode::Landed ? 1.25f : 1.0f); // landed: it is dazed and takes extra
         r.hit = true;
         const float dealt = (std::min)(r.damage, b->health);
@@ -1363,6 +1377,11 @@ class Match {
                 if (p.maxHealth >= kMaxHealthCap && p.health >= p.maxHealth) return false;
                 p.maxHealth = (std::min)(kMaxHealthCap, p.maxHealth + 1.0f);
                 p.health = (std::min)(p.maxHealth, p.health + 1.0f);
+                return true;
+            case InstantEffect::AdultPower:
+                if (clock + 20.0f < p.adultUntil) return false;   // already grown: don't waste it (it can be topped up near the end)
+                p.adultUntil = clock + kAdultSeconds;
+                p.dirty = true;
                 return true;
             case InstantEffect::MagicJar: {
                 const bool needsMagic = MagicNow(p) < kMaxMagic - 0.5f, recharging = p.hasAbility && clock < p.abilityReadyAt;

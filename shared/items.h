@@ -29,7 +29,7 @@ enum class ItemId : uint8_t {
     // ---- consumables (bottle contents and potions)
     GreenPotion, RedPotion, BluePotion, Fairy, Milk, Fish, BlueFire, Bug, Poe, SmallShieldPotion, LargeShieldPotion,
     // ---- instant
-    RecoveryHeart, HeartPiece, HeartContainer, MagicJar,
+    RecoveryHeart, HeartPiece, HeartContainer, MagicJar, AdultPower,
     // ---- abilities
     DinsFire, FaroresWind, NayrusLove, Hookshot, Longshot, LensOfTruth, MagicBeans, FairyOcarina, OcarinaOfTime,
     ZeldasLullaby, EponasSong, SariasSong, SunsSong, SongOfTime, SongOfStorms, MinuetOfForest, BoleroOfFire,
@@ -115,6 +115,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::HeartPiece, "Piece of Heart", kInstant, rU, rR, "Four make a Heart Container"},
     {ItemId::HeartContainer, "Heart Container", kInstant, rE, rL, "+1 maximum heart and heals it"},
     {ItemId::MagicJar, "Magic Jar", kInstant, rC, rR, "Refills your magic and recharges your ability"},
+    {ItemId::AdultPower, "Adult Power", kInstant, rL, rL, "Grow into adult Link for a minute: hit harder, take less damage, run faster"},
     // abilities
     {ItemId::DinsFire, "Din's Fire", kAbility, rR, rL, "Fire burst around you"},
     {ItemId::FaroresWind, "Farore's Wind", kAbility, rE, rL, "Mark a spot, then jump back to it"},
@@ -286,13 +287,14 @@ constexpr PotionDef PotionOf(ItemId id) {
     }
 }
 
-enum class InstantEffect : uint8_t { None, Heart, HeartPiece, HeartContainer, MagicJar, Rupees, Ammo };
+enum class InstantEffect : uint8_t { None, Heart, HeartPiece, HeartContainer, MagicJar, AdultPower, Rupees, Ammo };
 constexpr InstantEffect InstantOf(ItemId id) {
     switch (id) {
         case ItemId::RecoveryHeart: return InstantEffect::Heart;
         case ItemId::HeartPiece: return InstantEffect::HeartPiece;
         case ItemId::HeartContainer: return InstantEffect::HeartContainer;
         case ItemId::MagicJar: return InstantEffect::MagicJar;
+        case ItemId::AdultPower: return InstantEffect::AdultPower;
         case ItemId::Rupees: return InstantEffect::Rupees;
         case ItemId::ArrowAmmo: case ItemId::SeedAmmo: case ItemId::BombAmmo: case ItemId::BombchuAmmo: case ItemId::NutAmmo: return InstantEffect::Ammo;
         default: return InstantEffect::None;

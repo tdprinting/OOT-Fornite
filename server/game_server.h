@@ -658,19 +658,20 @@ class GameServer {
             inv.regenLeft = (std::max)(0.0f, p->regenUntil - now);
             inv.shield = p->armor;
             inv.magic = sim.match.MagicNow(*p);
+            inv.adultLeft = (std::max)(0.0f, p->adultUntil - now);
             inv.shieldLeft = (std::max)(0.0f, p->dmgTakenUntil - now);
             SendTo(c, inv);
         }
     }
 
-    static net::PlayerNet ToNet(const PlayerState& p) {
+    net::PlayerNet ToNet(const PlayerState& p) const {
         net::PlayerNet n;
         n.id = static_cast<uint16_t>(p.id);
         n.x = p.pos.x; n.z = p.pos.z; n.y = p.y;
         n.rot = p.rot;
         n.health = net::PlayerNet::QuantizeHealth(p.health);
         n.flags = static_cast<uint8_t>((p.alive ? net::PlayerNet::kAlive : 0) | (p.hasShield ? net::PlayerNet::kShield : 0) |
-                                       (p.isBot ? net::PlayerNet::kBot : 0));
+                                       (p.isBot ? net::PlayerNet::kBot : 0) | (sim.match.Clock() < p.adultUntil ? net::PlayerNet::kAdult : 0));
         n.weapon = static_cast<uint8_t>(p.weapon.item);
         n.weaponRarity = static_cast<uint8_t>(p.weapon.rarity);
         n.potions = static_cast<uint8_t>(p.potions.size());
