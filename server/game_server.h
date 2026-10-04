@@ -231,7 +231,7 @@ class GameServer {
         if (!p || !p->alive) return;
         Vec2 target = {in.x, in.z};
         if (sim.match.State() != MatchState::Lobby) {
-            float elapsed = std::min(std::max(clock - c.lastInputClock, kStep), kMaxInputGap);
+            float elapsed = (std::min)(std::max(clock - c.lastInputClock, kStep), kMaxInputGap);
             float maxMove = kMaxPlausibleSpeed * elapsed + kMovementSlack;
             float d = Distance(p->pos, target);
             if (d > maxMove) {
@@ -341,15 +341,15 @@ class GameServer {
             s.epoch = c.epoch;
             s.players.push_back(ToNet(*self));
 
-            std::vector<std::pair<float, const PlayerState*>> near;
+            std::vector<std::pair<float, const PlayerState*>> nearby;
             for (const auto& o : players) {
                 if (o.id == self->id || !o.alive) continue;
-                near.push_back({Distance(self->pos, o.pos), &o});
+                nearby.push_back({Distance(self->pos, o.pos), &o});
             }
-            size_t keep = std::min(near.size(), net::kSnapshotMaxPlayers);
-            std::partial_sort(near.begin(), near.begin() + static_cast<long>(keep), near.end(),
+            size_t keep = (std::min)(nearby.size(), net::kSnapshotMaxPlayers);
+            std::partial_sort(nearby.begin(), nearby.begin() + static_cast<long>(keep), nearby.end(),
                               [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second->id < b.second->id); });
-            for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*near[i].second));
+            for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*nearby[i].second));
             SendTo(c, s, false);
         }
     }

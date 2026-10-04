@@ -215,7 +215,7 @@ class Match {
             bool iEnough = hi >= missing, bEnough = hb >= missing;
             if ((iEnough && !bEnough) || (iEnough == bEnough && (iEnough ? hi < hb : hi > hb))) best = i;
         }
-        p->health = std::min(kMaxHealth, p->health + PotionHeal(p->potions[best].item, p->potions[best].rarity));
+        p->health = (std::min)(kMaxHealth, p->health + PotionHeal(p->potions[best].item, p->potions[best].rarity));
         p->potions.erase(p->potions.begin() + static_cast<long>(best));
         return true;
     }

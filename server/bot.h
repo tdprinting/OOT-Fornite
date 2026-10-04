@@ -54,7 +54,7 @@ class BotController {
         float dx = target.x - p.pos.x, dz = target.z - p.pos.z;
         float len = std::hypot(dx, dz);
         if (len < 1e-3f) return;
-        float step = std::min(len, kRunSpeed * speedScale * dt);
+        float step = (std::min)(len, kRunSpeed * speedScale * dt);
         p.pos.x += dx / len * step;
         p.pos.z += dz / len * step;
     }

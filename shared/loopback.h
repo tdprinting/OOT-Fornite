@@ -80,7 +80,7 @@ class LoopbackNetwork {
         const Link& l = useOwnLink ? to.link : (linkOwner ? linkOwner->link : to.link);
         float delay = l.latencySec + (l.jitterSec > 0 ? static_cast<float>(rng.Unit()) * l.jitterSec : 0.0f);
         if (type == NetEvent::Type::Data && !reliable && l.unreliableLoss > 0 && rng.Unit() < l.unreliableLoss) return;
-        float at = std::max(now + delay, to.lastAt);
+        float at = (std::max)(now + delay, to.lastAt);
         to.lastAt = at;
         NetEvent ev;
         ev.type = type;

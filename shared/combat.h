@@ -55,7 +55,7 @@ inline float WeaponDps(ItemId id, Rarity r) {
 // Fraction of incoming damage the shield absorbs, capped at 75%.
 inline float ShieldReduction(ItemId id, Rarity r) {
     float base = id == ItemId::DekuShield ? 0.20f : id == ItemId::HylianShield ? 0.35f : id == ItemId::MirrorShield ? 0.45f : 0.0f;
-    return std::min(0.75f, base * static_cast<float>(kRarityMultiplier[static_cast<int>(r)]));
+    return (std::min)(0.75f, base * static_cast<float>(kRarityMultiplier[static_cast<int>(r)]));
 }
 
 inline float PotionHeal(ItemId id, Rarity r) {

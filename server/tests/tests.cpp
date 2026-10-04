@@ -191,11 +191,11 @@ static void NoAttacksDuringDrop() {
 static void PickUpRulesAndSwap() {
     Simulation sim = Duel(1, {1500, 0}, {0, 0});
     Match& m = sim.match;
-    size_t far = m.AddLoot({{400, 0}, ItemId::MasterSword, Rarity::Epic, false});
-    size_t near = m.AddLoot({{10, 0}, ItemId::MasterSword, Rarity::Epic, false});
-    CHECK(!m.PickUp(1000, far));                   // too far
-    CHECK(m.PickUp(1000, near));
-    CHECK(!m.PickUp(1000, near));                  // already taken
+    size_t farLoot = m.AddLoot({{400, 0}, ItemId::MasterSword, Rarity::Epic, false});
+    size_t nearLoot = m.AddLoot({{10, 0}, ItemId::MasterSword, Rarity::Epic, false});
+    CHECK(!m.PickUp(1000, farLoot));                   // too far
+    CHECK(m.PickUp(1000, nearLoot));
+    CHECK(!m.PickUp(1000, nearLoot));                  // already taken
     CHECK(m.Find(1000)->weapon.item == ItemId::MasterSword);
     size_t n = m.Loot().size();
     size_t k = m.AddLoot({{0, 0}, ItemId::BiggoronSword, Rarity::Rare, false});

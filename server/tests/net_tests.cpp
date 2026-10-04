@@ -589,9 +589,9 @@ static void InterpolationIsSmoothUnderJitter() {
         if (t > 2.0f && watcher.Sample(2, seen)) {
             if (last > -1e8f) {
                 CHECK(seen.x >= last - 0.001f);                              // never goes backwards
-                worstStep = std::max(worstStep, seen.x - last);
+                worstStep = (std::max)(worstStep, seen.x - last);
             }
-            worstLag = std::max(worstLag, runnerX - seen.x);
+            worstLag = (std::max)(worstLag, runnerX - seen.x);
             last = seen.x;
             samples++;
         }
@@ -618,17 +618,17 @@ static void InterpolatesAngleAcrossWrap() {
     // 32000 -> -32000 as binary angles is a short turn through +-32768 (1536 units), not a 64000-unit sweep through zero.
     // Every interpolated sample while the turn is shown must stay near the wrap point.
     // Sample at 200 Hz, far finer than the 20 Hz snapshots, so many samples land between the two keyframes.
-    int near = 0, turning = 0;
+    int nearWrap = 0, turning = 0;
     for (int i = 0; i < 200; i++) {
         rig.Step(0.005f);
         PlayerNet s;
         if (a.Sample(2, s)) {
             CHECK(std::abs(static_cast<int>(s.rot)) >= 31990);
-            near++;
+            nearWrap++;
             if (s.rot != 32000 && s.rot != -32000) turning++;
         }
     }
-    CHECK(near >= 150);
+    CHECK(nearWrap >= 150);
     CHECK(turning >= 5);                       // we actually observed samples mid-turn, not just the end points
 }
 
