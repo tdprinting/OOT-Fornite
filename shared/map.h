@@ -1,17 +1,80 @@
 #pragma once
+#include "boss.h"
 #include "storm.h"
 
 namespace royale {
 
-// Hyrule Field (SCENE_SPOT00, scene 0x51) is the v1 map.
+// The places a match can be played. Each is one of the game's overworld scenes; the host picks one in the lobby. Everything else (storm,
+// loot, spawn spread, bots) scales from the circle measured on that scene when the match starts. `fallback` is only the guess used in the
+// lobby, before the host's game has been there to measure it.
 //
-// PLACEHOLDER VALUES: the real extent of the playable field has not been measured. Before playtesting, walk Link to the
-// edges with the debug HUD ("Show Link position" in the Royale window) and set the centre and radius here. Everything
-// else (storm circles, loot placement, spawn spread, bot movement) scales from this one circle.
+// Each place has a theme, and its mini bosses and its one major boss (a flying dragon) are dressed for it, and so are the names of the
+// points of interest: 16 silly rhyming names per place, the first being the big landmark in the middle.
+enum class Theme : uint8_t { Meadow, Water, Shadow, Fire, Desert, Count };
+
+constexpr int kNamesPerMap = 16;
+inline const char* const kPoiNames[] = {
+    // Hyrule Field
+    "Hylian Billion Pavilion", "Deku Dew Zoo",         "Goron Groove Lagoon",      "Zora Snore Shore",
+    "Gerudo Voodoo Rendezvous", "Kokiri Breezy Wheezy", "Skulltula Hullabaloo",    "Bombchu Kaboom Room",
+    "Poe Show Shack",          "Octorok Rock Dock",     "Cucco Mucky Plucky",      "Navi Gravy Bay",
+    "Ganon's Bacon Cabin",     "Moblin Cobblin' Wobblin'", "Tektite Tight Bite",   "Lon Lon Gone Wrong",
+    // Lake Hylia
+    "Splish Splash Laboratory", "Fishy Wishy Pond",     "Shoreline Dine-a-line",   "Zora Aurora Pier",
+    "Dive Hive Dock",          "Gulp Pulp Cove",        "Drizzle Sizzle Bay",      "Bubble Trouble Reef",
+    "Ripple Tripple Bridge",   "Kelp Help Hut",         "Octorok Sock Dock",       "Tadpole Hold-a-Pole",
+    "Pelican Melon Bay",       "Dewdrop Flop Shop",     "Whirl Pearl Spiral",      "Mudskipper Zipper Strip",
+    // Kakariko Village
+    "Windmill Chill Hill",     "Graveyard Hard Yard",   "Redead Bed Shed",         "Skulltula House Grouse",
+    "Bazaar Bizarre Bar",      "Potion Motion Shop",    "Cucco Lady Shady",        "Gossip Stone Moan Zone",
+    "Well Spell Bell Cell",    "Dampe's Camps Ramps",   "Shadow Meadow Barrow",    "Poe Show Row",
+    "Anju's Hunch Brunch",     "Archery Hearty Party",  "Lantern Pattern Lane",    "Spooky Pookie Crypt",
+    // Death Mountain Crater
+    "Cinder Tinder Crater",    "Goron Moron Lair",      "Ember Remember Ridge",    "Bolero Zero Slope",
+    "Magma Dilemma Pit",       "Ash Stash Cache",       "Fire Choir Spire",        "Scorch Porch Perch",
+    "Smoke Poke Stoke",        "Obsidian Lid-ian Rim",  "Flame Game Frame",        "Bomb Flower Power Tower",
+    "Hot Spot Plot",           "Sizzle Fizzle Shack",   "Brimstone Prone Zone",    "Blaze Daze Haze",
+    // Desert Colossus
+    "Spirit Merit Statue",     "Sand Land Stand",       "Dune Moon Lagoon",        "Mirage Garage Stage",
+    "Oasis Basis Place",       "Gerudo Dude Mood Food", "Cactus Practice Patch",   "Quicksand Command Strand",
+    "Haunted Daunted Dune",    "Sunbaked Naked Rock",   "Scarab Carb Cab",         "Vulture Culture Perch",
+    "Dust Rust Trust",         "Pharaoh Narrow Arrow",  "Sphinx Winks Jinx",       "Camel Mammal Trail",
+};
+
+struct MapDef {
+    const char* name;
+    const char* blurb;
+    int scene;            // the game's scene number (SCENE_*), checked against the engine in RoyaleMod.cpp
+    Circle fallback;
+    Theme theme;
+    BossKind minis[2];    // the mini bosses that guard this place
+    BossKind major;       // its dragon
+};
+
+constexpr MapDef kMaps[] = {
+    {"Hyrule Field", "Wide green plains with a town in the middle and caves around the edge", 0x51, {{0.0f, 0.0f}, 4000.0f}, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    {"Lake Hylia", "Shores, docks and little islands: fights on the beaches and bridges", 0x57, {{0.0f, 0.0f}, 3200.0f}, Theme::Water,
+     {BossKind::Tide, BossKind::Frost}, BossKind::DragonWater},
+    {"Kakariko Village", "A tight village of rooftops and graves: close fights, lots of climbing", 0x52, {{0.0f, 0.0f}, 1900.0f}, Theme::Shadow,
+     {BossKind::Shade, BossKind::Stone}, BossKind::DragonShadow},
+    {"Death Mountain Crater", "A hot crater rim: lava, ash and narrow ledges", 0x61, {{0.0f, 0.0f}, 2200.0f}, Theme::Fire,
+     {BossKind::Lava, BossKind::Stone}, BossKind::DragonFire},
+    {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{0.0f, 0.0f}, 3500.0f}, Theme::Desert,
+     {BossKind::Dune, BossKind::Stone}, BossKind::DragonSand},
+};
+constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
+static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
+constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
+
+constexpr int ClampMap(int id) { return id >= 0 && id < kMapCount ? id : 0; }
+constexpr const MapDef& MapOf(int id) { return kMaps[ClampMap(id)]; }
+
+// Hyrule Field is the default map and the one the older constants name.
 constexpr int kHyruleFieldScene = 0x51;
 // The waiting room is the Temple of Time (SCENE_TEMPLE_OF_TIME). Players wait there for the host to start; the match itself
-// is always played in Hyrule Field. RoyaleMod.cpp static_asserts that this matches the engine's scene id.
+// is always played on the chosen map. RoyaleMod.cpp static_asserts that this matches the engine's scene id.
 constexpr int kWaitingRoomScene = 0x43;
-constexpr Circle kHyruleFieldMap = {{0.0f, 0.0f}, 4000.0f};
+constexpr Circle kHyruleFieldMap = kMaps[0].fallback;
 
 } // namespace royale

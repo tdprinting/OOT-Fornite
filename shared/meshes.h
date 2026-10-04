@@ -17,6 +17,7 @@ struct MeshVertex {
 
 enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
+constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
 struct MeshData {
     std::vector<MeshVertex> v; // three vertices per triangle, each triangle flat-coloured
@@ -140,12 +141,16 @@ inline MeshData Roof() {
 // crest. The three kinds share the shape and differ in colour: grey stone, dark rock veined with lava, and pale ice.
 inline MeshData Golem(uint32_t kind) {
     struct Palette { Rgb body, dark, glow, crest; };
-    static const Palette palettes[3] = {
-        {{138, 132, 122}, {96, 92, 84}, {255, 230, 120}, {170, 160, 140}},
-        {{78, 60, 56}, {52, 38, 36}, {255, 120, 30}, {210, 70, 20}},
-        {{176, 214, 232}, {120, 160, 190}, {120, 230, 255}, {232, 248, 255}},
+    static const Palette palettes[7] = {
+        {{138, 132, 122}, {96, 92, 84}, {255, 230, 120}, {170, 160, 140}},   // stone
+        {{78, 60, 56}, {52, 38, 36}, {255, 120, 30}, {210, 70, 20}},         // lava
+        {{176, 214, 232}, {120, 160, 190}, {120, 230, 255}, {232, 248, 255}}, // frost
+        {{96, 130, 84}, {58, 86, 52}, {170, 240, 120}, {70, 170, 60}},       // moss
+        {{70, 130, 170}, {44, 90, 126}, {110, 235, 235}, {180, 220, 240}},   // tide
+        {{86, 64, 110}, {50, 36, 70}, {200, 110, 255}, {140, 90, 190}},      // shade
+        {{200, 170, 110}, {150, 120, 76}, {255, 220, 110}, {230, 190, 120}}, // dune
     };
-    const Palette& pal = palettes[kind % 3];
+    const Palette& pal = palettes[kind % 7];
     Builder b;
     auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
         b.inside = {cx, cy, cz};
@@ -212,8 +217,18 @@ inline MeshData Glider(uint32_t variant) {
 
 // The fire dragon: a big winged reptile, nose towards +z, about 1200 across with its wings out. The variant is the wing pose
 // (0 up, 1 level, 2 down, 3 level), so cycling the variants flaps its wings.
-inline MeshData Dragon(uint32_t pose) {
-    const Rgb body = {168, 44, 32}, dark = {104, 28, 24}, belly = {236, 176, 84}, glow = {255, 210, 70}, bone = {70, 40, 36}, skin = {204, 66, 44};
+inline MeshData Dragon(uint32_t variant) {
+    const uint32_t pose = variant % 4, theme = (variant / 4) % 5;
+    struct Look { Rgb body, dark, belly, glow, skin; };
+    static const Look looks[5] = {
+        {{168, 44, 32}, {104, 28, 24}, {236, 176, 84}, {255, 210, 70}, {204, 66, 44}},     // fire
+        {{40, 110, 170}, {24, 70, 120}, {170, 225, 235}, {150, 255, 255}, {70, 160, 200}},  // water
+        {{60, 140, 64}, {36, 90, 44}, {200, 220, 120}, {255, 240, 120}, {110, 180, 70}},    // forest
+        {{80, 56, 110}, {44, 30, 70}, {150, 120, 190}, {255, 90, 200}, {110, 70, 150}},     // shadow
+        {{200, 160, 84}, {140, 104, 52}, {240, 220, 160}, {255, 120, 60}, {230, 190, 110}}, // sand
+    };
+    const Look& lk = looks[theme];
+    const Rgb body = lk.body, dark = lk.dark, belly = lk.belly, glow = lk.glow, bone = {70, 40, 36}, skin = lk.skin;
     Builder b;
     auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
         b.inside = {cx, cy, cz};

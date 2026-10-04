@@ -1233,7 +1233,7 @@ static void PointsOfInterest() {
     for (const Vec2& sp : a.lootSpots) grounded &= valid(sp);
     CHECK(grounded);
     CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 6);       // a building, a cave and ruins at each
-    for (int i = 0; i < kPoiNameCount; i++) CHECK(kPoiNames[i] != nullptr && kPoiNames[i][0] != 0);
+    for (int i = 0; i < kPoiNameTotal; i++) CHECK(kPoiNames[i] != nullptr && kPoiNames[i][0] != 0);
 
     // The chests: every spot gets one, always on the better tiers, in a container, on top of the scattered ones.
     Simulation sim(9, map, 0);
@@ -1273,6 +1273,42 @@ static void PointsOfInterest() {
     }
 }
 
+static void MapsHaveTheirOwnNamesAndBosses() {
+    CHECK(kMapCount >= 5);
+    for (int id = 0; id < kMapCount; id++) {
+        const MapDef& m = MapOf(id);
+        CHECK(m.name != nullptr && m.scene > 0x50 && m.scene < 0x70 && m.fallback.radius > 1000);
+        CHECK(!IsDragonKind(m.minis[0]) && !IsDragonKind(m.minis[1]) && IsDragonKind(m.major));
+        // The pois use this map's own names, and the landmark keeps the first one.
+        const Circle map = {{0, 0}, m.fallback.radius};
+        const PoiLayout layout = GeneratePois(12 + id, map, 16, nullptr, id);
+        CHECK(layout.pois.size() >= 3);
+        for (const Poi& p : layout.pois) CHECK(p.name >= id * kNamesPerMap && p.name < (id + 1) * kNamesPerMap);
+        CHECK(layout.pois[0].name == id * kNamesPerMap);
+        // The bosses a match spawns are the ones that suit the place, never a dragon.
+        Match match(5, map, 10);
+        match.SetMapId(id);
+        match.SetBossSpots(layout.bossSpots);
+        match.SetBossCount(6);
+        match.AddHuman(1);
+        match.Start();
+        CHECK(!match.Bosses().empty());
+        for (const MiniBoss& b : match.Bosses()) CHECK(b.kind == m.minis[0] || b.kind == m.minis[1]);
+        for (const auto& p : match.Players()) if (p.isBot) CHECK(p.scene == m.scene);
+    }
+    // The dragon of a map is the one for that place.
+    for (int id = 0; id < kMapCount; id++) {
+        Match match(6, {{0, 0}, 2000}, 10);
+        match.SetMapId(id);
+        match.SetMajorBoss(true);
+        match.AddHuman(1);
+        match.Start();
+        for (int i = 0; i < 20 * 400 && !match.FindBoss(kDragonId); i++) match.Tick(0.05f);
+        const MiniBoss* d = match.FindBoss(kDragonId);
+        CHECK(d && d->kind == MapOf(id).major);
+    }
+}
+
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
@@ -1301,6 +1337,33 @@ static void CustomMeshes() {
         }
     }
     // Variants of a rock really differ.
+    // One golem per kind of mini boss, one dragon per theme and pose, and each is its own colour.
+    {
+        std::set<int> reds;
+        for (uint32_t kind = 0; kind < kMiniBossKindCount; kind++) {
+            const MeshData g = BuildMesh(MeshKind::Golem, kind);
+            CHECK(g.Triangles() >= 100 && g.Triangles() <= 420);
+            reds.insert(g.v[0].r * 1000 + g.v[0].g);
+        }
+        CHECK(reds.size() >= 6);
+        std::set<int> dragonColours;
+        for (uint32_t theme = 0; theme < 5; theme++) {
+            for (uint32_t pose = 0; pose < 4; pose++) {
+                const MeshData d = BuildMesh(MeshKind::Dragon, pose + 4 * theme);
+                CHECK(d.Triangles() >= 150 && d.Triangles() <= 420);
+                float mn[3], mx[3];
+                d.Bounds(mn, mx);
+                CHECK(mn[1] >= -0.01f && std::isfinite(mx[0]));
+                if (pose == 0) dragonColours.insert(d.v[0].r * 1000 + d.v[0].g);
+            }
+        }
+        CHECK(dragonColours.size() == 5);
+        // The wings really move: arms up reaches higher than arms down.
+        float upMn[3], upMx[3], dnMn[3], dnMx[3];
+        BuildMesh(MeshKind::Dragon, 0).Bounds(upMn, upMx);
+        BuildMesh(MeshKind::Dragon, 2).Bounds(dnMn, dnMx);
+        CHECK(upMx[1] > dnMx[1] + 200.0f);
+    }
     const MeshData r0 = BuildMesh(MeshKind::Rock, 0), r1 = BuildMesh(MeshKind::Rock, 1);
     bool differ = false;
     for (size_t i = 0; i < r0.v.size() && i < r1.v.size(); i++) differ |= r0.v[i].x != r1.v[i].x;
@@ -1340,6 +1403,115 @@ static Simulation BossArena(std::vector<Vec2> spots, int bosses, Vec2 human) {
     sim.match.Find(1000)->pos = {-1950, -1950}; // one bot far away, so the match doesn't end for lack of opponents
     sim.match.Find(1)->pos = human;
     return sim;
+}
+
+static bool storm_inside(Simulation& sim, Vec2 p) { return sim.match.GetStorm().SafeZoneAt(sim.match.StormTime()).Contains(p); }
+
+static Simulation DragonArena(int mapId, bool enabled) {
+    Simulation sim(9, MapCircle(), 0);
+    sim.match.SetMapId(mapId);
+    sim.match.SetMajorBoss(enabled);
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
+    sim.match.Find(1000)->pos = {-1950, -1950};
+    sim.match.Find(1)->pos = {0, 0};
+    sim.match.Find(1)->maxHealth = sim.match.Find(1)->health = 100.0f;
+    sim.match.Find(1)->invulnUntil = 1.0e9f; // the storm and the dragon leave the test player alone unless a test turns this off
+    sim.match.Find(1000)->maxHealth = sim.match.Find(1000)->health = 1000.0f;
+    return sim;
+}
+
+static void TheMajorBoss() {
+    float half = 0;
+    for (const auto& ph : kStormPhases) half += ph.waitSec + ph.closeSec;
+    half *= 0.5f;
+    // Halfway through the storm timeline, and only if it is switched on.
+    {
+        Simulation off = DragonArena(0, false);
+        Run(off, half + 20.0f);
+        CHECK(off.match.FindBoss(kDragonId) == nullptr);
+        Simulation on = DragonArena(3, true);
+        Run(on, half - 10.0f);
+        CHECK(on.match.FindBoss(kDragonId) == nullptr);
+        bool announced = false;
+        for (int i = 0; i < 20 * 25; i++) {
+            on.Tick(kDt);
+            for (const auto& e : on.match.DrainEvents()) announced |= e.type == MatchEvent::Type::BossSpawned;
+        }
+        const MiniBoss* d = on.match.FindBoss(kDragonId);
+        CHECK(d && d->alive && d->kind == BossKind::DragonFire && announced);                       // map 3 is Death Mountain Crater: the fire dragon
+        CHECK(d && d->y > 100.0f && storm_inside(on, d->pos));                                       // it flies, over the safe zone
+    }
+    // In the air only ranged weapons reach it; landed, it takes extra.
+    {
+        Simulation sim = DragonArena(1, true);
+        Run(sim, half + 2.0f);
+        Match& m = sim.match;
+        MiniBoss* d = const_cast<MiniBoss*>(m.FindBoss(kDragonId));
+        CHECK(d && d->kind == BossKind::DragonWater);
+        PlayerState* h = m.Find(1);
+        d->mode = DragonMode::Chase;
+        d->attackReadyAt = 1e9f;
+        d->swoopReadyAt = 1e9f;
+        d->y = kDragonAltitude;
+        d->pos = {0, 40};
+        h->pos = {0, 0};
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        CHECK(!m.AttackBoss(1, kDragonId, true).ok);                                                 // a sword can't reach
+        h->weapon = {ItemId::FairyBow, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        const AttackResult air = m.AttackBoss(1, kDragonId, true);
+        CHECK(air.ok && air.damage > 0);
+        d->mode = DragonMode::Landed; d->modeUntil = m.Clock() + 10; d->y = 0;
+        h->attackReadyAt = 0;
+        const AttackResult ground = m.AttackBoss(1, kDragonId, true);
+        CHECK(ground.ok && ground.damage > air.damage * 1.4f);
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        CHECK(m.AttackBoss(1, kDragonId, true).ok);                                                  // on the ground a sword does
+    }
+    // Marked blasts land after their delay, only on whoever stands in the ring.
+    {
+        Simulation sim = DragonArena(0, true);
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->invulnUntil = 0;
+        h->pos = {100, 0};
+        m.AddStrike({100, 0}, 150.0f, 1.3f, 1.0f, kDragonId);
+        Run(sim, 0.5f);
+        CHECK(h->health > 99.99f);
+        Run(sim, 1.0f);
+        CHECK(h->health < 100.0f - 1.2f);
+        Run(sim, 4.0f);                                                                              // let the burn finish
+        const float after = h->health;
+        h->pos = {1500, 0};
+        m.AddStrike({100, 0}, 150.0f, 1.3f, 0.2f, kDragonId);
+        Run(sim, 0.6f);
+        CHECK(h->health >= after - 0.01f);
+    }
+    // Bringing it down drops nine chests and two heart containers.
+    {
+        Simulation sim = DragonArena(4, true);
+        Run(sim, half + 2.0f);
+        Match& m = sim.match;
+        MiniBoss* d = const_cast<MiniBoss*>(m.FindBoss(kDragonId));
+        CHECK(d && d->kind == BossKind::DragonSand);
+        PlayerState* h = m.Find(1);
+        d->mode = DragonMode::Landed; d->modeUntil = m.Clock() + 10; d->y = 0; d->pos = {0, 30}; d->health = 0.5f;
+        d->attackReadyAt = 1e9f;
+        h->pos = {0, 0};
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        const size_t before = m.Loot().size();
+        const AttackResult r = m.AttackBoss(1, kDragonId, true);
+        CHECK(r.ok && r.killed);
+        size_t hearts = 0;
+        for (size_t i = before; i < m.Loot().size(); i++) hearts += m.Loot()[i].spawn.item == ItemId::HeartContainer && m.Loot()[i].spawn.special;
+        CHECK(m.Loot().size() - before >= 9 + 2 && hearts == 2);
+    }
 }
 
 static void MiniBosses() {
@@ -1624,7 +1796,7 @@ static void ShieldBar() {
 }
 
 int main() {
-    StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

@@ -54,6 +54,8 @@ void Player_Draw(Actor* actor, PlayState* play);
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
 static_assert(SCENE_TEMPLE_OF_TIME == royale::kWaitingRoomScene, "update kWaitingRoomScene in shared/map.h");
 static_assert(SCENE_HYRULE_FIELD == royale::kHyruleFieldScene, "update kHyruleFieldScene in shared/map.h");
+static_assert(SCENE_HYRULE_FIELD == royale::kMaps[0].scene && SCENE_LAKE_HYLIA == royale::kMaps[1].scene && SCENE_KAKARIKO_VILLAGE == royale::kMaps[2].scene &&
+              SCENE_DEATH_MOUNTAIN_CRATER == royale::kMaps[3].scene && SCENE_DESERT_COLOSSUS == royale::kMaps[4].scene, "update the scene numbers in shared/map.h");
 
 namespace SohGui {
 extern std::shared_ptr<SohMenu> mSohMenu;
@@ -75,12 +77,14 @@ bool InGame() {
     return gPlayState != nullptr && GET_PLAYER(gPlayState) != nullptr && gSaveContext.fileNum >= 0 && gSaveContext.fileNum <= 2 &&
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
-bool InField() { return InGame() && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
+bool InField() { return InGame() && gPlayState->sceneNum == CurrentMap().scene; }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
 const char* SceneName(int scene) {
     static char other[24];
-    if (scene == SCENE_HYRULE_FIELD) return "Hyrule Field";
+    for (int i = 0; i < royale::kMapCount; i++) if (scene == royale::kMaps[i].scene) return royale::kMaps[i].name;
     if (scene == SCENE_TEMPLE_OF_TIME) return "Temple of Time (waiting room)";
     std::snprintf(other, sizeof(other), "scene 0x%02X", scene);
     return other;
@@ -89,8 +93,11 @@ const char* SceneName(int scene) {
 // Scene travel. Moves the player with the same mechanism the game's own warp console command uses.
 int gTravelCooldown = 0; // game frames (20 per second) before another travel request is allowed
 
+bool gOurTravel = false; // a scene change we asked for ourselves (see SealExits)
+
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
+    gOurTravel = true;
     gPlayState->nextEntranceIndex = entrance;
     gPlayState->transitionTrigger = TRANS_TRIGGER_START;
     gPlayState->transitionType = TRANS_TYPE_FADE_BLACK;
@@ -99,7 +106,16 @@ bool TravelTo(int entrance) {
     return true;
 }
 bool GoToWaitingRoom() { return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
-bool GoToField() { return TravelTo(ENTR_HYRULE_FIELD_0_1); }
+int EntranceFor(int mapId) {
+    switch (royale::ClampMap(mapId)) {
+        case 1: return ENTR_LAKE_HYLIA_0_1;
+        case 2: return ENTR_KAKARIKO_VILLAGE_0_1;
+        case 3: return ENTR_DEATH_MOUNTAIN_CRATER_0_1;
+        case 4: return ENTR_DESERT_COLOSSUS_0_4;
+        default: return ENTR_HYRULE_FIELD_0_1;
+    }
+}
+bool GoToField() { return TravelTo(EntranceFor(gMapId)); }
 
 // Lobby rule: players may wait in either the waiting room or the field. Once the countdown starts everyone must be in the
 // field, and the client takes them there by itself.
@@ -151,7 +167,7 @@ std::string ItemLabel(royale::ItemId id, royale::Rarity r) {
 
 // ---- the real map -----------------------------------------------------------------------------------------------------------
 
-// Is there floor under (x, z)? Used to measure Hyrule Field and to keep loot, spawns and storm centres on ground.
+// Is there floor under (x, z)? Used to measure the map and to keep loot, spawns and storm centres on ground.
 bool FloorAt(float x, float z, float* outY = nullptr) {
     if (!InField()) return false;
     CollisionPoly poly;
@@ -166,9 +182,16 @@ float gMedianFloorY = 0;   // heights far from this are cliffs or rooftops, not 
 bool gMapMeasured = false;
 float gMeasuredRadius = 0;
 
+// Water is no place for a chest or a spawn: the surface is above the floor under it.
+bool UnderWater(float x, float z, float floorY) {
+    float surface = 0;
+    WaterBox* box = nullptr;
+    return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
+}
+
 bool WalkableAt(royale::Vec2 p) {
     float y;
-    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f;
+    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y);
 }
 
 // Probe the floor on a grid across the whole scene and fit a circle around the part that has ground. Takes a few thousand
@@ -180,7 +203,7 @@ bool MeasureField(royale::Circle* out) {
     for (float x = -9000.0f; x <= 9000.0f; x += 300.0f) {
         for (float z = -9000.0f; z <= 9000.0f; z += 300.0f) {
             float y;
-            if (FloorAt(x, z, &y)) { points.push_back({ x, z }); heights.push_back(y); }
+            if (FloorAt(x, z, &y) && !UnderWater(x, z, y)) { points.push_back({ x, z }); heights.push_back(y); }
         }
     }
     if (points.size() < 100) return false;
@@ -867,12 +890,12 @@ struct GpuMesh {
     std::vector<Vtx> vtx;
     std::vector<Gfx> dl;
 };
-GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariants];
-bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariants] = {};
+GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots];
+bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots] = {};
 
 const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
     const int k = static_cast<int>(kind);
-    variant %= royale::kMeshVariants;
+    variant %= royale::kMeshVariantSlots;
     GpuMesh& m = gGpuMeshes[k][variant];
     if (gGpuBuilt[k][variant]) return &m;
     const royale::MeshData data = royale::BuildMesh(kind, variant);
@@ -1022,6 +1045,8 @@ struct BossActor {
     float hp = 1.0f;
     float smashAge = 10.0f;      // seconds since it last swung
     float moved = 0;             // distance covered lately, for the walking bob
+    float alt = 0, talt = 0;     // height above the ground, smoothed / latest (the dragon flies)
+    int mode = 0;                // royale::DragonMode
     bool initialised = false;
 };
 std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
@@ -1042,7 +1067,13 @@ void Boss_Update(Actor* actor, PlayState* play) {
     b.smashAge += dt;
     actor->world.pos.x = b.x;
     actor->world.pos.z = b.z;
-    actor->world.pos.y = GroundY(play, b.x, b.z, actor->world.pos.y);
+    b.alt += (b.talt - b.alt) * 0.25f;
+    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) {
+        const float ground = GroundY(play, b.x, b.z, GET_PLAYER(play)->actor.world.pos.y);
+        actor->world.pos.y = ground + b.alt;
+    } else {
+        actor->world.pos.y = GroundY(play, b.x, b.z, actor->world.pos.y);
+    }
     actor->shape.rot.y = b.rot;
     actor->world.rot.y = b.rot;
 }
@@ -1101,10 +1132,42 @@ void ReconcileLocalGlider(bool want) {
     }
 }
 
+constexpr float kDragonDrawScale = 0.55f; // the mesh is 1200 across with its wings out
+
+void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
+    const royale::BossKind kind = static_cast<royale::BossKind>(b.kind);
+    const uint32_t theme = static_cast<uint32_t>(kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    // Wings: a steady beat while it flies (up, level, down, level), folded down when it has landed.
+    static const uint32_t kBeat[4] = { 0, 1, 2, 1 };
+    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
+    const float rate = b.mode == static_cast<int>(royale::DragonMode::Swoop) ? 9.0f : 4.5f;
+    const uint32_t pose = landed ? 2u : kBeat[static_cast<int>(t * rate) & 3];
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Dragon, pose + 4u * theme);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
+    float pitch = 0.0f;                                                  // nose down in a dive, up as it climbs
+    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
+    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.35f;
+    else if (b.mode == static_cast<int>(royale::DragonMode::Breath)) pitch = 0.18f;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateX(pitch, MTXMODE_APPLY);
+    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 void Boss_Draw(Actor* actor, PlayState* play) {
     auto of = gBossOf.find(actor);
     if (of == gBossOf.end()) return;
     const BossActor& b = gBosses[of->second];
+    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) { Dragon_Draw(actor, play, b); return; }
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Golem, static_cast<uint32_t>(b.kind));
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
@@ -1147,11 +1210,14 @@ void ReconcileBosses(const royale::HudState& hud) {
             auto it = gBosses.find(id);
             if (it == gBosses.end()) {
                 float y = 0;
-                if (!FloorAt(n.x, n.z, &y)) continue;
+                if (!FloorAt(n.x, n.z, &y)) {
+                    if (!royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) continue;
+                    y = GET_PLAYER(gPlayState)->actor.world.pos.y; // it flies: over a gap or the lava there may be no floor
+                }
                 Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
                 if (actor == nullptr) continue;
                 BossActor b;
-                b.actor = actor; b.origDestroy = actor->destroy; b.kind = n.kind;
+                b.actor = actor; b.origDestroy = actor->destroy; b.kind = n.kind; b.alt = b.talt = n.y; b.mode = n.mode;
                 b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.rot = n.rot; b.x = n.x; b.z = n.z; b.initialised = true;
                 gBosses[id] = b;
                 gBossOf[actor] = id;
@@ -1160,10 +1226,16 @@ void ReconcileBosses(const royale::HudState& hud) {
                 actor->destroy = Boss_Destroy;
                 actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
                 actor->uncullZoneForward = 5000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
-                actor->shape.shadowScale = 70.0f * royale::kBossDefs[n.kind].scale;
+                if (royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) {
+                    actor->flags |= ACTOR_FLAG_DRAW_CULLING_DISABLED;
+                    actor->uncullZoneForward = 12000.0f; actor->uncullZoneScale = 4000.0f; actor->uncullZoneDownward = 4000.0f;
+                    actor->shape.shadowScale = 0.0f;
+                } else {
+                    actor->shape.shadowScale = 70.0f * royale::kBossDefs[n.kind].scale;
+                }
             } else {
                 BossActor& b = it->second;
-                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f;
+                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f; b.talt = n.y; b.mode = n.mode;
                 if (n.smashing && b.smashAge > 0.3f) b.smashAge = 0.0f;
             }
         }
@@ -1179,9 +1251,10 @@ void DrawBossBars(ImDrawList* dl, ImFont* font, float scale) {
         if (!b.actor) continue;
         const float dx = b.x - pl->actor.world.pos.x, dz = b.z - pl->actor.world.pos.z;
         const float d = std::sqrt(dx * dx + dz * dz);
-        if (d > 3800.0f) continue;
+        const bool dragon = royale::IsDragonKind(static_cast<royale::BossKind>(b.kind));
+        if (d > (dragon ? 9000.0f : 3800.0f)) continue;
         ImVec2 at;
-        if (!WorldToScreen(b.x, b.actor->world.pos.y + 330.0f * royale::kBossDefs[b.kind].scale, b.z, &at)) continue;
+        if (!WorldToScreen(b.x, b.actor->world.pos.y + (dragon ? 300.0f : 330.0f * royale::kBossDefs[b.kind].scale), b.z, &at)) continue;
         const float w = 130.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.55f, 1.4f), h = 11.0f * scale;
         const char* name = royale::kBossDefs[b.kind].name;
         const float ts = 17.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f);
@@ -1928,6 +2001,131 @@ void DrawQuestLabel() {
     dl->AddText(font, size, pos, IM_COL32(255, 214, 90, 255), text);
 }
 
+// ---- banners, chest-opening and boss effects --------------------------------------------------------------------------------
+// A big line of text across the top for the moments that matter (the dragon arriving, what a chest gave you), an item that floats up out of
+// a chest you open, and the world-space effects of the dragon: warning rings on the ground, the blast, and its breath.
+struct Banner { std::string text; ImU32 colour; double until; double start; };
+std::vector<Banner> gBanners;
+void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
+    const double now = ImGui::GetTime();
+    gBanners.push_back({ text, colour, now + seconds, now });
+    if (gBanners.size() > 3) gBanners.erase(gBanners.begin());
+}
+
+struct PickupFx { royale::ItemId item; royale::Rarity rarity; float x, y, z; double at; };
+std::vector<PickupFx> gPickupFx;
+
+struct StrikeFx { float x, z, radius; double land; bool boomed; };
+std::vector<StrikeFx> gStrikeFx;
+
+void DrawBanners(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime();
+    float y = ds.y * 0.27f;
+    for (const Banner& b : gBanners) {
+        const double age = now - b.start, left = b.until - now;
+        if (left <= 0) continue;
+        const float a = static_cast<float>(std::min(1.0, std::min(age / 0.2, left / 0.5)));
+        const float size = (30.0f + 6.0f * static_cast<float>(std::max(0.0, 1.0 - age * 4.0))) * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, b.text.c_str());
+        const ImVec2 pos((ds.x - sz.x) * 0.5f, y);
+        const ImU32 col = (b.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24);
+        dl->AddRectFilled(ImVec2(pos.x - 20 * scale, pos.y - 6 * scale), ImVec2(pos.x + sz.x + 20 * scale, pos.y + sz.y + 6 * scale), IM_COL32(6, 12, 18, static_cast<int>(170 * a)), 8.0f * scale);
+        dl->AddText(font, size, ImVec2(pos.x + 2, pos.y + 2), IM_COL32(0, 0, 0, static_cast<int>(230 * a)), b.text.c_str());
+        dl->AddText(font, size, pos, col, b.text.c_str());
+        y += sz.y + 16.0f * scale;
+    }
+    gBanners.erase(std::remove_if(gBanners.begin(), gBanners.end(), [&](const Banner& b) { return b.until <= now; }), gBanners.end());
+}
+
+// The item floats up out of the chest on a halo of its rarity colour, spinning its glow, then fades.
+void DrawPickupFx(ImDrawList* dl, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime();
+    for (const PickupFx& f : gPickupFx) {
+        const double age = now - f.at;
+        if (age > 1.7) continue;
+        ImVec2 at;
+        if (!WorldToScreen(f.x, f.y + 50.0f + static_cast<float>(std::min(age, 1.0)) * 90.0f, f.z, &at)) continue;
+        const float a = static_cast<float>(std::min(1.0, (1.7 - age) / 0.5));
+        const float pop = static_cast<float>(std::min(1.0, age / 0.25)) * (1.0f + 0.12f * std::sin(static_cast<float>(age) * 14.0f));
+        const Rgb& c = kRarityRgb[static_cast<int>(f.rarity)];
+        const float R = 44.0f * scale * pop;
+        dl->AddCircleFilled(at, R * 1.5f, IM_COL32(c.r, c.g, c.b, static_cast<int>(60 * a)), 28);
+        for (int i = 0; i < 10; i++) { // rays turning slowly
+            const float ang = i * 0.62832f + static_cast<float>(age) * 1.6f;
+            dl->AddLine(ImVec2(at.x + std::cos(ang) * R * 0.9f, at.y + std::sin(ang) * R * 0.9f), ImVec2(at.x + std::cos(ang) * R * 1.8f, at.y + std::sin(ang) * R * 1.8f),
+                        IM_COL32(c.r, c.g, c.b, static_cast<int>(150 * a)), 3.0f * scale);
+        }
+        dl->AddCircleFilled(at, R, IM_COL32(8, 18, 28, static_cast<int>(210 * a)), 28);
+        dl->AddCircle(at, R, IM_COL32(c.r, c.g, c.b, static_cast<int>(255 * a)), 28, 3.0f * scale);
+        DrawItemIcon(dl, f.item, at, R * 1.25f, IM_COL32(c.r, c.g, c.b, 255));
+    }
+    gPickupFx.erase(std::remove_if(gPickupFx.begin(), gPickupFx.end(), [&](const PickupFx& f) { return now - f.at > 1.7; }), gPickupFx.end());
+}
+
+Color_RGBA8 BossThemeColour(int kind) {
+    switch (static_cast<royale::BossKind>(kind)) {
+        case royale::BossKind::DragonWater: return { 90, 200, 255, 255 };
+        case royale::BossKind::DragonForest: return { 120, 235, 90, 255 };
+        case royale::BossKind::DragonShadow: return { 210, 90, 255, 255 };
+        case royale::BossKind::DragonSand: return { 255, 205, 90, 255 };
+        default: return { 255, 120, 40, 255 };
+    }
+}
+
+void SparkBurst(PlayState* play, float x, float y, float z, Color_RGBA8 prim, int count, float speed) {
+    Color_RGBA8 env = { 255, 255, 255, 255 };
+    for (int i = 0; i < count; i++) {
+        const float a = Rand_ZeroOne() * 6.2831853f, up = 0.3f + Rand_ZeroOne() * 0.9f;
+        Vec3f pos = { x, y, z };
+        Vec3f vel = { std::cos(a) * speed * (0.4f + Rand_ZeroOne()), speed * up, std::sin(a) * speed * (0.4f + Rand_ZeroOne()) };
+        Vec3f accel = { 0.0f, -0.35f, 0.0f };
+        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
+    }
+}
+
+// Every game frame: strike rings and blasts, the dragon's breath.
+void UpdateBossWorldFx() {
+    if (!InField() || gPlayState == nullptr) { gStrikeFx.clear(); return; }
+    const double now = ImGui::GetTime();
+    Player* pl = GET_PLAYER(gPlayState);
+    for (StrikeFx& s : gStrikeFx) {
+        const float ground = GroundY(gPlayState, s.x, s.z, pl->actor.world.pos.y);
+        if (now < s.land) {
+            const float danger = static_cast<float>(1.0 - (s.land - now) / 1.4);   // sparks come faster as the blast gets close
+            const int n = 5 + static_cast<int>(danger * 9.0f);
+            Color_RGBA8 prim = { 255, static_cast<u8>(210 - danger * 150.0f), 40, 255 }, env = { 255, 60, 20, 255 };
+            for (int i = 0; i < n; i++) {
+                const float a = Rand_ZeroOne() * 6.2831853f;
+                Vec3f pos = { s.x + std::cos(a) * s.radius, ground + 6.0f, s.z + std::sin(a) * s.radius };
+                Vec3f vel = { 0.0f, 1.2f + Rand_ZeroOne() * 1.5f, 0.0f };
+                Vec3f accel = { 0.0f, 0.0f, 0.0f };
+                EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 25, 32);
+            }
+        } else if (!s.boomed) {
+            s.boomed = true;
+            Vec3f pos = { s.x, ground + 20.0f, s.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
+            EffectSsBomb2_SpawnLayered(gPlayState, &pos, &vel, &accel, 90, 14);
+            SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 255, 190, 60, 255 }, 26, 7.0f);
+            Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        }
+    }
+    gStrikeFx.erase(std::remove_if(gStrikeFx.begin(), gStrikeFx.end(), [&](const StrikeFx& s) { return now > s.land + 0.8; }), gStrikeFx.end());
+    // Breath: a stream of sparks out of its mouth along the way it faces.
+    for (const auto& [id, b] : gBosses) {
+        if (!b.actor || !royale::IsDragonKind(static_cast<royale::BossKind>(b.kind)) || b.mode != static_cast<int>(royale::DragonMode::Breath)) continue;
+        const float ang = b.rot * (3.14159265f / 32768.0f), fx = std::sin(ang), fz = std::cos(ang);
+        Color_RGBA8 prim = BossThemeColour(b.kind), env = { 255, 255, 255, 255 };
+        for (int i = 0; i < 14; i++) {
+            const float spread = (Rand_ZeroOne() - 0.5f) * 0.45f, sp = 20.0f + Rand_ZeroOne() * 18.0f;
+            const float dx = fx * std::cos(spread) - fz * std::sin(spread), dz = fz * std::cos(spread) + fx * std::sin(spread);
+            Vec3f pos = { b.x + fx * 190.0f, b.actor->world.pos.y + 120.0f, b.z + fz * 190.0f };
+            Vec3f vel = { dx * sp, -sp * 0.28f, dz * sp };
+            Vec3f accel = { 0.0f, -0.4f, 0.0f };
+            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 30, 70);
+        }
+    }
+}
+
 // ---- hit effects -------------------------------------------------------------------------------------------------------------
 // When you hurt someone: a white X hit marker at the crosshair (red when it is a kill) and the damage floating up from them.
 // When you are hurt: the screen edges flash red, a red arrow on a ring around the middle points at who hit you, and the damage shows.
@@ -2033,7 +2231,7 @@ void DrawOverlay() {
         DrawSplash(dl, font, ds, scale, royale::kCountdownSec - h.countdownLeft);
     } else if (h.state == royale::MatchState::Countdown) {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
-        if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to Hyrule Field...");
+        if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to " + std::string(CurrentMap().name) + "...");
     }
     if (h.state == royale::MatchState::Ending) {
         centered(ds.y * 0.16f, gold, 46 * scale, h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16 ? "VICTORY ROYALE!" : "MATCH OVER");
@@ -2061,7 +2259,9 @@ void DrawOverlay() {
 
     if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
 
+    DrawPickupFx(dl, ds, scale);
     DrawHitEffects(dl, font, ds, scale);
+    DrawBanners(dl, font, ds, scale);
 
     if (!live || !h.haveSelf) return;
 
@@ -2741,7 +2941,20 @@ void ReportEvents(const royale::HudState& hud) {
                     const std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), got);
                     Say((l.chest ? "Opened a chest: " : "Picked up ") + label);
                     NotePickup(label, got, l.chest);
+                    const royale::ItemId itemId = static_cast<royale::ItemId>(l.item);
+                    float py = 0;
+                    if (!FloorAt(l.x, l.z, &py)) py = GET_PLAYER(gPlayState)->actor.world.pos.y;
+                    gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
+                    ShowBanner((l.chest ? "You got: " : "Picked up: ") + label, RarityU32(got), got >= royale::Rarity::Epic ? 3.2f : 2.2f);
+                    SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
+                    if (l.chest) {
+                        Vec3f at = { l.x, py + 30.0f, l.z };
+                        Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    }
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    if (itemId == royale::ItemId::HeartContainer) Audio_PlayFanfare(NA_BGM_HEART_GET);
+                    else if (got >= royale::Rarity::Epic) Audio_PlayFanfare(NA_BGM_ITEM_GET);
+                    else if (got == royale::Rarity::Rare) Audio_PlayFanfare(NA_BGM_SMALL_ITEM_GET);
                 }
                 break;
             case royale::ClientEvent::Type::BossDown: {
@@ -2750,6 +2963,16 @@ void ReportEvents(const royale::HudState& hud) {
                 Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
                 break;
             }
+            case royale::ClientEvent::Type::BossSpawned: {
+                const char* name = royale::kBossDefs[std::min<int>(e.item, royale::kBossKindCount - 1)].name;
+                Say(std::string("The ") + name + " has arrived! Ranged weapons reach it in the air; it lands after a dive");
+                ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 4.0f);
+                Audio_PlaySoundGeneral(NA_SE_EN_VALVAISA_FIRE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                break;
+            }
+            case royale::ClientEvent::Type::Strike:
+                gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false });
+                break;
             case royale::ClientEvent::Type::MapChanged:
                 gBrokenProps.clear();   // a new match (or a rematch): all the scenery is back
                 gPickupLog.clear();
@@ -2868,6 +3091,35 @@ void DriveTimeOfDay(const royale::HudState& hud) {
     }
 }
 
+// No way out. Every door, cave mouth and map edge that would load another scene is sealed while you are in a lobby or match: the game's
+// request to change scene is cancelled the moment it is made (the only scene changes allowed are our own trips between the waiting room
+// and the map), and Link is put back on the ground inside the map, facing the way he came from. That also catches falling into a void.
+void SealExits(const royale::HudState& hud) {
+    if (!gSession.Joined() || !InGame() || gOurTravel) return;
+    if (!(InField() || InWaitingRoom())) return;
+    if (gPlayState->transitionTrigger == TRANS_TRIGGER_OFF) return;
+    Player* player = GET_PLAYER(gPlayState);
+    gPlayState->transitionTrigger = TRANS_TRIGGER_OFF;
+    gPlayState->transitionMode = TRANS_MODE_OFF;
+    player->stateFlags1 &= ~PLAYER_STATE1_LOADING;
+    float tx = hud.map.center.x, tz = hud.map.center.z;
+    if (!InField() || hud.map.radius <= 0) { tx = player->actor.home.pos.x; tz = player->actor.home.pos.z; }
+    float dx = tx - player->actor.world.pos.x, dz = tz - player->actor.world.pos.z;
+    const float len = std::max(1.0f, std::hypot(dx, dz));
+    dx /= len; dz /= len;
+    float x = player->actor.world.pos.x + dx * 180.0f, z = player->actor.world.pos.z + dz * 180.0f;
+    if (InField()) { x = player->actor.world.pos.x + dx * std::min(len, 220.0f); z = player->actor.world.pos.z + dz * std::min(len, 220.0f); }
+    player->actor.world.pos.x = x;
+    player->actor.world.pos.z = z;
+    player->actor.world.pos.y = GroundY(gPlayState, x, z, player->actor.world.pos.y + 20.0f) + 5.0f;
+    player->actor.prevPos = player->actor.world.pos;
+    player->actor.velocity = { 0.0f, 0.0f, 0.0f };
+    player->actor.speedXZ = 0.0f;
+    player->actor.shape.rot.y = player->actor.world.rot.y = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+    static double lastNote = -100.0;
+    if (ImGui::GetTime() - lastNote > 3.0) { Say("You can't leave the battle area"); lastNote = ImGui::GetTime(); }
+}
+
 // One minimap, not two: while a match is live the game's own field map is switched off (its switch is the same one the L button flips) and the
 // Royale map takes its place.
 bool gMinimapSwitched = false;
@@ -2916,6 +3168,7 @@ void OnGameFrameUpdate() {
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
+    if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
@@ -2925,7 +3178,9 @@ void OnGameFrameUpdate() {
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
     if (joined && IsLive(hud) && InGame()) StormEdgeFx(hud);
+    UpdateBossWorldFx();
     gStateNow = hud.state;
+    SealExits(hud);
     DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
@@ -2976,6 +3231,7 @@ void OnGameFrameUpdate() {
 }
 
 void OnSceneInit(int16_t) {
+    gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
     gActorOf.clear();
@@ -3039,6 +3295,8 @@ struct UiState {
     int botDifficulty = 1; // 0 easy, 1 normal, 2 hard
     int playerLimit = royale::kMaxPlayers; // the host's slider
     bool autoStart = true;                 // the lobby starts the match by itself after two minutes
+    int mapId = 0;                         // which place to play (host)
+    bool majorBoss = true;                 // the map's dragon arrives halfway through (host)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool showCustomize = false;
@@ -3070,6 +3328,10 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
+        ui.mapId = royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0));
+        ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
+        gSession.SelectMap(ui.mapId);
+        gSession.SetMajorBoss(ui.majorBoss);
         gSession.SetPlayerLimit(ui.playerLimit);
         gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
         ui.skin = std::clamp(CVarGetInteger(ROYALE_CVAR("Skin"), 0), 0, royale::kCustomSkin);
@@ -3090,6 +3352,8 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("Skin"), ui.skin);
     CVarSetInteger(ROYALE_CVAR("PlayerLimit"), ui.playerLimit);
     CVarSetInteger(ROYALE_CVAR("AutoStart"), ui.autoStart ? 1 : 0);
+    CVarSetInteger(ROYALE_CVAR("Map"), ui.mapId);
+    CVarSetInteger(ROYALE_CVAR("MajorBoss"), ui.majorBoss ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
@@ -3277,6 +3541,31 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::Spacing();
     }
 
+    // Where the match will be played: everyone sees it, the host chooses.
+    ImGui::TextColored(kGold, "Map: %s", royale::MapOf(h.mapId).name);
+    ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
+    if (h.isHost) {
+        UiState& ui = Ui();
+        ui.mapId = h.mapId;
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
+                    ui.mapId = i;
+                    gSession.SelectMap(i);
+                    SaveUi(ui);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::Checkbox("A dragon boss arrives halfway through the match", &ui.majorBoss)) {
+            gSession.SetMajorBoss(ui.majorBoss);
+            SaveUi(ui);
+        }
+        ImGui::TextColored(kGrey, "Its look and the mini bosses match the map: forest, water, shadow, fire or sand.");
+    }
+    ImGui::Spacing();
+
     DrawRoster(h);
     ImGui::Spacing();
 
@@ -3314,8 +3603,8 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::BeginDisabled(!InGame() || gPendingStart);
         if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
         ImGui::EndDisabled();
-        if (gPendingStart) ImGui::TextColored(kGrey, "Heading to Hyrule Field and measuring the map before the countdown...");
-        else ImGui::TextColored(kGrey, "Starting takes you to Hyrule Field first, so the real map can be measured.");
+        if (gPendingStart) ImGui::TextColored(kGrey, "Heading to %s and measuring the map before the countdown...", CurrentMap().name);
+        else ImGui::TextColored(kGrey, "Starting takes you to %s first, so the real map can be measured.", CurrentMap().name);
         if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
     } else {
         if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
@@ -3327,10 +3616,10 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("Where you are");
     int scene = InGame() ? gPlayState->sceneNum : -1;
     ImGui::Text("%s", scene < 0 ? "Not in a game" : SceneName(scene));
-    ImGui::TextColored(kGrey, "Players in the same place can see each other. The match itself is in Hyrule Field, and you are taken there automatically.");
+    ImGui::TextColored(kGrey, "Players in the same place can see each other. The match itself is on the chosen map (%s), and you are taken there automatically.", CurrentMap().name);
     ImGui::BeginDisabled(!InGame());
     if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
-    if (!InField() && ImGui::Button("Go to Hyrule Field", ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
+    if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
     ImGui::EndDisabled();
 
     ImGui::Spacing();
@@ -3340,7 +3629,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
 void DrawCountdown(const royale::HudState& h) {
     Heading("MATCH STARTING");
     ImGui::TextColored(kGold, "Drop in %d", static_cast<int>(std::ceil(h.countdownLeft)));
-    ImGui::TextWrapped("%s", InField() ? "You are in Hyrule Field. Get ready." : "Heading to Hyrule Field...");
+    ImGui::TextWrapped("%s", InField() ? (std::string("You are in ") + CurrentMap().name + ". Get ready.").c_str() : (std::string("Heading to ") + CurrentMap().name + "...").c_str());
     DrawRoster(h);
     if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
 }

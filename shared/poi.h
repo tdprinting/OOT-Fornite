@@ -1,4 +1,5 @@
 #pragma once
+#include "map.h"
 #include "props.h"
 #include <vector>
 
@@ -7,14 +8,6 @@ namespace royale {
 // Points of interest: named places with a stone building, a small cave and some ruins, where most of the chests are. The layout comes
 // from the match seed (like the scenery), the host sends it to everyone, and the pieces are ordinary props, so the bots' navigation
 // grid treats the walls as solid and the buildings can be walked into through their doors.
-inline const char* const kPoiNames[] = {
-    "Deku Dew Zoo",         "Goron Groove Lagoon",    "Zora Snore Shore",       "Gerudo Voodoo Rendezvous",
-    "Kokiri Breezy Wheezy", "Hylian Billion Pavilion", "Skulltula Hullabaloo",  "Bombchu Kaboom Room",
-    "Poe Show Shack",       "Octorok Rock Dock",       "Cucco Mucky Plucky",    "Navi Gravy Bay",
-    "Ganon's Bacon Cabin",  "Moblin Cobblin' Wobblin'", "Tektite Tight Bite",   "Lon Lon Gone Wrong",
-};
-constexpr int kPoiNameCount = 16;
-
 struct Poi {
     uint8_t name = 0; // index into kPoiNames
     Vec2 center;
@@ -84,21 +77,20 @@ inline void AddRuins(PoiLayout& out, Rng& rng, Vec2 at, float angle, const Place
     out.lootSpots.push_back(poi_detail::Rotated({120, 60}, angle, at));
 }
 
-inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr) {
+inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
     PoiLayout out;
     Rng rng(seed ^ 0x706F69ull); // "poi"
     // The names, shuffled for this match.
-    uint8_t names[kPoiNameCount];
-    for (int i = 0; i < kPoiNameCount; i++) names[i] = static_cast<uint8_t>(i);
-    for (int i = kPoiNameCount - 1; i > 0; i--) std::swap(names[i], names[rng.Below(static_cast<uint32_t>(i + 1))]);
+    const int nameBase = ClampMap(mapId) * kNamesPerMap;
+    uint8_t names[kNamesPerMap];
+    for (int i = 0; i < kNamesPerMap; i++) names[i] = static_cast<uint8_t>(nameBase + i);
+    for (int i = kNamesPerMap - 1; i > 1; i--) std::swap(names[i], names[1 + rng.Below(static_cast<uint32_t>(i))]); // name 0 stays the landmark's
 
     // Laid out the way battle royale maps are: a big landmark in the middle, a ring of towns around it and a wider ring near the edge,
     // each with room around it so there are open stretches (full of rocks to hide behind) between them to run across.
-    const float poiRadius = 480.0f;
+    const float poiRadius = (std::max)(260.0f, (std::min)(480.0f, map.radius * 0.13f)); // small places get smaller towns
     const float minGap = (std::max)(poiRadius * 2.2f, map.radius * 0.26f);
-    const int wanted = (std::min)(count, kPoiNameCount);
-    // The centre landmark keeps its name; the rest of the names are dealt out in shuffled order.
-    for (int i = 0; i < kPoiNameCount; i++) if (names[i] == 5) std::swap(names[0], names[i]); // "Hylian Billion Pavilion"
+    const int wanted = (std::min)(count, kNamesPerMap);
     struct Slot { float ring; int index, of; float phase; };
     std::vector<Slot> slots = {{0.0f, 0, 1, 0.0f}};
     const float phase = static_cast<float>(rng.Unit() * 6.2831853);

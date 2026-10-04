@@ -20,7 +20,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 11; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 12; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -28,10 +28,10 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -115,6 +115,14 @@ struct UseShieldRequest {
     bool Read(ByteReader& r) { return r.ok; }
 };
 
+// The host picks which place the match is played in (lobby only).
+struct SelectMapRequest {
+    static constexpr MsgType kType = MsgType::SelectMapRequest;
+    uint8_t map = 0;
+    void Write(ByteWriter& w) const { w.U8(map); }
+    bool Read(ByteReader& r) { map = r.U8(); return r.ok && map < kMapCount; }
+};
+
 // The host asks for another match with everyone who is still connected, straight from the results screen.
 struct RematchRequest {
     static constexpr MsgType kType = MsgType::RematchRequest;
@@ -162,11 +170,11 @@ inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
 }
 inline bool ReadPois(ByteReader& r, std::vector<Poi>& pois) {
     const size_t n = r.U8();
-    if (n > static_cast<size_t>(kPoiNameCount)) return false;
+    if (n > static_cast<size_t>(kNamesPerMap)) return false;
     pois.assign(n, {});
     for (Poi& p : pois) {
         p.name = r.U8(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
-        if (p.name >= kPoiNameCount || !Finite(p.center.x) || !Finite(p.center.z) || !Finite(p.radius) || p.radius < 0) return false;
+        if (p.name >= kPoiNameTotal || !Finite(p.center.x) || !Finite(p.center.z) || !Finite(p.radius) || p.radius < 0) return false;
     }
     return r.ok;
 }
@@ -195,6 +203,7 @@ struct Welcome {
     uint16_t version = kProtocolVersion;
     uint64_t seed = 0;
     uint8_t limit = kMaxPlayers;
+    uint8_t mapId = 0;
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
@@ -202,7 +211,7 @@ struct Welcome {
     std::vector<Poi> pois;
     std::vector<RosterEntry> roster;
     void Write(ByteWriter& w) const {
-        w.U16(playerId); w.U16(version); w.U64(seed); w.U8(limit);
+        w.U16(playerId); w.U16(version); w.U64(seed); w.U8(limit); w.U8(mapId);
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
@@ -213,8 +222,8 @@ struct Welcome {
         for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); }
     }
     bool Read(ByteReader& r) {
-        playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8();
-        if (limit < kMinPlayers || limit > kMaxPlayers) return false;
+        playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8(); mapId = r.U8();
+        if (limit < kMinPlayers || limit > kMaxPlayers || mapId >= kMapCount) return false;
         map = ReadCircle(r);
         for (auto& c : stormEnds) c = ReadCircle(r);
         size_t n = r.U16();
@@ -286,13 +295,16 @@ struct BossNet {
     int16_t rot = 0;
     uint8_t hp = 255;        // health as a fraction of its maximum, 0..255
     bool smashing = false;   // just swung (for the animation)
+    int16_t y = 0;           // height above the ground: the dragon flies
+    uint8_t mode = 0;        // DragonMode, for the dragon
     uint32_t Id() const { return kBossIdBase + index; }
-    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U8(smashing ? 1 : 0); }
+    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U8(smashing ? 1 : 0); w.I16(y); w.U8(mode); }
     bool Read(ByteReader& r) {
         index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8();
         const uint8_t f = r.U8();
         smashing = f != 0;
-        return r.ok && index < kMaxBosses && kind < kBossKindCount && Finite(x) && Finite(z) && f <= 1;
+        y = r.I16(); mode = r.U8();
+        return r.ok && index < kMaxBosses && kind < kBossKindCount && Finite(x) && Finite(z) && f <= 1 && mode <= static_cast<uint8_t>(DragonMode::Climb);
     }
 };
 
@@ -333,6 +345,25 @@ struct EvBossDown {
     float x = 0, z = 0;
     void Write(ByteWriter& w) const { w.U16(boss); w.U16(killer); w.F32(x); w.F32(z); }
     bool Read(ByteReader& r) { boss = r.U16(); killer = r.U16(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && Finite(x) && Finite(z); }
+};
+
+// A blast is coming: a ring at (x, z) that goes off `delay` seconds from now (the dragon's fireballs, meteors and dive).
+struct EvStrike {
+    static constexpr MsgType kType = MsgType::EvStrike;
+    uint16_t by = 0;
+    float x = 0, z = 0, radius = 0, delay = 0;
+    void Write(ByteWriter& w) const { w.U16(by); w.F32(x); w.F32(z); w.F32(radius); w.F32(delay); }
+    bool Read(ByteReader& r) { by = r.U16(); x = r.F32(); z = r.F32(); radius = r.F32(); delay = r.F32(); return r.ok && Finite(x) && Finite(z) && Finite(radius) && Finite(delay) && radius >= 0 && delay >= 0; }
+};
+
+// The map's dragon has arrived.
+struct EvBossSpawn {
+    static constexpr MsgType kType = MsgType::EvBossSpawn;
+    uint16_t boss = 0;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.U16(boss); w.U8(kind); w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) { boss = r.U16(); kind = r.U8(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && kind < kBossKindCount && Finite(x) && Finite(z); }
 };
 
 struct EvDamaged {
@@ -387,12 +418,14 @@ struct EvReady {
 // The host measured the real map and rebuilt the lobby's world: new map circle, storm circles and loot. Lobby only.
 struct EvMapConfig {
     static constexpr MsgType kType = MsgType::EvMapConfig;
+    uint8_t mapId = 0;
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
     std::vector<Prop> props;
     std::vector<Poi> pois;
     void Write(ByteWriter& w) const {
+        w.U8(mapId);
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
@@ -401,6 +434,8 @@ struct EvMapConfig {
         WritePois(w, pois);
     }
     bool Read(ByteReader& r) {
+        mapId = r.U8();
+        if (mapId >= kMapCount) return false;
         map = ReadCircle(r);
         for (auto& c : stormEnds) c = ReadCircle(r);
         size_t n = r.U16();

@@ -193,7 +193,10 @@ class Match {
         if (state != MatchState::Lobby || players.empty()) return false;
         humans = static_cast<int>(players.size());
         uint32_t nextId = 1000;
-        while (static_cast<int>(players.size()) < playerLimit) players.push_back(MakePlayer(nextId++, true));
+        while (static_cast<int>(players.size()) < playerLimit) {
+            players.push_back(MakePlayer(nextId++, true));
+            players.back().scene = static_cast<uint8_t>(MapOf(mapId).scene);
+        }
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
@@ -575,6 +578,8 @@ class Match {
 
     // Where bosses may stand guard (the caves of the points of interest). Any shortfall is filled with spots on open ground.
     void SetBossSpots(std::vector<Vec2> spots) { bossSpots = std::move(spots); }
+    void SetMapId(int id) { mapId = ClampMap(id); }
+    int MapId() const { return mapId; }
     void SetBossCount(int n) { bossCount = (std::max)(0, (std::min)(n, kMaxBosses)); }
     const std::vector<MiniBoss>& Bosses() const { return bosses; }
     const MiniBoss* FindBoss(uint32_t id) const {
@@ -605,7 +610,7 @@ class Match {
             if (!found) break;
             MiniBoss b;
             b.id = kBossIdBase + static_cast<uint32_t>(bosses.size());
-            b.kind = static_cast<BossKind>(rng.Below(kBossKindCount));
+            b.kind = MapOf(mapId).minis[rng.Below(2)];   // the ones that suit this place
             b.home = b.pos = at;
             b.maxHealth = b.health = BossOf(b.kind).health;
             bosses.push_back(b);
@@ -620,7 +625,7 @@ class Match {
         if (!a || !b || !a->alive || !b->alive) return r;
         const WeaponStats w = WeaponOf(a->weapon.item);
         if (w.damage <= 0 || clock < a->attackReadyAt || clock < a->stunUntil || clock < a->frozenUntil) return r;
-        const bool dragon = b->kind == BossKind::Dragon;
+        const bool dragon = IsDragonKind(b->kind);
         const bool airborne = dragon && b->y > kDragonAirborneAbove;
         if (airborne && !w.ranged) return r;                                           // up in the sky: only arrows and the like reach it
         if (Distance(a->pos, b->pos) > w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius)) return r; // it is big: you can hit it from further off
@@ -666,7 +671,7 @@ class Match {
             if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = b.pos;
             AddLoot({at, item, t, true, true});
         }
-        if (b.kind == BossKind::Dragon) { // the big one also leaves heart containers
+        if (IsDragonKind(b.kind)) { // the big one also leaves heart containers
             for (int i = 0; i < 2; i++) {
                 const float angle = 6.2831853f * (i + 0.5f) / 2.0f + 0.4f;
                 Vec2 at = {b.pos.x + std::cos(angle) * 230.0f, b.pos.z + std::sin(angle) * 230.0f};
@@ -699,9 +704,9 @@ class Match {
         }
         MiniBoss d;
         d.id = kDragonId;
-        d.kind = BossKind::Dragon;
+        d.kind = MapOf(mapId).major;
         d.home = d.pos = at;
-        d.maxHealth = d.health = BossOf(BossKind::Dragon).health;
+        d.maxHealth = d.health = BossOf(d.kind).health;
         d.y = kDragonAltitude;
         d.waypoint = at;
         d.swoopReadyAt = clock + 8.0f;
@@ -725,6 +730,13 @@ class Match {
         events.push_back(e);
     }
 
+    // The fire dragon sets people alight; the others (water, forest, shadow, sand) leave their victims stunned for a moment instead.
+    void ApplyElement(PlayerState& p, uint32_t by, float seconds, float dps) {
+        const MiniBoss* src = FindBoss(by);
+        if (src && src->kind != BossKind::DragonFire) { p.stunUntil = (std::max)(p.stunUntil, clock + 0.5f + seconds * 0.15f); p.dirty = true; }
+        else ApplyBurn(p, by, seconds, dps);
+    }
+
     void ApplyBurn(PlayerState& p, uint32_t by, float seconds, float dps) {
         p.burnUntil = (std::max)(p.burnUntil, clock + seconds);
         p.burnDps = (std::max)(clock < p.burnUntil ? p.burnDps : 0.0f, dps);
@@ -737,9 +749,9 @@ class Match {
             if (s.applied || clock < s.hitAt) continue;
             s.applied = true;
             for (auto& p : players) {
-                if (!p.alive || Distance(p.pos, s.at) > s.radius) continue;
+                if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 Damage(p.id, s.damage, s.by, DamageKind::Fire);
-                if (p.alive) ApplyBurn(p, s.by, 3.0f, 0.3f);
+                if (p.alive) ApplyElement(p, s.by, 3.0f, 0.3f);
             }
         }
         strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [&](const Strike& s) { return s.applied && clock > s.hitAt + 1.0f; }), strikes.end());
@@ -792,7 +804,7 @@ class Match {
                 b.lastSmashAt = clock; // keeps the animation going
                 if (target) face(target->pos);
                 for (auto& p : players) {
-                    if (!p.alive) continue;
+                    if (!p.alive || clock < p.invulnUntil) continue;
                     const float dx = p.pos.x - b.pos.x, dz = p.pos.z - b.pos.z, d = std::hypot(dx, dz);
                     if (d > kDragonBreathRange) continue;
                     float off = std::atan2(dx, dz) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
@@ -800,7 +812,7 @@ class Match {
                     while (off < -3.14159265f) off += 6.2831853f;
                     if (std::fabs(off) > kDragonBreathHalfAngle) continue;
                     Damage(p.id, kDragonBreathDps * dt, b.id, DamageKind::Fire, false);
-                    if (p.alive) ApplyBurn(p, b.id, 2.5f, 0.3f);
+                    if (p.alive) ApplyElement(p, b.id, 2.5f, 0.3f);
                 }
                 if (clock >= b.modeUntil) b.mode = DragonMode::Chase;
                 return;
@@ -855,7 +867,7 @@ class Match {
         TickStrikes();
         for (auto& b : bosses) {
             if (!b.alive) continue;
-            if (b.kind == BossKind::Dragon) { TickDragon(b, dt); continue; }
+            if (IsDragonKind(b.kind)) { TickDragon(b, dt); continue; }
             const BossDef def = BossOf(b.kind);
             // Notice the nearest player in range (the current target is kept while it stays in reach).
             PlayerState* target = Find(b.target);
@@ -1211,6 +1223,7 @@ class Match {
     bool majorBoss = false;
     bool dragonSpawned = false;
     int bossCount = 0;
+    int mapId = 0;           // which place this is (shared/map.h): decides the bosses
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };
 

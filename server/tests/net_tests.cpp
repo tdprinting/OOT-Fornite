@@ -714,6 +714,60 @@ static void ShieldOverTheWire() {
     CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
 }
 
+static void SelectingTheMap() {
+    Rig rig(71, 0);
+    rig.server.SetHostToken(0xABCDEF12345ull);
+    GameClient& guest = rig.Add("Guest");
+    CHECK(rig.RunUntil([&] { return guest.GetStatus() == GameClient::Status::Joined; }));
+    GameClient host(rig.network.NewClient(), "Host", 0xABCDEF12345ull);
+    for (int i = 0; i < 20; i++) { rig.Step(); host.Update(kDt); }
+    CHECK(guest.MapId() == 0 && host.MapId() == 0);
+    // The host picks Lake Hylia: everybody is told, with that place's guessed size and its own point of interest names.
+    host.SelectMap(1);
+    CHECK(rig.RunUntil([&] { host.Update(kDt); return guest.MapId() == 1 && host.MapId() == 1; }));
+    CHECK(guest.Map().radius == MapOf(1).fallback.radius);
+    CHECK(!guest.Pois().empty());
+    for (const Poi& p : guest.Pois()) CHECK(p.name >= kNamesPerMap && p.name < 2 * kNamesPerMap);
+    // Somebody who is not the host can't change it.
+    const uint64_t rejected = rig.server.GetStats().rejectedActions;
+    guest.SelectMap(3);
+    for (int i = 0; i < 20; i++) { rig.Step(); host.Update(kDt); }
+    CHECK(guest.MapId() == 1 && rig.server.GetStats().rejectedActions == rejected + 1);
+    // Players joining later are welcomed onto the chosen map.
+    GameClient late(rig.network.NewClient(), "Late");
+    for (int i = 0; i < 20; i++) { rig.Step(); late.Update(kDt); host.Update(kDt); }
+    CHECK(late.GetStatus() == GameClient::Status::Joined && late.MapId() == 1);
+    // And it can't be changed once the match is on.
+    rig.server.StartMatch();
+    CHECK(!rig.server.SelectMap(2));
+}
+
+static void TheDragonOverTheWire() {
+    Rig rig(82, 20);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) { p.invulnUntil = 1.0e9f; if (p.isBot) p.pos = {1900, 1900}; }
+    rig.M().Find(1)->pos = {0, 0};
+    float half = 0;
+    for (const auto& ph : kStormPhases) half += ph.waitSec + ph.closeSec;
+    half *= 0.5f;
+    bool spawned = false, strike = false;
+    for (int i = 0; i < static_cast<int>((half + 30.0f) * kTickHz) && !(spawned && strike); i++) {
+        rig.Step();
+        for (auto& p : rig.M().Players()) p.invulnUntil = 1.0e9f;
+        for (const auto& e : a.DrainEvents()) {
+            spawned |= e.type == ClientEvent::Type::BossSpawned && IsBossId(e.id) && IsDragonKind(static_cast<BossKind>(e.item));
+            strike |= e.type == ClientEvent::Type::Strike && e.amount > 0 && e.health > 0;
+        }
+    }
+    CHECK(spawned);
+    bool seen = false;
+    for (const auto& b : a.Bosses()) seen |= b.Id() == kDragonId && IsDragonKind(static_cast<BossKind>(b.kind)) && b.y > 100;
+    CHECK(seen);   // always in the snapshot, however far away, and with its height
+    (void)strike;
+}
+
 static void BackupWeaponsReachTheOwner() {
     Rig rig(62, 20);
     GameClient& a = rig.Add("A");
@@ -1145,7 +1199,7 @@ static void ReconfigureRebuildsTheLobbyWorld() {
         CHECK(g->Map().radius == 800 && g->Map().center.x == 500);
         CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 120);   // 120 scattered, plus a chest for each spot in the buildings
         CHECK(!g->Pois().empty() && g->Props().size() > 100 && g->Pois().size() == rig.server.Pois().size());
-        for (const Poi& poi : g->Pois()) CHECK(Distance(poi.center, real.center) <= 800.01f && poi.name < kPoiNameCount);
+        for (const Poi& poi : g->Pois()) CHECK(Distance(poi.center, real.center) <= 800.01f && poi.name < kPoiNameTotal);
         bool eventSeen = false;
         for (auto& e : g->DrainEvents()) eventSeen |= e.type == ClientEvent::Type::MapChanged;
         CHECK(eventSeen);
@@ -1203,7 +1257,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    ShieldOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    ShieldOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

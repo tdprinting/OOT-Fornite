@@ -84,6 +84,7 @@ struct HudState {
     bool selfReady = false;
     float countdownLeft = 0;      // seconds until the drop, while the state is Countdown
     int playerLimit = kMaxPlayers; // players in the match, bots included (the host's slider)
+    int mapId = 0;                 // which place the match is played in (shared/map.h)
     float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
@@ -107,6 +108,8 @@ class RoyaleSession {
         server->SetBossCount(5);
         server->SetAutoStart(autoStart);
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
+        server->SetMajorBoss(majorBoss);
+        if (selectedMap != 0) server->SelectMap(selectedMap);
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;
@@ -150,6 +153,9 @@ class RoyaleSession {
     // Host only: the lobby starts the match by itself after this many seconds; 0 turns the timer off.
     void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
     bool SetPlayerLimit(int n) { playerLimit = n; return server ? server->SetPlayerLimit(n) : false; }
+    // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
+    bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
+    void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
@@ -238,6 +244,7 @@ class RoyaleSession {
         }
         h.humanCount = static_cast<int>(h.roster.size());
         h.playerLimit = client->PlayerLimit();
+        h.mapId = client->MapId();
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
         h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
@@ -314,6 +321,8 @@ class RoyaleSession {
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     uint32_t tunic = SkinRgb(0);
     int playerLimit = kMaxPlayers;
+    int selectedMap = 0;
+    bool majorBoss = true;
     float autoStart = kLobbyAutoStartSec;
     Mode mode = Mode::Idle;
     // Order matters: clients are destroyed before the transports they use.

@@ -28,9 +28,11 @@ class GameServer {
     };
 
     GameServer(net::Transport& transport, uint64_t seed, Circle map, int lootCount = 400)
-        : link(transport), sim(seed, map, lootCount), mapCircle(map) {}
+        : link(transport), sim(seed, map, lootCount), mapCircle(map) { sim.match.SetMajorBoss(majorBoss); }
     // How many mini bosses a match has (0 to 8). Survives Reconfigure.
     void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(n); }
+    // The map's dragon arrives halfway through the storm timeline. Survives Reconfigure.
+    void SetMajorBoss(bool on) { majorBoss = on; sim.match.SetMajorBoss(on); }
     // The host's player-count slider: how many players the match has, bots included. Lobby only, and never fewer than the people here.
     // Smaller matches also get fewer towns and bosses, so the map isn't mostly empty. Everyone is told.
     bool SetPlayerLimit(int n) {
@@ -79,7 +81,8 @@ class GameServer {
         sim.bots.SetDifficulty(botDifficulty);
         sim.match.SetPlacementValidator(valid);
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
-        const PoiLayout layout = GeneratePois(seed, map, poiCount, valid);
+        sim.match.SetMapId(mapId);
+        const PoiLayout layout = GeneratePois(seed, map, poiCount, valid, mapId);
         pois = layout.pois;
         props = GenerateProps(seed, map, propCount, valid);
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings and caves are scenery too
@@ -87,6 +90,7 @@ class GameServer {
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetBossCount(bossCount);
+        sim.match.SetMajorBoss(majorBoss);
         sim.match.SetPlayerLimit(playerLimit);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
@@ -98,6 +102,7 @@ class GameServer {
         mapCircle = map;
 
         net::EvMapConfig cfg;
+        cfg.mapId = static_cast<uint8_t>(mapId);
         cfg.map = map;
         cfg.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) cfg.loot.push_back(ToNet(l));
@@ -114,6 +119,16 @@ class GameServer {
         std::random_device rd;
         return (static_cast<uint64_t>(rd()) << 32) ^ rd() ^ 0x9E3779B97F4A7C15ull;
     }
+
+    // The host chooses where the match is played (lobby only). Everyone is sent a rebuilt world on that map's guessed size; the host's game
+    // measures the real scene when the match starts and rebuilds it once more.
+    bool SelectMap(int id) {
+        if (sim.match.State() != MatchState::Lobby || id < 0 || id >= kMapCount) return false;
+        mapId = id;
+        mapCircle = MapOf(id).fallback;
+        return Reconfigure(mapCircle, nullptr, lastLootCount, FreshSeedOffset());
+    }
+    int MapId() const { return mapId; }
 
     bool PlayAgain() {
         if (sim.match.State() != MatchState::Ending) return false;
@@ -270,6 +285,12 @@ class GameServer {
                 if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::SelectMapRequest: {
+                net::SelectMapRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!c->isHost || !SelectMap(m.map)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::RematchRequest: {
                 net::RematchRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -353,6 +374,7 @@ class GameServer {
         net::Welcome w;
         w.playerId = static_cast<uint16_t>(id);
         w.seed = sim.match.Seed();
+        w.mapId = static_cast<uint8_t>(mapId);
         w.limit = static_cast<uint8_t>(playerLimit);
         w.map = mapCircle;
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
@@ -492,6 +514,22 @@ class GameServer {
                     Broadcast(d);
                     break;
                 }
+                case MatchEvent::Type::Strike: {
+                    net::EvStrike st;
+                    st.by = static_cast<uint16_t>(e.a);
+                    st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health;
+                    Broadcast(st);
+                    break;
+                }
+                case MatchEvent::Type::BossSpawned: {
+                    net::EvBossSpawn sp;
+                    sp.boss = static_cast<uint16_t>(e.a);
+                    const MiniBoss* b = sim.match.FindBoss(e.a);
+                    sp.kind = b ? static_cast<uint8_t>(b->kind) : static_cast<uint8_t>(BossKind::DragonFire);
+                    sp.x = e.x; sp.z = e.z;
+                    Broadcast(sp);
+                    break;
+                }
                 case MatchEvent::Type::Revived: {
                     net::EvAbility a;
                     a.user = static_cast<uint16_t>(e.a);
@@ -594,13 +632,15 @@ class GameServer {
                               [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second->id < b.second->id); });
             for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*nearby[i].second));
             for (const MiniBoss& b : sim.match.Bosses()) {
-                if (!b.alive || Distance(self->pos, b.pos) > 4500.0f) continue; // only the ones that could matter to this player
+                if (!b.alive || (!IsDragonKind(b.kind) && Distance(self->pos, b.pos) > 4500.0f)) continue; // only the ones that could matter to this player (the dragon is always visible)
                 net::BossNet n;
                 n.index = static_cast<uint8_t>(b.id - kBossIdBase);
                 n.kind = static_cast<uint8_t>(b.kind);
                 n.x = b.pos.x; n.z = b.pos.z; n.rot = b.rot;
                 n.hp = static_cast<uint8_t>((std::max)(0.0f, (std::min)(255.0f, b.health / b.maxHealth * 255.0f + 0.5f)));
                 n.smashing = sim.match.Clock() - b.lastSmashAt < 0.4f;
+                n.y = static_cast<int16_t>(std::lround((std::max)(0.0f, (std::min)(b.y, 3000.0f))));
+                n.mode = static_cast<uint8_t>(b.mode);
                 s.bosses.push_back(n);
             }
             SendTo(c, s, false);
@@ -610,6 +650,8 @@ class GameServer {
     net::Transport& link;
     Simulation sim;
     BotDifficulty botDifficulty = BotDifficulty::Normal;
+    int mapId = 0;
+    bool majorBoss = true;
     std::vector<Prop> props;
     std::vector<Poi> pois;
     int propCount = 350;

@@ -14,7 +14,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -23,7 +23,7 @@ struct ClientEvent {
     MatchState state = MatchState::Lobby;
     bool ready = false;  // ReadyChanged
     uint8_t item = 0;    // AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
-    float x = 0, z = 0;  // AbilityUsed: where the user was
+    float x = 0, z = 0;  // AbilityUsed: where the user was | Strike / BossSpawned / BossDown: where
 };
 
 // Everything the local player carries and the timed effects on them, as last reported by the server. The "left" values count down by
@@ -114,12 +114,14 @@ class GameClient {
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
     // Players in the match, bots included.
     int PlayerLimit() const { return playerLimit; }
+    int MapId() const { return mapId; }
     // Seconds until the lobby starts the match by itself (as of the last snapshot), or -1 if there is no timer.
     float LobbyLeft() const { return lobbyLeftAtSnapshot == 255 ? -1.0f : (std::max)(0.0f, static_cast<float>(lobbyLeftAtSnapshot) - (localClock - snapshotArrival)); }
     const std::vector<Prop>& Props() const { return props; }
     const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
+    void SelectMap(int id) { net::SelectMapRequest m; m.map = static_cast<uint8_t>(id); SendIfJoined(m); } // host only, lobby only
     const std::vector<net::ResultRow>& Results() const { return results; }
     // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
     void SetReady(bool ready) { net::SetReady m; m.ready = ready; SendIfJoined(m); }
@@ -327,6 +329,22 @@ class GameClient {
                 results = m.rows;
                 break;
             }
+            case net::MsgType::EvStrike: {
+                net::EvStrike m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::Strike};
+                e.id = m.by; e.x = m.x; e.z = m.z; e.amount = m.radius; e.health = m.delay;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvBossSpawn: {
+                net::EvBossSpawn m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::BossSpawned};
+                e.id = m.boss; e.item = m.kind; e.x = m.x; e.z = m.z;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvBossDown: {
                 net::EvBossDown m;
                 if (!net::Decode(data, m)) break;
@@ -347,6 +365,7 @@ class GameClient {
                 net::EvMapConfig m;
                 if (!net::Decode(data, m)) break;
                 map = m.map;
+                mapId = m.mapId;
                 storm = std::make_unique<Storm>(m.map, m.stormEnds);
                 loot = m.loot;
                 props = m.props;
@@ -380,6 +399,7 @@ class GameClient {
         loot = w.loot;
         props = w.props;
         playerLimit = w.limit;
+        mapId = w.mapId;
         pois = w.pois;
         roster.clear();
         for (const auto& r : w.roster) {
@@ -424,6 +444,7 @@ class GameClient {
     uint16_t playerId = 0;
     uint64_t seed = 0;
     Circle map;
+    int mapId = 0;
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;
