@@ -812,6 +812,7 @@ void SpawnPuppet(const royale::PuppetState& s) {
 // A body that tumbles and slides to a stop with simple physics (gravity, bounces off the ground, friction, a spin that dies away), then lies
 // in Link's own knocked-down pose. It is a puppet actor that runs its own physics instead of following the network.
 constexpr uint16_t kCorpseIdBase = 0xF000;
+constexpr uint16_t kAllyIdBase = 0xE000;   // puppet ids from here up to the corpses are hireable allies (index = id - base)
 struct Corpse {
     Actor* actor = nullptr;
     royale::Vec2 vel = {};       // horizontal speed, units per second
@@ -1825,6 +1826,91 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
     Audio_PlaySoundGeneral(sfx, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
+// Arrows, bombs, bombchus and boomerangs are drawn with the game's own models (the same display lists and skeleton the real arrow, bomb, bombchu and
+// boomerang actors use), dressed the way the real actors draw them. The server still decides what they hit; these only fly for the eyes.
+// Returns false for the kinds that keep our own little models (seeds and nuts).
+bool DrawRealProjectile(PlayState* play, const Projectile& p) {
+    const float horiz = std::hypot(p.vx, p.vz);
+    const float yaw = std::atan2(p.vx, p.vz);
+    const float pitchUp = std::atan2(p.vy, horiz);
+    constexpr float kScale = 0.01f;   // the game's actors are drawn at a hundredth
+    switch (p.variant) {
+        case 0: case 1: case 2: case 3: {
+            static SkelAnime arrow;
+            static bool ready = false;
+            if (!ready) {
+                SkelAnime_Init(play, &arrow, (SkeletonHeader*)gArrowSkel, (AnimationHeader*)gArrow2Anim, nullptr, nullptr, 0);
+                Animation_PlayOnce(&arrow, (AnimationHeader*)gArrow1Anim);
+                SkelAnime_Update(&arrow);
+                ready = true;
+            }
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            // Like the real arrow: yawed to its heading, then pitched about X by atan2(speed, -vy) (the model's long axis is Y).
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_RotateY(yaw, MTXMODE_APPLY);
+            Matrix_RotateX(1.5707963f - pitchUp, MTXMODE_APPLY);
+            Matrix_Scale(kScale, kScale, kScale, MTXMODE_APPLY);
+            SkelAnime_DrawLod(play, arrow.skeleton, arrow.jointTable, nullptr, nullptr, nullptr, 0);
+            CLOSE_DISPS(play->state.gfxCtx);
+            if (p.variant != 0 && play->gameplayFrames % 2 == 0) {   // the elemental arrows leave a trail of sparks in their colour
+                static const Color_RGBA8 prim[4] = { {255, 255, 255, 255}, {255, 170, 40, 255}, {170, 240, 255, 255}, {255, 255, 150, 255} };
+                static const Color_RGBA8 env[4] = { {255, 255, 255, 255}, {255, 40, 0, 255}, {40, 120, 255, 255}, {255, 230, 80, 255} };
+                Vec3f pos = { p.x, p.y, p.z }, vel = { 0.0f, 0.2f, 0.0f }, accel = { 0.0f, 0.0f, 0.0f };
+                Color_RGBA8 pc = prim[p.variant], ec = env[p.variant];
+                EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &pc, &ec, 120, 14);
+            }
+            return true;
+        }
+        case 5: {   // a bomb: the cap and the body, blinking, always facing the camera like the real one
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_ReplaceRotation(&play->billboardMtxF);
+            Matrix_Scale(kScale, kScale, kScale, MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gBombCapDL);
+            Matrix_RotateZYX(0x4000, 0, 0, MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            const int flash = static_cast<int>(120.0f + 120.0f * std::sin(p.spin * 3.0f));
+            gDPPipeSync(POLY_OPA_DISP++);
+            gDPSetEnvColor(POLY_OPA_DISP++, flash, 0, 40, 255);
+            gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, flash, 0, 40, 255);
+            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gBombBodyDL);
+            CLOSE_DISPS(play->state.gfxCtx);
+            return true;
+        }
+        case 6: case 7: {   // a bombchu, blinking red like the real one
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            const float blink = 0.5f + 0.5f * std::sin(p.spin * 4.0f);
+            gDPSetEnvColor(POLY_OPA_DISP++, static_cast<int>(9.0f + blink * 209.0f), static_cast<int>(9.0f + blink * 34.0f), static_cast<int>(35.0f - blink * 35.0f), 255);
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_RotateY(yaw, MTXMODE_APPLY);
+            Matrix_RotateX(-pitchUp, MTXMODE_APPLY);
+            Matrix_Scale(kScale, kScale, kScale, MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gBombchuDL);
+            CLOSE_DISPS(play->state.gfxCtx);
+            return true;
+        }
+        case 9: {   // the boomerang, spinning flat as in the game
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_RotateY(yaw, MTXMODE_APPLY);
+            Matrix_RotateZ(0x1F40 * (3.14159265f / 0x8000), MTXMODE_APPLY);
+            Matrix_RotateY(p.spin * 5.0f, MTXMODE_APPLY);
+            Matrix_Scale(kScale, kScale, kScale, MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gBoomerangRefDL);
+            CLOSE_DISPS(play->state.gfxCtx);
+            return true;
+        }
+        default: return false;
+    }
+}
+
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
@@ -1867,6 +1953,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
             gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i));
             continue;
         }
+        if (DrawRealProjectile(play, p)) { i++; continue; }
         const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Projectile, p.variant);
         if (mesh != nullptr && !mesh->dl.empty()) {
             const float horiz = std::hypot(p.vx, p.vz);
@@ -4142,6 +4229,41 @@ void ApplyPlatforms(Player* player) {
     }
 }
 
+// Rocks, boulders and standing stones are solid in the mod's own terms too (the game's collision for the stand-in rock is smaller than the model you see,
+// so you walked into the stone). You are pushed out of their sides, and can walk up onto the low ones (a rock, a boulder) the same way as onto the
+// climbing blocks: step up by walking into them, or jump. Tall stones (the posts) are only walls.
+void ApplyRocks(Player* player) {
+    if (!InField() || !gSession.Client()) return;
+    const auto& props = gSession.Client()->Props();
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    const float py = player->actor.world.pos.y;
+    const bool grounded = (player->actor.bgCheckFlags & 1) != 0;
+    const float reach = grounded ? 64.0f : 28.0f;
+    for (size_t i = 0; i < props.size(); i++) {
+        const royale::Prop& p = props[i];
+        if (p.kind != royale::PropKind::Rock && p.kind != royale::PropKind::Boulder && p.kind != royale::PropKind::Pillar) continue;
+        const float dx = px - p.pos.x, dz = pz - p.pos.z;
+        const float radius = royale::PropRadius(p.kind);
+        if (std::fabs(dx) > radius + 40.0f || std::fabs(dz) > radius + 40.0f) continue;
+        const float d = std::hypot(dx, dz);
+        const float base = PlatformBase(i);
+        if (base < -1.0e8f) continue;
+        const float height = p.kind == royale::PropKind::Rock ? 24.0f : p.kind == royale::PropKind::Boulder ? 60.0f : 200.0f;
+        const float top = base + height;
+        const float standR = radius * 0.62f;
+        if (p.kind != royale::PropKind::Pillar && d <= standR && py >= top - reach && player->actor.velocity.y <= 0.5f) {   // on top
+            player->actor.world.pos.y = top;
+            player->actor.velocity.y = 0.0f;
+            player->actor.bgCheckFlags |= 1;
+            player->actor.floorHeight = top;
+        } else if (d < radius && py < top - 4.0f && d > 0.01f) {   // against its side: out you go (and slide round it)
+            const float push = radius - d;
+            player->actor.world.pos.x += dx / d * push;
+            player->actor.world.pos.z += dz / d * push;
+        }
+    }
+}
+
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
@@ -4421,6 +4543,7 @@ void OnPlayerUpdate() {
     if (gActionFrames > 0) gActionFrames--;
     SyncLocalWeapon(player, hud);
     ApplyPlatforms(player);
+    ApplyRocks(player);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     ApplySpeedBuffs(player, hud);
@@ -5175,10 +5298,23 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
 // Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
+// The four allies are Link's own skeleton and animations, like the other players: a tunic in their people's colour, the matching mask, and the item
+// they fight with in hand (slingshot, bow, hammer), moving with the game's walking, standing and attacking animations.
+struct AllyLook { uint32_t tunic; royale::ItemId item; int mask; float scale; royale::Anim attack; };
+AllyLook AllyLookOf(int kind) {
+    switch (kind) {
+        case 0: return { 0x50C850, royale::ItemId::Slingshot, PLAYER_MASK_NONE, 0.92f, royale::Anim::Shoot };       // Kokiri
+        case 1: return { 0x4682EB, royale::ItemId::DekuStick, PLAYER_MASK_ZORA, 1.0f, royale::Anim::Cast };           // Zora
+        case 2: return { 0xDC503C, royale::ItemId::MegatonHammer, PLAYER_MASK_GORON, 1.3f, royale::Anim::Attack };   // Goron
+        default: return { 0xAA5AE6, royale::ItemId::FairyBow, PLAYER_MASK_GERUDO, 1.05f, royale::Anim::Shoot };      // Gerudo
+    }
+}
+
 void Ally_Update(Actor* actor, PlayState* play) {
     auto of = gAllyOf.find(actor);
     if (of == gAllyOf.end()) { Actor_Kill(actor); return; }
     AllyActor& a = gAllies[of->second];
+    Player* player = reinterpret_cast<Player*>(actor);
     if (!a.init) { a.x = a.tx; a.z = a.tz; a.rot = a.trot; a.init = true; }
     const float nx = a.x + (a.tx - a.x) * 0.4f, nz = a.z + (a.tz - a.z) * 0.4f;
     a.moved = a.moved * 0.8f + std::hypot(nx - a.x, nz - a.z);
@@ -5191,32 +5327,54 @@ void Ally_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.y = a.rot;
     actor->world.rot.y = a.rot;
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 50.0f;
+    // The game never runs this actor's own player logic, so its flags are kept as a standing, unhurt Link.
+    actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);
+    const AllyLook look = AllyLookOf(a.kind);
+    {   // it grows or shrinks to its people's size
+        const float k = actor->scale.x + (0.01f * look.scale - actor->scale.x) * 0.2f;
+        actor->scale.x = actor->scale.y = actor->scale.z = k;
+    }
+    player->currentTunic = PLAYER_TUNIC_KOKIRI;
+    player->currentMask = static_cast<u8>(look.mask);
+    const Look held = LookFor(look.item);
+    if (player->modelGroup != held.modelGroup || player->heldItemAction != held.itemAction) {
+        u8 original = gSaveContext.equips.buttonItems[0];
+        gSaveContext.equips.buttonItems[0] = held.buttonItem;
+        player->itemAction = player->heldItemAction = held.itemAction;
+        Player_SetModelGroup(player, held.modelGroup);
+        gSaveContext.equips.buttonItems[0] = original;
+    }
+    // Which animation: an attack plays through once, then walking or standing.
+    const bool acting = a.actAge < 0.55f;
+    static std::unordered_map<const Actor*, bool> wasActing;
+    bool& before = wasActing[actor];
+    const uint8_t pose = acting ? static_cast<uint8_t>(look.attack) : static_cast<uint8_t>(a.moved > 0.4f ? royale::Anim::Run : royale::Anim::Idle);
+    LinkAnimationHeader* want = AnimFor(pose, look.item, static_cast<int>(of->second));
+    auto playing = gPlaying.find(actor);
+    const bool restart = acting && !before;
+    before = acting;
+    if (restart || playing == gPlaying.end() || playing->second != (const void*)want) {
+        if (acting) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
+        else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
+        gPlaying[actor] = (const void*)want;
+    }
+    LinkAnimation_Update(play, &player->skelAnime);
+    Vec3f ignored;
+    SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
 }
 
 void Ally_Draw(Actor* actor, PlayState* play) {
     auto of = gAllyOf.find(actor);
     if (of == gAllyOf.end()) return;
     const AllyActor& a = gAllies[of->second];
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Ally, static_cast<uint32_t>(a.kind));
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    const bool walking = a.moved > 0.4f;
-    const float bob = walking ? std::fabs(std::sin(t * 8.0f + of->second)) * 7.0f : std::sin(t * 1.6f + of->second) * 1.5f;
-    const float sway = walking ? std::sin(t * 8.0f + of->second) * 0.07f : 0.0f;
-    const float lunge = a.actAge < 0.4f ? std::sin(a.actAge / 0.4f * 3.14159f) : 0.0f;   // an attack: it pitches forward
-    const float scale = a.kind == 2 ? 1.0f : 0.95f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(lunge * (a.kind == 2 ? 0.5f : 0.3f), MTXMODE_APPLY);
-    Matrix_RotateZ(sway, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
+    const AllyLook look = AllyLookOf(a.kind);
+    const u8 original = gSaveContext.equips.buttonItems[0];
+    gSaveContext.equips.buttonItems[0] = LookFor(look.item).buttonItem;
+    if (gTunicApplied) SetTunicCosmetics(look.tunic);
+    Player_Draw(actor, play);
+    if (gTunicApplied) SetTunicCosmetics(gLocalTunic);
+    gSaveContext.equips.buttonItems[0] = original;
 }
 
 void Ally_Destroy(Actor* actor, PlayState* play) {
@@ -5227,7 +5385,8 @@ void Ally_Destroy(Actor* actor, PlayState* play) {
         if (a != gAllies.end()) { orig = a->second.origDestroy; gAllies.erase(a); }
         gAllyOf.erase(of);
     }
-    if (orig) orig(actor, play);
+    Puppet_Destroy(actor, play);   // it is a puppet-style Player actor: the same clean-up
+    (void)orig;
 }
 
 void ReconcileAllies(const royale::HudState& hud) {
@@ -5241,16 +5400,15 @@ void ReconcileAllies(const royale::HudState& hud) {
             if (it == gAllies.end()) {
                 float y = 0;
                 if (!FloorAt(n.x, n.z, &y)) continue;
-                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
+                gSpawningPuppet = static_cast<uint16_t>(kAllyIdBase + n.index);
+                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, n.x, y, n.z, 0, n.rot, 0, 0, false);
+                gSpawningPuppet = 0;
                 if (actor == nullptr) continue;
                 AllyActor a;
-                a.actor = actor; a.origDestroy = actor->destroy; a.kind = n.kind; a.owner = n.owner;
+                a.actor = actor; a.origDestroy = nullptr; a.kind = n.kind; a.owner = n.owner;
                 a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.rot = n.rot; a.x = n.x; a.z = n.z; a.init = true;
                 gAllies[n.index] = a;
                 gAllyOf[actor] = n.index;
-                actor->update = Ally_Update;
-                actor->draw = Ally_Draw;
-                actor->destroy = Ally_Destroy;
                 actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
                 actor->uncullZoneForward = 4000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
                 actor->shape.shadowScale = 40.0f;
@@ -5518,7 +5676,7 @@ void OnGameFrameUpdate() {
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
-    if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
     DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
@@ -5628,6 +5786,7 @@ void RegisterRoyaleMod() {
             actor->draw = Puppet_Draw;
             actor->destroy = Puppet_Destroy;
             if (gSpawningPuppet >= kCorpseIdBase) { actor->update = Corpse_Update; actor->draw = Corpse_Draw; } // a body, not a live player
+            else if (gSpawningPuppet >= kAllyIdBase) { actor->update = Ally_Update; actor->draw = Ally_Draw; actor->destroy = Ally_Destroy; } // a hireable ally
         });
 
     // No enemies spawn while in a lobby or match.

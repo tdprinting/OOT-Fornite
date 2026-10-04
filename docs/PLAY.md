@@ -125,3 +125,14 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
 - **Controls added:** **C-Left** drinks a shield potion, **C-Up** jumps, **C-Right** emotes, **A** also hires allies and talks.
 - **Lilo the cat.** An Easter egg: a grey and white cat called Lilo sits at a random spot on the map. Press **A** next to her to talk. It can be switched off with "Lilo the cat" under "Minimap and game options" in the Royale menu.
+
+## Latest changes (real assets, weather, scenery)
+- **Hotbar and loot icons** are the game's own item icons wherever the game has one (swords, bow, bombs, bottles, tunics, masks...). Songs, rupee piles and a few others keep a drawn fallback.
+- **Weapons in use:** every action (slash, shot, throw, spell, ocarina, potion) plays the game's own animation once from its first frame; sword slashes cycle through the game's four swings. Arrows, bombs, bombchus and the boomerang in flight are the game's own models; elemental arrows leave sparks.
+- **Allies** are Link-skeleton characters with a tunic colour, mask and weapon per people (Kokiri slingshot, Zora mask, Goron hammer, Gerudo bow).
+- **Weather:** rain and snow are the game's own particle effects; snow builds up as mounds on the ground and melts slowly afterwards.
+- **Grass, trees and flowers** are scattered over the field (sway in the wind, change with the season); trunks are solid. Option: "Grass and trees (%)".
+- **Rocks and boulders** are solid and you can walk up onto them; the climbing blocks now step up automatically.
+- **Cloth physics** has its own on/off tick box; the cap now swings with Link's acceleration and its tip whips.
+- **Music:** the Royale menu shows which folder the .wav songs go in and how many were found, with a Rescan button.
+- **Glider:** Link hangs from the bar with both hands up.
