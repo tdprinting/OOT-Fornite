@@ -1724,6 +1724,99 @@ void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h
     }
 }
 
+// ---- seasons and weather ----------------------------------------------------------------------------------------------------
+// What the sky is doing (the server's spell of weather) drawn over the game: a seasonal tint, then rain, fog, snow, ash or sand streaming
+// across the screen. Everything fades in and out as spells change. The "Weather density" option scales the particles (0 turns them off).
+double gBoltFlashUntil = 0;   // a lightning bolt has landed nearby: the screen flashes until then
+float gWeatherBlend = 0.0f;
+bool gSeasonAnnounced = false;
+royale::Weather gWeatherShown;
+float gWeatherDensity = 1.0f;       // the local option, 0 to 2
+
+float WeatherAmount() { return gWeatherBlend * gWeatherShown.Strength(); }
+
+void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
+    const bool live = InField() && gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
+    const bool active = live && h.weather.sky != royale::Sky::Clear && h.weather.intensity > 0;
+    if (active) gWeatherShown = h.weather;
+    gWeatherBlend = std::clamp(gWeatherBlend + (active ? 0.012f : -0.012f), 0.0f, 1.0f);
+    if (live) gWeatherShown.season = h.weather.season;
+    const double t = ImGui::GetTime();
+    const float tf = static_cast<float>(t);
+    if (!live) return;
+    // The season colours the whole picture a little.
+    static const ImU32 kSeasonTint[4] = { IM_COL32(150, 230, 140, 16), IM_COL32(255, 214, 120, 18), IM_COL32(255, 150, 60, 26), IM_COL32(190, 215, 255, 30) };
+    dl->AddRectFilled(ImVec2(0, 0), ds, kSeasonTint[static_cast<int>(h.weather.season) & 3]);
+    const float w = WeatherAmount();
+    const float density = gWeatherDensity;
+    if (w > 0.01f && density > 0.0f) {
+        const float d = std::clamp(w * density, 0.0f, 2.0f);
+        switch (gWeatherShown.sky) {
+            case royale::Sky::Rain: case royale::Sky::Thunder: {
+                const bool thunder = gWeatherShown.sky == royale::Sky::Thunder;
+                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(40, 50, 70, static_cast<int>((thunder ? 80 : 50) * w)));
+                const int n = static_cast<int>(200 * d);
+                for (int i = 0; i < n; i++) {
+                    const float depth = 0.6f + 0.4f * (i % 3) / 2.0f;
+                    const float x = std::fmod(i * 97.3f + tf * 300.0f * depth, ds.x + 260.0f) - 130.0f;
+                    const float y = std::fmod(i * 61.7f + tf * 1100.0f * depth, ds.y + 100.0f) - 50.0f;
+                    dl->AddLine(ImVec2(x, y), ImVec2(x - 11 * scale * depth, y + 34 * scale * depth), IM_COL32(190, 205, 235, static_cast<int>(120 * std::min(1.0f, w + 0.3f) * depth)), 1.3f * scale * depth);
+                }
+                break;
+            }
+            case royale::Sky::Fog: {
+                dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(205, 210, 215, static_cast<int>(120 * w)), IM_COL32(205, 210, 215, static_cast<int>(120 * w)),
+                                            IM_COL32(215, 218, 222, static_cast<int>(185 * w)), IM_COL32(215, 218, 222, static_cast<int>(185 * w)));
+                const int n = static_cast<int>(7 * std::min(1.5f, density));
+                for (int i = 0; i < n; i++) {   // slow drifting banks
+                    const float x = std::fmod(tf * (22.0f + 9.0f * i) + i * 310.0f, ds.x + 700.0f) - 350.0f, y = ds.y * (0.25f + 0.1f * i);
+                    dl->AddRectFilledMultiColor(ImVec2(x, y - 55 * scale), ImVec2(x + 650 * scale, y + 55 * scale), IM_COL32(225, 228, 232, 0), IM_COL32(225, 228, 232, static_cast<int>(60 * w)),
+                                                IM_COL32(225, 228, 232, 0), IM_COL32(225, 228, 232, static_cast<int>(60 * w)));
+                }
+                break;
+            }
+            case royale::Sky::Snow: {
+                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(220, 230, 245, static_cast<int>(48 * w)));
+                const int n = static_cast<int>(170 * d);
+                for (int i = 0; i < n; i++) {
+                    const float depth = 0.5f + 0.5f * (i % 4) / 3.0f;
+                    const float sway = std::sin(tf * 1.3f + i) * 26.0f * scale;
+                    const float x = std::fmod(i * 83.7f + tf * 36.0f * depth, ds.x + 80.0f) - 40.0f + sway;
+                    const float y = std::fmod(i * 47.3f + tf * 120.0f * depth, ds.y + 40.0f) - 20.0f;
+                    dl->AddCircleFilled(ImVec2(x, y), (1.4f + 2.6f * depth) * scale, IM_COL32(245, 248, 255, static_cast<int>(215 * std::min(1.0f, w + 0.3f))), 8);
+                }
+                break;
+            }
+            case royale::Sky::Ash: {
+                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(60, 40, 36, static_cast<int>(95 * w)));
+                const int n = static_cast<int>(120 * d);
+                for (int i = 0; i < n; i++) {
+                    const float depth = 0.5f + 0.5f * (i % 4) / 3.0f;
+                    const float x = std::fmod(i * 91.3f + tf * 60.0f * depth, ds.x + 120.0f) - 60.0f + std::sin(tf + i) * 18.0f * scale;
+                    const float y = ds.y - std::fmod(i * 53.1f + tf * 70.0f * depth, ds.y + 40.0f) + 20.0f;   // embers rise
+                    const bool ember = i % 3 == 0;
+                    dl->AddCircleFilled(ImVec2(x, y), (1.2f + 2.0f * depth) * scale, ember ? IM_COL32(255, 150, 50, 230) : IM_COL32(150, 145, 140, 170), 6);
+                }
+                break;
+            }
+            case royale::Sky::Sandstorm: {
+                dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(205, 165, 105, static_cast<int>(95 * w)), IM_COL32(205, 165, 105, static_cast<int>(95 * w)),
+                                            IM_COL32(190, 145, 85, static_cast<int>(165 * w)), IM_COL32(190, 145, 85, static_cast<int>(165 * w)));
+                const int n = static_cast<int>(120 * d);
+                for (int i = 0; i < n; i++) {
+                    const float depth = 0.5f + 0.5f * (i % 3) / 2.0f;
+                    const float y = std::fmod(i * 71.9f, ds.y), x = std::fmod(i * 131.3f + tf * 1300.0f * depth, ds.x + 400.0f) - 200.0f;
+                    dl->AddLine(ImVec2(x, y), ImVec2(x - 70 * scale * depth, y + 6 * scale), IM_COL32(235, 200, 140, static_cast<int>(120 * depth)), 1.5f * scale);
+                }
+                break;
+            }
+            default: break;
+        }
+    }
+    // A lightning bolt landing nearby lights up the whole screen.
+    if (t < gBoltFlashUntil) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(225, 232, 255, static_cast<int>(std::min(1.0, (gBoltFlashUntil - t) / 0.35) * 150.0)));
+}
+
 // Town names hanging over each point of interest, big enough to read from the sky while you skydive.
 void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     if (!gSession.Client() || !InField()) return;
@@ -2391,7 +2484,7 @@ void DrawGains(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 struct PickupFx { royale::ItemId item; royale::Rarity rarity; float x, y, z; double at; };
 std::vector<PickupFx> gPickupFx;
 
-struct StrikeFx { float x, z, radius; double land; bool boomed; };
+struct StrikeFx { float x, z, radius; double land; bool boomed; bool bolt; };   // bolt: lightning from a thunderstorm
 std::vector<StrikeFx> gStrikeFx;
 
 void DrawBanners(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
@@ -2470,6 +2563,7 @@ void UpdateBossWorldFx() {
             const float danger = static_cast<float>(1.0 - (s.land - now) / 1.4);   // sparks come faster as the blast gets close
             const int n = 5 + static_cast<int>(danger * 9.0f);
             Color_RGBA8 prim = { 255, static_cast<u8>(210 - danger * 150.0f), 40, 255 }, env = { 255, 60, 20, 255 };
+            if (s.bolt) { prim = { 210, 225, 255, 255 }; env = { 90, 120, 255, 255 }; }   // lightning crackles blue-white
             for (int i = 0; i < n; i++) {
                 const float a = Rand_ZeroOne() * 6.2831853f;
                 Vec3f pos = { s.x + std::cos(a) * s.radius, ground + 6.0f, s.z + std::sin(a) * s.radius };
@@ -2480,8 +2574,19 @@ void UpdateBossWorldFx() {
         } else if (!s.boomed) {
             s.boomed = true;
             Vec3f pos = { s.x, ground + 20.0f, s.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
-            EffectSsBomb2_SpawnLayered(gPlayState, &pos, &vel, &accel, 90, 14);
-            SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 255, 190, 60, 255 }, 26, 7.0f);
+            if (s.bolt) {
+                gBoltFlashUntil = now + 0.35;
+                for (int k = 0; k < 14; k++) {   // the bolt itself: a column of white sparks from the sky
+                    Vec3f col = { s.x + (Rand_ZeroOne() - 0.5f) * 16.0f, ground + 40.0f + k * 55.0f, s.z + (Rand_ZeroOne() - 0.5f) * 16.0f };
+                    Vec3f v = { 0, 0, 0 }, a = { 0, 0, 0 };
+                    Color_RGBA8 p = { 240, 245, 255, 255 }, e2 = { 120, 150, 255, 255 };
+                    EffectSsKiraKira_SpawnDispersed(gPlayState, &col, &v, &a, &p, &e2, 260, 10);
+                }
+                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 190, 210, 255, 255 }, 30, 8.0f);
+            } else {
+                EffectSsBomb2_SpawnLayered(gPlayState, &pos, &vel, &accel, 90, 14);
+                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 255, 190, 60, 255 }, 26, 7.0f);
+            }
             Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
         }
     }
@@ -2664,6 +2769,7 @@ void DrawOverlay() {
         col = (col & 0x00FFFFFF) | (static_cast<ImU32>(255 * fade) << 24);
         centered(ds.y * 0.58f, col, 30 * scale, gBannerText);
     }
+    DrawWeather(dl, ds, scale, h);
     DrawStorm(dl, ds, scale, h);
     DrawBossBars(dl, font, scale);
     DrawPoiLabels(dl, font, ds, scale, h);
@@ -3551,10 +3657,26 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::Strike:
-                gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false });
+                gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false, e.id == royale::net::kNoPlayer16 });
                 break;
+            case royale::ClientEvent::Type::WeatherChanged: {
+                const auto sky = static_cast<royale::Sky>(e.item);
+                if (!gSeasonAnnounced) {
+                    gSeasonAnnounced = true;
+                    const auto season = static_cast<royale::Season>(e.id & 3);
+                    ShowBanner(std::string(royale::SeasonName(season)) + ": " + royale::SeasonBlurb(season), IM_COL32(255, 235, 170, 255), 3.4f);
+                } else if (sky != royale::Sky::Clear) {
+                    ShowBanner(std::string(royale::SkyName(sky)) + " rolls in", IM_COL32(190, 210, 255, 255), 2.8f);
+                } else {
+                    ShowBanner("The sky clears", IM_COL32(255, 235, 170, 255), 2.4f);
+                }
+                if (sky == royale::Sky::Fog || sky == royale::Sky::Sandstorm) Say(std::string(royale::SkyName(sky)) + ": bots (and you) see less far");
+                if (sky == royale::Sky::Thunder) Say("Thunderstorm: watch the marked circles, lightning is about to strike");
+                break;
+            }
             case royale::ClientEvent::Type::MapChanged:
                 gBrokenProps.clear();   // a new match (or a rematch): all the scenery is back
+                gSeasonAnnounced = false;
                 gPickupLog.clear();
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
@@ -3676,7 +3798,8 @@ void DriveTimeOfDay(const royale::HudState& hud) {
         for (const auto& ph : royale::kStormPhases) total += ph.waitSec + ph.closeSec;
         const float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
         int t = 0x5000 + static_cast<int>(p * 0x9000); // about 7:30 in the morning to about 9 at night
-        if (t < 0xD400) t += static_cast<int>((0xD400 - t) * gStormWeather * 0.85f); // storm weather: the sky goes to dusk-dark while you are outside the zone
+        const float dark = std::max(gStormWeather * 0.85f, royale::SkyDarkness(gWeatherShown) * gWeatherBlend);   // the storm zone and heavy weather both darken the sky
+        if (t < 0xD400) t += static_cast<int>((0xD400 - t) * dark);
         gSaveContext.dayTime = static_cast<u16>(t);
         gSaveContext.skyboxTime = static_cast<u16>(t);
     } else if (gTimeTaken) {
@@ -3939,6 +4062,10 @@ struct UiState {
     bool autoStart = true;                 // the lobby starts the match by itself after two minutes
     int mapId = 0;                         // which place to play (host)
     bool majorBoss = true;                 // the map's dragon arrives halfway through (host)
+    int weatherSeason = royale::kSeasonRandom;   // 0-3 or kSeasonRandom (host)
+    int weatherIntensity = 60;             // 0 = no weather (host)
+    int weatherChange = 50;                // how often the weather changes (host)
+    int weatherDensity = 100;              // particles drawn on this screen, per cent (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool showCustomize = false;
@@ -3972,6 +4099,12 @@ UiState& Ui() {
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
         ui.mapId = royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0));
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
+        ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
+        ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
+        ui.weatherChange = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherChange"), 50), 0, 100);
+        ui.weatherDensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherDensity"), 100), 0, 200);
+        gWeatherDensity = ui.weatherDensity / 100.0f;
+        gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
         gSession.SelectMap(ui.mapId);
         gSession.SetMajorBoss(ui.majorBoss);
         gSession.SetPlayerLimit(ui.playerLimit);
@@ -3996,6 +4129,10 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("AutoStart"), ui.autoStart ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("Map"), ui.mapId);
     CVarSetInteger(ROYALE_CVAR("MajorBoss"), ui.majorBoss ? 1 : 0);
+    CVarSetInteger(ROYALE_CVAR("WeatherSeason"), ui.weatherSeason);
+    CVarSetInteger(ROYALE_CVAR("WeatherIntensity"), ui.weatherIntensity);
+    CVarSetInteger(ROYALE_CVAR("WeatherChange"), ui.weatherChange);
+    CVarSetInteger(ROYALE_CVAR("WeatherDensity"), ui.weatherDensity);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
@@ -4242,6 +4379,22 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
             }
             ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
         }
+        {
+            UiState& ui = Ui();
+            bool changed = false;
+            static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
+            ImGui::SetNextItemWidth(160);
+            changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
+            ImGui::SetNextItemWidth(280);
+            changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
+            ImGui::SetNextItemWidth(280);
+            changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
+            if (changed) {
+                gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
+                SaveUi(ui);
+            }
+            ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
+        }
         ImGui::BeginDisabled(!InGame() || gPendingStart);
         if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
         ImGui::EndDisabled();
@@ -4253,6 +4406,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
+    {
+        UiState& ui = Ui();
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+    }
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");

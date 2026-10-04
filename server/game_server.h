@@ -96,6 +96,7 @@ class GameServer {
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetBossCount(bossCount);
         sim.match.SetMajorBoss(majorBoss);
+        sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
@@ -189,6 +190,9 @@ class GameServer {
     const std::vector<Poi>& Pois() const { return pois; }
     // How well bots play. Survives Reconfigure (which rebuilds the simulation).
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; sim.bots.SetDifficulty(d); }
+    // The host's weather choices; they apply to the next match (and survive Reconfigure).
+    void SetWeatherOptions(const WeatherOptions& o) { weatherOptions = o; sim.match.SetWeatherOptions(o); }
+    const WeatherOptions& GetWeatherOptions() const { return weatherOptions; }
     BotDifficulty GetBotDifficulty() const { return botDifficulty; }
     const Stats& GetStats() const { return stats; }
     uint32_t Tick() const { return tick; }
@@ -556,6 +560,12 @@ class GameServer {
                     Broadcast(st);
                     break;
                 }
+                case MatchEvent::Type::Weather: {
+                    net::EvWeather w;
+                    w.season = static_cast<uint8_t>(e.a); w.sky = e.item; w.intensity = static_cast<uint8_t>(e.amount); w.seconds = e.health;
+                    Broadcast(w);
+                    break;
+                }
                 case MatchEvent::Type::SupplyDrop: {
                     net::EvSupplyDrop sd;
                     sd.x = e.x; sd.z = e.z; sd.delay = e.health;
@@ -693,6 +703,7 @@ class GameServer {
     net::Transport& link;
     Simulation sim;
     BotDifficulty botDifficulty = BotDifficulty::Normal;
+    WeatherOptions weatherOptions;
     int mapId = 0;
     bool majorBoss = true;
     std::vector<Prop> props;

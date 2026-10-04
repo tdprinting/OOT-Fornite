@@ -15,7 +15,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -127,6 +127,8 @@ class GameClient {
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
     void ReportSmash(size_t index) { net::PropSmashRequest m; m.index = static_cast<uint16_t>(index); SendIfJoined(m); } // I broke a rock or cut a bush
     const std::set<size_t>& BrokenProps() const { return brokenProps; }
+    const Weather& CurrentWeather() const { return weather; }
+    float WeatherSecondsLeft() const { return (std::max)(0.0f, weatherSeconds - (localClock - weatherAt)); }
     void SelectMap(int id) { net::SelectMapRequest m; m.map = static_cast<uint8_t>(id); SendIfJoined(m); } // host only, lobby only
     const std::vector<net::ResultRow>& Results() const { return results; }
     // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
@@ -336,6 +338,17 @@ class GameClient {
                 results = m.rows;
                 break;
             }
+            case net::MsgType::EvWeather: {
+                net::EvWeather m;
+                if (!net::Decode(data, m)) break;
+                weather = Weather{static_cast<Season>(m.season), static_cast<Sky>(m.sky), m.intensity};
+                weatherSeconds = m.seconds;
+                weatherAt = localClock;
+                ClientEvent e{ClientEvent::Type::WeatherChanged};
+                e.item = m.sky; e.count = m.intensity; e.health = m.seconds; e.id = m.season;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvSupplyDrop: {
                 net::EvSupplyDrop m;
                 if (!net::Decode(data, m)) break;
@@ -471,6 +484,8 @@ class GameClient {
     Circle map;
     int mapId = 0;
     std::set<size_t> brokenProps;   // props somebody has smashed this match
+    Weather weather;                // the sky, as last announced by the server
+    float weatherSeconds = 0, weatherAt = 0;
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;

@@ -87,6 +87,8 @@ struct HudState {
     int playerLimit = kMaxPlayers; // players in the match, bots included (the host's slider)
     int mapId = 0;                 // which place the match is played in (shared/map.h)
     int rupees = 0;
+    Weather weather;               // the sky right now (season, kind, strength)
+    float weatherSecondsLeft = 0;  // until the next spell
     std::array<int, kAmmoKinds> ammo = {};
     float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
     uint16_t winnerId = 0xFFFF;   // once the match has ended
@@ -112,6 +114,7 @@ class RoyaleSession {
         server->SetAutoStart(autoStart);
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
         server->SetMajorBoss(majorBoss);
+        server->SetWeatherOptions(weatherOptions);
         if (selectedMap != 0) server->SelectMap(selectedMap);
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
@@ -160,6 +163,7 @@ class RoyaleSession {
     void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
+    void SetWeatherOptions(const WeatherOptions& o) { weatherOptions = o; if (server) server->SetWeatherOptions(o); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
@@ -249,6 +253,8 @@ class RoyaleSession {
         h.humanCount = static_cast<int>(h.roster.size());
         h.playerLimit = client->PlayerLimit();
         h.mapId = client->MapId();
+        h.weather = client->CurrentWeather();
+        h.weatherSecondsLeft = client->WeatherSecondsLeft();
         h.rupees = client->Inventory().rupees;
         for (int k = 0; k < kAmmoKinds; k++) h.ammo[static_cast<size_t>(k)] = client->Inventory().ammo[static_cast<size_t>(k)];
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
@@ -329,6 +335,7 @@ class RoyaleSession {
     int playerLimit = kMaxPlayers;
     int selectedMap = 0;
     bool majorBoss = true;
+    WeatherOptions weatherOptions;
     float autoStart = kLobbyAutoStartSec;
     Mode mode = Mode::Idle;
     // Order matters: clients are destroyed before the transports they use.

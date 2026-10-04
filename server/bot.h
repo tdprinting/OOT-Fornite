@@ -612,6 +612,7 @@ class BotController {
         if (p.health < mem.lastHealth - 0.12f) mem.alertUntil = now + 5.0f;
         mem.lastHealth = p.health;
         float sight = tune.sight * (now < mem.alertUntil ? 1.5f : 1.0f);
+        sight *= SightMult(m.CurrentWeather());   // fog, sandstorms and heavy weather hide people
         if (m.Revealing(p)) sight = 1e9f;
 
         PlayerState* foe = ChooseTarget(m, p, mem, sight);

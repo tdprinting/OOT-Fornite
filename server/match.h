@@ -5,6 +5,7 @@
 #include "../shared/map.h"
 #include "../shared/props.h"
 #include "../shared/storm.h"
+#include "../shared/weather.h"
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -75,7 +76,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -118,6 +119,7 @@ struct Strike {
     float hitAt = 0;
     uint32_t by = 0;
     bool applied = false;
+    bool lightning = false;   // a bolt from a thunderstorm: plain damage, no burning
 };
 
 struct AttackResult {
@@ -214,6 +216,7 @@ class Match {
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
         nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
+        spell = -1; boltCount = 0; weather = Weather{PickSeason(wopt, seed), Sky::Clear, 0};
         Enter(MatchState::Countdown);
         return true;
     }
@@ -226,10 +229,12 @@ class Match {
                 if (stateTime >= kCountdownSec) Enter(MatchState::Drop);
                 break;
             case MatchState::Drop:
+                TickWeather();
                 if (stateTime >= kDropSec) Enter(MatchState::InMatch);
                 break;
             case MatchState::InMatch:
                 stormTime += dt;
+                TickWeather();
                 TickSupplyDrops();
                 for (auto& p : players) {
                     if (!p.alive) continue;
@@ -846,6 +851,39 @@ class Match {
         }
     }
 
+    // Weather: see shared/weather.h. The sky changes spell by spell as the match goes on; thunderstorms throw lightning at the players.
+    void SetWeatherOptions(const WeatherOptions& o) { wopt = o; }
+    const WeatherOptions& GetWeatherOptions() const { return wopt; }
+    const Weather& CurrentWeather() const { return weather; }
+    void TickWeather() {
+        const int sp = SpellIndex(wopt, stormTime);
+        if (sp != spell) {
+            spell = sp;
+            weather = WeatherForSpell(wopt, seed, mapId, sp);
+            MatchEvent e{MatchEvent::Type::Weather};
+            e.a = static_cast<uint32_t>(weather.season); e.item = static_cast<uint8_t>(weather.sky); e.amount = static_cast<float>(weather.intensity);
+            e.health = SpellSeconds(wopt);
+            events.push_back(e);
+            nextBolt = clock + 4.0f;
+        }
+        const float every = LightningEvery(weather);
+        if (state != MatchState::InMatch || every <= 0.0f || clock < nextBolt) return;
+        Rng rng(seed ^ (static_cast<uint64_t>(++boltCount) * 0xA24BAED4963EE407ull) ^ 0x626F6C74ull);   // "bolt"
+        nextBolt = clock + every * (0.6f + 0.8f * static_cast<float>(rng.Unit()));
+        std::vector<const PlayerState*> alive;
+        for (const auto& p : players) if (p.alive) alive.push_back(&p);
+        if (alive.empty()) return;
+        const PlayerState* victim = alive[rng.Below(static_cast<uint32_t>(alive.size()))];
+        const float ang = static_cast<float>(rng.Unit()) * 6.2831853f, off = static_cast<float>(rng.Unit()) * 320.0f;
+        Strike s;
+        s.at = {victim->pos.x + std::cos(ang) * off, victim->pos.z + std::sin(ang) * off};
+        s.radius = kLightningRadius; s.damage = kLightningDamage; s.hitAt = clock + kLightningWarning; s.by = kNoPlayer; s.lightning = true;
+        strikes.push_back(s);
+        MatchEvent e{MatchEvent::Type::Strike};
+        e.a = kNoPlayer; e.x = s.at.x; e.z = s.at.z; e.amount = s.radius; e.health = kLightningWarning;
+        events.push_back(e);
+    }
+
     void SetMajorBoss(bool on) { majorBoss = on; }
     bool MajorBossEnabled() const { return majorBoss; }
     const std::vector<Strike>& Strikes() const { return strikes; }
@@ -898,6 +936,7 @@ class Match {
     }
 
     void ApplyBurn(PlayerState& p, uint32_t by, float seconds, float dps) {
+        seconds *= BurnMult(weather);   // rain puts fires out, ash storms feed them
         p.burnUntil = (std::max)(p.burnUntil, clock + seconds);
         p.burnDps = (std::max)(clock < p.burnUntil ? p.burnDps : 0.0f, dps);
         p.burnBy = by;
@@ -910,6 +949,7 @@ class Match {
             s.applied = true;
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
+                if (s.lightning) { Damage(p.id, s.damage, s.by, DamageKind::Normal); continue; }
                 Damage(p.id, s.damage, s.by, DamageKind::Fire);
                 if (p.alive) ApplyElement(p, s.by, 3.0f, 0.3f);
             }
@@ -1406,6 +1446,11 @@ class Match {
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;
     bool supplyDrops = true;
+    WeatherOptions wopt;
+    Weather weather;
+    int spell = -1;
+    float nextBolt = 0;
+    int boltCount = 0;
     float nextSupplyAt = kSupplyFirstSec;
     int supplyCount = 0;
     struct PendingSupply { Vec2 pos; float landAt; };

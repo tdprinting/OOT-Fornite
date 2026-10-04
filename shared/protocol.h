@@ -6,6 +6,7 @@
 #include "poi.h"
 #include "skins.h"
 #include "storm.h"
+#include "weather.h"
 #include <array>
 #include <cmath>
 #include <string>
@@ -20,7 +21,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 13; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 14; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -31,7 +32,7 @@ enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvSupplyDrop = 86,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -356,6 +357,15 @@ struct EvBossDown {
     float x = 0, z = 0;
     void Write(ByteWriter& w) const { w.U16(boss); w.U16(killer); w.F32(x); w.F32(z); }
     bool Read(ByteReader& r) { boss = r.U16(); killer = r.U16(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && Finite(x) && Finite(z); }
+};
+
+// The weather changed (a new spell begins): `season`, what the sky does, how strongly, and how long the spell lasts.
+struct EvWeather {
+    static constexpr MsgType kType = MsgType::EvWeather;
+    uint8_t season = 0, sky = 0, intensity = 0;
+    float seconds = 0;
+    void Write(ByteWriter& w) const { w.U8(season); w.U8(sky); w.U8(intensity); w.F32(seconds); }
+    bool Read(ByteReader& r) { season = r.U8(); sky = r.U8(); intensity = r.U8(); seconds = r.F32(); return r.ok && season < kSeasonCount && sky < kSkyCount && intensity <= 100 && Finite(seconds); }
 };
 
 // A supply drop has been announced: a crate lands at (x, z) in `delay` seconds.

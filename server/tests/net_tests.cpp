@@ -1226,6 +1226,28 @@ static void WinnerIsAnnounced() {
     CHECK(w && me.Winner() == w->id);
 }
 
+static void WeatherOverTheWire() {
+    net::EvWeather w; w.season = 2; w.sky = static_cast<uint8_t>(Sky::Fog); w.intensity = 80; w.seconds = 60;
+    std::vector<uint8_t> bytes = net::Encode(w);
+    net::EvWeather back;
+    CHECK(net::Decode(bytes, back) && back.season == 2 && back.sky == static_cast<uint8_t>(Sky::Fog) && back.intensity == 80 && back.seconds == 60);
+    net::EvWeather bad; bad.sky = 99;
+    std::vector<uint8_t> badBytes = net::Encode(bad);
+    net::EvWeather rejected;
+    CHECK(!net::Decode(badBytes, rejected));
+    Rig rig(31, 0);
+    GameClient& me = rig.Add("W");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    WeatherOptions o; o.season = static_cast<uint8_t>(Season::Winter); o.intensity = 100; o.change = 100;
+    rig.server.SetWeatherOptions(o);
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    CHECK(me.CurrentWeather().season == Season::Winter);                       // the season arrives with the first spell
+    bool changed = false;
+    CHECK(rig.RunUntil([&] { changed = changed || me.CurrentWeather().sky != Sky::Clear; return changed; }, 400));
+    CHECK(changed && me.CurrentWeather().Strength() > 0);
+}
+
 static void CountdownElapsedTracksState() {
     Rig rig(11, 0);
     GameClient& a = rig.Add("A");
@@ -1322,7 +1344,7 @@ int main() {
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
-    OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
+    WeatherOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");

@@ -1104,6 +1104,63 @@ static void BotsPickUpFairiesAndHearts() {
 
 static Simulation DragonArena(int mapId, bool enabled);
 
+
+static void SeasonsAndWeather() {
+    // Pure and deterministic: same seed, map and spell give the same sky; the first spell is fair; no intensity means no weather at all.
+    WeatherOptions o;
+    for (int map = 0; map < kMapCount; map++) {
+        for (int sp = 0; sp < 30; sp++) {
+            const Weather a = WeatherForSpell(o, 99, map, sp), b = WeatherForSpell(o, 99, map, sp);
+            CHECK(a.sky == b.sky && a.intensity == b.intensity && a.season == b.season);
+            CHECK(a.intensity <= 100 && (a.sky == Sky::Clear) == (a.intensity == 0));
+            if (sp == 0) CHECK(a.sky == Sky::Clear);
+            // places keep to their own weather: no rain in the crater, no snow outside winter, no sandstorm outside the desert
+            for (int season = 0; season < kSeasonCount; season++) {
+                WeatherOptions fixed = o; fixed.season = static_cast<uint8_t>(season);
+                const Weather w = WeatherForSpell(fixed, 1234 + sp, map, sp);
+                CHECK(w.season == static_cast<Season>(season));
+                if (map == 3) CHECK(w.sky != Sky::Rain && w.sky != Sky::Sandstorm);
+                if (season != 3 && !(map == 3 && w.sky == Sky::Snow)) CHECK(w.sky != Sky::Snow);
+                if (map != 4) CHECK(w.sky != Sky::Sandstorm);
+                if (map != 3) CHECK(w.sky != Sky::Ash);
+            }
+        }
+    }
+    WeatherOptions calm; calm.intensity = 0;
+    for (int sp = 0; sp < 30; sp++) CHECK(WeatherForSpell(calm, 5, 0, sp).sky == Sky::Clear);
+    // Every kind turns up somewhere over many seeds, and the change slider shortens spells.
+    int seen[kSkyCount] = {};
+    for (int map = 0; map < kMapCount; map++) for (int season = 0; season < kSeasonCount; season++) for (int sp = 1; sp < 80; sp++) {
+        WeatherOptions f = o; f.season = static_cast<uint8_t>(season);
+        seen[static_cast<int>(WeatherForSpell(f, 7, map, sp).sky)]++;
+    }
+    for (int k = 0; k < kSkyCount; k++) CHECK(seen[k] > 0);
+    WeatherOptions slow, fast; slow.change = 0; fast.change = 100;
+    CHECK(SpellSeconds(slow) > SpellSeconds(fast) * 2.0f && SpellSeconds(fast) >= 30.0f);
+    // Effects scale with strength.
+    Weather fog{Season::Autumn, Sky::Fog, 100}, mist{Season::Autumn, Sky::Fog, 30}, clear;
+    CHECK(SightMult(fog) < SightMult(mist) && SightMult(mist) < 1.0f && SightMult(clear) == 1.0f);
+    CHECK(BurnMult(Weather{Season::Spring, Sky::Rain, 100}) < 1.0f && BurnMult(Weather{Season::Spring, Sky::Ash, 100}) > 1.0f);
+    CHECK(LightningEvery(Weather{Season::Spring, Sky::Thunder, 100}) > 0 && LightningEvery(fog) == 0);
+    // A match announces each spell once, tells the season, and lightning only falls in thunderstorms.
+    Simulation sim = DragonArena(0, false);
+    WeatherOptions fastOpt; fastOpt.change = 100; fastOpt.intensity = 100; fastOpt.season = static_cast<uint8_t>(Season::Spring);
+    sim.match.SetWeatherOptions(fastOpt);
+    sim.match.DrainEvents();   // (the arena already announced its first spell under the default options)
+    int announced = 0, strikes = 0;
+    float lastStart = -1;
+    bool wasThunder = false;
+    for (int i = 0; i < static_cast<int>(600 * kTickHz); i++) {
+        sim.Tick(kDt);
+        for (const auto& e : sim.match.DrainEvents()) {
+            if (e.type == MatchEvent::Type::Weather) { announced++; CHECK(e.a == 0 && std::abs(e.health - SpellSeconds(fastOpt)) < 0.01f); lastStart = sim.match.StormTime(); wasThunder = e.item == static_cast<uint8_t>(Sky::Thunder); }
+            if (e.type == MatchEvent::Type::Strike && e.a == kNoPlayer) { strikes++; CHECK(wasThunder && std::abs(e.health - kLightningWarning) < 0.01f); }
+        }
+    }
+    CHECK(announced >= 5 && lastStart >= 0);
+    (void)strikes;
+}
+
 static void SupplyDrops() {
     float total = 0;
     for (const auto& ph : kStormPhases) total += ph.waitSec + ph.closeSec;
@@ -2203,7 +2260,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
