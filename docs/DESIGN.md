@@ -65,22 +65,68 @@ Farore's Wind), and Hyrule Field's large open map.
 
 | Slot | Items |
 |---|---|
-| Melee | Kokiri Sword, Master Sword, Biggoron's Sword, Megaton Hammer, Deku Stick |
+| Melee | Kokiri Sword, Master Sword, Biggoron's Sword, Megaton Hammer, Deku Stick (each with a rarity tier, see 4.3) |
 | Ranged | Fairy Bow (ammo), Slingshot, Hookshot / Longshot (pull to player), Boomerang |
 | Explosive | Bombs, Bombchus |
 | Magic | Din's Fire, Farore's Wind (self-revive/warp beacon), Nayru's Love (shield) |
 | Defence | Deku Shield, Hylian Shield, Mirror Shield (reflects light arrows) |
 | Heal | Red/Green Potions, Fairy in bottle (auto-revive once), Hearts |
 
-- Rarity tiers (common, rare, epic, legendary) drive damage and spawn weight.
 - PvP damage is applied through the server. The attacker's client reports a hit with the weapon, target and tick;
   the server checks range and line of sight and applies damage. Z-target dodge rolls give i-frames server-side.
 - Health: 3 hearts base, up to 10. Shield value as an overlay, as in Fortnite.
-- Stretch: a simple build mechanic (push a block, place a crate) in place of Fortnite building.
+- Building is no longer a stretch goal. It is in scope as the "crates and platforms" system in 4.3.1 (build mode, v3).
 
-### 4.3 Loot
-- Server places ~400 loot spawns from a seeded table. Chests are the high-tier loot.
-- Eliminated players drop their kit as a Gold Skulltula token pile.
+### 4.3 Loot and rarity tiers
+
+Every weapon, shield and consumable has a rarity tier, as in Fortnite. Tier sets damage or effect strength, spawn
+weight and the item's glow colour (the same colour family is used for the item's drop beam and inventory frame).
+
+| Tier | Colour | Spawn weight | Stat multiplier | Example OoT items |
+|---|---|---|---|---|
+| Common | Grey | 40% | x1.0 | Deku Stick, Deku Shield, Slingshot, Kokiri Sword, Green Potion |
+| Uncommon | Green | 28% | x1.15 | Boomerang, Bombs (5), Hylian Shield, Red Potion |
+| Rare | Blue | 18% | x1.3 | Fairy Bow, Hookshot, Bombchus, Biggoron's Sword (short) |
+| Epic | Purple | 10% | x1.5 | Megaton Hammer, Master Sword, Din's Fire, Longshot |
+| Legendary | Gold | 4% | x1.75 | Mirror Shield, Light Arrows, Farore's Wind, Nayru's Love |
+
+- Same item base, different tier. A Rare bow does more damage and has a faster draw than a Common one. Tiers can be
+  upgraded at a workbench (a Great Fairy Fountain) for materials.
+- Multipliers and weights are tunable constants in `shared/balance.h`.
+- Chests are the high-tier source (weights shifted one tier up). Floor loot, pots and bushes give lower tiers.
+- Server places ~400 loot spawns from a seeded table. Eliminated players drop their kit as a Gold Skulltula token pile.
+
+### 4.3.1 Fortnite mechanics mapped onto OoT
+
+The goal is every core Fortnite mechanic, expressed with OoT's engine, assets and its own look. Items marked
+(new) need custom code or assets beyond what the engine does today.
+
+| Fortnite mechanic | OoT Royale version | Notes |
+|---|---|---|
+| Battle bus and drop | Cucco/owl glide from the sky onto Hyrule Field | (new) Glide camera and animation, uses the Kaepora Gaebora flight. Pick landing spot. |
+| Skydive then glider | Skydive, then Deku Leaf glider | (new) Deku Leaf glide exists in OoT as a prop only. Needs a player state. |
+| Storm | Poe fog circle | Server-driven, see 4.4. |
+| Health and shield bars | Hearts (health) plus a magic-style shield bar | Shield bar reuses the magic meter. |
+| Weapon rarity | Tiers above | Done in 4.3. |
+| Ammo types | Arrows, Deku Seeds, bombs, bombchus, magic | Ammo pickups are rarity-neutral. |
+| Looting chests and floor loot | OoT chests plus ground items | Chest opening animation reused. |
+| Supply drops | Great Fairy drop on a balloon-like Deku Flower | (new) Falling crate actor, legendary loot. |
+| Building (walls, floors, ramps) | **Crates and platforms**: place a wooden crate wall, floor or ramp piece that Link can climb | (new, big) Server-owned structures, stored as grid cells, rendered as actor models. Materials: wood, stone, metal. Edit mode is **not** in v1. |
+| Harvesting materials | Cut grass and bushes, pots and rocks | Wood from trees (sword), stone from boulders (hammer), metal from Gerudo ore (new) |
+| Healing items and shield potions | Red/Green/Blue potions, fairies, Lon Lon milk | Fairy in bottle auto-revives once. |
+| Mobility items | Hover Boots, Hookshot, Longshot, Epona | Epona is the vehicle, see below. |
+| Vehicles | Epona (rideable horse), Deku Flower launch pads, Iron Knuckle cart | (new) Epona exists in the engine but needs multiplayer sync and a second seat. |
+| Emotes | Ocarina songs and Link's existing emote animations | Ocarina songs play the song and show a note effect. |
+| Teams (Duos, Squads) | Same | Revive: Farore's Wind or a fairy |
+| Down but not out (DBNO) | Collapse animation (Link kneels), teammate revives | (new) Reuse the Link "damage flip" and kneel animations. |
+| Spectating | Free camera over eliminated player's killer | (new) |
+| Kill feed, map, ping | HUD overlay, minimap ring, marker pins | (new) ImGui or in-engine HUD. |
+| Skins and cosmetics | Tunics, Kokiri or Gerudo or Zora outfits, masks | The engine already supports tunic colours and masks. |
+| Victory | Item Get pose with Triforce | Reuse the Item Get animation. |
+| Quests/challenges, battle pass | Out of scope for v1 | Possible later. |
+
+"Its own style" means we keep OoT models and textures but use our own HUD art, item glows, fog, logo and sound
+mixing, not Nintendo's UI chrome. Any new art is original. (IP note: see section 6.)
 
 ### 4.4 Storm
 
@@ -186,7 +232,7 @@ players, host from the Odin 2 Portal on Wi-Fi for smaller groups.
 
 **Windows:** upstream-supported (DirectX 11 or OpenGL). Milestones 1 to 5 target Windows first.
 
-**Android:** upstream Shipwright has **no Android target** (its CMake build covers Windows, Linux, macOS, and
+**Android:** upstream Shipwright has **no Android target** (but see the community fork below) (its CMake build covers Windows, Linux, macOS, and
 consoles via forks, and its README lists only DirectX 11, OpenGL and Metal). Android is therefore a port, not a
 build flag. This is the largest single risk in the project.
 
@@ -204,8 +250,11 @@ Work needed for Android:
   content. The risk is thermals while rendering 32 puppets, so cap puppet draw distance and test early.
 - Sustained hosting (see section 7) and background network handling (hold a wake lock while hosting).
 
-Strategy: look at existing community Android forks of Shipwright first and decide whether to base our port on one
-rather than start from scratch (need to evaluate maintenance state and license compatibility before committing).
+Strategy: a community fork exists, [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android). Per its
+release notes it is controller-only with no touch controls, needs OpenGL ES 3.0 and has been tested on Android 10 and
+13, which fits the Odin 2 Portal. Its maintenance state, how far it lags upstream and its license are not yet checked, and
+that's the first job of milestone 1b. Decision rule: if it tracks a recent upstream release, we base our Android build on it;
+otherwise we port the relevant diffs onto 9.2.3.
 
 ## 9. Milestones
 
@@ -214,7 +263,7 @@ Android is pulled forward as a feasibility spike because it could change the who
 | # | Goal | Done when |
 |---|---|---|
 | 0 | This document | Reviewed |
-| 1 | Shipwright as submodule, Windows build, stub `RoyaleMod` logging hooks | Boots with a user ROM |
+| 1 | Shipwright as submodule (pinned to 9.2.3, done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
 | 1b | **Android feasibility spike**: vanilla Shipwright (or a community fork) running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
 | 2 | `server/` library plus 32 bot clients on loopback, puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
 | 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
@@ -223,7 +272,8 @@ Android is pulled forward as a feasibility spike because it could change the who
 | 6 | Join codes and relay, bots, balance | Cross-network play between Windows and Android |
 
 ## 10. Open questions
-1. Android: build on a community fork, or port from upstream? (Needs the spike in milestone 1b.)
+1. Android: build on Waterdish/Shipwright-Android, or port its diffs onto our pinned upstream? (Needs the spike in milestone 1b.)
+2. Building scope: is crates/platforms (no edit mode) enough for v1, or is full Fortnite-style edit mode wanted?
 
 Resolved: Hyrule Field for v1, Windows and Android, host-run matches, 1 human minimum with bots that loot and fight,
 own protocol, join codes via STUN hole punching with a free-tier serverless lookup.
