@@ -1,0 +1,67 @@
+diff --git a/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c b/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
+index 6290d65..be2302a 100644
+--- a/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
++++ b/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
+@@ -10,6 +10,10 @@
+ #include "soh/ResourceManagerHelpers.h"
+ #include <string.h>
+ 
++// OOT Royale: the game's own title logo is replaced by the mod's picture (a plain RGBA image) when the mod has one. It is drawn right here, in
++// the title's own draw, so it fades in with the title's own fade and the original logo and its two lines of text are not drawn at all.
++extern const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, int* destWidth, int* destHeight);
++
+ #define FLAGS (ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED)
+ 
+ void EnMag_Init(Actor* thisx, PlayState* play);
+@@ -483,6 +487,25 @@ bool EnMag_ShouldDrawPressStart(Font* font, Gfx** gfxP, bool isActualText) {
+ 
+ // Title logo is shifted to the left in Master Quest
+ #define LOGO_X_SHIFT (isMQ ? 0 : -8)
++
++static void EnMag_DrawCustomLogo(Gfx** gfxp, s16 centerX, s16 centerY, const unsigned char* source, u32 width, u32 height, u32 destW, u32 destH) {
++    Gfx* gfx = *gfxp;
++    s32 left = centerX - (s32)(destW / 2);
++    s32 top = centerY - (s32)(destH / 2);
++
++    Gfx_SetupDL_56Ptr(&gfx);
++
++    gDPSetTileCustom(gfx++, G_IM_FMT_RGBA, G_IM_SIZ_32b, width, height, 0, G_TX_NOMIRROR | G_TX_CLAMP,
++                     G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
++    gDPSetTextureImage(gfx++, G_IM_FMT_RGBA, G_IM_SIZ_32b, width, source);
++    gDPLoadSync(gfx++);
++    gDPLoadTile(gfx++, G_TX_LOADTILE, 0, 0, (width - 1) << 2, (height - 1) << 2);
++    gDPSetTextureFilter(gfx++, G_TF_BILERP);
++    gSPTextureRectangle(gfx++, left << 2, top << 2, (left + (s32)destW) << 2, (top + (s32)destH) << 2, G_TX_RENDERTILE, 0,
++                        0, (width << 10) / destW, (height << 10) / destH);
++
++    *gfxp = gfx;
++}
+ #define LOGO_TEX (isMQ ? gTitleZeldaShieldLogoMQTex : gTitleZeldaShieldLogoTex)
+ // Copyright texture is different depending on the version
+ // JPN CE displays two slightly different 2004 copyrights when lang is jpn or not
+@@ -556,8 +579,15 @@ void EnMag_DrawInner(Actor* thisx, PlayState* play, Gfx** gfxP) {
+ 
+     gDPSetPrimColor(gfx++, 0, 0, 255, 255, 255, (s16)this->mainAlpha);
+ 
++    int royaleW = 0, royaleH = 0, royaleDestW = 0, royaleDestH = 0;
++    const unsigned char* royaleLogo = Royale_TitleLogoRGBA(&royaleW, &royaleH, &royaleDestW, &royaleDestH);
++
+     if ((s16)this->mainAlpha != 0) {
+-        EnMag_DrawImageRGBA32(&gfx, 160 + LOGO_X_SHIFT, 100, (u8*)LOGO_TEX, 160, 160);
++        if (royaleLogo != NULL) {
++            EnMag_DrawCustomLogo(&gfx, 160, 104, royaleLogo, royaleW, royaleH, royaleDestW, royaleDestH);
++        } else {
++            EnMag_DrawImageRGBA32(&gfx, 160 + LOGO_X_SHIFT, 100, (u8*)LOGO_TEX, 160, 160);
++        }
+     }
+ 
+     Gfx_SetupDL_39Ptr(&gfx);
+@@ -581,7 +611,7 @@ void EnMag_DrawInner(Actor* thisx, PlayState* play, Gfx** gfxP) {
+         gDPSetEnvColor(gfx++, 0, 0, 100, 255);
+     }
+ 
+-    if ((s16)this->mainAlpha != 0) {
++    if ((s16)this->mainAlpha != 0 && royaleLogo == NULL) {
+         EnMag_DrawTextureI8(&gfx, gTitleTheLegendOfTextTex, 72, 8, 154 + LOGO_X_SHIFT, 73, 72, 8, 1024, 1024);
+         EnMag_DrawTextureI8(&gfx, gTitleOcarinaOfTimeTMTextTex, 96, 8, 152 + LOGO_X_SHIFT, 127, 96, 8, 1024, 1024);
+ 

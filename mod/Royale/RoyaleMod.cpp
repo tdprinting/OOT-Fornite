@@ -3652,6 +3652,36 @@ constexpr float kSplashSeconds = 5.0f;
 // ---- the logo ---------------------------------------------------------------------------------------------------------------
 // The picture in mod/Royale/logo_data.h (made from assets/logo.png by scripts/make_logo_assets.py) is turned into a texture the first time it is
 // wanted, and drawn on the title screen, the file select screen, the match splash and the top of the menu.
+// The game's own title screen (the Zelda logo that fades in when you press start) draws this picture instead of its own logo: patches/0010 calls here.
+// Plain RGBA bytes, the same picture as everywhere else; returns null if there is none.
+extern "C" const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, int* destWidth, int* destHeight) {
+    static std::vector<uint8_t> rgba;
+    static bool built = false;
+    if (!built) {
+        built = true;
+        if (royale::kLogoW > 0 && royale::kLogoH > 0 && royale::kLogoRuns > 0) {
+            rgba.assign(static_cast<size_t>(royale::kLogoW) * royale::kLogoH * 4, 0);
+            size_t px = 0;
+            for (int r = 0; r < royale::kLogoRuns; r++) {
+                const int count = royale::kLogoRle[r * 3], idx = royale::kLogoRle[r * 3 + 1], alpha = royale::kLogoRle[r * 3 + 2];
+                for (int k = 0; k < count && px * 4 < rgba.size(); k++, px++) {
+                    if (idx == 0) continue;
+                    rgba[px * 4 + 0] = royale::kLogoPalette[(idx - 1) * 3 + 0];
+                    rgba[px * 4 + 1] = royale::kLogoPalette[(idx - 1) * 3 + 1];
+                    rgba[px * 4 + 2] = royale::kLogoPalette[(idx - 1) * 3 + 2];
+                    rgba[px * 4 + 3] = static_cast<uint8_t>(alpha);
+                }
+            }
+        }
+    }
+    if (rgba.empty()) return nullptr;
+    *width = royale::kLogoW;
+    *height = royale::kLogoH;
+    *destHeight = 172;   // in the title's 320 x 240 picture
+    *destWidth = static_cast<int>(172.0f * royale::kLogoW / royale::kLogoH + 0.5f);
+    return rgba.data();
+}
+
 ImTextureID LogoTexture(ImVec2* size = nullptr) {
     static ImTextureID tex = nullptr;
     static bool tried = false;
@@ -3713,17 +3743,7 @@ void DrawTitleLogo() {
     static double shownAt = 0.0;
     if (mode != lastMode) { lastMode = mode; shownAt = ImGui::GetTime(); }
     if (mode == GAMEMODE_TITLE_SCREEN) {
-        // Like the original title: the real 3D title scene shows through (no backdrop of our own) and the logo fades up out of the dark
-        // after a short beat, drifting up a touch as it arrives.
-        const double t = ImGui::GetTime();
-        const float since = static_cast<float>(t - shownAt);
-        const float fade = std::clamp((since - 0.8f) / 2.6f, 0.0f, 1.0f);
-        const float ease = fade * fade * (3.0f - 2.0f * fade);
-        const float width = std::min(ds.x * 0.62f, ds.y * 0.74f * aspect);
-        const float height = width / aspect;
-        const float settle = (1.0f - ease) * ds.y * 0.03f;
-        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.04f + settle + static_cast<float>(std::sin(t * 1.4)) * ds.y * 0.004f, width, static_cast<int>(255 * ease));
-        (void)height;
+        // nothing: the game's own title screen now draws the logo (patches/0010), fading in with its own fade
     } else {
         const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
         DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245, true);
