@@ -150,25 +150,37 @@ class GliderCloth {
 // The tail of Link's cap: a spring in two directions. `air` is the airflow in Link's own frame (x to his left, z in front of him), `wind01` the
 // weather. The tail streams away from the airflow, sags back when it is still, and swings and settles when he stops or turns.
 struct HatSpring {
+    // `fore` and `side` are what the cap's limb is turned by. A springy base (underdamped, so it overshoots and swings) is followed by a second,
+    // looser spring for the floppy tip, which whips a little beyond the base when the base moves and settles after it.
     float fore = 0, side = 0, vFore = 0, vSide = 0;
-    void Step(float dt, float airX, float airZ, float airY, float wind01, float time, float phase) {
-        const float k = 38.0f, damp = 5.2f;
+    float baseFore = 0, baseSide = 0, tipFore = 0, tipSide = 0, vTipFore = 0, vTipSide = 0;
+    // kickFore/kickSide: a sudden push from Link's own acceleration (starting, stopping, landing, a hit), added to the spring's speed.
+    void Step(float dt, float airX, float airZ, float airY, float wind01, float time, float phase, float kickFore = 0.0f, float kickSide = 0.0f) {
+        const float k = 34.0f, damp = 3.6f;
         float targetFore = std::clamp(-airZ * 0.0016f - airY * 0.0007f, -0.55f, 0.55f);    // forward speed and falling both lift the tail up and back
         float targetSide = std::clamp(-airX * 0.0016f, -0.5f, 0.5f);
         const float flutter = (0.04f + 0.22f * wind01) * (0.4f + (std::min)(1.0f, std::sqrt(airX * airX + airZ * airZ) / 300.0f));
-        targetFore += std::sin(time * 9.0f + phase) * flutter;
+        targetFore += std::sin(time * 9.0f + phase) * flutter + std::sin(time * 14.3f + phase * 0.6f) * flutter * 0.35f;
         targetSide += std::sin(time * 6.3f + phase * 1.7f) * flutter * 0.8f;
+        if (std::isfinite(kickFore)) vFore += std::clamp(kickFore, -6.0f, 6.0f);
+        if (std::isfinite(kickSide)) vSide += std::clamp(kickSide, -6.0f, 6.0f);
         const float steps = (std::max)(1.0f, std::floor(dt / (1.0f / 120.0f) + 0.5f));
         const float h = dt / steps;
         for (int s = 0; s < static_cast<int>((std::min)(steps, 6.0f)); s++) {
-            vFore += ((targetFore - fore) * k - vFore * damp) * h;
-            vSide += ((targetSide - side) * k - vSide * damp) * h;
-            fore += vFore * h;
-            side += vSide * h;
+            vFore += ((targetFore - baseFore) * k - vFore * damp) * h;
+            vSide += ((targetSide - baseSide) * k - vSide * damp) * h;
+            baseFore += vFore * h;
+            baseSide += vSide * h;
+            vTipFore += ((baseFore - tipFore) * 70.0f - vTipFore * 3.2f) * h;   // the tip chases the base, loosely
+            vTipSide += ((baseSide - tipSide) * 70.0f - vTipSide * 3.2f) * h;
+            tipFore += vTipFore * h;
+            tipSide += vTipSide * h;
         }
-        fore = std::clamp(fore, -0.7f, 0.7f);
-        side = std::clamp(side, -0.6f, 0.6f);
-        if (!std::isfinite(fore) || !std::isfinite(side)) { fore = side = vFore = vSide = 0; }
+        baseFore = std::clamp(baseFore, -0.7f, 0.7f);
+        baseSide = std::clamp(baseSide, -0.6f, 0.6f);
+        if (!std::isfinite(baseFore) || !std::isfinite(baseSide) || !std::isfinite(tipFore) || !std::isfinite(tipSide)) { baseFore = baseSide = tipFore = tipSide = vFore = vSide = vTipFore = vTipSide = 0; }
+        fore = std::clamp(baseFore + 0.5f * (baseFore - tipFore), -0.7f, 0.7f);
+        side = std::clamp(baseSide + 0.5f * (baseSide - tipSide), -0.6f, 0.6f);
     }
 };
 

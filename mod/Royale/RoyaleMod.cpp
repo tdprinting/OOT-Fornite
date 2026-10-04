@@ -93,6 +93,7 @@ bool InGame() {
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
+royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
 float gStormWeather = 0.0f;         // 0 to 1: how far you are into the storm's dark weather
 double gBoltFlashUntil = 0;   // a lightning bolt has landed nearby: the screen flashes until then
 float gWeatherBlend = 0.0f;
@@ -607,6 +608,11 @@ void HeldGlow(PlayState* play, Player* player, royale::Rarity rarity, bool self)
     EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 40, 10);
 }
 
+bool HangingFromGlider(const royale::PuppetState* st, const Actor* actor, PlayState* play) {
+    return st != nullptr && st->alive && (gStateNow == royale::MatchState::Countdown || gStateNow == royale::MatchState::Drop) &&
+           actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f;
+}
+
 void Puppet_Update(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
     auto idIt = gPuppetOf.find(actor);
@@ -673,6 +679,17 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     static std::unordered_map<uint16_t, int> combo;
     bool restart = false;
     LinkAnimationHeader* want = nullptr;
+    const bool hanging = HangingFromGlider(&s, actor, play);
+    if (hanging) {   // both hands up on the glider's bar (the game's ledge-hang pose)
+        want = RA(normal_jump_climb_wait);
+        auto cur = gPlaying.find(actor);
+        if (cur == gPlaying.end() || cur->second != (const void*)want) { LinkAnimation_PlayLoop(play, &player->skelAnime, want); gPlaying[actor] = (const void*)want; }
+        LinkAnimation_Update(play, &player->skelAnime);
+        Vec3f ignored;
+        SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
+        lastAnim[actor] = 255;
+        return;
+    }
     {
         auto sw = gSwingFrames.find(s.id);
         const bool hitting = sw != gSwingFrames.end() && sw->second > 0;
@@ -748,7 +765,6 @@ void ApplyLocalTunic(bool on) {
     }
 }
 
-royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme); // with the other custom models, below
 
 void Puppet_Draw(Actor* actor, PlayState* play) {
@@ -761,8 +777,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
-    if (st && st->alive && (gStateNow == royale::MatchState::Countdown || gStateNow == royale::MatchState::Drop) &&
-        actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f) {
+    if (st && HangingFromGlider(st, actor, play)) {
         DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id);
     }
 }
@@ -807,6 +822,11 @@ struct Corpse {
     royale::ItemId weapon = royale::ItemId::DekuStick;
     uint32_t tunic = royale::SkinRgb(0);
     bool animStarted = false;
+    float pitch = 0, pitchVel = 0;        // tumbling head over heels in the air (radians)
+    royale::Vec2 lastVel = {};
+    float lastVy = 0;
+    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians), see ApplyRagdollLimbs
+    int bounces = 0;
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
 };
@@ -849,18 +869,39 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     c.age += dt;
     if (c.age > 25.0f) { Actor_Kill(actor); return; }
 
-    c.vy -= 900.0f * dt;
+    // Rigid-body-ish motion: gravity and a little air drag; the body tumbles head over heels in the air, bounces (losing most of its energy each time),
+    // slides with friction that is stronger the slower it goes, and the spin dies away until it lies still.
+    const bool wasAir = c.vy != 0.0f || c.bounces == 0;
+    c.vy -= 980.0f * dt;
+    c.vel.x *= 1.0f - 0.35f * dt; c.vel.z *= 1.0f - 0.35f * dt;
     actor->world.pos.x += c.vel.x * dt;
     actor->world.pos.z += c.vel.z * dt;
     actor->world.pos.y += c.vy * dt;
     const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
+    bool onGround = false;
     if (actor->world.pos.y <= ground) {
         actor->world.pos.y = ground;
-        if (c.vy < -140.0f) { c.vy = -c.vy * 0.3f; c.rollVel += (c.vel.x > 0 ? 1.0f : -1.0f) * 3000.0f; } // a bounce, and the body flops
-        else c.vy = 0;
-        c.vel.x *= 0.82f; c.vel.z *= 0.82f;      // sliding on the ground
-        c.spin *= 0.85f;
+        onGround = true;
+        if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the spin changes, and the limbs fling
+            c.vy = -c.vy * 0.34f;
+            c.bounces++;
+            c.vel.x *= 0.72f; c.vel.z *= 0.72f;
+            c.pitchVel *= -0.45f;
+            c.rollVel += (c.vel.x > 0 ? 1.0f : -1.0f) * 2600.0f;
+            for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 9.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 9.0f; }
+        } else {
+            c.vy = 0;
+            const float speed = std::hypot(c.vel.x, c.vel.z);
+            const float drag = (speed > 60.0f ? 3.2f : 7.5f) * dt;   // sliding to a stop
+            c.vel.x *= std::max(0.0f, 1.0f - drag); c.vel.z *= std::max(0.0f, 1.0f - drag);
+            c.spin *= std::max(0.0f, 1.0f - 4.0f * dt);
+        }
     }
+    (void)wasAir;
+    // Head over heels while airborne; once down, the tumble eases out and the knocked-down pose takes over.
+    if (!onGround) { c.pitch += c.pitchVel * dt; }
+    else { c.pitch *= std::max(0.0f, 1.0f - 6.0f * dt); c.pitchVel *= std::max(0.0f, 1.0f - 6.0f * dt); }
+    actor->shape.rot.x = static_cast<s16>(c.pitch * (32768.0f / 3.14159265f));
     actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
     actor->world.rot.y = actor->shape.rot.y;
     // A loose roll that wobbles and settles.
@@ -870,11 +911,39 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.z = static_cast<s16>(std::clamp(c.roll, -2500.0f, 2500.0f));
     actor->shape.shadowAlpha = 255;
 
+    // The limbs lag behind the body: every change of speed (the blow, each bounce, the stop) swings them, springs pull them back to limp.
+    {
+        const float ax = (c.vel.x - c.lastVel.x) / dt, az = (c.vel.z - c.lastVel.z) / dt, ay = (c.vy - c.lastVy) / dt;
+        c.lastVel = c.vel; c.lastVy = c.vy;
+        const float kick = std::clamp((std::fabs(ax) + std::fabs(az) + std::fabs(ay) * 0.4f) * 0.0009f, 0.0f, 1.4f);
+        for (int i = 0; i < 9; i++) {
+            for (int a = 0; a < 2; a++) {
+                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f)) * (i % 2 ? -1.0f : 1.0f) + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
+                c.limbVel[i][a] += push;
+                if (!onGround) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
+                c.limbVel[i][a] += -c.limb[i][a] * 55.0f * dt;
+                c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.5f * dt);
+                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.1f, 1.1f);
+            }
+        }
+    }
+
     if (!c.animStarted) {
         LinkAnimation_PlayOnce(play, &player->skelAnime, (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA); // knocked flat on the back
         c.animStarted = true;
     }
     LinkAnimation_Update(play, &player->skelAnime);
+    {   // the loose limbs, on top of the knocked-down pose
+        static const int kLimbs[9] = { PLAYER_LIMB_HEAD, PLAYER_LIMB_L_SHOULDER, PLAYER_LIMB_R_SHOULDER, PLAYER_LIMB_L_FOREARM, PLAYER_LIMB_R_FOREARM,
+                                       PLAYER_LIMB_L_THIGH, PLAYER_LIMB_R_THIGH, PLAYER_LIMB_L_SHIN, PLAYER_LIMB_R_SHIN };
+        static const float kReach[9] = { 0.5f, 1.0f, 1.0f, 0.9f, 0.9f, 0.6f, 0.6f, 0.7f, 0.7f };
+        Vec3s* j = player->skelAnime.jointTable;
+        const float bin = 32768.0f / 3.14159265f;
+        for (int i = 0; i < 9; i++) {
+            j[kLimbs[i]].x = static_cast<s16>(j[kLimbs[i]].x + c.limb[i][0] * kReach[i] * bin);
+            j[kLimbs[i]].z = static_cast<s16>(j[kLimbs[i]].z + c.limb[i][1] * kReach[i] * bin);
+        }
+    }
     Vec3f ignored;
     SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
 }
@@ -923,9 +992,10 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     Corpse c;
     c.actor = actor;
     const float len = std::max(1.0f, std::hypot(pushX, pushZ));
-    c.vel = { pushX / len * 190.0f, pushZ / len * 190.0f };   // thrown back by the blow
-    c.vy = 260.0f;
-    c.spin = (id & 1 ? 1.0f : -1.0f) * 4.5f;
+    c.vel = { pushX / len * 250.0f, pushZ / len * 250.0f };   // thrown back by the blow
+    c.vy = 330.0f;
+    c.pitchVel = -7.0f - (id % 3);                            // flips over backwards
+    c.spin = (id & 1 ? 1.0f : -1.0f) * 3.2f;
     c.rollVel = (id & 1 ? 1.0f : -1.0f) * 4000.0f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
@@ -1496,6 +1566,215 @@ void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+// ---- foliage, snow on the ground and the weather the game itself draws ------------------------------------------------------
+// Patches of swaying grass, trees (a different set of leaves for each season) and, when it snows, mounds of snow that build up on the ground and
+// slowly melt away afterwards are scattered around the player. All of it is local scenery: where it stands is worked out from the map and a hash of
+// each cell, so nothing is sent over the network, and it is only ever drawn near the player. Trees are solid (you walk around the trunk).
+bool WaterAt(float x, float z, float floorY) { return UnderWater(x, z, floorY); }
+float gFoliage = 1.0f;       // the local option, 0 (none) to 2
+float gSnowCover = 0.0f;     // 0 bare ground to 1 deep snow
+float WeatherAmount();
+
+uint32_t FloraHash(int a, int b, int salt) {
+    uint32_t h = static_cast<uint32_t>(a) * 374761393u + static_cast<uint32_t>(b) * 668265263u + static_cast<uint32_t>(salt) * 2246822519u + 0x9E3779B9u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+}
+float Flora01(int a, int b, int salt) { return static_cast<float>(FloraHash(a, b, salt) & 0xFFFF) / 65535.0f; }
+
+struct FloraSpot { bool ok; float y; };
+std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
+int gFloraScene = -1;
+int gFloraBudget = 0;
+
+// Is there good ground at (x, z)? Cached per cell. nullptr = not measured yet (the per-frame budget of measurements ran out).
+const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
+    const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
+    auto it = gFloraSpots.find(key);
+    if (it != gFloraSpots.end()) return &it->second;
+    if (gFloraBudget <= 0) return nullptr;
+    gFloraBudget--;
+    FloraSpot spot = { false, 0.0f };
+    float y = 0, y2 = 0, y3 = 0;
+    if (RawFloorAt(x, z, &y) && !WaterAt(x, z, y) && !OnExitFloor(x, z)) {
+        spot.ok = true;
+        spot.y = y;
+        if (kind != 2) {   // grass and trees stay off steep ground (and cliff edges)
+            spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
+        }
+        if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
+            for (const royale::Prop& p : gSession.Client()->Props())
+                if (std::fabs(p.pos.x - x) < 140.0f && std::fabs(p.pos.z - z) < 140.0f) { spot.ok = false; break; }
+            for (const royale::Poi& poi : gSession.Client()->Pois())
+                if (std::hypot(poi.center.x - x, poi.center.z - z) < poi.radius * 0.7f + 140.0f) { spot.ok = false; break; }
+        }
+    }
+    return &gFloraSpots.emplace(key, spot).first->second;
+}
+
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f;
+
+struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; };
+bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
+    if (Flora01(cx / 2, cz / 2, 21) < 0.45f - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
+    if (Flora01(cx, cz, 22) > 0.62f) return false;
+    const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kTreeCell;
+    const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
+    if (spot == nullptr || !spot->ok) return false;
+    *out = { x, spot->y, z, 0.8f + 0.5f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+    return true;
+}
+
+void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_RotateX(tiltX, MTXMODE_APPLY);
+    Matrix_RotateZ(tiltZ, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(m->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.season) & 3) : 1; }
+
+void DrawFlora(PlayState* play) {
+    if (!InField() || gPlayState == nullptr) return;
+    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; }
+    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    const int season = FloraSeason();
+    const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
+    if (snowing) gSnowCover = std::min(1.0f, gSnowCover + dt / 45.0f * (0.5f + WeatherAmount()));
+    else gSnowCover = std::max(season == 3 ? 0.3f : 0.0f, gSnowCover - dt / 150.0f);   // it melts slowly (winter keeps a little)
+    const bool snowOn = gSnowCover > 0.02f;
+    if (gFoliage <= 0.01f && !snowOn) return;
+
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
+    const float t = static_cast<float>(ImGui::GetTime());
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
+    gFloraBudget = 36;
+
+    {
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Opa(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    auto fade = [](float dist, float reach) { const float f = std::clamp((reach - dist) / (reach * 0.25f), 0.0f, 1.0f); return f * f * (3.0f - 2.0f * f); };
+
+    if (snowOn) {   // mounds of snow, thicker the longer it has snowed
+        const float reach = 1000.0f;
+        const int c0x = static_cast<int>(std::floor((px - reach) / kSnowCell)), c1x = static_cast<int>(std::floor((px + reach) / kSnowCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kSnowCell)), c1z = static_cast<int>(std::floor((pz + reach) / kSnowCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                if (Flora01(cx, cz, 31) > gSnowCover * 0.92f) continue;
+                const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 32)) * kSnowCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 33)) * kSnowCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(2, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, FloraHash(cx, cz, 34) % 4);
+                if (m == nullptr || m->dl.empty()) continue;
+                const float k = (0.75f + 0.5f * gSnowCover) * (0.85f + 0.5f * Flora01(cx, cz, 35)) * fade(d, reach);
+                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.5f, z, Flora01(cx, cz, 36) * 6.2831853f, 0, 0, k);
+            }
+    }
+
+    if (gFoliage > 0.01f) {
+        // grass: patches (blocks of cells that are grassy) of tufts, leaning and swaying in the wind
+        const float reach = 700.0f + 650.0f * std::min(1.5f, gFoliage);
+        const int c0x = static_cast<int>(std::floor((px - reach) / kGrassCell)), c1x = static_cast<int>(std::floor((px + reach) / kGrassCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kGrassCell)), c1z = static_cast<int>(std::floor((pz + reach) / kGrassCell));
+        const float amp = 0.07f + 0.2f * wind, lean = 0.05f + 0.3f * wind;
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                if (Flora01(cx / 6, cz / 6, 41) < 0.5f) continue;                                   // not a grassy patch
+                if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
+                const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * static_cast<uint32_t>(season));
+                if (m == nullptr || m->dl.empty()) continue;
+                const float phase = t * (1.6f + 2.4f * wind) + x * 0.011f + z * 0.009f;
+                const float a = lean + std::sin(phase) * amp + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
+                const float k = 0.27f * (0.8f + 0.5f * Flora01(cx, cz, 46)) * fade(d, reach);
+                if (k > 0.01f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 47) * 6.2831853f, dz * a, -dx * a, k);
+            }
+
+        // trees
+        const float treeReach = 1800.0f + 1800.0f * std::min(1.5f, gFoliage);
+        const int t0x = static_cast<int>(std::floor((px - treeReach) / kTreeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / kTreeCell));
+        const int t0z = static_cast<int>(std::floor((pz - treeReach) / kTreeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / kTreeCell));
+        const float tamp = 0.008f + 0.03f * wind;
+        for (int cz = t0z; cz <= t1z; cz++)
+            for (int cx = t0x; cx <= t1x; cx++) {
+                TreeSpot tr;
+                if (!TreeIn(cx, cz, season, &tr)) continue;
+                const float d = std::hypot(tr.x - px, tr.z - pz);
+                if (d > treeReach) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Tree, tr.variant);
+                if (m == nullptr || m->dl.empty()) continue;
+                const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
+                DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
+            }
+    }
+}
+
+// Trunks are solid: stand against one and you are pushed out of it (the same sort of local solidity the climbing blocks have).
+void ApplyTrees(Player* player) {
+    if (!InField() || gFoliage <= 0.01f) return;
+    const int season = FloraSeason();
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    gFloraBudget = 6;
+    for (int cz = static_cast<int>(std::floor((pz - 160.0f) / kTreeCell)); cz <= static_cast<int>(std::floor((pz + 160.0f) / kTreeCell)); cz++)
+        for (int cx = static_cast<int>(std::floor((px - 160.0f) / kTreeCell)); cx <= static_cast<int>(std::floor((px + 160.0f) / kTreeCell)); cx++) {
+            TreeSpot tr;
+            if (!TreeIn(cx, cz, season, &tr)) continue;
+            const float r = 20.0f * tr.scale + 14.0f, ddx = px - tr.x, ddz = pz - tr.z, d = std::hypot(ddx, ddz);
+            if (d < r && player->actor.world.pos.y < tr.y + 160.0f * tr.scale && d > 0.01f) {
+                player->actor.world.pos.x = tr.x + ddx / d * r;
+                player->actor.world.pos.z = tr.z + ddz / d * r;
+            }
+        }
+}
+
+// Rain and snow are the game's own: its rain streaks and its falling snow (the same flakes as its winter holiday mode), switched on and scaled with
+// the server's spell of weather and the storm. The flat 2D weather in DrawWeather keeps only the tint, fog and lightning.
+void DriveRealWeather() {
+    if (!InField() || gPlayState == nullptr) return;
+    PlayState* play = gPlayState;
+    const float w = WeatherAmount();
+    const bool rainSky = gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder;
+    const float rain = std::max(rainSky ? w : 0.0f, gStormWeather * 0.8f) * gWeatherDensity;
+    const float snow = gWeatherShown.sky == royale::Sky::Snow ? w * gWeatherDensity : 0.0f;
+    static bool rainManaged = false, snowManaged = false;
+    const int wantRain = std::clamp(static_cast<int>(rain * 70.0f), 0, 130);
+    if (wantRain > 0 || (rainManaged && play->envCtx.unk_EE[1] > 0)) {
+        const int cur = play->envCtx.unk_EE[1];
+        play->envCtx.unk_EE[1] = static_cast<u8>(cur < wantRain ? std::min(wantRain, cur + 2) : std::max(wantRain, cur - 2));
+        rainManaged = true;
+    } else rainManaged = false;
+    const int wantSnow = std::clamp(static_cast<int>(snow * 40.0f) & ~1, 0, 62);
+    if (wantSnow > 0) {
+        snowManaged = true;
+        play->envCtx.unk_EE[3] = static_cast<u8>(wantSnow);
+        static int tryFrame = 0;
+        if (tryFrame++ % 40 == 0) Actor_Spawn(&play->actorCtx, play, ACTOR_OBJECT_KANKYO, 0, 0, 0, 0, 0, 0, 3, false);   // a second one removes itself
+    } else if (snowManaged) {
+        play->envCtx.unk_EE[3] = 0;   // the flakes thin out by themselves
+        if (play->envCtx.unk_EE[2] == 0) snowManaged = false;
+    }
+}
+
 // ---- things in flight --------------------------------------------------------------------------------------------------------
 // Every arrow, seed, bomb, bombchu and boomerang anybody looses is drawn in flight: when a puppet starts its shooting or throwing pose (or when
 // you press B with something to shoot) a projectile leaves from there, along the way they face. One stand-in actor near the player draws them
@@ -1552,6 +1831,7 @@ void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    DrawFlora(play);
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -2109,13 +2389,6 @@ void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
             case royale::Sky::Rain: case royale::Sky::Thunder: {
                 const bool thunder = gWeatherShown.sky == royale::Sky::Thunder;
                 dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(40, 50, 70, static_cast<int>((thunder ? 80 : 50) * w)));
-                const int n = static_cast<int>(200 * d);
-                for (int i = 0; i < n; i++) {
-                    const float depth = 0.6f + 0.4f * (i % 3) / 2.0f;
-                    const float x = std::fmod(i * 97.3f + tf * 300.0f * depth, ds.x + 260.0f) - 130.0f;
-                    const float y = std::fmod(i * 61.7f + tf * 1100.0f * depth, ds.y + 100.0f) - 50.0f;
-                    dl->AddLine(ImVec2(x, y), ImVec2(x - 11 * scale * depth, y + 34 * scale * depth), IM_COL32(190, 205, 235, static_cast<int>(120 * std::min(1.0f, w + 0.3f) * depth)), 1.3f * scale * depth);
-                }
                 break;
             }
             case royale::Sky::Fog: {
@@ -2131,14 +2404,6 @@ void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
             }
             case royale::Sky::Snow: {
                 dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(220, 230, 245, static_cast<int>(48 * w)));
-                const int n = static_cast<int>(170 * d);
-                for (int i = 0; i < n; i++) {
-                    const float depth = 0.5f + 0.5f * (i % 4) / 3.0f;
-                    const float sway = std::sin(tf * 1.3f + i) * 26.0f * scale;
-                    const float x = std::fmod(i * 83.7f + tf * 36.0f * depth, ds.x + 80.0f) - 40.0f + sway;
-                    const float y = std::fmod(i * 47.3f + tf * 120.0f * depth, ds.y + 40.0f) - 20.0f;
-                    dl->AddCircleFilled(ImVec2(x, y), (1.4f + 2.6f * depth) * scale, IM_COL32(245, 248, 255, static_cast<int>(215 * std::min(1.0f, w + 0.3f))), 8);
-                }
                 break;
             }
             case royale::Sky::Ash: {
@@ -2920,12 +3185,21 @@ void DrawTitleLogo() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 ds = ImGui::GetIO().DisplaySize;
     const float aspect = sz.x / sz.y;
+    static int lastMode = -1;
+    static double shownAt = 0.0;
+    if (mode != lastMode) { lastMode = mode; shownAt = ImGui::GetTime(); }
     if (mode == GAMEMODE_TITLE_SCREEN) {
+        // Like the original title: the real 3D title scene shows through (no backdrop of our own) and the logo fades up out of the dark
+        // after a short beat, drifting up a touch as it arrives.
         const double t = ImGui::GetTime();
-        dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(250, 247, 238, 255), IM_COL32(250, 247, 238, 255), IM_COL32(222, 214, 198, 255), IM_COL32(222, 214, 198, 255));
-        const float width = std::min(ds.x * 0.78f, ds.y * 0.86f * aspect);
+        const float since = static_cast<float>(t - shownAt);
+        const float fade = std::clamp((since - 0.8f) / 2.6f, 0.0f, 1.0f);
+        const float ease = fade * fade * (3.0f - 2.0f * fade);
+        const float width = std::min(ds.x * 0.62f, ds.y * 0.74f * aspect);
         const float height = width / aspect;
-        DrawLogo(dl, ds.x * 0.5f, (ds.y - height) * 0.5f + static_cast<float>(std::sin(t * 1.4)) * ds.y * 0.006f, width);
+        const float settle = (1.0f - ease) * ds.y * 0.03f;
+        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.04f + settle + static_cast<float>(std::sin(t * 1.4)) * ds.y * 0.004f, width, static_cast<int>(255 * ease));
+        (void)height;
     } else {
         const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
         DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245, true);
@@ -4135,7 +4409,13 @@ void OnPlayerUpdate() {
     }
     UpdateSkydive(player, hud);
     ReconcileLocalGlider(gSkydiving);
+    if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
+        LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
+        if (player->skelAnime.animation != (void*)hang) LinkAnimation_PlayLoop(gPlayState, &player->skelAnime, hang);
+    }
     UpdateEmote(player, hud);
+    // Safety net: a living player in a live match is never invisible (the flag is set only for emotes and eliminated spectators).
+    if (gEmote.id < 0 && InField() && LiveAndAlive(hud)) player->stateFlags2 &= ~PLAYER_STATE2_DISABLE_DRAW;
     if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
     if (gActionFrames > 0) gActionFrames--;
@@ -5066,6 +5346,7 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
 struct HatState {
     royale::HatSpring spring;
     float lx = 0, ly = 0, lz = 0;
+    float lvx = 0, lvz = 0, lvy = 0;   // last velocity, to feel the acceleration
     double lastT = 0, seen = 0;
     bool have = false;
 };
@@ -5088,8 +5369,13 @@ void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
         const float ax = wx - vx, az = wz - vz;
         const float yaw = pl->actor.shape.rot.y * (3.14159265f / 32768.0f), c = std::cos(yaw), sn = std::sin(yaw);
         // The air in Link's frame: x to his left, z in front of him. (Running forward makes air stream back over the cap.)
+        // Link's own acceleration (in his frame) kicks the cap the opposite way: it lags behind a start, and swings forward when he stops or lands.
+        const float dvx = vx - h.lvx, dvz = vz - h.lvz, dvy = vy - h.lvy;
+        h.lvx = vx; h.lvz = vz; h.lvy = vy;
+        const float accSide = dvx * c - dvz * sn, accFore = dvx * sn + dvz * c;
         h.spring.Step(std::min(dt, 0.1f), (ax * c - az * sn) * gClothScale, (ax * sn + az * c) * gClothScale, -vy * gClothScale, wind * gClothScale,
-                      static_cast<float>(now), static_cast<float>(reinterpret_cast<uintptr_t>(playerPtr) % 61));
+                      static_cast<float>(now), static_cast<float>(reinterpret_cast<uintptr_t>(playerPtr) % 61),
+                      (accFore * 0.0035f + dvy * 0.0016f) * gClothScale, accSide * 0.0035f * gClothScale);
     }
     const float toBinary = 32768.0f / 3.14159265f;
     rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.spring.fore * toBinary));   // fore and aft: the limb's pitch
@@ -5232,7 +5518,8 @@ void OnGameFrameUpdate() {
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
-    if (joined && InField() && gPlayState != nullptr) ApplyPlatforms(GET_PLAYER(gPlayState));   // also before the player's own update, so it never sees itself as airborne
+    if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     UpdateChickenMusic();
@@ -5373,6 +5660,8 @@ struct UiState {
     int weatherIntensity = 60;             // 0 = no weather (host)
     int weatherChange = 50;                // how often the weather changes (host)
     int weatherDensity = 100;              // particles drawn on this screen, per cent (local)
+    int foliage = 100;                     // grass and trees scattered around, per cent (local)
+    bool clothOn = true;                   // cloth physics on hats and gliders at all (local)
     int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
@@ -5413,8 +5702,11 @@ UiState& Ui() {
         ui.weatherChange = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherChange"), 50), 0, 100);
         ui.weatherDensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherDensity"), 100), 0, 200);
         gWeatherDensity = ui.weatherDensity / 100.0f;
+        ui.foliage = std::clamp(CVarGetInteger(ROYALE_CVAR("Foliage"), 100), 0, 200);
+        gFoliage = ui.foliage / 100.0f;
         ui.clothPhysics = std::clamp(CVarGetInteger(ROYALE_CVAR("ClothPhysics"), 100), 0, 200);
-        gClothScale = ui.clothPhysics / 100.0f;
+        ui.clothOn = CVarGetInteger(ROYALE_CVAR("ClothOn"), 1) != 0;
+        gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
@@ -5446,7 +5738,9 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("WeatherIntensity"), ui.weatherIntensity);
     CVarSetInteger(ROYALE_CVAR("WeatherChange"), ui.weatherChange);
     CVarSetInteger(ROYALE_CVAR("WeatherDensity"), ui.weatherDensity);
+    CVarSetInteger(ROYALE_CVAR("Foliage"), ui.foliage);
     CVarSetInteger(ROYALE_CVAR("ClothPhysics"), ui.clothPhysics);
+    CVarSetInteger(ROYALE_CVAR("ClothOn"), ui.clothOn ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("MusicMode"), ui.musicMode);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
@@ -5730,7 +6024,14 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
         ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Cloth and wind on hats and gliders (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::Checkbox("Cloth physics (hats and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+        if (ui.clothOn) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+        }
         static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
         ImGui::SetNextItemWidth(280);
         if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }

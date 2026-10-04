@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -209,8 +209,18 @@ inline MeshData Glider(uint32_t variant, bool wings = true) {
                    {to.x + off[j].x, to.y, to.z + off[j].z}, {to.x + off[i].x, to.y, to.z + off[i].z}, strut);
         }
     };
-    bar({-14, 62, 0}, {-46, 143, 12}, 3.5f);   // the struts down to the shoulders
-    bar({14, 62, 0}, {46, 143, 12}, 3.5f);
+    bar({-18, 80, 2}, {-46, 143, 12}, 3.5f);   // the struts down to the hand bar
+    bar({18, 80, 2}, {46, 143, 12}, 3.5f);
+    {   // the hand bar Link hangs from (he is drawn with both arms up gripping it)
+        const V3 c = {0, 80, 2};
+        const float hx = 26.0f, hy = 3.0f, hz = 3.0f;
+        b.inside = c;
+        const V3 q[8] = {{c.x - hx, c.y - hy, c.z - hz}, {c.x + hx, c.y - hy, c.z - hz}, {c.x + hx, c.y + hy, c.z - hz}, {c.x - hx, c.y + hy, c.z - hz},
+                         {c.x - hx, c.y - hy, c.z + hz}, {c.x + hx, c.y - hy, c.z + hz}, {c.x + hx, c.y + hy, c.z + hz}, {c.x - hx, c.y + hy, c.z + hz}};
+        const Rgb grip = {96, 66, 40};
+        b.Quad(q[0], q[1], q[2], q[3], grip); b.Quad(q[4], q[5], q[6], q[7], grip); b.Quad(q[0], q[1], q[5], q[4], grip);
+        b.Quad(q[3], q[2], q[6], q[7], grip); b.Quad(q[0], q[3], q[7], q[4], grip); b.Quad(q[1], q[2], q[6], q[5], grip);
+    }
     bar({0, 138, -50}, {0, 138, 70}, 3.5f);    // the keel
     return b.mesh;
 }
@@ -471,6 +481,161 @@ inline MeshData Cat() {
     return b.mesh;
 }
 
+
+// ---- foliage: grass tufts, trees and drifts of snow (scattered over the field by the game layer, purely for looks) ---------------------------
+// `variant` = shape (0-3) + 4 * season (spring, summer, autumn, winter), so the leaves turn with the weather's season. Grass is made 4 times
+// life size (the game layer shrinks it) so its thin blades survive the whole-number vertex coordinates.
+inline void Put(MeshData& m, V3 p, Rgb c) { m.v.push_back({p.x, p.y, p.z, static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.r))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.g))), static_cast<uint8_t>((std::min)(255.0f, (std::max)(0.0f, c.b)))}); }
+inline Rgb Mix(Rgb a, Rgb b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; }
+
+inline MeshData Grass(uint32_t variant) {
+    const int shape = static_cast<int>(variant % 4), season = static_cast<int>(variant / 4 % 4);
+    static const Rgb root[4] = {{40, 120, 40}, {34, 100, 36}, {120, 90, 36}, {120, 140, 120}};
+    static const Rgb tip[4] = {{150, 230, 80}, {120, 200, 70}, {226, 190, 80}, {226, 236, 230}};
+    MeshData m;
+    Lcg rng(900 + variant);
+    const int blades = 7 + shape;
+    for (int i = 0; i < blades; i++) {
+        const float a = (static_cast<float>(i) + rng.Next() * 0.6f) / blades * 6.2831853f;
+        const float r0 = 6.0f + rng.Next() * 22.0f;                       // where the blade stands
+        const float height = (shape == 1 ? 150.0f : 100.0f) + rng.Next() * 70.0f;
+        const float lean = 0.25f + rng.Next() * 0.5f;                     // how far the tip arches outwards
+        const V3 base = {std::cos(a) * r0, 0, std::sin(a) * r0};
+        const V3 out = {std::cos(a), 0, std::sin(a)}, side = {-std::sin(a), 0, std::cos(a)};
+        const float w = 9.0f + rng.Next() * 3.0f;
+        const float t = rng.Next() * 0.35f;
+        const Rgb c0 = Mix(root[season], tip[season], 0.0f), c1 = Mix(root[season], tip[season], 0.55f + t), c2 = Mix(root[season], tip[season], 1.0f);
+        auto at = [&](float f, float hw) { // a point along the blade: f 0..1 up it, hw half width
+            const float up = height * f, bend = lean * height * f * f;
+            return V3{base.x + out.x * bend + side.x * hw, up, base.z + out.z * bend + side.z * hw};
+        };
+        const V3 l0 = at(0, -w), r0p = at(0, w), l1 = at(0.5f, -w * 0.7f), r1 = at(0.5f, w * 0.7f), tp = at(1.0f, 0);
+        Put(m, l0, c0); Put(m, r0p, c0); Put(m, r1, c1);
+        Put(m, l0, c0); Put(m, r1, c1); Put(m, l1, c1);
+        Put(m, l1, c1); Put(m, r1, c1); Put(m, tp, c2);
+    }
+    if (shape == 3 && season < 3) { // a few wild flowers standing in this one
+        static const Rgb petal[3] = {{255, 140, 190}, {255, 230, 90}, {250, 150, 70}};
+        for (int i = 0; i < 3; i++) {
+            const float a = rng.Next() * 6.2831853f, r = 8.0f + rng.Next() * 14.0f, h = 80.0f + rng.Next() * 40.0f;
+            const V3 c = {std::cos(a) * r, h, std::sin(a) * r};
+            const Rgb col = petal[(i + season) % 3];
+            for (int k = 0; k < 4; k++) {
+                const float b0 = k * 1.5707963f, b1 = b0 + 1.5707963f;
+                Put(m, c, {255, 245, 200}); Put(m, {c.x + std::cos(b0) * 16, c.y + 4, c.z + std::sin(b0) * 16}, col); Put(m, {c.x + std::cos(b1) * 16, c.y + 4, c.z + std::sin(b1) * 16}, col);
+            }
+            Put(m, {c.x - 2, 0, c.z}, {50, 110, 40}); Put(m, {c.x + 2, 0, c.z}, {50, 110, 40}); Put(m, c, {90, 160, 60});
+        }
+    }
+    return m;
+}
+
+inline void Blob(Builder& b, float cx, float cy, float cz, float rx, float ry, float rz, Rgb col, uint32_t seed, float snowTop = 0.0f) {
+    const float t = 1.6180339887f;
+    V3 base[12] = {{-1, t, 0}, {1, t, 0}, {-1, -t, 0}, {1, -t, 0}, {0, -1, t}, {0, 1, t}, {0, -1, -t}, {0, 1, -t}, {t, 0, -1}, {t, 0, 1}, {-t, 0, -1}, {-t, 0, 1}};
+    static const int faces[20][3] = {{0, 11, 5}, {0, 5, 1}, {0, 1, 7}, {0, 7, 10}, {0, 10, 11}, {1, 5, 9}, {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
+                                     {3, 9, 4}, {3, 4, 2}, {3, 2, 6}, {3, 6, 8}, {3, 8, 9}, {4, 9, 5}, {2, 4, 11}, {6, 2, 10}, {8, 6, 7}, {9, 8, 1}};
+    Lcg rng(seed);
+    V3 p[12];
+    for (int i = 0; i < 12; i++) {
+        const V3 n = Norm(base[i]);
+        const float j = 0.82f + rng.Next() * 0.36f;
+        p[i] = {cx + n.x * rx * j, cy + n.y * ry * j, cz + n.z * rz * j};
+    }
+    b.inside = {cx, cy, cz};
+    for (const auto& f : faces) {
+        const V3 centre = {(p[f[0]].x + p[f[1]].x + p[f[2]].x) / 3, (p[f[0]].y + p[f[1]].y + p[f[2]].y) / 3, (p[f[0]].z + p[f[1]].z + p[f[2]].z) / 3};
+        const bool top = snowTop > 0 && (centre.y - cy) > ry * (1.0f - snowTop * 1.2f) * 0.4f && (centre.y - cy) > 0;
+        b.Tri(p[f[0]], p[f[1]], p[f[2]], top ? Rgb{240, 244, 250} : col);
+    }
+}
+
+inline void Prism(Builder& b, float cx, float cz, float y0, float y1, float r0, float r1, int sides, Rgb col) {
+    b.inside = {cx, (y0 + y1) * 0.5f, cz};
+    for (int i = 0; i < sides; i++) {
+        const float a0 = static_cast<float>(i) / sides * 6.2831853f, a1 = static_cast<float>(i + 1) / sides * 6.2831853f;
+        const V3 p00 = {cx + std::cos(a0) * r0, y0, cz + std::sin(a0) * r0}, p01 = {cx + std::cos(a1) * r0, y0, cz + std::sin(a1) * r0};
+        const V3 p10 = {cx + std::cos(a0) * r1, y1, cz + std::sin(a0) * r1}, p11 = {cx + std::cos(a1) * r1, y1, cz + std::sin(a1) * r1};
+        b.Quad(p00, p01, p11, p10, col);
+    }
+}
+
+inline MeshData Tree(uint32_t variant) {
+    const int shape = static_cast<int>(variant % 4), season = static_cast<int>(variant / 4 % 4);
+    static const Rgb leaf[4] = {{104, 190, 70}, {50, 140, 52}, {214, 110, 36}, {88, 130, 90}};
+    static const Rgb leaf2[4] = {{130, 214, 84}, {70, 164, 60}, {232, 170, 50}, {110, 150, 112}};
+    const float snow = season == 3 ? 1.0f : 0.0f;
+    Builder b;
+    const Rgb bark = shape == 3 ? Rgb{226, 222, 212} : Rgb{104, 70, 40};
+    switch (shape) {
+        case 1: { // a pine: tall trunk, three stacked cones
+            Prism(b, 0, 0, 0, 120, 14, 9, 8, bark);
+            const Rgb green = season == 2 ? Rgb{60, 110, 60} : leaf[1];
+            const float heights[3] = {70, 150, 230}, radii[3] = {96, 72, 48};
+            for (int i = 0; i < 3; i++) {
+                const float y0 = heights[i], y1 = y0 + 110;
+                b.inside = {0, (y0 + y1) * 0.5f, 0};
+                for (int k = 0; k < 8; k++) {
+                    const float a0 = k / 8.0f * 6.2831853f, a1 = (k + 1) / 8.0f * 6.2831853f;
+                    const V3 q0 = {std::cos(a0) * radii[i], y0, std::sin(a0) * radii[i]}, q1 = {std::cos(a1) * radii[i], y0, std::sin(a1) * radii[i]};
+                    b.Tri(q0, q1, {0, y1, 0}, (snow > 0 && k % 2 == 0) ? Rgb{236, 242, 248} : (i % 2 ? Mix(green, leaf2[1], 0.4f) : green));
+                    b.Tri(q0, q1, {0, y0 - 6, 0}, Mix(green, Rgb{0, 0, 0}, 0.35f));
+                }
+            }
+            break;
+        }
+        case 2: { // a wide, round-crowned tree
+            Prism(b, 0, 0, 0, 110, 20, 14, 8, bark);
+            Blob(b, 0, 190, 0, 118, 86, 118, leaf[season], 710 + variant, snow);
+            Blob(b, 70, 150, 30, 76, 60, 76, leaf2[season], 720 + variant, snow);
+            Blob(b, -64, 160, -26, 80, 62, 80, leaf2[season], 730 + variant, snow);
+            break;
+        }
+        case 3: { // a slender birch: pale trunk, a light crown
+            Prism(b, 0, 0, 0, 170, 9, 6, 6, bark);
+            Prism(b, 0, 0, 40, 46, 9.6f, 9.6f, 6, {40, 36, 30});
+            Prism(b, 0, 0, 100, 106, 8.2f, 8.2f, 6, {40, 36, 30});
+            Blob(b, 0, 230, 0, 72, 90, 72, leaf2[season], 740 + variant, snow);
+            Blob(b, 26, 170, 18, 46, 50, 46, leaf[season], 750 + variant, snow);
+            break;
+        }
+        default: { // an oak
+            Prism(b, 0, 0, 0, 120, 18, 12, 8, bark);
+            Prism(b, 20, 0, 90, 150, 7, 5, 6, bark);   // a bough
+            Blob(b, 0, 200, 0, 96, 78, 96, leaf[season], 700 + variant, snow);
+            Blob(b, 64, 170, 20, 62, 52, 62, leaf2[season], 701 + variant, snow);
+            Blob(b, -56, 176, -24, 66, 54, 66, leaf2[season], 702 + variant, snow);
+            break;
+        }
+    }
+    return b.mesh;
+}
+
+// A low mound of snow, 200 across and a little over a hand tall: scattered close together they read as a snowy ground.
+inline MeshData SnowPatch(uint32_t variant) {
+    Builder b;
+    b.inside = {0, -20, 0};
+    Lcg rng(800 + variant);
+    const int n = 10;
+    const float rad[3] = {100.0f, 72.0f, 38.0f}, hgt[3] = {0.0f, 9.0f, 15.0f};
+    std::vector<V3> ring[3];
+    for (int r = 0; r < 3; r++) {
+        for (int i = 0; i < n; i++) {
+            const float a = static_cast<float>(i) / n * 6.2831853f;
+            const float j = r == 0 ? 0.78f + rng.Next() * 0.44f : 0.9f + rng.Next() * 0.2f;
+            ring[r].push_back({std::cos(a) * rad[r] * j, hgt[r] + (r == 0 ? 0.0f : rng.Next() * 3.0f), std::sin(a) * rad[r] * j});
+        }
+    }
+    const Rgb snow = {244, 247, 252};
+    for (int r = 0; r < 2; r++)
+        for (int i = 0; i < n; i++) {
+            const int k = (i + 1) % n;
+            b.Quad(ring[r][i], ring[r][k], ring[r + 1][k], ring[r + 1][i], r == 0 ? Rgb{226, 234, 246} : snow);
+        }
+    for (int i = 0; i < n; i++) b.Tri(ring[2][i], ring[2][(i + 1) % n], {0, 17.0f, 0}, snow);
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -485,6 +650,9 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Sign: return mesh_detail::Sign();
         case MeshKind::Ally: return mesh_detail::Ally(variant);
         case MeshKind::Cat: return mesh_detail::Cat();
+        case MeshKind::Grass: return mesh_detail::Grass(variant);
+        case MeshKind::Tree: return mesh_detail::Tree(variant);
+        case MeshKind::SnowPatch: return mesh_detail::SnowPatch(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
