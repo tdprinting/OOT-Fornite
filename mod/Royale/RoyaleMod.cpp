@@ -1955,13 +1955,15 @@ void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
 }
 
 
-// ---- foliage, snow on the ground and the weather the game itself draws ------------------------------------------------------
+// ---- foliage, snow and puddles on the ground and the weather the game itself draws ------------------------------------------
 // Patches of swaying grass, trees (a different set of leaves for each season) and, when it snows, mounds of snow that build up on the ground and
-// slowly melt away afterwards are scattered around the player. All of it is local scenery: where it stands is worked out from the map and a hash of
+// slowly melt away afterwards are scattered around the player. Rain leaves puddles on level ground that grow while it pours, ripple with
+// every drop and dry up slowly once it stops; rain also washes the snow away, and snow covers the puddles over. All of it is local scenery: where it stands is worked out from the map and a hash of
 // each cell, so nothing is sent over the network, and it is only ever drawn near the player. Trees are solid (you walk around the trunk).
 bool WaterAt(float x, float z, float floorY) { return UnderWater(x, z, floorY); }
 float gFoliage = 1.0f;       // the local option, 0 (none) to 2
 float gSnowCover = 0.0f;     // 0 bare ground to 1 deep snow
+float gPuddleCover = 0.0f;   // 0 dry ground to 1 soaked (big puddles everywhere it is level)
 float WeatherAmount();
 
 uint32_t FloraHash(int a, int b, int salt) {
@@ -1971,12 +1973,13 @@ uint32_t FloraHash(int a, int b, int salt) {
 }
 float Flora01(int a, int b, int salt) { return static_cast<float>(FloraHash(a, b, salt) & 0xFFFF) / 65535.0f; }
 
-struct FloraSpot { bool ok; float y; };
+struct FloraSpot { bool ok; float y; float sx = 0.0f, sz = 0.0f; };   // sx, sz: how the ground slopes (puddles lie along it)
 std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
 int gFloraScene = -1;
 int gFloraBudget = 0;
 
-// Is there good ground at (x, z)? Cached per cell. nullptr = not measured yet (the per-frame budget of measurements ran out).
+// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket.
+// nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
     auto it = gFloraSpots.find(key);
@@ -1988,7 +1991,13 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     if (RawFloorAt(x, z, &y) && !WaterAt(x, z, y) && !OnExitFloor(x, z)) {
         spot.ok = true;
         spot.y = y;
-        if (kind != 2) {   // grass and trees stay off steep ground (and cliff edges)
+        if (kind == 3) {   // puddles only lie on level, even ground: a gentle slope at most, and no bumps or edges across them
+            float y4 = 0, y5 = 0;
+            spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && RawFloorAt(x - 45.0f, z, &y4) && RawFloorAt(x, z - 45.0f, &y5) &&
+                      std::fabs(y2 - y4) < 14.0f && std::fabs(y3 - y5) < 14.0f && std::fabs(y2 + y4 - 2.0f * y) < 3.0f && std::fabs(y3 + y5 - 2.0f * y) < 3.0f;
+            spot.sx = (y2 - y4) / 90.0f;
+            spot.sz = (y3 - y5) / 90.0f;
+        } else if (kind == 0 || kind == 1) {   // grass and trees stay off steep ground (and cliff edges)
             spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
         }
         if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
@@ -2001,7 +2010,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
-constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f;
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f;
 
 struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
@@ -2026,18 +2035,38 @@ void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z,
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// Something lying flat on (possibly gently sloping) ground, drawn see-through with `alpha` (0-255). Expects the XLU setup DrawFlora makes.
+void DrawGroundXlu(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float scale, int alpha) {
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
+    Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, static_cast<u8>(std::clamp(alpha, 0, 255)));
+    gSPDisplayList(POLY_XLU_DISP++, const_cast<Gfx*>(m->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.season) & 3) : 1; }
 
 void DrawFlora(PlayState* play) {
     if (!InField() || gPlayState == nullptr) return;
-    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; }
+    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     const int season = FloraSeason();
     const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
+    const bool rainSky = gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder;
+    const float rainNow = std::max(rainSky ? WeatherAmount() : 0.0f, gStormWeather * 0.8f);   // the same rain DriveRealWeather lets fall
+    const bool raining = rainNow > 0.12f;
     if (snowing) gSnowCover = std::min(1.0f, gSnowCover + dt / 45.0f * (0.5f + WeatherAmount()));
+    else if (raining) gSnowCover = std::max(0.0f, gSnowCover - dt / 40.0f * (0.5f + rainNow));   // rain washes the snow away
     else gSnowCover = std::max(season == 3 ? 0.3f : 0.0f, gSnowCover - dt / 150.0f);   // it melts slowly (winter keeps a little)
-    const bool snowOn = gSnowCover > 0.02f;
-    if (gFoliage <= 0.01f && !snowOn) return;
+    if (raining) gPuddleCover = std::min(1.0f, gPuddleCover + dt / 40.0f * (0.5f + rainNow));
+    else gPuddleCover = std::max(0.0f, gPuddleCover - dt / (snowing ? 25.0f : 120.0f));   // they dry up slowly, or the snow covers them
+    const bool snowOn = gSnowCover > 0.02f, puddlesOn = gPuddleCover > 0.02f;
+    if (gFoliage <= 0.01f && !snowOn && !puddlesOn) return;
 
     Player* pl = GET_PLAYER(play);
     const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
@@ -2072,6 +2101,24 @@ void DrawFlora(PlayState* play) {
                 if (m == nullptr || m->dl.empty()) continue;
                 const float k = (0.75f + 0.5f * gSnowCover) * (0.85f + 0.5f * Flora01(cx, cz, 35)) * fade(d, reach);
                 if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.5f, z, Flora01(cx, cz, 36) * 6.2831853f, 0, 0, k);
+            }
+    }
+    if (gSnowCover > 0.35f) {   // deep snow: broad, low blankets fill the ground between the mounds
+        const float reach = 1000.0f, deep = (gSnowCover - 0.35f) / 0.65f;
+        const int c0x = static_cast<int>(std::floor((px - reach) / kBlanketCell)), c1x = static_cast<int>(std::floor((px + reach) / kBlanketCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kBlanketCell)), c1z = static_cast<int>(std::floor((pz + reach) / kBlanketCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                if (Flora01(cx, cz, 71) > deep * 0.9f) continue;
+                const float x = (static_cast<float>(cx) + 0.25f + 0.5f * Flora01(cx, cz, 72)) * kBlanketCell, z = (static_cast<float>(cz) + 0.25f + 0.5f * Flora01(cx, cz, 73)) * kBlanketCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(4, cx, cz, x, z);   // any ground, like the mounds, in cells of its own
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, 4u + FloraHash(cx, cz, 74) % 4);
+                if (m == nullptr || m->dl.empty()) continue;
+                const float k = (0.7f + 0.3f * deep) * (0.85f + 0.35f * Flora01(cx, cz, 75)) * fade(d, reach);
+                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 76) * 6.2831853f, 0, 0, k);
             }
     }
 
@@ -2113,6 +2160,47 @@ void DrawFlora(PlayState* play) {
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
                 DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
+            }
+    }
+
+    if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
+        const GpuMesh* ripple = GpuMeshFor(royale::MeshKind::Ripple, 0);
+        {
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+            gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
+            gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+        const float reach = 950.0f, rippleReach = 650.0f;
+        const int c0x = static_cast<int>(std::floor((px - reach) / kPuddleCell)), c1x = static_cast<int>(std::floor((px + reach) / kPuddleCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kPuddleCell)), c1z = static_cast<int>(std::floor((pz + reach) / kPuddleCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                if (Flora01(cx, cz, 51) > 0.15f + 0.45f * gPuddleCover) continue;   // the first puddles show early, more join as it soaks in
+                const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 52)) * kPuddleCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 53)) * kPuddleCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(3, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4 + (season == 3 ? 4u : 0u));   // frozen over in winter
+                if (m == nullptr || m->dl.empty()) continue;
+                const float size = (0.35f + 0.75f * gPuddleCover) * (0.7f + 0.6f * Flora01(cx, cz, 55));
+                const float f = fade(d, reach);
+                if (f < 0.02f) continue;
+                const float yaw = Flora01(cx, cz, 56) * 6.2831853f;
+                DrawGroundXlu(play, m, x, spot->y + 1.0f, z, spot->sx, spot->sz, yaw, size, static_cast<int>(215.0f * f * std::min(1.0f, gPuddleCover * 3.0f)));
+                if (!raining || season == 3 || ripple == nullptr || ripple->dl.empty() || d > rippleReach) continue;
+                const int rings = 1 + static_cast<int>(rainNow * 3.0f);
+                for (int j = 0; j < rings; j++) {   // each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle
+                    const float phase = t / 0.8f + Flora01(cx, cz, 60 + j);
+                    const int drop = static_cast<int>(std::floor(phase));
+                    const float age = phase - static_cast<float>(drop);
+                    const float ang = Flora01(cx * 31 + j, cz + drop, 61) * 6.2831853f, rr = 55.0f * size * std::sqrt(Flora01(cx + drop, cz * 17 + j, 62));
+                    const float ox = std::cos(ang) * rr, oz = std::sin(ang) * rr;
+                    DrawGroundXlu(play, ripple, x + ox, spot->y + 1.6f + spot->sx * ox + spot->sz * oz, z + oz, spot->sx, spot->sz, 0.0f,
+                                  0.35f + 1.3f * age, static_cast<int>(190.0f * (1.0f - age) * f));
+                }
             }
     }
 }
