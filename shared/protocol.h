@@ -21,7 +21,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 15; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 16; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -29,10 +29,10 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -122,6 +122,14 @@ struct PropSmashRequest {
     uint16_t index = 0;
     void Write(ByteWriter& w) const { w.U16(index); }
     bool Read(ByteReader& r) { index = r.U16(); return r.ok && index < kMaxProps; }
+};
+
+// Pay the ally with this index (0 to kAllyCount - 1) to join you. You must be standing next to it.
+struct HireAllyRequest {
+    static constexpr MsgType kType = MsgType::HireAllyRequest;
+    uint8_t index = 0;
+    void Write(ByteWriter& w) const { w.U8(index); }
+    bool Read(ByteReader& r) { index = r.U8(); return r.ok && index < kAllyCount; }
 };
 
 // The host picks which place the match is played in (lobby only).
@@ -320,6 +328,22 @@ struct BossNet {
     }
 };
 
+// A hireable ally as clients see it.
+struct AllyNet {
+    uint8_t index = 0;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    int16_t rot = 0;
+    uint8_t hp = 255;           // health as a fraction of its maximum, 0..255
+    uint16_t owner = kNoPlayer16;   // who hired it (kNoPlayer16 while it is free)
+    uint8_t flags = 0;          // 1 walking, 2 attacking
+    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(flags); }
+    bool Read(ByteReader& r) {
+        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8(); owner = r.U16(); flags = r.U8();
+        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && flags <= 3;
+    }
+};
+
 struct Snapshot {
     static constexpr MsgType kType = MsgType::Snapshot;
     uint32_t tick = 0;       // server tick counter, kTickHz per second
@@ -330,12 +354,15 @@ struct Snapshot {
     uint8_t lobbyLeft = 255; // seconds until the lobby starts the match by itself; 255 when the timer is off
     std::vector<PlayerNet> players; // first entry is always the receiving client
     std::vector<BossNet> bosses;    // the mini bosses near this client
+    std::vector<AllyNet> allies;    // the hireable allies near this client
     void Write(ByteWriter& w) const {
         w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch); w.U8(lobbyLeft);
         w.U8(static_cast<uint8_t>(players.size()));
         for (const auto& p : players) p.Write(w);
         w.U8(static_cast<uint8_t>(bosses.size()));
         for (const auto& b : bosses) b.Write(w);
+        w.U8(static_cast<uint8_t>(allies.size()));
+        for (const auto& a : allies) a.Write(w);
     }
     bool Read(ByteReader& r) {
         tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8(); lobbyLeft = r.U8();
@@ -347,6 +374,10 @@ struct Snapshot {
         if (nb > static_cast<size_t>(kMaxBosses)) return false;
         bosses.assign(nb, {});
         for (auto& b : bosses) if (!b.Read(r)) return false;
+        const size_t na = r.U8();
+        if (na > static_cast<size_t>(kAllyCount)) return false;
+        allies.assign(na, {});
+        for (auto& a : allies) if (!a.Read(r)) return false;
         return r.ok;
     }
 };
@@ -366,6 +397,26 @@ struct EvWeather {
     float seconds = 0;
     void Write(ByteWriter& w) const { w.U8(season); w.U8(sky); w.U8(intensity); w.F32(seconds); }
     bool Read(ByteReader& r) { season = r.U8(); sky = r.U8(); intensity = r.U8(); seconds = r.F32(); return r.ok && season < kSeasonCount && sky < kSkyCount && intensity <= 100 && Finite(seconds); }
+};
+
+// An ally was hired (owner = who), let go because its owner fell (owner = kNoPlayer16) or fell itself (`fell`).
+struct EvAlly {
+    static constexpr MsgType kType = MsgType::EvAlly;
+    uint8_t index = 0;
+    uint16_t owner = kNoPlayer16;
+    uint8_t status = 0;   // 0 hired, 1 released, 2 fell
+    void Write(ByteWriter& w) const { w.U8(index); w.U16(owner); w.U8(status); }
+    bool Read(ByteReader& r) { index = r.U8(); owner = r.U16(); status = r.U8(); return r.ok && index < kAllyCount && status <= 2; }
+};
+
+// An ally attacked (or, when `target` is its own owner, healed them): where the target was.
+struct EvAllyAction {
+    static constexpr MsgType kType = MsgType::EvAllyAction;
+    uint8_t index = 0;
+    uint16_t target = kNoPlayer16;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); return r.ok && index < kAllyCount && Finite(x) && Finite(z); }
 };
 
 // A supply drop has been announced: a crate lands at (x, z) in `delay` seconds.

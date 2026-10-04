@@ -163,6 +163,7 @@ class RoyaleSession {
     // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
     void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
+    void HireAlly(int index) { if (client) client->HireAlly(index); }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
     void SetWeatherOptions(const WeatherOptions& o) { weatherOptions = o; if (server) server->SetWeatherOptions(o); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }

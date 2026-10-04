@@ -1199,6 +1199,98 @@ static void TheSignInTheMiddle() {
     CHECK(frame.Triangles() >= 24 && frame.Triangles() < BuildMesh(MeshKind::Glider, 0).Triangles());   // the cloth version has no wings of its own
 }
 
+static void HireableAllies() {
+    // Four allies, one of each kind, free and healthy, placed apart and on valid ground.
+    {
+        const Circle map = {{0, 0}, 3000};
+        auto valid = [](Vec2 p) { return p.x > -2500.0f; };
+        const PoiLayout layout = GeneratePois(4, map, 12, valid, 1);
+        const std::vector<Vec2> spots = GenerateAllySpots(4, map, layout.pois, valid);
+        CHECK(static_cast<int>(spots.size()) == kAllyCount);
+        for (size_t i = 0; i < spots.size(); i++) {
+            CHECK(valid(spots[i]) && Distance(spots[i], map.center) <= map.radius);
+            for (size_t j = i + 1; j < spots.size(); j++) CHECK(Distance(spots[i], spots[j]) > 300.0f);
+        }
+        CHECK(GenerateAllySpots(4, map, layout.pois, valid).size() == spots.size() && Distance(GenerateAllySpots(4, map, layout.pois, valid)[2], spots[2]) < 0.01f);
+    }
+    for (int i = 0; i < kAllyCount; i++) CHECK(AllyOf(static_cast<AllyKind>(i)).price >= 30 && AllyOf(static_cast<AllyKind>(i)).maxHealth >= 3 && std::string(AllyOf(static_cast<AllyKind>(i)).name).size() > 2);
+    Simulation sim = Duel(11, {0, 0}, {0, 1900});
+    Match& m = sim.match;
+    CHECK(m.Allies().size() == static_cast<size_t>(kAllyCount));
+    for (int i = 0; i < kAllyCount; i++) CHECK(m.Allies()[static_cast<size_t>(i)].index == i && static_cast<int>(m.Allies()[static_cast<size_t>(i)].kind) == i && m.Allies()[static_cast<size_t>(i)].alive && !m.Allies()[static_cast<size_t>(i)].Hired());
+    PlayerState* me = m.Find(1);
+    m.Find(1000)->stunUntil = 1e9f;                                                        // (the bot sits this part out, far away)
+    me->rupees = 1000;
+    auto place = [&](int index, Vec2 at) { m.MutableAllies()[static_cast<size_t>(index)].pos = at; };
+    // Hiring needs you to be next to it, enough rupees, and a free ally.
+    place(0, {600, 0});
+    CHECK(!m.HireAlly(1, 0));                                                             // too far
+    place(0, {100, 0});
+    me->rupees = 10;
+    CHECK(!m.HireAlly(1, 0));                                                             // too poor
+    me->rupees = 1000;
+    m.DrainEvents();
+    CHECK(m.HireAlly(1, 0) && m.Allies()[0].owner == 1 && me->rupees == 1000 - AllyOf(AllyKind::Kokiri).price);
+    bool announced = false;
+    for (const auto& e : m.DrainEvents()) announced |= e.type == MatchEvent::Type::AllyChanged && e.a == 0 && e.b == 1 && e.item == 0;
+    CHECK(announced);
+    CHECK(!m.HireAlly(1, 0) && !m.HireAlly(1, 9) && !m.HireAlly(99, 1));                  // already hired, no such ally, no such player
+    place(1, {120, 40}); place(2, {-100, 40});
+    CHECK(m.HireAlly(1, 1) && m.AlliesOf(1) == 2);
+    CHECK(!m.HireAlly(1, 2) && !m.Allies()[2].Hired());                                   // two at most
+    // They follow: walk away and they come along; one left far behind is brought back.
+    me->pos = {1500, 0};
+    Run(sim, 12.0f);
+    CHECK(Distance(m.Allies()[0].pos, me->pos) < 450.0f && Distance(m.Allies()[1].pos, me->pos) < 450.0f);
+    me->pos = {-1200, 1000};
+    m.MutableAllies()[0].pos = {1400, -1300};
+    Run(sim, 2.0f);
+    CHECK(Distance(m.Allies()[0].pos, me->pos) < 800.0f);   // (2600 behind: brought back in a flash)
+    // They fight: a bot that comes close is hit by them and the credit goes to their owner.
+    PlayerState* foe = m.Find(1000);
+    foe->stunUntil = 0;
+    foe->weapon = {ItemId::DekuStick, Rarity::Common};
+    foe->health = foe->maxHealth;
+    me->invulnUntil = 1e9f;                      // (the owner is not the test)
+    foe->pos = {me->pos.x + 400, me->pos.z};
+    m.MutableAllies()[0].pos = {me->pos.x + 150, me->pos.z}; m.MutableAllies()[1].pos = {me->pos.x - 150, me->pos.z};
+    const float dealtBefore = me->damageDealt;
+    bool acted = false;
+    for (int i = 0; i < 15 * kTickHz && foe->alive; i++) { sim.Tick(kDt); for (const auto& e : m.DrainEvents()) acted |= e.type == MatchEvent::Type::AllyAction; }
+    CHECK(acted && me->damageDealt > dealtBefore + 0.2f);
+    // A Goron hits hard, up close; a Zora mends a hurt owner.
+    Simulation s2 = Duel(12, {0, 0}, {0, 1900});
+    Match& m2 = s2.match;
+    PlayerState* me2 = m2.Find(1);
+    m2.Find(1000)->stunUntil = 1e9f;
+    me2->rupees = 1000;
+    m2.MutableAllies()[1].pos = {80, 0};
+    CHECK(m2.HireAlly(1, 1));
+    me2->health = 1.0f;
+    Run(s2, 5.0f);
+    CHECK(me2->health >= 1.4f);                                                          // the Zora's gift (0.5 hearts)
+    // When the owner falls, the allies are free again.
+    m2.MutableAllies()[2].pos = {60, 0};
+    CHECK(m2.HireAlly(1, 2));
+    me2->invulnUntil = 0;
+    m2.DrainEvents();
+    CHECK(m2.Damage(1, 100.0f, 1000));
+    bool released = false;
+    for (const auto& e : m2.DrainEvents()) released |= e.type == MatchEvent::Type::AllyChanged && e.item == 1;
+    CHECK(released && m2.AlliesOf(1) == 0 && !m2.Allies()[1].Hired() && !m2.Allies()[2].Hired());
+    // Out in the storm an ally is hurt and finally falls (and a free one walks for the safe zone first).
+    Simulation s3 = Duel(13, {0, 0}, {0, 1900});
+    Match& m3 = s3.match;
+    m3.Find(1)->invulnUntil = 1e9f; m3.Find(1000)->invulnUntil = 1e9f;                    // (so the match runs on while the storm closes)
+    AllyState& lost = m3.MutableAllies()[3];
+    for (int i = 0; i < static_cast<int>(2000 * kTickHz) && m3.State() == MatchState::InMatch && m3.GetStorm().DamagePerSecond(lost.pos, m3.StormTime()) <= 0; i++) m3.Tick(kDt);
+    lost.pos = {m3.MapCircle().center.x + m3.MapCircle().radius * 0.95f, m3.MapCircle().center.z};
+    const float before = lost.health;
+    bool outside = m3.GetStorm().DamagePerSecond(lost.pos, m3.StormTime()) > 0;
+    Run(s3, 2.0f);
+    CHECK(!outside || lost.health < before || Distance(lost.pos, {m3.MapCircle().center.x + m3.MapCircle().radius * 0.95f, m3.MapCircle().center.z}) > 20.0f);   // it ran for cover or took damage
+}
+
 static void MagicMeter() {
     Simulation sim = Duel(1, {0, 0}, {3000, 0});
     Match& m = sim.match;
@@ -2434,7 +2526,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

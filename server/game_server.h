@@ -97,6 +97,7 @@ class GameServer {
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
+        sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         sim.match.SetBossCount(bossCount);
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
@@ -347,6 +348,12 @@ class GameServer {
                 if (!sim.match.SelectWeapon(c->playerId, m.slot)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::HireAllyRequest: {
+                net::HireAllyRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.HireAlly(c->playerId, m.index)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::UseAbilityRequest: {
                 net::UseAbilityRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -563,6 +570,18 @@ class GameServer {
                     Broadcast(st);
                     break;
                 }
+                case MatchEvent::Type::AllyChanged: {
+                    net::EvAlly a;
+                    a.index = static_cast<uint8_t>(e.a); a.owner = e.b == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(e.b); a.status = e.item;
+                    Broadcast(a);
+                    break;
+                }
+                case MatchEvent::Type::AllyAction: {
+                    net::EvAllyAction a;
+                    a.index = static_cast<uint8_t>(e.a); a.target = e.b == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(e.b); a.x = e.x; a.z = e.z;
+                    Broadcast(a);
+                    break;
+                }
                 case MatchEvent::Type::Weather: {
                     net::EvWeather w;
                     w.season = static_cast<uint8_t>(e.a); w.sky = e.item; w.intensity = static_cast<uint8_t>(e.amount); w.seconds = e.health;
@@ -699,6 +718,16 @@ class GameServer {
                 n.y = static_cast<int16_t>(std::lround((std::max)(0.0f, (std::min)(b.y, 3000.0f))));
                 n.mode = static_cast<uint8_t>(b.mode);
                 s.bosses.push_back(n);
+            }
+            for (const AllyState& a : sim.match.Allies()) {
+                if (!a.alive || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
+                net::AllyNet n;
+                n.index = a.index; n.kind = static_cast<uint8_t>(a.kind);
+                n.x = a.pos.x; n.z = a.pos.z; n.rot = a.rot;
+                n.hp = static_cast<uint8_t>((std::max)(0.0f, (std::min)(255.0f, a.health / AllyOf(a.kind).maxHealth * 255.0f + 0.5f)));
+                n.owner = a.Hired() ? static_cast<uint16_t>(a.owner) : net::kNoPlayer16;
+                n.flags = static_cast<uint8_t>((a.moving ? 1 : 0) | (sim.match.Clock() < a.actUntil ? 2 : 0));
+                s.allies.push_back(n);
             }
             SendTo(c, s, false);
         }

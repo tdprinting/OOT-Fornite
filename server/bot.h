@@ -49,6 +49,7 @@ class BotController {
         if (m.State() != MatchState::Drop && m.State() != MatchState::InMatch) return;
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
         repathBudget = 8;
+        StepAllies(m, dt);
         // Bots are "in the air" for most of the drop, so they land and start looting when the humans do, not before.
         if (m.State() == MatchState::Drop && m.StateTime() < kDropSec * 0.65f) return;
         for (auto& p : m.Players()) {
@@ -58,6 +59,85 @@ class BotController {
                 if (m.Clock() < mem.actUntil && !m.Stunned(p)) p.anim = static_cast<uint8_t>(mem.actAnim);   // it just used something: show it
             }
         }
+    }
+
+    // The hireable allies (shared/ally.h). A free ally stands about (and walks out of the storm); a hired one follows its owner, picks the nearest
+    // enemy close to them and fights it the way its kind does, and is brought back if it falls too far behind.
+    void StepAllies(Match& m, float dt) {
+        if (m.State() != MatchState::InMatch) return;
+        for (AllyState& a : m.MutableAllies()) {
+            if (!a.alive) continue;
+            const AllyDef& def = AllyOf(a.kind);
+            const float dps = m.GetStorm().DamagePerSecond(a.pos, m.StormTime());
+            if (dps > 0) {
+                a.health -= dps * dt * 0.6f;
+                if (a.health <= 0) { m.ReleaseAlly(a, true); continue; }
+            }
+            PlayerState* owner = a.Hired() ? m.Find(a.owner) : nullptr;
+            if (a.Hired() && (!owner || !owner->alive)) { m.ReleaseAlly(a, false); owner = nullptr; }
+            a.moving = false;
+            const float step = def.speed * dt;
+            auto walkTo = [&](Vec2 to, float speedScale) {
+                const float dx = to.x - a.pos.x, dz = to.z - a.pos.z;
+                if (std::hypot(dx, dz) < 1.0f) return;
+                if (Advance(m, a.pos, dx, dz, (std::min)(step * speedScale, std::hypot(dx, dz)))) a.moving = true;
+                a.rot = FaceAngle(a.pos, to);
+            };
+            if (!owner) {
+                if (dps > 0) walkTo(m.GetStorm().SafeZoneAt(m.StormTime() + 5.0f).center, 1.0f);   // anyone would run from the storm
+                continue;
+            }
+            // Heal (a Zora's gift).
+            if (def.healEvery > 0 && m.Clock() >= a.healReadyAt && owner->health < owner->maxHealth * 0.7f && Distance(owner->pos, a.pos) < 600.0f) {
+                a.healReadyAt = m.Clock() + def.healEvery;
+                owner->health = (std::min)(owner->maxHealth, owner->health + def.healAmount);
+                owner->dirty = true;
+                a.actUntil = m.Clock() + 0.6f;
+                MatchEvent e{MatchEvent::Type::AllyAction};
+                e.a = a.index; e.b = owner->id; e.x = owner->pos.x; e.z = owner->pos.z;
+                m.PushEvent(e);
+            }
+            // Pick the nearest enemy that is near both the ally and its owner.
+            uint32_t foeId = kNoPlayer;
+            Vec2 foePos = {};
+            float best = def.range + 350.0f;
+            for (const auto& p : m.Players()) {
+                if (!p.alive || p.id == owner->id || m.Invulnerable(p)) continue;
+                const float d = Distance(p.pos, a.pos);
+                if (d < best && Distance(p.pos, owner->pos) < kAllyLeash * 0.8f) { best = d; foeId = p.id; foePos = p.pos; }
+            }
+            for (const auto& b : m.Bosses()) {
+                if (!b.alive || (IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee)) continue;
+                const float d = Distance(b.pos, a.pos) - (IsDragonKind(b.kind) ? kDragonBodyRadius : kBossBodyRadius) * 0.8f;
+                if (d < best && Distance(b.pos, owner->pos) < kAllyLeash * 0.8f) { best = d; foeId = b.id; foePos = b.pos; }
+            }
+            const float ownerDist = Distance(owner->pos, a.pos);
+            if (ownerDist > kAllyLeash * 2.0f) {   // left far behind: catch up in a flash, beside the owner
+                a.pos = {owner->pos.x + 90.0f, owner->pos.z + 60.0f};
+                if (!Walkable(a.pos)) a.pos = owner->pos;
+                continue;
+            }
+            if (foeId != kNoPlayer) {
+                const float d = Distance(foePos, a.pos);
+                const float want = def.melee ? 90.0f : def.range * 0.75f;
+                a.rot = FaceAngle(a.pos, foePos);
+                if (d > want) walkTo(foePos, 1.0f);
+                const float reach = def.range + (IsBossId(foeId) ? (IsDragonKind(m.FindBoss(foeId)->kind) ? kDragonBodyRadius : kBossBodyRadius) : 0.0f);
+                if (d <= reach) m.AllyStrike(a, foeId);
+                continue;
+            }
+            if (ownerDist > kAllyFollowDistance * 1.5f) walkTo(owner->pos, ownerDist > kAllyLeash ? 1.5f : 1.0f);
+            else a.rot = FaceAngle(a.pos, owner->pos);
+        }
+    }
+
+    // Same walk as the bots' (sliding along walls) but for a bare position.
+    bool Advance(const Match& m, Vec2& pos, float dx, float dz, float dist) {
+        PlayerState tmp;
+        tmp.pos = pos;
+        const bool moved = Advance(m, tmp, dx, dz, dist);
+        pos = tmp.pos;
+        return moved;
     }
 
     // How a fight between `me` and `foe` would go: above 1 favours me. Public so tests and the HUD can show it.

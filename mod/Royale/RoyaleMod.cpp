@@ -98,6 +98,23 @@ float gClothScale = 1.0f;           // the local option: cloth and wind physics 
 
 // The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
 // turning. Returns the wind in world units per second; `strength` is 0 to 1.
+// Hireable allies as drawn (the actors and their smoothing are with the other ally code, further down).
+struct AllyActor {
+    Actor* actor = nullptr;
+    ActorFunc origDestroy = nullptr;
+    int kind = 0;
+    float x = 0, z = 0, tx = 0, tz = 0;
+    int16_t rot = 0, trot = 0;
+    float hp = 1.0f;
+    uint16_t owner = royale::net::kNoPlayer16;
+    float moved = 0;
+    float actAge = 10.0f;      // seconds since it attacked or healed
+    bool init = false;
+};
+std::unordered_map<uint8_t, AllyActor> gAllies;
+std::unordered_map<const Actor*, uint8_t> gAllyOf;
+
+
 void WindNow(float* wx, float* wz, float* strength) {
     const float t = static_cast<float>(ImGui::GetTime());
     float speed = 28.0f;
@@ -930,6 +947,9 @@ bool LiveAndAlive(const royale::HudState& h) {
 
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
+void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
+int NearbyFreeAlly();
+void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);
 
 void Loot_Update(Actor* actor, PlayState* play) {
     auto idx = gLootOf.find(actor);
@@ -2098,6 +2118,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
         };
         gSupplyMarks.erase(std::remove_if(gSupplyMarks.begin(), gSupplyMarks.end(), [&](const SupplyMark& m) { return now > m.until; }), gSupplyMarks.end());
         for (const SupplyMark& m : gSupplyMarks) star(m.x, m.z, IM_COL32(255, 160, 60, 255));
+        for (const auto& [aid, al] : gAllies) star(al.x, al.z, al.owner == royale::net::kNoPlayer16 ? IM_COL32(255, 222, 110, 255) : al.owner == h.selfId ? IM_COL32(120, 255, 150, 255) : IM_COL32(170, 180, 210, 255));
         if (gSession.Client()) for (const auto& l : gSession.Client()->Loot()) if (l.supply && l.chest && !l.taken) star(l.x, l.z, IM_COL32(255, 220, 90, 255));
     }
     if (gSession.Client() && MapOption("MapChests")) {
@@ -2982,6 +3003,13 @@ void DrawOverlay() {
                 centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "D-pad Right or A: take or swap");
             }
         }
+        else if (const int ally = NearbyFreeAlly(); ally >= 0) {
+            const royale::AllyDef& def = royale::kAllyDefs[ally];
+            const bool afford = h.rupees >= def.price;
+            centered(ds.y * 0.66f, IM_COL32(255, 222, 110, 255), 26 * scale, std::string(def.name) + " " + def.title);
+            centered(ds.y * 0.66f + 31 * scale, afford ? white : IM_COL32(255, 130, 120, 255), 20 * scale,
+                     afford ? "A: hire for " + std::to_string(def.price) + " rupees" : "Needs " + std::to_string(def.price) + " rupees (you have " + std::to_string(h.rupees) + ")");
+        }
     }
     if (ImGui::GetTime() < gBannerUntil) {
         const float fade = static_cast<float>(std::min(1.0, gBannerUntil - ImGui::GetTime()));
@@ -2994,6 +3022,7 @@ void DrawOverlay() {
     DrawBossBars(dl, font, scale);
     DrawPoiLabels(dl, font, ds, scale, h);
     DrawSign(dl, font, ds, scale);
+    DrawAllyLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
@@ -3506,6 +3535,14 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (in.press.button & (BTN_A | BTN_DRIGHT)) {
         const size_t target = NearestLootIndex();
         if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
+        else if (in.press.button & BTN_A) {   // nothing to open or take: maybe somebody to hire
+            const int ally = NearbyFreeAlly();
+            if (ally >= 0) {
+                const royale::AllyDef& def = royale::kAllyDefs[ally];
+                if (hud.inv.rupees < def.price) Say(std::string("The ") + def.name + " wants " + std::to_string(def.price) + " rupees (you have " + std::to_string(hud.inv.rupees) + ")");
+                else gSession.HireAlly(ally);
+            }
+        }
     }
 
     // D-pad Left: switch to your next weapon, like cycling the hotbar. With backups B and C, hand A goes to B, then C, then back to A.
@@ -3895,6 +3932,24 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::Strike:
                 gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false, e.id == royale::net::kNoPlayer16 });
                 break;
+            case royale::ClientEvent::Type::AllyChanged: {
+                const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
+                if (e.item == 0) {
+                    if (e.id == hud.selfId) { ShowBanner(std::string("The ") + name + " joins you!", IM_COL32(130, 255, 150, 255), 2.8f); Say(std::string("You hired the ") + name + ": they follow you and fight for you"); }
+                    else Say(std::string("Somebody hired the ") + name);
+                } else if (e.item == 1) {
+                    Say(std::string("The ") + name + " is free to hire again");
+                } else {
+                    Say(std::string("The ") + name + " has fallen");
+                    auto it = gAllies.find(static_cast<uint8_t>(e.index));
+                    if (it != gAllies.end() && it->second.actor != nullptr && gPlayState != nullptr)
+                        SparkBurst(gPlayState, it->second.x, it->second.actor->world.pos.y + 60.0f, it->second.z, { 220, 220, 255, 255 }, 24, 5.0f);
+                }
+                break;
+            }
+            case royale::ClientEvent::Type::AllyAction:
+                AllyActionFx(e, hud);
+                break;
             case royale::ClientEvent::Type::WeatherChanged: {
                 const auto sky = static_cast<royale::Sky>(e.item);
                 if (!gSeasonAnnounced) {
@@ -4160,6 +4215,174 @@ void DriveStormAlerts(const royale::HudState& hud) {
     }
 }
 
+// ---- hireable allies -----------------------------------------------------------------------------------------------------------
+// Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
+// server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
+void Ally_Update(Actor* actor, PlayState* play) {
+    auto of = gAllyOf.find(actor);
+    if (of == gAllyOf.end()) { Actor_Kill(actor); return; }
+    AllyActor& a = gAllies[of->second];
+    if (!a.init) { a.x = a.tx; a.z = a.tz; a.rot = a.trot; a.init = true; }
+    const float nx = a.x + (a.tx - a.x) * 0.4f, nz = a.z + (a.tz - a.z) * 0.4f;
+    a.moved = a.moved * 0.8f + std::hypot(nx - a.x, nz - a.z);
+    a.x = nx; a.z = nz;
+    a.rot = static_cast<s16>(a.rot + static_cast<s16>(a.trot - a.rot) * 0.35f);
+    a.actAge += 1.0f / royale::kTickHz;
+    actor->world.pos.x = a.x;
+    actor->world.pos.z = a.z;
+    actor->world.pos.y = GroundY(play, a.x, a.z, actor->world.pos.y);
+    actor->shape.rot.y = a.rot;
+    actor->world.rot.y = a.rot;
+    actor->focus.pos = actor->world.pos;
+}
+
+void Ally_Draw(Actor* actor, PlayState* play) {
+    auto of = gAllyOf.find(actor);
+    if (of == gAllyOf.end()) return;
+    const AllyActor& a = gAllies[of->second];
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Ally, static_cast<uint32_t>(a.kind));
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const bool walking = a.moved > 0.4f;
+    const float bob = walking ? std::fabs(std::sin(t * 8.0f + of->second)) * 7.0f : std::sin(t * 1.6f + of->second) * 1.5f;
+    const float sway = walking ? std::sin(t * 8.0f + of->second) * 0.07f : 0.0f;
+    const float lunge = a.actAge < 0.4f ? std::sin(a.actAge / 0.4f * 3.14159f) : 0.0f;   // an attack: it pitches forward
+    const float scale = a.kind == 2 ? 1.0f : 0.95f;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateX(lunge * (a.kind == 2 ? 0.5f : 0.3f), MTXMODE_APPLY);
+    Matrix_RotateZ(sway, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void Ally_Destroy(Actor* actor, PlayState* play) {
+    ActorFunc orig = nullptr;
+    auto of = gAllyOf.find(actor);
+    if (of != gAllyOf.end()) {
+        auto a = gAllies.find(of->second);
+        if (a != gAllies.end()) { orig = a->second.origDestroy; gAllies.erase(a); }
+        gAllyOf.erase(of);
+    }
+    if (orig) orig(actor, play);
+}
+
+void ReconcileAllies(const royale::HudState& hud) {
+    const bool show = gSession.Joined() && InField() && gSession.Client() &&
+                      (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch || hud.state == royale::MatchState::Ending);
+    std::unordered_map<uint8_t, bool> wanted;
+    if (show) {
+        for (const royale::net::AllyNet& n : gSession.Client()->Allies()) {
+            wanted[n.index] = true;
+            auto it = gAllies.find(n.index);
+            if (it == gAllies.end()) {
+                float y = 0;
+                if (!FloorAt(n.x, n.z, &y)) continue;
+                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
+                if (actor == nullptr) continue;
+                AllyActor a;
+                a.actor = actor; a.origDestroy = actor->destroy; a.kind = n.kind; a.owner = n.owner;
+                a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.rot = n.rot; a.x = n.x; a.z = n.z; a.init = true;
+                gAllies[n.index] = a;
+                gAllyOf[actor] = n.index;
+                actor->update = Ally_Update;
+                actor->draw = Ally_Draw;
+                actor->destroy = Ally_Destroy;
+                actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
+                actor->uncullZoneForward = 4000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
+                actor->shape.shadowScale = 40.0f;
+            } else {
+                AllyActor& a = it->second;
+                a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.hp = n.hp / 255.0f; a.owner = n.owner;
+                if ((n.flags & 2) && a.actAge > 0.5f) a.actAge = 0.0f;
+            }
+        }
+    }
+    for (auto& [id, a] : gAllies) if (!wanted.count(id) && a.actor) Actor_Kill(a.actor);
+}
+
+// The free ally you are standing next to, or -1.
+int NearbyFreeAlly() {
+    if (!InField() || gSession.Client() == nullptr) return -1;
+    Player* pl = GET_PLAYER(gPlayState);
+    int best = -1;
+    float bestD = royale::kHireRange;
+    for (const auto& [id, a] : gAllies) {
+        if (a.owner != royale::net::kNoPlayer16 || a.actor == nullptr) continue;
+        const float d = std::hypot(a.x - pl->actor.world.pos.x, a.z - pl->actor.world.pos.z);
+        if (d < bestD) { bestD = d; best = id; }
+    }
+    return best;
+}
+
+void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    for (const auto& [id, a] : gAllies) {
+        if (a.actor == nullptr) continue;
+        const float d = std::hypot(a.x - pl->actor.world.pos.x, a.z - pl->actor.world.pos.z);
+        const bool mine = a.owner == h.selfId, free = a.owner == royale::net::kNoPlayer16;
+        if (d > (free ? 2600.0f : 1800.0f)) continue;
+        ImVec2 at;
+        if (!WorldToScreen(a.x, a.actor->world.pos.y + 245.0f, a.z, &at)) continue;
+        const royale::AllyDef& def = royale::kAllyDefs[a.kind];
+        const float k = std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f), ts = 18.0f * scale * k;
+        std::string line1 = free ? std::string(def.name) + " " + def.title : mine ? std::string(def.name) + " (yours)" : std::string(def.name) + " (an ally)";
+        const ImU32 col = free ? IM_COL32(255, 222, 110, 255) : mine ? IM_COL32(130, 255, 150, 255) : IM_COL32(190, 200, 220, 255);
+        ImVec2 sz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, line1.c_str());
+        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f + 1.5f, at.y + 1.5f), IM_COL32(0, 0, 0, 220), line1.c_str());
+        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f, at.y), col, line1.c_str());
+        if (free) {
+            const bool afford = h.rupees >= def.price;
+            const std::string line2 = std::to_string(def.price) + " rupees";
+            sz = font->CalcTextSizeA(ts * 0.9f, FLT_MAX, 0.0f, line2.c_str());
+            dl->AddText(font, ts * 0.9f, ImVec2(at.x - sz.x * 0.5f + 1.5f, at.y + ts + 1.5f), IM_COL32(0, 0, 0, 220), line2.c_str());
+            dl->AddText(font, ts * 0.9f, ImVec2(at.x - sz.x * 0.5f, at.y + ts), afford ? IM_COL32(120, 255, 140, 255) : IM_COL32(255, 120, 110, 255), line2.c_str());
+        } else {
+            const float w = 90.0f * scale * k, hgt = 7.0f * scale;
+            const ImVec2 a0(at.x - w * 0.5f, at.y + ts + 3.0f * scale);
+            dl->AddRectFilled(ImVec2(a0.x - 1, a0.y - 1), ImVec2(a0.x + w + 1, a0.y + hgt + 1), IM_COL32(0, 0, 0, 190));
+            dl->AddRectFilled(a0, ImVec2(a0.x + w * a.hp, a0.y + hgt), mine ? IM_COL32(90, 220, 110, 255) : IM_COL32(180, 190, 210, 255));
+        }
+    }
+}
+
+// What an ally's hit looks like: a shot flies from it (or a thump lands, for the Goron); a Zora's gift is a shower of green sparks on you.
+void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
+    auto it = gAllies.find(static_cast<uint8_t>(e.index));
+    if (it == gAllies.end() || it->second.actor == nullptr || gPlayState == nullptr) return;
+    AllyActor& a = it->second;
+    a.actAge = 0.0f;
+    const float ay = a.actor->world.pos.y;
+    if (e.id == a.owner) {   // mending its owner
+        float gy = ay;
+        FloorAt(e.x, e.z, &gy);
+        SparkBurst(gPlayState, e.x, gy + 60.0f, e.z, { 120, 255, 150, 255 }, 18, 3.0f);
+        if (a.owner == h.selfId) Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        return;
+    }
+    const s16 yaw = static_cast<s16>(std::atan2(e.x - a.x, e.z - a.z) * (32768.0f / 3.14159265f));
+    switch (a.kind) {
+        case 0: SpawnProjectileFrom(royale::ItemId::Slingshot, a.x, ay + 70.0f, a.z, yaw); break;
+        case 1: SpawnProjectileFrom(royale::ItemId::IceArrows, a.x, ay + 90.0f, a.z, yaw); break;
+        case 3: SpawnProjectileFrom(royale::ItemId::FairyBow, a.x, ay + 90.0f, a.z, yaw); break;
+        default: {
+            float gy = ay;
+            FloorAt(e.x, e.z, &gy);
+            SparkBurst(gPlayState, e.x, gy + 40.0f, e.z, { 255, 200, 120, 255 }, 20, 6.0f);
+            Vec3f at = { e.x, gy + 40.0f, e.z };
+            Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+            break;
+        }
+    }
+}
+
 // ---- Link's cap ---------------------------------------------------------------------------------------------------------------
 // The game calls us while it draws the cap's limb (a patch adds the hook, patches/0009): the tail of the cap swings on a spring pushed by the
 // air, which is the wind plus how fast Link is moving, running or falling. Everyone's cap does it, the other players' too.
@@ -4319,6 +4542,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
     ReconcileSign(hud);
+    ReconcileAllies(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     ReconcileProjectileActor();
     DriveStormAlerts(hud);

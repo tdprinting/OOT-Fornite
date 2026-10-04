@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -373,6 +373,68 @@ inline MeshData Sign() {
     return b.mesh;
 }
 
+// The four hireable allies, about 150 to 230 tall, blocky like the golems: variant 0 a Kokiri (green tunic, leaf cap), 1 a Zora (blue, fins), 2 a
+// Goron (broad and rocky), 3 a Gerudo (red hair, purple and gold).
+inline MeshData Ally(uint32_t variant) {
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    const Rgb skin[4] = {{238, 206, 170}, {120, 175, 205}, {176, 112, 76}, {210, 160, 108}};
+    const Rgb boots = {84, 58, 40};
+    switch (variant % 4) {
+        case 0: {   // Kokiri: small
+            const Rgb tunic = {70, 150, 66}, cap = {52, 120, 54};
+            box(-16, 30, 0, 12, 30, 12, boots); box(16, 30, 0, 12, 30, 12, boots);                  // legs
+            box(0, 80, 0, 30, 24, 18, tunic);                                                     // body
+            box(-40, 78, 0, 10, 22, 10, tunic); box(40, 78, 0, 10, 22, 10, tunic);                // arms
+            box(-40, 52, 0, 9, 8, 9, skin[0]); box(40, 52, 0, 9, 8, 9, skin[0]);                  // hands
+            box(0, 124, 0, 26, 22, 22, skin[0]);                                                  // big head
+            box(0, 150, -2, 28, 10, 24, cap); box(0, 168, -12, 14, 14, 16, cap);                  // the leaf cap with its point
+            box(-10, 126, 21, 5, 5, 2, {30, 30, 40}); box(10, 126, 21, 5, 5, 2, {30, 30, 40});   // eyes
+            break;
+        }
+        case 1: {   // Zora: tall, blue, with fins
+            const Rgb fin = {70, 130, 190}, belly = {220, 235, 240};
+            box(-18, 44, 0, 13, 44, 13, skin[1]); box(18, 44, 0, 13, 44, 13, skin[1]);
+            box(0, 112, 0, 32, 30, 18, skin[1]); box(0, 112, 14, 22, 24, 6, belly);               // body and pale front
+            box(-46, 108, 0, 10, 28, 10, skin[1]); box(46, 108, 0, 10, 28, 10, skin[1]);
+            box(-60, 100, 0, 3, 24, 16, fin); box(60, 100, 0, 3, 24, 16, fin);                    // arm fins
+            box(0, 168, 0, 22, 22, 22, skin[1]);                                                  // head
+            box(0, 196, -26, 10, 30, 34, fin);                                                    // the long head fin sweeping back
+            box(-11, 170, 21, 5, 5, 2, {250, 220, 90}); box(11, 170, 21, 5, 5, 2, {250, 220, 90});
+            break;
+        }
+        case 2: {   // Goron: broad and rocky
+            const Rgb rock = {128, 100, 80}, dark = {92, 70, 56};
+            box(-34, 36, 0, 24, 36, 24, dark); box(34, 36, 0, 24, 36, 24, dark);
+            box(0, 108, 0, 64, 42, 46, skin[2]);                                                  // huge round body
+            box(-86, 104, 0, 24, 40, 26, skin[2]); box(86, 104, 0, 24, 40, 26, skin[2]);          // thick arms
+            box(-88, 60, 6, 26, 20, 28, rock); box(88, 60, 6, 26, 20, 28, rock);                  // stone fists
+            box(0, 168, 4, 30, 24, 28, skin[2]);                                                  // head
+            for (int i = -2; i <= 2; i++) box(i * 16.0f, 202 - std::abs(i) * 4.0f, -10, 7, 12, 10, rock);   // rocky spikes along the back of the head
+            box(-12, 172, 30, 5, 5, 2, {30, 24, 20}); box(12, 172, 30, 5, 5, 2, {30, 24, 20});
+            break;
+        }
+        default: {  // Gerudo: tall, red hair, purple and gold
+            const Rgb cloth = {120, 60, 160}, gold = {236, 196, 90}, hair = {204, 70, 40};
+            box(-16, 46, 0, 12, 46, 12, cloth); box(16, 46, 0, 12, 46, 12, cloth);
+            box(0, 112, 0, 26, 28, 16, cloth); box(0, 122, 12, 20, 6, 6, gold);                   // body and a gold sash
+            box(-38, 110, 0, 9, 28, 9, skin[3]); box(38, 110, 0, 9, 28, 9, skin[3]);
+            box(0, 166, 0, 20, 22, 20, skin[3]);                                                  // head
+            box(0, 188, -4, 22, 14, 24, hair); box(0, 168, -26, 12, 36, 12, hair);                // hair and a long tail
+            box(0, 150, 14, 14, 3, 6, gold);                                                      // veil band
+            box(-10, 170, 19, 4, 4, 2, {40, 30, 20}); box(10, 170, 19, 4, 4, 2, {40, 30, 20});
+            break;
+        }
+    }
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -385,6 +447,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Glider: return mesh_detail::Glider(variant);
         case MeshKind::GliderFrame: return mesh_detail::Glider(0, false);
         case MeshKind::Sign: return mesh_detail::Sign();
+        case MeshKind::Ally: return mesh_detail::Ally(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);

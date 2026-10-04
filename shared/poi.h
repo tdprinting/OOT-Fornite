@@ -1,4 +1,5 @@
 #pragma once
+#include "ally.h"
 #include "map.h"
 #include "props.h"
 #include <vector>
@@ -321,6 +322,24 @@ inline PoiLayout GenerateFieldPois(uint64_t seed, Circle map, int towns, const P
     std::vector<Vec2> spots;
     for (const Vec2& sp : out.lootSpots) if (!valid || valid(sp)) spots.push_back(sp);
     out.lootSpots = spots;
+    return out;
+}
+
+// Where the four allies wait: spread across the middle rings of the map, well apart from each other and from the towns (so you have to go and find them).
+inline std::vector<Vec2> GenerateAllySpots(uint64_t seed, Circle map, const std::vector<Poi>& pois, const PlacementFn& valid = nullptr) {
+    Rng rng(seed ^ 0x616C6C79ull ^ 0x73706F74ull);   // "ally" "spot"
+    std::vector<Vec2> out;
+    const float apart = (std::max)(500.0f, map.radius * 0.42f);
+    for (int attempt = 0; attempt < 600 && static_cast<int>(out.size()) < kAllyCount; attempt++) {
+        const float a = static_cast<float>(rng.Unit() * 6.2831853), d = map.radius * (0.25f + 0.5f * static_cast<float>(rng.Unit()));
+        const Vec2 at = {map.center.x + std::cos(a) * d, map.center.z + std::sin(a) * d};
+        if (valid && !valid(at)) continue;
+        bool ok = true;
+        for (const Vec2& q : out) if (Distance(q, at) < apart * (attempt < 300 ? 1.0f : 0.6f)) ok = false;
+        for (const Poi& p : pois) if (Distance(p.center, at) < p.radius * 0.9f) ok = false;
+        if (ok) out.push_back(at);
+    }
+    while (static_cast<int>(out.size()) < kAllyCount) out.push_back(RandomPointIn(rng, map, valid, 0.6f));   // a small or strange map: anywhere will do
     return out;
 }
 

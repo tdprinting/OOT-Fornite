@@ -1248,6 +1248,36 @@ static void WeatherOverTheWire() {
     CHECK(changed && me.CurrentWeather().Strength() > 0);
 }
 
+static void AlliesOverTheWire() {
+    { HireAllyRequest a, b; a.index = 3; CHECK(RoundTrips(a, b) && b.index == 3); }
+    { HireAllyRequest bad, out; bad.index = 9; CHECK(!RoundTrips(bad, out)); }
+    { EvAlly a, b; a.index = 2; a.owner = 5; a.status = 1; CHECK(RoundTrips(a, b) && b.index == 2 && b.owner == 5 && b.status == 1); }
+    { EvAlly bad, out; bad.status = 7; CHECK(!RoundTrips(bad, out)); }
+    { EvAllyAction a, b; a.index = 1; a.target = 1003; a.x = 4; a.z = -9; CHECK(RoundTrips(a, b) && b.target == 1003 && b.z == -9); }
+    { Snapshot a, b; AllyNet n; n.index = 2; n.kind = 2; n.x = 10; n.z = -4; n.rot = -321; n.hp = 99; n.owner = 7; n.flags = 3; a.allies = {n};
+      CHECK(RoundTrips(a, b) && b.allies.size() == 1 && b.allies[0].rot == -321 && b.allies[0].owner == 7 && b.allies[0].flags == 3); }
+    { Snapshot bad, out; AllyNet n; n.kind = 9; bad.allies = {n}; CHECK(!RoundTrips(bad, out)); }
+    Rig rig(41, 0);
+    GameClient& me = rig.Add("Hirer");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    rig.Run(1.0f);
+    PlayerState* self = rig.M().Find(me.Self()->id);
+    CHECK(self != nullptr);
+    CHECK(rig.RunUntil([&] { return !me.Allies().empty() || true; }, 1));
+    self->pos = rig.M().Allies()[0].pos;
+    self->rupees = 500;
+    self->dirty = true;
+    CHECK(rig.RunUntil([&] { return me.Inventory().rupees == 500; }, 5));
+    me.HireAlly(0);
+    CHECK(rig.RunUntil([&] { for (const auto& a : me.Allies()) if (a.index == 0 && a.owner == me.Self()->id) return true; return false; }, 5));
+    CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price);
+    me.HireAlly(0);                                                                    // again: refused, nothing changes
+    rig.Run(1.0f);
+    CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price);
+}
+
 static void CountdownElapsedTracksState() {
     Rig rig(11, 0);
     GameClient& a = rig.Add("A");
@@ -1344,7 +1374,7 @@ int main() {
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
-    WeatherOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
+    WeatherOverTheWire(); AlliesOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");

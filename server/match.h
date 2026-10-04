@@ -1,5 +1,6 @@
 #pragma once
 #include "../shared/balance.h"
+#include "../shared/ally.h"
 #include "../shared/boss.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
@@ -78,7 +79,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather, AllyChanged, AllyAction } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -87,6 +88,7 @@ struct MatchEvent {
     MatchState state = MatchState::Lobby; // StateChanged
     uint8_t item = 0;       // AbilityUsed: which ability
     float x = 0, z = 0;     // AbilityUsed: where the user stood | BossDown: where it fell (a = boss id, b = who landed the last hit)
+    // AllyChanged: a = ally index, b = its owner (kNoPlayer when free), item = 0 hired / 1 released / 2 fell. AllyAction: a = ally index, b = target id, x/z = target.
 };
 
 struct LootEntry {
@@ -217,6 +219,7 @@ class Match {
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
+        SpawnAllies();
         nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
         for (auto& pl : players) { pl.magic = kMaxMagic; pl.magicStamp = clock; }
         spell = -1; boltCount = 0; weather = Weather{PickSeason(wopt, seed), Sky::Clear, 0};
@@ -646,6 +649,89 @@ class Match {
         p->armor = (std::min)(d.shieldCap, p->armor + d.shield);
         p->potions.erase(p->potions.begin() + best);
         p->dirty = true;
+        return true;
+    }
+
+
+    // ---- allies (shared/ally.h): four people to hire. Their behaviour is in BotController::StepAllies; the rules of hiring are here. ----
+    void PushEvent(const MatchEvent& e) { events.push_back(e); }
+    void SetAllySpots(std::vector<Vec2> spots) { allySpots = std::move(spots); }
+    const std::vector<AllyState>& Allies() const { return allies; }
+    std::vector<AllyState>& MutableAllies() { return allies; }
+    int AlliesOf(uint32_t player) const { int n = 0; for (const auto& a : allies) n += a.alive && a.owner == player; return n; }
+    void SpawnAllies() {
+        allies.clear();
+        Rng rng(seed ^ 0x616C6C79ull);   // "ally"
+        for (int i = 0; i < kAllyCount; i++) {
+            AllyState a;
+            a.index = static_cast<uint8_t>(i);
+            a.kind = static_cast<AllyKind>(i);
+            a.health = AllyOf(a.kind).maxHealth;
+            if (static_cast<size_t>(i) < allySpots.size()) a.pos = allySpots[static_cast<size_t>(i)];
+            else a.pos = RandomPointIn(rng, map, placement, 0.7f);
+            a.rot = static_cast<int16_t>(rng.Below(65536) - 32768);
+            allies.push_back(a);
+        }
+    }
+    // Pay an ally to join you. The player must be standing next to it, have the rupees and have a free place (two allies at most).
+    bool HireAlly(uint32_t playerId, int index) {
+        PlayerState* p = Find(playerId);
+        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || index < 0 || index >= static_cast<int>(allies.size())) return false;
+        AllyState& a = allies[static_cast<size_t>(index)];
+        const AllyDef& def = AllyOf(a.kind);
+        if (!a.alive || a.Hired() || p->rupees < def.price || AlliesOf(playerId) >= kMaxAlliesPerPlayer) return false;
+        if (Distance(p->pos, a.pos) > kHireRange * 1.15f) return false;
+        p->rupees -= def.price;
+        p->dirty = true;
+        a.owner = playerId;
+        a.attackReadyAt = clock + 1.0f;
+        a.healReadyAt = clock + (def.healEvery > 0 ? 4.0f : 0.0f);   // a Zora can mend you almost at once, then settles to its rhythm
+        MatchEvent e{MatchEvent::Type::AllyChanged};
+        e.a = a.index; e.b = playerId; e.item = 0;
+        events.push_back(e);
+        return true;
+    }
+    void ReleaseAlly(AllyState& a, bool fell) {
+        a.owner = kNoPlayer;
+        if (fell) a.alive = false;
+        MatchEvent e{MatchEvent::Type::AllyChanged};
+        e.a = a.index; e.b = kNoPlayer; e.item = fell ? 2 : 1;
+        events.push_back(e);
+    }
+    // An ally's hit on a player or boss, credited to the ally's owner. Returns true if it landed.
+    bool AllyStrike(AllyState& a, uint32_t targetId) {
+        const AllyDef& def = AllyOf(a.kind);
+        PlayerState* owner = Find(a.owner);
+        if (!owner || !owner->alive || clock < a.attackReadyAt) return false;
+        a.attackReadyAt = clock + def.cooldown;
+        a.actUntil = clock + 0.45f;
+        MatchEvent act{MatchEvent::Type::AllyAction};
+        act.a = a.index; act.b = targetId;
+        if (IsBossId(targetId)) {
+            for (auto& b : bosses) {
+                if (b.id != targetId || !b.alive) continue;
+                if (IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee) return false;
+                act.x = b.pos.x; act.z = b.pos.z; events.push_back(act);
+                const float dmg = def.damage * (IsDragonKind(b.kind) ? 0.7f : 1.0f);
+                const float dealt = (std::min)(dmg, b.health);
+                b.health -= dmg;
+                owner->damageDealt += dealt;
+                b.target = owner->id; b.lostTargetAt = clock;
+                MatchEvent e{MatchEvent::Type::Damaged};
+                e.a = targetId; e.b = owner->id; e.amount = dmg; e.health = (std::max)(0.0f, b.health);
+                events.push_back(e);
+                if (b.health <= 0) KillBoss(b, *owner);
+                return true;
+            }
+            return false;
+        }
+        PlayerState* t = Find(targetId);
+        if (!t || !t->alive || t->id == a.owner) return false;
+        act.x = t->pos.x; act.z = t->pos.z; events.push_back(act);
+        if (clock < t->rollUntil || clock < t->invulnUntil) return true;      // dodged or protected: the swing still happened
+        float dmg = def.damage;
+        if (t->hasShield) dmg *= 1.0f - ShieldReduction(t->shield.item, t->shield.rarity);
+        Damage(t->id, dmg, owner->id, DamageKind::Normal);
         return true;
     }
 
@@ -1182,6 +1268,7 @@ class Match {
         p.alive = false;
         p.health = 0;
         DropKit(p);
+        for (auto& ally : allies) if (ally.owner == p.id && ally.alive) ReleaseAlly(ally, false);   // their allies are free to hire again
         if (killer != kNoPlayer && killer != p.id) {
             if (PlayerState* k = Find(killer)) k->kills++;
         }
@@ -1465,6 +1552,8 @@ class Match {
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
     std::vector<Strike> strikes;
+    std::vector<AllyState> allies;
+    std::vector<Vec2> allySpots;
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;

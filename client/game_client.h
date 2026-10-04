@@ -15,7 +15,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -111,12 +111,15 @@ class GameClient {
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
+    void HireAlly(int index) { net::HireAllyRequest m; m.index = static_cast<uint8_t>(index); SendIfJoined(m); }   // next to a free ally, with the rupees
     // Drink a shield potion.
     void UseShield() { SendIfJoined(net::UseShieldRequest{}); }
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
     // The mini bosses in the latest snapshot (the ones near you).
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
+    // The hireable allies in the latest snapshot (the ones near you, and yours wherever they are).
+    const std::vector<net::AllyNet>& Allies() const { return allies; }
     // Players in the match, bots included.
     int PlayerLimit() const { return playerLimit; }
     int MapId() const { return mapId; }
@@ -352,6 +355,22 @@ class GameClient {
                 events.push_back(e);
                 break;
             }
+            case net::MsgType::EvAlly: {
+                net::EvAlly m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::AllyChanged};
+                e.index = m.index; e.id = m.owner; e.item = m.status;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvAllyAction: {
+                net::EvAllyAction m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::AllyAction};
+                e.index = m.index; e.id = m.target; e.x = m.x; e.z = m.z;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvSupplyDrop: {
                 net::EvSupplyDrop m;
                 if (!net::Decode(data, m)) break;
@@ -466,6 +485,7 @@ class GameClient {
         epoch = s.epoch;
 
         bosses = s.bosses;
+        allies = s.allies;
         bossesAt = localClock;
         for (auto& [id, p] : players) p.visible = false;
         for (const auto& pn : s.players) {
@@ -495,6 +515,7 @@ class GameClient {
     uint32_t tunic = SkinRgb(0);
     InventoryInfo inventory;
     std::vector<net::BossNet> bosses;
+    std::vector<net::AllyNet> allies;
     float bossesAt = 0;
     int playerLimit = kMaxPlayers;
     uint8_t lobbyLeftAtSnapshot = 255;
