@@ -2729,10 +2729,12 @@ float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255
 
 // The game's title screen and file select screen (nothing of the game is running yet): our logo takes the place of the 3D title on the first, and
 // sits at the top of the second.
+// Which of the game's own screens is running is read from the game state itself: its title (the Nintendo 64 logo) or its file select. The moment the
+// game moves on to anything else (the game itself, the intro cutscene) the logo is gone.
 void DrawTitleLogo() {
-    if (InGame()) return;
-    const int mode = gSaveContext.gameMode;
-    if (mode != GAMEMODE_TITLE_SCREEN && mode != GAMEMODE_FILE_SELECT) return;
+    if (InGame() || gGameState == nullptr) return;
+    const int mode = gGameState->init == Title_Init ? GAMEMODE_TITLE_SCREEN : gGameState->init == FileChoose_Init ? GAMEMODE_FILE_SELECT : -1;
+    if (mode < 0) return;
     ImVec2 sz;
     if (LogoTexture(&sz) == nullptr) return;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
