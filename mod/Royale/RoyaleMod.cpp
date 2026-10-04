@@ -1,6 +1,6 @@
 // OOT Royale: milestone 1 stub. Registers hooks and logs them. No gameplay yet.
-// Copied or symlinked into third_party/Shipwright/soh/soh/Enhancements/Royale/ by scripts/link_mod.sh (a copy).
-// NOTE: not yet compiled against Shipwright (needs a full SoH build); written against tag 9.2.3.
+// Copied or symlinked into third_party/Shipwright-Android/soh/soh/Enhancements/Royale/ by scripts/link_mod.sh (a copy).
+// NOTE: not yet compiled against Shipwright (needs a full SoH build); written against Waterdish/Shipwright-Android c9d8f4a (Shipwright 9.0.2).
 #include "soh/ShipInit.hpp"
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include <spdlog/spdlog.h>

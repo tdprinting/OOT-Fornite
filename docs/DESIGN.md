@@ -2,10 +2,10 @@
 
 Status: design draft v2 (milestone 0). No code yet.
 
-Decisions so far: **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
+Decisions so far: **zero-build** (no Fortnite-style building at all); **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
 Minimum 1 human to start; **bots fill the remaining slots up to 32**. We use our own protocol and do not stay compatible with Shipwright's Anchor.
 Matches are **host-run**: whoever starts a game hosts it (listen server), no dedicated servers required.
-Base: [HarbourMasters/Shipwright](https://github.com/HarbourMasters/Shipwright) (Ship of Harkinian, "SoH").
+Base: [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android), a fork of [HarbourMasters/Shipwright](https://github.com/HarbourMasters/Shipwright) (Ship of Harkinian, "SoH") 9.0.2 that already runs on Android. One codebase for Windows and Android.
 
 ## 1. Pitch
 
@@ -75,7 +75,7 @@ Farore's Wind), and Hyrule Field's large open map.
 - PvP damage is applied through the server. The attacker's client reports a hit with the weapon, target and tick;
   the server checks range and line of sight and applies damage. Z-target dodge rolls give i-frames server-side.
 - Health: 3 hearts base, up to 10. Shield value as an overlay, as in Fortnite.
-- Building is no longer a stretch goal. It is in scope as the "crates and platforms" system in 4.3.1 (build mode, v3).
+- No building. Combat is decided by aim, movement, dodge timing and positioning, as in Fortnite Zero Build.
 
 ### 4.3 Loot and rarity tiers
 
@@ -98,7 +98,7 @@ weight and the item's glow colour (the same colour family is used for the item's
 
 ### 4.3.1 Fortnite mechanics mapped onto OoT
 
-The goal is every core Fortnite mechanic, expressed with OoT's engine, assets and its own look. Items marked
+The goal is every core Fortnite Zero Build mechanic, expressed with OoT's engine, assets and its own look. Items marked
 (new) need custom code or assets beyond what the engine does today.
 
 | Fortnite mechanic | OoT Royale version | Notes |
@@ -111,8 +111,8 @@ The goal is every core Fortnite mechanic, expressed with OoT's engine, assets an
 | Ammo types | Arrows, Deku Seeds, bombs, bombchus, magic | Ammo pickups are rarity-neutral. |
 | Looting chests and floor loot | OoT chests plus ground items | Chest opening animation reused. |
 | Supply drops | Great Fairy drop on a balloon-like Deku Flower | (new) Falling crate actor, legendary loot. |
-| Building (walls, floors, ramps) | **Crates and platforms**: place a wooden crate wall, floor or ramp piece that Link can climb | (new, big) Server-owned structures, stored as grid cells, rendered as actor models. Materials: wood, stone, metal. Edit mode is **not** in v1. |
-| Harvesting materials | Cut grass and bushes, pots and rocks | Wood from trees (sword), stone from boulders (hammer), metal from Gerudo ore (new) |
+| Building (walls, floors, ramps) | **Not included.** This is a zero-build game | Replaced by mobility, terrain cover and buildings that already exist in Hyrule (see 4.6). |
+| Harvesting materials | **Not included** (no building means no materials) | Cutting grass, pots and bushes still drops hearts, rupees (used at shops, see 4.7) and ammo. |
 | Healing items and shield potions | Red/Green/Blue potions, fairies, Lon Lon milk | Fairy in bottle auto-revives once. |
 | Mobility items | Hover Boots, Hookshot, Longshot, Epona | Epona is the vehicle, see below. |
 | Vehicles | Epona (rideable horse), Deku Flower launch pads, Iron Knuckle cart | (new) Epona exists in the engine but needs multiplayer sync and a second seat. |
@@ -144,6 +144,22 @@ Rendered as purple Poe fog (a circle of fog and sky tint) with a minimap ring. N
 ### 4.5 Modes
 Solo and Duos are the first modes. Squads come later.
 
+### 4.6 Zero-build: how fights and mobility work
+Zero Build replaces building with movement and cover that is already in the map. Our version:
+- **Mobility:** rolling, backflips and side-hops (existing Z-target moves), Hover Boots, Hookshot and Longshot to
+  reach ledges, Epona, Deku Flower launchers, and the Deku Leaf glider from drops. Mobility items are tiered loot.
+- **Cover and high ground:** Hyrule Field's fences, Lon Lon Ranch walls, the Market, the Kakariko and Gerudo
+  approaches, the Lake Hylia bridge, trees and boulders, plus spawn-time placed crates and pots as extra cover.
+  Static only: nothing can be built, moved or destroyed except pots and crates.
+- **Defence:** shield items. Mirror Shield reflects projectiles, Nayru's Love blocks them for a few seconds,
+  shield potions add a shield bar. A deployable **Deku Shield wall** is a consumable, single-use and
+  tiered, as in Zero Build's "Shield" gadgets, not a building system.
+- **Health and shield** replace the build-heal loop. Hearts regen only through items.
+
+### 4.7 Economy (optional, v2)
+Rupees picked up in the field can buy tiered items from Great Fairy and Happy Mask shop stalls, a stand-in for
+Fortnite's gold bars and vending machines. Not in v1.
+
 ## 5. Architecture
 
 ```
@@ -168,9 +184,9 @@ server/                    headless match server (C++17, CMake, ENet)
 shared/                    protocol structs, constants, storm math (used by both)
 mod/                       SoH enhancement module (copied/linked into soh/soh/Enhancements/Royale)
 patches/                   minimal patches to vanilla SoH files, kept small and documented
-third_party/Shipwright/    upstream as a submodule pinned to a release tag
+third_party/Shipwright-Android/    Android-capable Shipwright fork as a submodule, pinned to a commit
 ```
-Shipwright is added as a git **submodule** (not a copy), pinned to a release tag. We carry a small patch series
+Shipwright is added as a git **submodule** (not a copy), pinned to a commit. We carry a small patch series
 for the places hooks aren't enough. This keeps rebasing on upstream cheap. ROM-derived assets are never committed:
 each player supplies their own OoT ROM, as with stock SoH.
 
@@ -232,7 +248,7 @@ players, host from the Odin 2 Portal on Wi-Fi for smaller groups.
 
 **Windows:** upstream-supported (DirectX 11 or OpenGL). Milestones 1 to 5 target Windows first.
 
-**Android:** upstream Shipwright has **no Android target** (but see the community fork below) (its CMake build covers Windows, Linux, macOS, and
+**Android:** upstream Shipwright has **no Android target**, so we use the community fork below as our base (its CMake build covers Windows, Linux, macOS, and
 consoles via forks, and its README lists only DirectX 11, OpenGL and Metal). Android is therefore a port, not a
 build flag. This is the largest single risk in the project.
 
@@ -250,11 +266,24 @@ Work needed for Android:
   content. The risk is thermals while rendering 32 puppets, so cap puppet draw distance and test early.
 - Sustained hosting (see section 7) and background network handling (hold a wake lock while hosting).
 
-Strategy: a community fork exists, [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android). Per its
-release notes it is controller-only with no touch controls, needs OpenGL ES 3.0 and has been tested on Android 10 and
-13, which fits the Odin 2 Portal. Its maintenance state, how far it lags upstream and its license are not yet checked, and
-that's the first job of milestone 1b. Decision rule: if it tracks a recent upstream release, we base our Android build on it;
-otherwise we port the relevant diffs onto 9.2.3.
+Decision: our base **is** [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android), pinned as the
+submodule `third_party/Shipwright-Android` at commit `c9d8f4a` (last commit 2025-07-10, Shipwright 9.0.2). It builds an
+APK through Gradle (`Android/`), is controller-friendly, requires OpenGL ES 3.0 and lists Android 15 as tested, which
+covers the Odin 2 Portal.
+
+What I verified in its source:
+- It has the `GameInteractor` hooks the stub mod needs (`OnLoadGame`, `OnSceneInit`, `OnPlayerHealthChange`,
+  `OnPlayerUpdate`, `OnActorInit/Update/Kill`, `OnVanillaBehavior`) and `ShipInit`.
+- It does **not** have the `ShouldActorInit/Update/Destroy` hooks from newer upstream. We strip enemies by killing
+  actors in `OnActorInit`, or add the hooks as a small patch under `patches/`.
+- It has no Anchor multiplayer, which suits us, since we write our own.
+
+Risks that remain:
+- **Lag behind upstream.** It is on 9.0.2 and upstream is past 9.2.3. We take bug fixes from upstream only as needed.
+- **Single maintainer, no visible license file** in the top three directory levels of the repo. Upstream Shipwright's own
+  licensing also needs checking. This matters before any public release. I haven't resolved it.
+- **Touch input:** menus are said to work with touch and controller, but ImGui gamepad navigation in our lobby
+  and HUD still needs to be tested on device.
 
 ## 9. Milestones
 
@@ -263,8 +292,8 @@ Android is pulled forward as a feasibility spike because it could change the who
 | # | Goal | Done when |
 |---|---|---|
 | 0 | This document | Reviewed |
-| 1 | Shipwright as submodule (pinned to 9.2.3, done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
-| 1b | **Android feasibility spike**: vanilla Shipwright (or a community fork) running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
+| 1 | Android fork as submodule (done), stub `RoyaleMod` logging hooks (written, not yet compiled), Windows build | Boots with a user ROM and logs hook calls |
+| 1b | **Android spike**: the unmodified fork APK running on the Odin 2 Portal | Title screen and Link running in Hyrule Field at stable fps on device |
 | 2 | `server/` library plus 32 bot clients on loopback, puppets rendered in Hyrule Field | 32 puppets smooth on Windows (and on Odin 2 Portal if 1b passes) |
 | 3 | Host-a-game flow: "Host" button starts the embedded server, "Join" by IP; storm, health, elimination server-side | Full bot match finishes with one winner |
 | 4 | Loot, weapons and pickups | Players can arm themselves and fight |
@@ -272,8 +301,7 @@ Android is pulled forward as a feasibility spike because it could change the who
 | 6 | Join codes and relay, bots, balance | Cross-network play between Windows and Android |
 
 ## 10. Open questions
-1. Android: build on Waterdish/Shipwright-Android, or port its diffs onto our pinned upstream? (Needs the spike in milestone 1b.)
-2. Building scope: is crates/platforms (no edit mode) enough for v1, or is full Fortnite-style edit mode wanted?
+1. License: confirm licensing of the fork and upstream before any public release.
 
-Resolved: Hyrule Field for v1, Windows and Android, host-run matches, 1 human minimum with bots that loot and fight,
+Resolved: Zero Build (no building), Android via Waterdish/Shipwright-Android, Hyrule Field for v1, Windows and Android, host-run matches, 1 human minimum with bots that loot and fight,
 own protocol, join codes via STUN hole punching with a free-tier serverless lookup.
