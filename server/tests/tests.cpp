@@ -1233,7 +1233,7 @@ static void ClimbsAndSpreadOutChests() {
     // Every town has a climb, and the map gets climbs and hideaways of its own, all spread apart.
     for (uint64_t seed = 5; seed < 9; seed++) {
         const Circle map = {{0, 0}, 4000};
-        PoiLayout layout = GeneratePois(seed, map, 12, nullptr, 0);
+        PoiLayout layout = GeneratePois(seed, map, 12, nullptr, 1);
         size_t platformsInTowns = 0;
         for (const Prop& p : layout.props) platformsInTowns += IsPlatform(p.kind);
         CHECK(platformsInTowns >= 3 * layout.pois.size());
@@ -1265,7 +1265,7 @@ static void ClimbsAndSpreadOutChests() {
     {
         Simulation sim(21, {{0, 0}, 4000}, 0);
         sim.match.AddHuman(1);
-        const PoiLayout layout = GeneratePois(21, {{0, 0}, 4000}, 12, nullptr, 0);
+        const PoiLayout layout = GeneratePois(21, {{0, 0}, 4000}, 12, nullptr, 1);
         PoiLayout wild = layout;
         const std::vector<Prop> scenery = GenerateProps(21, {{0, 0}, 4000}, 560, nullptr);
         GenerateWilds(wild, 21, {{0, 0}, 4000}, scenery, wild.lootSpots, 6, 30, nullptr);
@@ -1675,14 +1675,52 @@ static void ScoringAndStandings() {
     CHECK(h->chestsOpened == 0 || m.Score(*h) == scoreBefore + kPointsPerChest);
 }
 
+
+static void HyruleFieldHasPlacesOfItsOwn() {
+    const Circle map = {{-1269, 6635}, 7000.0f};
+    for (uint64_t seed = 1; seed < 6; seed++) {
+        const PoiLayout a = GeneratePois(seed, map, 12, nullptr, 0), b = GeneratePois(seed, map, 12, nullptr, 0);
+        CHECK(a.pois.size() == b.pois.size() && a.props.size() == b.props.size() && a.lootSpots.size() == b.lootSpots.size() && a.sites.size() == b.sites.size());
+        CHECK(a.pois.size() >= kFieldPlaceCount + 3 && a.pois.size() <= static_cast<size_t>(kNamesPerMap));        // ten places and some towns
+        CHECK(std::string(kPoiNames[a.pois[0].name]) == "Hylian Billion Pavilion" && Distance(a.pois[0].center, map.center) < 1.0f);   // the ruined castle in the middle
+        std::set<int> names;
+        bool apart = true, inside = true, own = true;
+        for (size_t i = 0; i < a.pois.size(); i++) {
+            names.insert(a.pois[i].name);
+            own &= a.pois[i].name < kNamesPerMap;
+            inside &= Distance(a.pois[i].center, map.center) <= map.radius;
+            for (size_t j = i + 1; j < a.pois.size(); j++) apart &= Distance(a.pois[i].center, a.pois[j].center) >= (a.pois[i].radius + a.pois[j].radius) * 0.95f;
+        }
+        CHECK(names.size() == a.pois.size() && apart && inside && own);
+        int platforms = 0, pillars = 0, boulders = 0, bushes = 0, tops = 0;
+        for (const Prop& p : a.props) { platforms += IsPlatform(p.kind); pillars += p.kind == PropKind::Pillar; boulders += p.kind == PropKind::Boulder; bushes += p.kind == PropKind::Bush; }
+        for (const ChestSite& st : a.sites) tops += st.bonus == 2;
+        CHECK(platforms >= 40 && pillars >= 100 && boulders >= 40 && bushes >= 10 && tops >= 5);                    // mounds, walls, canyons, rings, a causeway
+        CHECK(a.props.size() < static_cast<size_t>(kMaxProps) - 260 && a.lootSpots.size() >= 25 && !a.bossSpots.empty());
+        for (const Prop& p : a.props) inside &= Distance(p.pos, map.center) <= map.radius + 200.0f;
+        CHECK(inside);
+    }
+    // On a field with holes in it, nothing is built over the gaps, and the layout still has its places.
+    auto valid = [](Vec2 p) { return !(p.x > 1500.0f && p.x < 2600.0f); };
+    const PoiLayout holey = GeneratePois(3, map, 12, valid, 0);
+    CHECK(holey.pois.size() >= 6);
+    bool grounded = true;
+    for (const Prop& p : holey.props) grounded &= valid(p.pos);
+    for (const Vec2& sp : holey.lootSpots) grounded &= valid(sp);
+    for (const ChestSite& st : holey.sites) grounded &= valid(st.pos);
+    CHECK(grounded);
+    // A bigger arena gets a bigger allowance: the field may be measured up to 7400 across, the others to about 5000.
+    CHECK(MapOf(0).maxRadius >= 7000.0f && MapOf(1).maxRadius <= 5200.0f && MapOf(0).fallback.radius > 5000.0f);
+}
+
 static void PointsOfInterest() {
     const Circle map = {{0, 0}, 4000.0f};
     auto valid = [](Vec2 p) { return p.x > -3000.0f; };
-    const PoiLayout a = GeneratePois(9, map, 12, valid), b = GeneratePois(9, map, 12, valid), c = GeneratePois(10, map, 12, valid);
+    const PoiLayout a = GeneratePois(9, map, 12, valid, 1), b = GeneratePois(9, map, 12, valid, 1), c = GeneratePois(10, map, 12, valid, 1);
     CHECK(a.pois.size() >= 8 && a.pois.size() <= 12);
     CHECK(a.pois.size() == b.pois.size() && a.props.size() == b.props.size() && a.lootSpots.size() == b.lootSpots.size());
     CHECK(a.pois[1].center.x != c.pois[1].center.x || a.pois[1].name != c.pois[1].name);          // a new seed gives a new layout
-    CHECK(Distance(a.pois[0].center, map.center) < map.radius * 0.1f && std::string(kPoiNames[a.pois[0].name]) == "Hylian Billion Pavilion");   // the landmark in the middle
+    CHECK(Distance(a.pois[0].center, map.center) < map.radius * 0.1f && std::string(kPoiNames[a.pois[0].name]) == kPoiNames[kNamesPerMap]);   // the landmark in the middle
     int inner = 0, outer = 0;
     for (size_t i = 1; i < a.pois.size(); i++) { const float d = Distance(a.pois[i].center, map.center) / map.radius; inner += d > 0.4f && d < 0.62f; outer += d > 0.7f; }
     CHECK(inner >= 3 && outer >= 3);                                                              // a ring of towns, then a wider one
@@ -2281,7 +2319,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

@@ -126,7 +126,7 @@ static void MessagesRoundTrip() {
     { EvMapConfig a, b; a.props = {{{1, 2}, PropKind::Boulder, 123}, {{-3, 4}, PropKind::Bush, 65535}};
       CHECK(RoundTrips(a, b) && b.props.size() == 2 && b.props[0].kind == PropKind::Boulder && b.props[1].rot == 65535 && b.props[1].pos.x == -3); }
     { EvMapConfig a, b; a.pois = {{3, {10, 20}, 480}, {15, {-5, 7}, 480}}; CHECK(RoundTrips(a, b) && b.pois.size() == 2 && b.pois[1].name == 15 && b.pois[0].center.z == 20 && b.pois[0].radius == 480); }
-    { EvMapConfig a, b; a.pois = {{99, {0, 0}, 1}}; CHECK(!RoundTrips(a, b)); }           // not a name we have
+    { EvMapConfig a, b; a.pois = {{250, {0, 0}, 1}}; CHECK(!RoundTrips(a, b)); }           // not a name we have
     { EvInventory a, b; a.reserve = {{5, 1}, {6, 2}}; CHECK(RoundTrips(a, b) && b.reserve.size() == 2 && b.reserve[1].item == 6); }
     { EvAbility a, b; a.user = 7; a.item = 55; a.x = 1.5f; a.z = -2; CHECK(RoundTrips(a, b) && b.user == 7 && b.item == 55 && b.x == 1.5f && b.z == -2); }
     { EvInventory a, b; a.maxHealth = 5; a.heartPieces = 3; a.potions = {{1, 2}, {3, 4}}; a.hasAbility = true; a.hasMark = true; a.ability = {40, 3};

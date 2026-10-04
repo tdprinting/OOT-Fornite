@@ -38,7 +38,7 @@ static MatchStats PlayOne(uint64_t seed, BotDifficulty difficulty, int mapId, in
     server.SetBossCount(5);
     server.SetPlayerLimit(players);
     server.SelectMap(mapId);
-    const Circle real = {fallback.center, std::min(fallback.radius, 4500.0f)};
+    const Circle real = {fallback.center, std::min(fallback.radius, MapOf(mapId).maxRadius * 0.95f)};
     PlacementFn valid = [real](Vec2 p) { return Distance(p, real.center) <= real.radius; };
     server.Reconfigure(real, valid, 150, seed * 977);
     Simulation& sim = server.Sim();

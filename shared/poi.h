@@ -132,7 +132,200 @@ inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::
     }
 }
 
+
+// ---- Hyrule Field's own places ------------------------------------------------------------------------------------------------------
+// The field is the biggest map and gets places of its own instead of the same town over and over: a ruined castle in the middle, a ranch, a long wall,
+// a canyon, a stone circle, a graveyard and so on. Each is built from ordinary props (so bots path around them and clients draw them) plus our solid
+// stone blocks, which is how the field's ground gets new hills, a raised causeway and a stepped mound that need jumping and climbing.
+namespace poi_detail {
+inline void Piece(PoiLayout& out, Rng& rng, PropKind kind, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (!valid || valid(p)) out.props.push_back({p, kind, static_cast<uint16_t>(rng.Below(0x10000))});
+}
+inline void Spot(PoiLayout& out, Vec2 local, float angle, Vec2 at, const PlacementFn& valid) {
+    const Vec2 p = Rotated(local, angle, at);
+    if (!valid || valid(p)) out.lootSpots.push_back(p);
+}
+// A square stepped mound of nine blocks: low corners, middle edges and a high middle, 450 across. The chest on the top is an Epic or better.
+inline bool Ziggurat(PoiLayout& out, Vec2 at, const PlacementFn& valid) {
+    const float s = kPlatformHalf * 2.0f;
+    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) if (valid && !valid({at.x + ix * s, at.z + iz * s})) return false;
+    for (int ix = -1; ix <= 1; ix++) for (int iz = -1; iz <= 1; iz++) {
+        const int edge = (ix == 0) + (iz == 0);
+        out.props.push_back({{at.x + ix * s, at.z + iz * s}, edge == 2 ? PropKind::PlatformHigh : edge == 1 ? PropKind::PlatformMid : PropKind::PlatformLow, 0});
+    }
+    out.sites.push_back({at, 2});
+    return true;
+}
+} // namespace poi_detail
+
+enum class FieldPlace : uint8_t { Castle, Ranch, GreatWall, Ravine, TemplePlaza, WindmillHill, Graveyard, StoneCircle, FairyGlade, Causeway, Count };
+constexpr int kFieldPlaceCount = static_cast<int>(FieldPlace::Count);
+// Where each place goes (angle in degrees, distance as a share of the map radius) and how big its area is.
+struct FieldSlot { float angleDeg, ring, radius; };
+constexpr FieldSlot kFieldSlots[kFieldPlaceCount] = {
+    {0, 0.00f, 700}, {270, 0.55f, 520}, {20, 0.45f, 600}, {150, 0.65f, 560}, {60, 0.30f, 420},
+    {200, 0.38f, 380}, {110, 0.42f, 400}, {320, 0.62f, 380}, {235, 0.82f, 360}, {90, 0.78f, 600},
+};
+
+inline void BuildFieldPlace(PoiLayout& out, Rng& rng, FieldPlace what, Vec2 at, float angle, const PlacementFn& valid) {
+    using namespace poi_detail;
+    const float pi = 3.14159265f;
+    switch (what) {
+        case FieldPlace::Castle: {   // a ring wall with four gates, two halls inside and the stepped mound of the keep in the middle
+            const int posts = 36;
+            for (int i = 0; i < posts; i++) {
+                const float a = i * 2.0f * pi / posts;
+                const float gate = std::fabs(std::sin(a * 2.0f));      // 0 at the four gates
+                if (gate < 0.2f) continue;
+                Piece(out, rng, i % 3 == 0 ? PropKind::Boulder : PropKind::Pillar, {std::cos(a) * 520.0f, std::sin(a) * 520.0f}, 0, at, valid);
+            }
+            AddHouse(out, rng, Rotated({-250, 0}, angle, at), angle + pi * 0.5f, valid);
+            AddHouse(out, rng, Rotated({250, 0}, angle, at), angle - pi * 0.5f, valid);
+            Ziggurat(out, at, valid);
+            for (int i = 0; i < 4; i++) Spot(out, {std::cos(i * pi * 0.5f + 0.7f) * 330.0f, std::sin(i * pi * 0.5f + 0.7f) * 330.0f}, 0, at, valid);
+            break;
+        }
+        case FieldPlace::Ranch: {    // a fenced paddock with a barn at one end and bushes (the hay) inside
+            for (float x = -420.0f; x <= 420.1f; x += 105.0f) { Piece(out, rng, PropKind::Pillar, {x, -260}, angle, at, valid); if (std::fabs(x) > 120.0f) Piece(out, rng, PropKind::Pillar, {x, 260}, angle, at, valid); }
+            for (float z = -155.0f; z <= 155.1f; z += 105.0f) { Piece(out, rng, PropKind::Pillar, {-420, z}, angle, at, valid); Piece(out, rng, PropKind::Pillar, {420, z}, angle, at, valid); }
+            AddHouse(out, rng, Rotated({-250, 0}, angle, at), angle, valid);
+            for (int i = 0; i < 10; i++) Piece(out, rng, PropKind::Bush, {60.0f + rng.Below(300), -200.0f + rng.Below(400)}, angle, at, valid);
+            Spot(out, {330, -80}, angle, at, valid); Spot(out, {330, 90}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::GreatWall: { // a long wall of boulders across the field with two gaps to run through, and a climb at one end
+            for (float t = -1200.0f; t <= 1200.1f; t += 150.0f) {
+                if (std::fabs(t - 450.0f) < 140.0f || std::fabs(t + 500.0f) < 140.0f) continue;
+                Piece(out, rng, PropKind::Boulder, {t, 0}, angle, at, valid);
+            }
+            AddClimb(out, Rotated({-1330, 160}, angle, at), 0, valid);
+            Spot(out, {-700, 150}, angle, at, valid); Spot(out, {800, -150}, angle, at, valid); Spot(out, {-100, 150}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::Ravine: {   // two rows of boulders with a corridor between them, a dead end with chests, and a guardian
+            for (float t = -750.0f; t <= 750.1f; t += 150.0f) { Piece(out, rng, PropKind::Boulder, {t, -190}, angle, at, valid); Piece(out, rng, PropKind::Boulder, {t, 190}, angle, at, valid); }
+            for (float z = -110.0f; z <= 110.1f; z += 110.0f) Piece(out, rng, PropKind::Boulder, {825, z}, angle, at, valid);
+            Piece(out, rng, PropKind::Pillar, {-800, -80}, angle, at, valid); Piece(out, rng, PropKind::Pillar, {-800, 80}, angle, at, valid);
+            out.bossSpots.push_back(Rotated({600, 0}, angle, at));
+            Spot(out, {700, -60}, angle, at, valid); Spot(out, {640, 70}, angle, at, valid); Spot(out, {-300, 0}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::TemplePlaza: { // a ring of eight standing stones round a dais you have to climb
+            for (int i = 0; i < 8; i++) Piece(out, rng, PropKind::Pillar, {std::cos(i * pi * 0.25f) * 260.0f, std::sin(i * pi * 0.25f) * 260.0f}, 0, at, valid);
+            AddClimb(out, Rotated({-150, 0}, angle, at), (static_cast<int>(angle / (pi * 0.5f)) & 3), valid);
+            Spot(out, {0, -170}, angle, at, valid); Spot(out, {0, 170}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::WindmillHill: { // a stepped hill, with ruined walls round the foot
+            Ziggurat(out, at, valid);
+            for (int i = 0; i < 6; i++) { const float a = i * pi / 3.0f + 0.3f; Piece(out, rng, PropKind::Pillar, {std::cos(a) * 340.0f, std::sin(a) * 340.0f}, 0, at, valid); }
+            Spot(out, {0, 300}, angle, at, valid); Spot(out, {0, -300}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::Graveyard: { // rows of tombstones with a ruined chapel in the middle and something that guards it
+            for (int row = 0; row < 3; row++) for (int col = 0; col < 5; col++) {
+                if (row == 1 && col >= 1 && col <= 3) continue;
+                Piece(out, rng, PropKind::Pillar, {-300.0f + col * 150.0f, -200.0f + row * 200.0f}, angle, at, valid);
+            }
+            AddRuins(out, rng, at, angle, valid);
+            out.bossSpots.push_back(at);
+            Spot(out, {-220, -100}, angle, at, valid); Spot(out, {220, 100}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::StoneCircle: { // ten great stones round a chest, with two gaps in the ring
+            for (int i = 0; i < 10; i++) { if (i == 2 || i == 7) continue; Piece(out, rng, PropKind::Boulder, {std::cos(i * pi * 0.2f) * 300.0f, std::sin(i * pi * 0.2f) * 300.0f}, 0, at, valid); }
+            if (!valid || valid(at)) out.sites.push_back({at, 1});
+            break;
+        }
+        case FieldPlace::FairyGlade: { // a ring of bushes round a single standing stone
+            for (int i = 0; i < 14; i++) Piece(out, rng, PropKind::Bush, {std::cos(i * pi / 7.0f) * 230.0f, std::sin(i * pi / 7.0f) * 230.0f}, 0, at, valid);
+            Piece(out, rng, PropKind::Pillar, {0, 0}, angle, at, valid);
+            Spot(out, {60, 60}, angle, at, valid); Spot(out, {-70, -40}, angle, at, valid);
+            break;
+        }
+        case FieldPlace::Causeway: { // a raised walk of blocks with posts along both sides: a high road across the open field
+            const float s = kPlatformHalf * 2.0f;
+            bool ok = true;
+            for (int i = -3; i <= 3; i++) if (valid && !valid(Rotated({i * s, 0}, angle, at))) ok = false;
+            if (ok) {
+                for (int i = -3; i <= 3; i++) out.props.push_back({Rotated({i * s, 0}, angle, at), i == -3 || i == 3 ? PropKind::PlatformMid : PropKind::PlatformLow, 0});
+                for (int i = -3; i <= 3; i += 2) { Piece(out, rng, PropKind::Pillar, {i * s, -150}, angle, at, valid); Piece(out, rng, PropKind::Pillar, {i * s, 150}, angle, at, valid); }
+                out.sites.push_back({Rotated({3 * s, 0}, angle, at), 2});
+            }
+            Spot(out, {-300, 250}, angle, at, valid); Spot(out, {300, -250}, angle, at, valid);
+            break;
+        }
+        default: break;
+    }
+}
+
+// The field's layout: ten places of its own at fixed spots on the map, then ordinary towns (a house, a cave, ruins, a climb) in the gaps, each
+// kept apart from everything else. A place that will not fit on the ground is skipped, so a strangely shaped field still gets a sensible layout.
+inline PoiLayout GenerateFieldPois(uint64_t seed, Circle map, int towns, const PlacementFn& valid) {
+    PoiLayout out;
+    Rng rng(seed ^ 0x6669656C64ull);   // "field"
+    // names: the first of the field's list is the castle; the places have names of their own (kFieldNames) and the towns share the rest
+    static const uint8_t kFieldNames[kFieldPlaceCount] = {0, 15, 16, 17, 18, 19, 8, 20, 11, 21};
+    bool used[kNamesPerMap] = {};
+    for (uint8_t n : kFieldNames) used[n] = true;
+    std::vector<uint8_t> townNames;
+    for (int i = 0; i < kNamesPerMap; i++) if (!used[i]) townNames.push_back(static_cast<uint8_t>(i));
+    for (size_t i = townNames.size(); i > 1; i--) std::swap(townNames[i - 1], townNames[rng.Below(static_cast<uint32_t>(i))]);
+    auto groundUnder = [&](Vec2 c, float r) {
+        if (!valid) return true;
+        if (!valid(c)) return false;
+        for (int k = 0; k < 8; k++) { const float a = k * 0.785398f; if (!valid({c.x + std::cos(a) * r * 0.7f, c.z + std::sin(a) * r * 0.7f})) return false; }
+        return true;
+    };
+    auto apart = [&](Vec2 c, float r) {
+        for (const Poi& o : out.pois) if (Distance(o.center, c) < (o.radius + r) * 1.05f) return false;
+        return Distance(c, map.center) <= map.radius - r * 0.9f;
+    };
+    const float scale = (std::min)(1.0f, map.radius / 7000.0f);   // a smaller circle squeezes the same places closer
+    const float pi = 3.14159265f;
+    for (int i = 0; i < kFieldPlaceCount; i++) {
+        const FieldSlot& slot = kFieldSlots[i];
+        const float r = slot.radius * (0.55f + 0.45f * scale);
+        for (int attempt = 0; attempt < 14; attempt++) {
+            const float shift = attempt == 0 ? 0.0f : (attempt % 2 ? 1.0f : -1.0f) * 0.12f * ((attempt + 1) / 2);
+            const float a = slot.angleDeg * pi / 180.0f + shift;
+            const float ring = slot.ring * (attempt < 3 ? 1.0f : 0.9f);
+            const Vec2 c = {map.center.x + std::cos(a) * map.radius * ring, map.center.z + std::sin(a) * map.radius * ring};
+            if (!groundUnder(c, r) || !apart(c, r)) continue;
+            Poi p; p.name = kFieldNames[i]; p.center = c; p.radius = r;
+            out.pois.push_back(p);
+            // long places run across the line from the middle; the rest face a random way
+            const float facing = (i == static_cast<int>(FieldPlace::GreatWall) || i == static_cast<int>(FieldPlace::Causeway)) ? a + pi * 0.5f : static_cast<float>(rng.Unit() * 6.2831853);
+            BuildFieldPlace(out, rng, static_cast<FieldPlace>(i), c, facing, valid);
+            break;
+        }
+    }
+    // Towns in the gaps: a wide ring, then anywhere there is room.
+    const float townRadius = 330.0f;
+    for (int n = 0, placed = 0; n < 90 && placed < towns && placed < static_cast<int>(townNames.size()); n++) {
+        const float a = static_cast<float>(rng.Unit() * 6.2831853), d = map.radius * (0.35f + 0.55f * static_cast<float>(rng.Unit()));
+        const Vec2 c = {map.center.x + std::cos(a) * d, map.center.z + std::sin(a) * d};
+        if (!groundUnder(c, townRadius) || !apart(c, townRadius + 160.0f)) continue;
+        Poi p; p.name = townNames[static_cast<size_t>(placed)]; p.center = c; p.radius = townRadius;
+        out.pois.push_back(p);
+        const float base = static_cast<float>(rng.Unit() * 6.2831853);
+        AddHouse(out, rng, c, base, valid);
+        const float a1 = base + 1.1f + static_cast<float>(rng.Unit()) * 0.8f;
+        AddCave(out, rng, {c.x + std::cos(a1) * 310.0f, c.z + std::sin(a1) * 310.0f}, a1 + pi, valid);
+        const float a2 = a1 + pi + static_cast<float>(rng.Unit() - 0.5) * 1.0f;
+        AddRuins(out, rng, {c.x + std::cos(a2) * 300.0f, c.z + std::sin(a2) * 300.0f}, a2, valid);
+        AddClimb(out, {c.x + std::cos(base + 3.3f) * 400.0f, c.z + std::sin(base + 3.3f) * 400.0f}, static_cast<int>(rng.Below(4)), valid);
+        placed++;
+    }
+    std::vector<Vec2> spots;
+    for (const Vec2& sp : out.lootSpots) if (!valid || valid(sp)) spots.push_back(sp);
+    out.lootSpots = spots;
+    return out;
+}
+
 inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
+    if (ClampMap(mapId) == 0) return GenerateFieldPois(seed, map, (std::max)(3, (std::min)(8, count - 4)), valid);   // Hyrule Field has places of its own
     PoiLayout out;
     Rng rng(seed ^ 0x706F69ull); // "poi"
     // The names, shuffled for this match.

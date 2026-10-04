@@ -336,7 +336,7 @@ bool MeasureField(royale::Circle* out) {
     for (const auto& p : kept) dist.push_back(royale::Distance(p, centre));
     std::sort(dist.begin(), dist.end());
     float radius = dist[static_cast<size_t>(dist.size() * 0.95f)] * 0.95f; // ignore stragglers, keep a margin
-    radius = std::clamp(radius, 1500.0f, 5000.0f); // a smaller arena keeps the fights close and the storm in sight
+    radius = std::clamp(radius, 1500.0f, royale::MapOf(gMapId).maxRadius); // a smaller arena keeps the fights close and the storm in sight (Hyrule Field may be bigger)
     *out = { centre, radius };
     gMapMeasured = true;
     gMeasuredRadius = radius;

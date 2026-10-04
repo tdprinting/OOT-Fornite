@@ -65,6 +65,7 @@ class GameServer {
         if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
         lastValid = valid;
         lastLootCount = lootCount;
+        lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
         // Prefer a storm whose six circle centres are all on walkable ground; give up after 200 tries and take the last one.
         uint64_t seed = baseSeed;
@@ -84,8 +85,10 @@ class GameServer {
         sim.match.SetMapId(mapId);
         PoiLayout layout = GeneratePois(seed, map, poiCount, valid, mapId);
         pois = layout.pois;
-        const float areaShare = (std::min)(1.0f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, not the same crowd in less room
-        props = GenerateProps(seed, map, (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.0f, areaShare * 1.4f))), valid);
+        const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
+        const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
+        // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
+        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 260)), valid);
         // Climbs out in the open and chests hidden behind boulders, spread out over the whole map.
         GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid);
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too

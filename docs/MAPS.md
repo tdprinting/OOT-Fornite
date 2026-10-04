@@ -25,3 +25,24 @@ What changed because of it:
   placing points of interest on real buildings instead of random spots.
 
 To refresh the numbers, drag a ROM onto `tools/rom-extractor.html`, press "Analyse ALL maps" and keep the JSON it saves.
+
+## Hyrule Field, the big one
+
+The field is the largest scene in the data (a floor radius of about 7400), so it is the largest arena: up to 7400 across instead of 5000, with more
+chests and more scenery to match. It also has places of its own (`GenerateFieldPois` in `shared/poi.h`) instead of the same town repeated:
+
+| Place | What it is |
+|---|---|
+| Hylian Billion Pavilion | A ruined castle in the middle: a ring wall with four gates, two halls and a stepped keep (a nine-block mound to climb) |
+| Lon Lon Gone Wrong | A fenced ranch with a barn and bushes for hay |
+| Great Wall Brawl Hall | A long wall of boulders across the field with two gaps and a climb at one end |
+| Ravine Routine Scene | A canyon between two rows of boulders, a dead end with chests and a mini boss guarding it |
+| Plaza Raza Tazz | A ring of standing stones round a dais |
+| Hill Will Windmill Thrill | A stepped hill with ruined walls round the foot |
+| Poe Show Shack | A graveyard of tombstones with a ruined chapel and a guardian |
+| Stonehenge Avenge Lounge | Ten great stones round a chest |
+| Navi Gravy Bay | A fairy glade: a ring of bushes round a standing stone |
+| Causeway Hooray Highway | A raised walk of stone blocks with posts along both sides |
+
+Between them are three to eight ordinary towns (house, cave, ruins, climb). The ground itself cannot be reshaped (the scene's collision is the
+game's own), so the new geometry is built from the mod's solid stone blocks, walls and rings, which the bots path around and players can climb.
