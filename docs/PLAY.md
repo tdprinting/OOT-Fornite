@@ -129,7 +129,7 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 ## Latest changes (real assets, weather, scenery)
 - **Hotbar and loot icons** are the game's own item icons wherever the game has one (swords, bow, bombs, bottles, tunics, masks...). Songs, rupee piles and a few others keep a drawn fallback.
 - **Weapons in use:** every action (slash, shot, throw, spell, ocarina, potion) plays the game's own animation once from its first frame; sword slashes cycle through the game's four swings. Arrows, bombs, bombchus and the boomerang in flight are the game's own models; elemental arrows leave sparks.
-- **Allies** are Link-skeleton characters with a tunic colour, mask and weapon per people (Kokiri slingshot, Zora mask, Goron hammer, Gerudo bow).
+- **Allies** are the game's own NPCs (the Kokiri kid, the Zora, the Goron, the Gerudo) with their real skeletons, textures and animations. Free ones wave you over (Zora spreads its arms, the Gerudo claps); hired ones stand ready, walk with a built-in walk cycle and use attack poses (slingshot aim, Zora's arms wide, the Goron's overhead hammer slam, the Gerudo drawing the bow) while carrying the real item model.
 - **Weather:** rain and snow are the game's own particle effects; snow builds up as mounds on the ground and melts slowly afterwards.
 - **Grass, trees and flowers** are scattered over the field (sway in the wind, change with the season); trunks are solid. Option: "Grass and trees (%)".
 - **Rocks and boulders** are solid and you can walk up onto them; the climbing blocks now step up automatically.
