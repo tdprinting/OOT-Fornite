@@ -141,12 +141,16 @@ static void SpawnProtection() {
 constexpr float kDt = 1.0f / kTickHz;
 
 // Build a sim with one idle human (id 1) and one bot (id 1000), everyone else dead, no loot, already InMatch.
+// Ranged weapons spend ammo now; most tests are about something else, so they start with plenty.
+static void FillAmmo(Simulation& sim, int n = 60) { for (auto& p : sim.match.Players()) p.ammo.fill(n); }
+
 static Simulation Duel(uint64_t seed, Vec2 humanPos, Vec2 botPos) {
     Simulation sim(seed, MapCircle(), 0);
     sim.match.AddHuman(1);
     sim.match.Start();
     while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); // no bot movement while setting up
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
+    FillAmmo(sim);
     sim.match.Find(1)->pos = humanPos;
     sim.match.Find(1000)->pos = botPos;
     return sim;
@@ -241,6 +245,7 @@ static void DeathDropsKit() {
     p->weapon = {ItemId::MasterSword, Rarity::Epic};
     p->hasShield = true;
     p->shield = {ItemId::HylianShield, Rarity::Rare};
+    p->ammo.fill(0);   // (the test fixture hands out ammo; dropped ammo has its own test)
     CHECK(m.Loot().empty());
     CHECK(m.Damage(1000, 100));
     CHECK(m.Loot().size() == 2 && !m.Loot()[0].taken && !m.Loot()[1].taken);
@@ -416,7 +421,7 @@ static void CatalogIsConsistent() {
     int perKind[kItemKindCount] = {};
     std::set<std::string> names;
     int songs = 0, simple = 0;
-    for (int i = 0; i < kItemCount; i++) {
+    for (int i = 0; i < kPoolItemCount; i++) {
         const ItemDef& d = kItems[i];
         CHECK(static_cast<int>(d.id) == i);
         CHECK(d.name && d.name[0] && d.effect && d.effect[0]);
@@ -446,14 +451,14 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80);
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 14 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(kItemCount >= 80 && kPoolItemCount == 88 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 17 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 4);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
     int perSlot[kGearSlots] = {};
-    for (int i = 0; i < kItemCount; i++) if (kItems[i].kind == ItemKind::Gear) perSlot[static_cast<int>(GearOf(kItems[i].id).slot)]++;
+    for (int i = 0; i < kPoolItemCount; i++) if (kItems[i].kind == ItemKind::Gear) perSlot[static_cast<int>(GearOf(kItems[i].id).slot)]++;
     for (int n : perSlot) CHECK(n >= 2);
     int sum = 0;
     for (int w : kKindWeight) sum += w;
@@ -461,7 +466,7 @@ static void CatalogIsConsistent() {
 }
 
 static void LootCoversEveryItemAndRespectsKindWeights() {
-    std::vector<int> seen(kItemCount, 0);
+    std::vector<int> seen(kItemCount, 0);   // the economy items never appear in random loot
     int perKind[kItemKindCount] = {};
     int total = 0;
     for (uint64_t seed = 1; seed <= 25; seed++) {
@@ -473,7 +478,7 @@ static void LootCoversEveryItemAndRespectsKindWeights() {
             total++;
         }
     }
-    for (int i = 0; i < kItemCount; i++) {
+    for (int i = 0; i < kPoolItemCount; i++) {
         if (seen[i] == 0) std::printf("  never spawned: %s\n", kItems[i].name);
         CHECK(seen[i] > 0);                                  // every single item can appear
     }
@@ -484,6 +489,7 @@ static void LootCoversEveryItemAndRespectsKindWeights() {
     }
     // Higher tiers hold the rare stuff: Light Arrows only ever spawn at Legendary.
     for (const auto& l : GenerateLoot(3, MapCircle(), 20000, 0.5f)) if (l.item == ItemId::LightArrows) CHECK(l.rarity == Rarity::Legendary);
+    CHECK(seen[static_cast<int>(ItemId::BasicSword)] == 0 && seen[static_cast<int>(ItemId::Rupees)] == 0 && seen[static_cast<int>(ItemId::NutAmmo)] == 0);
 }
 
 static void GearScalesWithRarityAndStacks() {
@@ -940,6 +946,7 @@ static void EliminatedPlayersDropEverythingAndKillsAreCredited() {
     v->gear[static_cast<int>(GearSlot::Charm)] = {ItemId::ForestMedallion, Rarity::Epic};
     v->gearMask = (1 << static_cast<int>(GearSlot::Boots)) | (1 << static_cast<int>(GearSlot::Charm));
     v->potions = {{ItemId::RedPotion, Rarity::Common}, {ItemId::Fish, Rarity::Common}};
+    v->ammo.fill(0);
     CHECK(m.Loot().empty());
     CHECK(m.Damage(1000, 50.0f, 1));
     CHECK(m.Loot().size() == 7);                                                       // weapon, shield, ability, 2 gear, 2 potions
@@ -1093,6 +1100,108 @@ static void BotsPickUpFairiesAndHearts() {
     for (const Equipped& e : b->potions) fairy |= e.item == ItemId::Fairy;
     CHECK(fairy);
     CHECK(b->maxHealth > kMaxHealth);
+}
+
+static void StartingSwordAndAmmo() {
+    // Everyone starts with the basic sword: weak, but never out of ammo.
+    {
+        Simulation sim(77, MapCircle(), 0);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        for (const auto& p : sim.match.Players()) CHECK(p.weapon.item == ItemId::BasicSword && p.weapon.rarity == Rarity::Common && p.rupees == 0);
+        CHECK(WeaponDps(ItemId::BasicSword, Rarity::Common) > WeaponDps(ItemId::DekuStick, Rarity::Common));
+        CHECK(WeaponDps(ItemId::BasicSword, Rarity::Common) < WeaponDps(ItemId::KokiriSword, Rarity::Common) * 0.8f);
+    }
+    // A bow with no arrows is bashed with; picking one up gives a few to start with; more comes from piles, up to a cap that a Big Quiver raises.
+    {
+        Simulation sim = Duel(78, {0, 0}, {60, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        PlayerState* b = m.Find(1000);
+        h->ammo.fill(0);
+        h->weapon = {ItemId::FairyBow, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        b->maxHealth = b->health = 100.0f;
+        const AttackResult bash = m.Attack(1, 1000, true);
+        CHECK(bash.hit && bash.damage < 0.8f);                                         // the basic sword's damage, not the bow's
+        b->pos = {400, 0};
+        Run(sim, 1.0f);
+        h->attackReadyAt = 0;
+        CHECK(!m.Attack(1, 1000, true).ok);                                            // and only at the basic sword's reach
+        const size_t bowPile = m.AddLoot({{0, 0}, ItemId::FairyBow, Rarity::Rare, false});
+        h->weapon = {ItemId::BasicSword, Rarity::Common};
+        CHECK(m.PickUp(1, bowPile, true) && h->weapon.item == ItemId::FairyBow && h->ammo[static_cast<int>(AmmoKind::Arrows)] == AmmoStarter(AmmoKind::Arrows));
+        h->attackReadyAt = 0;
+        const int before = h->ammo[static_cast<int>(AmmoKind::Arrows)];
+        const AttackResult shot = m.Attack(1, 1000, true);
+        CHECK(shot.hit && h->ammo[static_cast<int>(AmmoKind::Arrows)] == before - 1 && shot.damage > bash.damage * 1.2f);
+        LootSpawn pile = {{0, 0}, ItemId::ArrowAmmo, Rarity::Common, false, false};
+        pile.amount = 50;
+        const size_t big = m.AddLoot(pile);
+        CHECK(m.PickUp(1, big, true) && h->ammo[static_cast<int>(AmmoKind::Arrows)] == AmmoBaseCap(AmmoKind::Arrows));   // capped
+        const size_t second = m.AddLoot(pile);
+        CHECK(!m.PickUp(1, second, true) && !m.Loot()[second].taken);                  // full: left for somebody else
+        h->gear[static_cast<int>(GearSlot::Pack)] = {ItemId::BigQuiver, Rarity::Common};
+        h->gearMask = static_cast<uint8_t>(h->gearMask | (1 << static_cast<int>(GearSlot::Pack)));
+        CHECK(m.PickUp(1, second, true) && h->ammo[static_cast<int>(AmmoKind::Arrows)] == AmmoBaseCap(AmmoKind::Arrows) + 20);
+    }
+    // The special variants.
+    {
+        Simulation sim = Duel(79, {0, 0}, {100, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        PlayerState* b = m.Find(1000);
+        b->maxHealth = b->health = 100.0f;
+        h->weapon = {ItemId::TripleSlingshot, Rarity::Common};
+        h->ammo[static_cast<int>(AmmoKind::Seeds)] = 10;
+        h->attackReadyAt = 0;
+        const float b0 = b->health;
+        const AttackResult close = m.Attack(1, 1000, true);
+        CHECK(close.hit && h->ammo[static_cast<int>(AmmoKind::Seeds)] == 7);            // three seeds spent
+        const float closeDamage = b0 - b->health;
+        b->pos = {700, 0};
+        Run(sim, 1.5f);
+        h->attackReadyAt = 0;
+        const float b1 = b->health;
+        m.Attack(1, 1000, true);
+        CHECK(b1 - b->health < closeDamage * 0.5f);                                       // far off, only one pellet lands
+        CHECK(WeaponDps(ItemId::TripleSlingshot, Rarity::Common) > WeaponDps(ItemId::Slingshot, Rarity::Common) * 1.25f);
+        // The Giant's Hammer's slam hurts whoever stands near the target too.
+        h->weapon = {ItemId::GiantsHammer, Rarity::Legendary};
+        h->attackReadyAt = 0;
+        b->pos = {60, 0};
+        PlayerState* third = nullptr;
+        for (auto& p : m.Players()) if (p.id != 1 && p.id != 1000 && !third) third = &p;
+        third->alive = true; third->pos = {60, 150}; third->maxHealth = third->health = 50.0f;
+        const float t0 = third->health;
+        CHECK(m.Attack(1, 1000, true).hit && third->health < t0);
+        CHECK(WeaponOf(ItemId::GiantsHammer).splashRadius > WeaponOf(ItemId::MegatonHammer).splashRadius && !WeaponOf(ItemId::GiantsHammer).ranged);
+        CHECK(WeaponOf(ItemId::HomingBombchus).homing && WeaponOf(ItemId::HomingBombchus).splashRadius > 0 && AmmoUsedBy(ItemId::HomingBombchus) == AmmoKind::Bombchus);
+    }
+    // Eliminated players leave their rupees and ammo in piles with the amounts.
+    {
+        Simulation sim = Duel(80, {0, 0}, {5000, 5000});
+        Match& m = sim.match;
+        PlayerState* b = m.Find(1000);
+        b->rupees = 120;
+        b->ammo.fill(0);
+        b->ammo[static_cast<int>(AmmoKind::Seeds)] = 9;
+        b->weapon = {ItemId::BasicSword, Rarity::Common};
+        const size_t before = m.Loot().size();
+        CHECK(m.Damage(1000, 500.0f, 1));
+        int rupees = 0, seeds = 0;
+        for (size_t i = before; i < m.Loot().size(); i++) {
+            const LootSpawn& l = m.Loot()[i].spawn;
+            if (l.item == ItemId::Rupees) rupees += l.amount;
+            if (l.item == ItemId::SeedAmmo) seeds += l.amount;
+        }
+        CHECK(rupees == 120 && seeds == 9);
+        PlayerState* h = m.Find(1);
+        h->ammo.fill(0);
+        int taken = 0;
+        for (size_t i = before; i < m.Loot().size(); i++) { h->pos = m.Loot()[i].spawn.pos; taken += m.PickUp(1, i, true); }
+        CHECK(taken >= 2 && h->rupees == 120 && h->ammo[static_cast<int>(AmmoKind::Seeds)] == 9);
+    }
 }
 
 static void StormJingleAndWarning() {
@@ -1494,6 +1603,7 @@ static Simulation BossArena(std::vector<Vec2> spots, int bosses, Vec2 human) {
     sim.match.Start();
     while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
+    FillAmmo(sim);
     sim.match.Find(1000)->pos = {-1950, -1950}; // one bot far away, so the match doesn't end for lack of opponents
     sim.match.Find(1)->pos = human;
     return sim;
@@ -1510,6 +1620,7 @@ static Simulation DragonArena(int mapId, bool enabled) {
     while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     sim.match.Find(1000)->pos = {-1950, -1950};
+    FillAmmo(sim);
     sim.match.Find(1)->pos = {0, 0};
     sim.match.Find(1)->maxHealth = sim.match.Find(1)->health = 100.0f;
     sim.match.Find(1)->invulnUntil = 1.0e9f; // the storm and the dragon leave the test player alone unless a test turns this off
@@ -1890,7 +2001,7 @@ static void ShieldBar() {
 }
 
 int main() {
-    StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

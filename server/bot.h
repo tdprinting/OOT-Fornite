@@ -53,8 +53,8 @@ class BotController {
 
     // How a fight between `me` and `foe` would go: above 1 favours me. Public so tests and the HUD can show it.
     static float Advantage(const Match& m, const PlayerState& me, const PlayerState& foe) {
-        const float myDps = EffectiveDps(me.weapon) * TotalsOf(me).melee;
-        const float theirDps = EffectiveDps(foe.weapon) * TotalsOf(foe).melee;
+        const float myDps = EffectiveDpsNow(me) * TotalsOf(me).melee;
+        const float theirDps = EffectiveDpsNow(foe) * TotalsOf(foe).melee;
         const float theirReduction = foe.hasShield ? ShieldReduction(foe.shield.item, foe.shield.rarity) : 0.0f;
         const float myReduction = me.hasShield ? ShieldReduction(me.shield.item, me.shield.rarity) : 0.0f;
         float myPool = me.health + HealingInBag(me);
@@ -159,6 +159,20 @@ class BotController {
         }
         if (w.splashRadius > 0) dps *= 1.1f;
         return dps;
+    }
+
+    // What the weapon in hand is worth right now: with no ammo it is only a club.
+    static float EffectiveDpsNow(const PlayerState& p) {
+        return Match::HasAmmo(p, p.weapon.item) ? EffectiveDps(p.weapon) : WeaponDps(ItemId::BasicSword, Rarity::Common);
+    }
+
+    // How much a bot wants ammo of this kind: only if it carries something that spends it, and more the emptier that gets.
+    static float AmmoWant(const PlayerState& p, AmmoKind k) {
+        bool uses = AmmoUsedBy(p.weapon.item) == k;
+        for (const Equipped& e : p.reserve) uses |= AmmoUsedBy(e.item) == k;
+        const int cap = Match::AmmoCapOf(p, k), have = p.ammo[static_cast<int>(k)];
+        if (have >= cap) return 0.0f;
+        return uses ? 0.35f + 0.9f * static_cast<float>(cap - have) / static_cast<float>(cap) : 0.04f;
     }
 
     static float HealingInBag(const PlayerState& p) {
@@ -406,6 +420,8 @@ class BotController {
                     case InstantEffect::Heart: return deficit > 0.4f ? 0.3f + deficit * 0.4f : 0.0f;
                     case InstantEffect::HeartPiece: return p.maxHealth < kMaxHealthCap ? 0.9f : 0.0f;
                     case InstantEffect::HeartContainer: return p.maxHealth < kMaxHealthCap ? 1.3f : 0.0f;
+                    case InstantEffect::Rupees: return 0.3f + 0.004f * static_cast<float>(s.amount);
+                    case InstantEffect::Ammo: return AmmoWant(p, AmmoGivenBy(s.item));
                     default: return 0.15f;
                 }
             }
@@ -486,7 +502,7 @@ class BotController {
             case ItemId::Hookshot:
             case ItemId::Longshot: {
                 // Reel a foe in when we are the one who wants the fight and they are out of our reach.
-                const WeaponStats w = WeaponOf(p.weapon.item);
+                const WeaponStats w = Match::StatsOf(p);
                 const float reach = p.ability.item == ItemId::Hookshot ? 800.0f : 1300.0f;
                 want = foeNear && !s.fleeing && s.advantage > 0.9f && d > w.range * 1.3f && d < reach;
                 break;
@@ -626,7 +642,7 @@ class BotController {
         if (boss) {
             const float bd = Distance(p.pos, boss->pos);
             const bool dragon = IsDragonKind(boss->kind);
-            const WeaponStats bw = WeaponOf(p.weapon.item);
+            const WeaponStats bw = Match::StatsOf(p);
             if (dragon && boss->y > kDragonAirborneAbove && !bw.ranged) { // swords and hammers can't reach it in the air: stay clear
                 if (bd < 800.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
             } else if (dragon && !(tune.hunt && p.health >= 2.4f && mem.aggression > 0.35f)) {
@@ -636,7 +652,7 @@ class BotController {
             if (!strong || p.health < 1.3f) {
                 if (bd < 420.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 500.0f), dt, 1.0f); return; }
             } else if (!foe || dist > 300.0f) {
-                const WeaponStats w = WeaponOf(p.weapon.item);
+                const WeaponStats w = Match::StatsOf(p);
                 const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
                 if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
                 else { p.rot = FaceAngle(p.pos, boss->pos); }
@@ -725,7 +741,7 @@ class BotController {
 
     bool FightWorthIt(const Match& m, const PlayerState& p, const Memory& mem, const PlayerState& foe, float dist, float advantage) const {
         (void)m; (void)foe;
-        const float range = (std::max)(kAlwaysFightRange * (0.5f + mem.aggression), WeaponOf(p.weapon.item).range * 1.5f);
+        const float range = (std::max)(kAlwaysFightRange * (0.5f + mem.aggression), Match::StatsOf(p).range * 1.5f);
         if (dist > range) return false;
         if (dist <= 180.0f) return true; // cornered: fight
         if (EffectiveDps(p.weapon) < kMinFightDps && advantage < 1.0f) return false;
@@ -737,8 +753,9 @@ class BotController {
     void ChooseWeapon(Match& m, PlayerState& p, Memory& mem, float dist) {
         if (p.reserve.empty() || m.Clock() < mem.switchAt || m.Clock() < p.attackReadyAt) return;
         auto fit = [&](const Equipped& e) {
-            const WeaponStats w = WeaponOf(e.item);
-            float score = EffectiveDps(e);
+            const bool ammo = Match::HasAmmo(p, e.item);
+            const WeaponStats w = ActiveWeapon(e.item, ammo);
+            float score = ammo ? EffectiveDps(e) : WeaponDps(ItemId::BasicSword, Rarity::Common); // out of ammo it is only a club
             if (dist > w.range * 1.1f) score *= w.ranged ? 0.55f : 0.15f;      // can't reach from here
             else if (w.ranged && dist < w.range * 0.25f) score *= 0.8f;        // too close for a bow
             return score;
@@ -755,8 +772,8 @@ class BotController {
     void FightEnemy(Match& m, PlayerState& p, Memory& mem, const PlayerState& foe, float dist, float advantage, float dt, const Tuning& tune) {
         (void)advantage;
         if (tune.kite) ChooseWeapon(m, p, mem, dist); // Easy bots just use what is in their hand
-        const WeaponStats mine = WeaponOf(p.weapon.item);
-        const WeaponStats theirs = WeaponOf(foe.weapon.item);
+        const WeaponStats mine = Match::StatsOf(p);
+        const WeaponStats theirs = Match::StatsOf(foe);
         float want = mine.ranged ? mine.range * 0.65f : mine.range * 0.6f; // strafing swings wide, so melee closes well inside its reach
 
         // Kite: a ranged bot facing a melee foe keeps its distance while its weapon recharges.
@@ -789,7 +806,7 @@ class BotController {
 
     // Swing or shoot if the foe is in range and the weapon is ready. Accuracy falls off with distance for ranged weapons.
     void TryAttack(Match& m, PlayerState& p, const Memory& mem, const PlayerState& foe, float dist) {
-        const WeaponStats w = WeaponOf(p.weapon.item);
+        const WeaponStats w = Match::StatsOf(p);
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
         if (m.Invulnerable(foe)) return; // don't waste a swing
         float chance = mem.skill * (w.ranged ? 1.0f - 0.35f * (dist / w.range) : 1.0f);
@@ -800,6 +817,7 @@ class BotController {
             chance -= across * 0.55f * (1.0f - mem.skill) * (0.5f + dist / w.range);
         }
         if (m.Stunned(foe)) chance = (std::min)(1.0f, chance + 0.25f);
+        if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
         m.Attack(p.id, foe.id, rng.Unit() < (std::max)(0.05f, chance));
     }
 };

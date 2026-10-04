@@ -15,6 +15,7 @@ struct LootSpawn {
     bool fromChest;           // rolled on the higher chest tiers
     bool container = false;   // shown as a treasure chest that has to be opened; false for items dropped by players
     bool special = false;     // a heart container chest: extra rare, drawn differently
+    uint16_t amount = 0;      // rupees and ammo: how many
 };
 
 inline Rarity RollRarity(Rng& rng, bool chest) {
@@ -39,7 +40,7 @@ inline Rarity RollRarity(Rng& rng, bool chest) {
 // eligible items. Returns false if nothing at all can spawn at the tier.
 inline bool PickItem(Rng& rng, Rarity tier, ItemId* out) {
     int eligibleCount[kItemKindCount] = {};
-    for (int i = 0; i < kItemCount; i++) {
+    for (int i = 0; i < kPoolItemCount; i++) {
         if (tier >= kItems[i].minRarity && tier <= kItems[i].maxRarity) eligibleCount[static_cast<int>(kItems[i].kind)]++;
     }
     int totalWeight = 0;
@@ -53,7 +54,7 @@ inline bool PickItem(Rng& rng, Rarity tier, ItemId* out) {
         roll -= kKindWeight[k];
     }
     int pick = static_cast<int>(rng.Below(static_cast<uint32_t>(eligibleCount[kind])));
-    for (int i = 0; i < kItemCount; i++) {
+    for (int i = 0; i < kPoolItemCount; i++) {
         if (static_cast<int>(kItems[i].kind) != kind || tier < kItems[i].minRarity || tier > kItems[i].maxRarity) continue;
         if (pick-- == 0) { *out = kItems[i].id; return true; }
     }
@@ -84,7 +85,7 @@ inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count,
         bool chest = rng.Unit() < chestFraction;
         Rarity tier = RollRarity(rng, chest);
         ItemId item;
-        if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kItemCount));
+        if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kPoolItemCount));
         // An item can only exist within its own tier range; clamp so a roll never produces an invalid (item, tier) pair.
         if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
         if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
@@ -100,7 +101,7 @@ inline std::vector<LootSpawn> GenerateSpotLoot(uint64_t seed, const std::vector<
     for (const Vec2& at : spots) {
         Rarity tier = RollRarity(rng, true);
         ItemId item;
-        if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kItemCount));
+        if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kPoolItemCount));
         if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
         if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
         out.push_back({at, item, tier, true, true});

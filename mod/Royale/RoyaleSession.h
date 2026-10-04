@@ -25,7 +25,7 @@ struct PuppetState {
     bool alive = true;
     bool isBot = false;
     float health = kMaxHealth;
-    ItemId weapon = ItemId::DekuStick;
+    ItemId weapon = ItemId::BasicSword;
     Rarity weaponRarity = Rarity::Common;
     uint32_t tunic = SkinRgb(0); // 0xRRGGBB, the colour this player chose (bots wear a preset by id)
 };
@@ -65,7 +65,7 @@ struct HudState {
     int stormPhase = 0;                  // 0-based; kStormPhaseCount once the storm has finished
     bool stormShrinking = false;
     float stormSecondsLeft = 0;          // until the hold ends / the shrink ends
-    ItemId weapon = ItemId::DekuStick;   // what the local player holds (from the server)
+    ItemId weapon = ItemId::BasicSword;   // what the local player holds (from the server)
     Rarity weaponRarity = Rarity::Common;
     bool hasShield = false;
     ItemId shield = ItemId::DekuShield;
@@ -85,6 +85,8 @@ struct HudState {
     float countdownLeft = 0;      // seconds until the drop, while the state is Countdown
     int playerLimit = kMaxPlayers; // players in the match, bots included (the host's slider)
     int mapId = 0;                 // which place the match is played in (shared/map.h)
+    int rupees = 0;
+    std::array<int, kAmmoKinds> ammo = {};
     float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
@@ -154,6 +156,7 @@ class RoyaleSession {
     void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
     bool SetPlayerLimit(int n) { playerLimit = n; return server ? server->SetPlayerLimit(n) : false; }
     // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
+    void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
@@ -245,6 +248,8 @@ class RoyaleSession {
         h.humanCount = static_cast<int>(h.roster.size());
         h.playerLimit = client->PlayerLimit();
         h.mapId = client->MapId();
+        h.rupees = client->Inventory().rupees;
+        for (int k = 0; k < kAmmoKinds; k++) h.ammo[static_cast<size_t>(k)] = client->Inventory().ammo[static_cast<size_t>(k)];
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
         h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());

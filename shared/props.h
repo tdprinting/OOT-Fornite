@@ -31,7 +31,8 @@ inline std::vector<Prop> GenerateProps(uint64_t seed, Circle map, int count, con
     out.reserve(count);
     for (int n = 0; n < count; n++) {
         const uint32_t roll = rng.Below(100);
-        const PropKind kind = roll < 45 ? PropKind::Rock : roll < 62 ? PropKind::Boulder : roll < 92 ? PropKind::Bush : PropKind::Pillar;
+        // Lots of bushes and rocks: the things you cut and break for rupees and ammo.
+        const PropKind kind = roll < 34 ? PropKind::Rock : roll < 46 ? PropKind::Boulder : roll < 92 ? PropKind::Bush : PropKind::Pillar;
         const Vec2 at = RandomPointIn(rng, map, valid, 0.97f);
         if (valid && !valid(at)) continue; // RandomPointIn gives up after 40 tries; don't put scenery in the void
         out.push_back({at, kind, static_cast<uint16_t>(rng.Below(0x10000))});

@@ -714,6 +714,67 @@ static void ShieldOverTheWire() {
     CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
 }
 
+static void SmashingPropsOverTheWire() {
+    Rig rig(95, 20);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    CHECK(rig.server.Reconfigure({{0, 0}, 2000}, nullptr, 20));
+    rig.Run(0.5f);
+    CHECK(a.Props().size() > 300);
+    size_t bush = a.Props().size(), rock = a.Props().size();
+    for (size_t i = 0; i < a.Props().size(); i++) {
+        if (a.Props()[i].kind == PropKind::Bush && bush == a.Props().size()) bush = i;
+        if (a.Props()[i].kind == PropKind::Rock && rock == a.Props().size()) rock = i;
+    }
+    CHECK(bush < a.Props().size() && rock < a.Props().size());
+    // Not during the lobby.
+    a.ReportSmash(bush);
+    rig.Run(0.3f);
+    CHECK(a.BrokenProps().empty());
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.pos = {1900, 1900};
+    PlayerState* me = rig.M().Find(1);
+    me->rupees = 0; me->ammo.fill(0);
+    // Too far away to have done it.
+    me->pos = {a.Props()[bush].pos.x + 900.0f, a.Props()[bush].pos.z};
+    rig.Run(0.2f);
+    const uint64_t rejected = rig.server.GetStats().rejectedActions;
+    a.ReportSmash(bush);
+    rig.Run(0.4f);
+    CHECK(a.BrokenProps().empty() && rig.server.GetStats().rejectedActions == rejected + 1);
+    // Next to it: it breaks for everybody, and what was inside goes to the one who broke it.
+    int found = 0;
+    for (size_t index = 0; index < a.Props().size() && found < 40; index++) {
+        const Prop& pr = a.Props()[index];
+        if (pr.kind != PropKind::Bush && pr.kind != PropKind::Rock && pr.kind != PropKind::Boulder) continue;
+        me->pos = pr.pos;
+        for (auto& p : rig.M().Players()) if (p.isBot) p.pos = {1900, 1900};
+        me->invulnUntil = 1.0e9f;
+        a.DrainEvents(); b.DrainEvents();
+        rig.Run(0.15f);
+        a.ReportSmash(index);
+        rig.Run(0.3f);
+        CHECK(a.BrokenProps().count(index) && b.BrokenProps().count(index));
+        bool bSaw = false, aSaw = false;
+        for (auto& e : b.DrainEvents()) bSaw |= e.type == ClientEvent::Type::PropBroken && e.index == index && e.id == a.PlayerId();
+        for (auto& e : a.DrainEvents()) aSaw |= e.type == ClientEvent::Type::PropBroken && e.index == index;
+        CHECK(aSaw && bSaw);
+        // Breaking it twice gives nothing twice.
+        const int rupees = me->rupees;
+        a.ReportSmash(index);
+        b.ReportSmash(index);
+        rig.Run(0.3f);
+        CHECK(me->rupees == rupees);
+        found++;
+    }
+    CHECK(me->rupees > 0 || (me->ammo[0] + me->ammo[1] + me->ammo[2] + me->ammo[3] + me->ammo[4]) > 0);     // forty props yield something
+    rig.Run(0.3f);
+    CHECK(a.Inventory().rupees == me->rupees);                                                              // and the owner is told
+    // A rematch puts the scenery back.
+    CHECK(rig.server.Reconfigure({{0, 0}, 2000}, nullptr, 20) == (rig.M().State() == MatchState::Lobby || rig.M().State() == MatchState::Ending));
+}
+
 static void SelectingTheMap() {
     Rig rig(71, 0);
     rig.server.SetHostToken(0xABCDEF12345ull);
@@ -1257,7 +1318,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    ShieldOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    ShieldOverTheWire(); SmashingPropsOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

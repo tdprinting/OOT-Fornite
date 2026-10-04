@@ -6,6 +6,7 @@
 #include <cmath>
 #include <deque>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,15 +15,16 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
     float health = 0;    // Damaged: what the target has left
+    uint16_t count = 0;  // PropBroken: how many rupees or pieces of ammo were inside (item 255 = nothing)
     size_t index = 0;    // LootTaken / LootAdded
     MatchState state = MatchState::Lobby;
     bool ready = false;  // ReadyChanged
-    uint8_t item = 0;    // AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
+    uint8_t item = 0;    // PropBroken: what was inside | AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
     float x = 0, z = 0;  // AbilityUsed: where the user was | Strike / BossSpawned / BossDown: where
 };
 
@@ -32,6 +34,8 @@ struct InventoryInfo {
     float maxHealth = kMaxHealth;
     float shield = 0; // the shield bar, 0 to kMaxShield
     int heartPieces = 0;
+    int rupees = 0;
+    std::array<uint8_t, kAmmoKinds> ammo = {};
     std::vector<net::ItemRef> potions;
     std::vector<net::ItemRef> reserve; // backup weapons (hotbar slots 2 and 3)
     bool hasAbility = false;
@@ -121,6 +125,8 @@ class GameClient {
     const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
+    void ReportSmash(size_t index) { net::PropSmashRequest m; m.index = static_cast<uint16_t>(index); SendIfJoined(m); } // I broke a rock or cut a bush
+    const std::set<size_t>& BrokenProps() const { return brokenProps; }
     void SelectMap(int id) { net::SelectMapRequest m; m.map = static_cast<uint8_t>(id); SendIfJoined(m); } // host only, lobby only
     const std::vector<net::ResultRow>& Results() const { return results; }
     // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
@@ -312,6 +318,7 @@ class GameClient {
             case net::MsgType::EvInventory: {
                 net::EvInventory m;
                 if (!net::Decode(data, m)) break;
+                inventory.rupees = m.rupees; inventory.ammo = m.ammo;
                 inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
                 inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
                 inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
@@ -327,6 +334,15 @@ class GameClient {
                 net::EvResults m;
                 if (!net::Decode(data, m)) break;
                 results = m.rows;
+                break;
+            }
+            case net::MsgType::EvPropBroken: {
+                net::EvPropBroken m;
+                if (!net::Decode(data, m)) break;
+                brokenProps.insert(m.index);
+                ClientEvent e{ClientEvent::Type::PropBroken};
+                e.index = m.index; e.id = m.by; e.item = m.item; e.count = m.amount;
+                events.push_back(e);
                 break;
             }
             case net::MsgType::EvStrike: {
@@ -366,6 +382,7 @@ class GameClient {
                 if (!net::Decode(data, m)) break;
                 map = m.map;
                 mapId = m.mapId;
+                brokenProps.clear();
                 storm = std::make_unique<Storm>(m.map, m.stormEnds);
                 loot = m.loot;
                 props = m.props;
@@ -445,6 +462,7 @@ class GameClient {
     uint64_t seed = 0;
     Circle map;
     int mapId = 0;
+    std::set<size_t> brokenProps;   // props somebody has smashed this match
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;

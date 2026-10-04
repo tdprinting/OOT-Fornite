@@ -43,9 +43,16 @@ enum class ItemId : uint8_t {
     BigQuiver, BulletBag, BombBag,
     ForestMedallion, FireMedallion, WaterMedallion, SpiritMedallion, ShadowMedallion, LightMedallion,
     KokiriEmerald, GoronRuby, ZoraSapphire,
+    // ---- special variants of weapons
+    TripleSlingshot, GiantsHammer, HomingBombchus,
+    // ---- the starting sword and the economy: never found as random loot (see InPool), given at the start, found in rocks and bushes, and
+    // dropped by players who are eliminated
+    BasicSword, Rupees, ArrowAmmo, SeedAmmo, BombAmmo, BombchuAmmo, NutAmmo,
     Count
 };
 constexpr int kItemCount = static_cast<int>(ItemId::Count);
+constexpr int kPoolItemCount = static_cast<int>(ItemId::BasicSword); // the items that can turn up in random loot are the ones before the economy items
+constexpr bool InPool(ItemId id) { return static_cast<int>(id) < kPoolItemCount; }
 
 enum class ItemKind : uint8_t { Weapon, Shield, Consumable, Instant, Ability, Gear };
 constexpr int kItemKindCount = 6;
@@ -169,6 +176,18 @@ constexpr ItemDef kItems[] = {
     {ItemId::KokiriEmerald, "Kokiri's Emerald", kGear, rE, rL, "5% less damage taken, a little faster"},
     {ItemId::GoronRuby, "Goron's Ruby", kGear, rE, rL, "Half the explosion damage, 40% less fire damage"},
     {ItemId::ZoraSapphire, "Zora's Sapphire", kGear, rE, rL, "25% less storm damage"},
+    // special weapon variants
+    {ItemId::TripleSlingshot, "Triple Slingshot", kWeapon, rU, rE, "Fires three seeds at once: close up they all land"},
+    {ItemId::GiantsHammer, "Giant's Hammer", kWeapon, rE, rL, "A huge slow slam that hits everyone around the target"},
+    {ItemId::HomingBombchus, "Homing Bombchus", kWeapon, rE, rL, "Purple bombchus that chase their target down"},
+    // starting sword and economy
+    {ItemId::BasicSword, "Basic Sword", kWeapon, rC, rC, "Your starting sword: weak, but it never runs out"},
+    {ItemId::Rupees, "Rupees", kInstant, rC, rC, "Money: hire helpers who follow and fight for you"},
+    {ItemId::ArrowAmmo, "Arrows", kInstant, rC, rC, "Ammo for the bow and the elemental arrows"},
+    {ItemId::SeedAmmo, "Deku Seeds", kInstant, rC, rC, "Ammo for the slingshot"},
+    {ItemId::BombAmmo, "Bombs (ammo)", kInstant, rC, rC, "Ammo for thrown bombs"},
+    {ItemId::BombchuAmmo, "Bombchus (ammo)", kInstant, rC, rC, "Ammo for bombchus"},
+    {ItemId::NutAmmo, "Deku Nuts (ammo)", kInstant, rC, rC, "Ammo for deku nuts"},
 };
 static_assert(sizeof(kItems) / sizeof(kItems[0]) == static_cast<size_t>(kItemCount), "item table must have one entry per ItemId");
 
@@ -267,16 +286,75 @@ constexpr PotionDef PotionOf(ItemId id) {
     }
 }
 
-enum class InstantEffect : uint8_t { None, Heart, HeartPiece, HeartContainer, MagicJar };
+enum class InstantEffect : uint8_t { None, Heart, HeartPiece, HeartContainer, MagicJar, Rupees, Ammo };
 constexpr InstantEffect InstantOf(ItemId id) {
     switch (id) {
         case ItemId::RecoveryHeart: return InstantEffect::Heart;
         case ItemId::HeartPiece: return InstantEffect::HeartPiece;
         case ItemId::HeartContainer: return InstantEffect::HeartContainer;
         case ItemId::MagicJar: return InstantEffect::MagicJar;
+        case ItemId::Rupees: return InstantEffect::Rupees;
+        case ItemId::ArrowAmmo: case ItemId::SeedAmmo: case ItemId::BombAmmo: case ItemId::BombchuAmmo: case ItemId::NutAmmo: return InstantEffect::Ammo;
         default: return InstantEffect::None;
     }
 }
+
+// ---- ammo --------------------------------------------------------------------------------------------------------------------
+// Bows, the slingshot and the thrown weapons spend one piece of ammo per shot. Picking up one of them gives you a few to start with; more
+// comes from rocks, bushes and eliminated players. With none left a weapon is just something to hit with (see ActiveWeapon in combat.h).
+enum class AmmoKind : uint8_t { Arrows, Seeds, Bombs, Bombchus, Nuts, None };
+constexpr int kAmmoKinds = 5;
+constexpr AmmoKind AmmoUsedBy(ItemId weapon) {
+    switch (weapon) {
+        case ItemId::FairyBow: case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows: return AmmoKind::Arrows;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: return AmmoKind::Seeds;
+        case ItemId::Bombs: return AmmoKind::Bombs;
+        case ItemId::Bombchus: case ItemId::HomingBombchus: return AmmoKind::Bombchus;
+        case ItemId::DekuNuts: return AmmoKind::Nuts;
+        default: return AmmoKind::None;
+    }
+}
+constexpr AmmoKind AmmoGivenBy(ItemId pickup) {
+    switch (pickup) {
+        case ItemId::ArrowAmmo: return AmmoKind::Arrows;
+        case ItemId::SeedAmmo: return AmmoKind::Seeds;
+        case ItemId::BombAmmo: return AmmoKind::Bombs;
+        case ItemId::BombchuAmmo: return AmmoKind::Bombchus;
+        case ItemId::NutAmmo: return AmmoKind::Nuts;
+        default: return AmmoKind::None;
+    }
+}
+constexpr ItemId AmmoItem(AmmoKind k) {
+    switch (k) {
+        case AmmoKind::Arrows: return ItemId::ArrowAmmo;
+        case AmmoKind::Seeds: return ItemId::SeedAmmo;
+        case AmmoKind::Bombs: return ItemId::BombAmmo;
+        case AmmoKind::Bombchus: return ItemId::BombchuAmmo;
+        default: return ItemId::NutAmmo;
+    }
+}
+constexpr const char* AmmoName(AmmoKind k) {
+    switch (k) {
+        case AmmoKind::Arrows: return "Arrows";
+        case AmmoKind::Seeds: return "Seeds";
+        case AmmoKind::Bombs: return "Bombs";
+        case AmmoKind::Bombchus: return "Bombchus";
+        case AmmoKind::Nuts: return "Nuts";
+        default: return "";
+    }
+}
+constexpr int AmmoStarter(AmmoKind k) { return k == AmmoKind::Arrows ? 12 : k == AmmoKind::Seeds ? 15 : k == AmmoKind::Nuts ? 6 : 4; }
+constexpr int AmmoBaseCap(AmmoKind k) { return k == AmmoKind::Arrows ? 20 : k == AmmoKind::Seeds ? 20 : k == AmmoKind::Nuts ? 10 : 8; }
+// The pack in your pack slot raises the cap for what it holds: the Big Quiver for arrows, the Bullet Bag for seeds, the Bomb Bag for bombs and bombchus.
+constexpr int AmmoCap(AmmoKind k, bool hasPack, ItemId pack) {
+    int cap = AmmoBaseCap(k);
+    if (!hasPack) return cap;
+    if (pack == ItemId::BigQuiver && k == AmmoKind::Arrows) cap += 20;
+    if (pack == ItemId::BulletBag && k == AmmoKind::Seeds) cap += 20;
+    if (pack == ItemId::BombBag && (k == AmmoKind::Bombs || k == AmmoKind::Bombchus)) cap += 8;
+    return cap;
+}
+
 constexpr float kMaxHealthCap = 10.0f; // hearts, however many containers you find
 constexpr int kHeartPiecesPerContainer = 4;
 

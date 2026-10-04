@@ -3,6 +3,7 @@
 #include "../shared/boss.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
+#include "../shared/props.h"
 #include "../shared/storm.h"
 #include <algorithm>
 #include <array>
@@ -33,7 +34,9 @@ struct PlayerState {
     uint8_t scene = 0; // game scene the player is in (relayed). Bots are always in Hyrule Field.
 
     // ---- what the player carries
-    Equipped weapon = {ItemId::DekuStick, Rarity::Common}; // starter weapon, like Fortnite's pickaxe
+    Equipped weapon = {ItemId::BasicSword, Rarity::Common}; // starter weapon, like Fortnite's pickaxe: a weak sword that never runs out
+    int rupees = 0;                                        // money: hire helpers
+    std::array<int, kAmmoKinds> ammo = {};                 // arrows, seeds, bombs, bombchus, nuts
     bool hasShield = false;
     Equipped shield = {ItemId::DekuShield, Rarity::Common};
     std::vector<Equipped> potions;                         // consumables bag, at most kMaxPotions
@@ -306,6 +309,33 @@ class Match {
     // A dodge roll. Bots call this when they decide to roll; for humans the game does the rolling and the server notices the roll animation in
     // their input (see GameServer). It lasts a third of a second and can't be repeated for a while. Hits that would land while it lasts miss.
     static constexpr float kRollSeconds = 0.35f, kRollCooldown = 1.1f;
+    static bool HasAmmo(const PlayerState& p, ItemId weapon) {
+        const AmmoKind k = AmmoUsedBy(weapon);
+        return k == AmmoKind::None || p.ammo[static_cast<int>(k)] > 0;
+    }
+    // The stats of the weapon in hand right now (a bow with no arrows is bashed with like the basic sword).
+    static WeaponStats StatsOf(const PlayerState& p) { return ActiveWeapon(p.weapon.item, HasAmmo(p, p.weapon.item)); }
+    static int AmmoCapOf(const PlayerState& p, AmmoKind k) {
+        const bool pack = (p.gearMask & (1 << static_cast<int>(GearSlot::Pack))) != 0;
+        return AmmoCap(k, pack, pack ? p.gear[static_cast<int>(GearSlot::Pack)].item : ItemId::BasicSword);
+    }
+    // Picking up a bow, the slingshot or something to throw gives enough to start with if you have none.
+    static void GiveStarterAmmo(PlayerState& p, ItemId weapon) {
+        const AmmoKind k = AmmoUsedBy(weapon);
+        if (k == AmmoKind::None) return;
+        int& n = p.ammo[static_cast<int>(k)];
+        n = (std::max)(n, (std::min)(AmmoStarter(k), AmmoCapOf(p, k)));
+    }
+    void SpendAmmo(PlayerState& p, ItemId weapon) {
+        const AmmoKind k = AmmoUsedBy(weapon);
+        if (k == AmmoKind::None) return;
+        int& n = p.ammo[static_cast<int>(k)];
+        n = (std::max)(0, n - WeaponOf(weapon).shots); // a volley spends one for each pellet
+        p.dirty = true;
+    }
+    // How many pellets of a volley reach a target `dist` away: all of them close up, fewer further off.
+    static int Pellets(const WeaponStats& w, float dist) { return (std::max)(1, w.shots - (dist >= 250.0f ? 1 : 0) - (dist >= 500.0f ? 1 : 0)); }
+
     bool StartRoll(uint32_t id) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || clock < p->rollReadyAt || Stunned(*p)) return false;
@@ -323,22 +353,24 @@ class Match {
         PlayerState* a = Find(attackerId);
         PlayerState* t = Find(targetId);
         if (!a || !t || a == t || !a->alive || !t->alive) return r;
-        WeaponStats w = WeaponOf(a->weapon.item);
+        const bool hadAmmo = HasAmmo(*a, a->weapon.item);
+        WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
         if (w.damage <= 0 || clock < a->attackReadyAt) return r;
         if (clock < a->stunUntil || clock < a->frozenUntil) return r;
         if (Distance(a->pos, t->pos) > w.range * 1.1f) return r;
         a->attackReadyAt = clock + w.cooldown;
         r.ok = true;
+        if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
         const GearTotals ag = TotalsOf(*a);
-        const float base = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);
+        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, t->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee);
         float reduction = 0.0f;
         if (w.effect != WeaponEffect::PierceShield && t->hasShield) reduction = ShieldReduction(t->shield.item, t->shield.rarity);
         r.damage = base * (1.0f - reduction);
         r.hit = true;
-        r.killed = Damage(targetId, r.damage, attackerId, w.splashRadius > 0 ? DamageKind::Explosion : DamageKind::Normal);
+        r.killed = Damage(targetId, r.damage, attackerId, w.splashRadius > 0 && w.ranged ? DamageKind::Explosion : DamageKind::Normal);
 
         if (!r.killed && t->alive) {
             const bool immune = TotalsOf(*t).stunImmune;
@@ -364,10 +396,61 @@ class Match {
             const Vec2 centre = t->pos;
             for (auto& o : players) {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
-                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, DamageKind::Explosion);
+                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
             }
         }
         return r;
+    }
+
+    // What is inside a rock or bush, rolled from the seed and the prop's number: nothing, rupees or ammo. Granted straight to whoever broke it.
+    struct PropDrop { bool any = false; ItemId item = ItemId::Rupees; int amount = 0; };
+    PropDrop GrantPropLoot(uint32_t playerId, PropKind kind, size_t index) {
+        PropDrop d;
+        PlayerState* p = Find(playerId);
+        if (!p || !p->alive) return d;
+        Rng rng(seed ^ (static_cast<uint64_t>(index) * 0x9E3779B97F4A7C15ull) ^ 0x736D617368ull); // "smash"
+        const uint32_t r = rng.Below(100);
+        auto give = [&](ItemId item, int amount) { d.any = true; d.item = item; d.amount = amount; };
+        switch (kind) {
+            case PropKind::Bush:
+                if (r < 40) give(ItemId::Rupees, 1);
+                else if (r < 48) give(ItemId::Rupees, 5);
+                else if (r < 58) give(ItemId::ArrowAmmo, 3);
+                else if (r < 66) give(ItemId::SeedAmmo, 5);
+                else if (r < 70) give(ItemId::BombAmmo, 1);
+                else if (r < 74) give(ItemId::NutAmmo, 2);
+                break;
+            case PropKind::Rock:
+                if (r < 28) give(ItemId::Rupees, 5);
+                else if (r < 38) give(ItemId::Rupees, 20);
+                else if (r < 52) give(ItemId::ArrowAmmo, 5);
+                else if (r < 62) give(ItemId::SeedAmmo, 8);
+                else if (r < 72) give(ItemId::BombAmmo, 2);
+                else if (r < 78) give(ItemId::BombchuAmmo, 2);
+                else if (r < 84) give(ItemId::NutAmmo, 3);
+                break;
+            case PropKind::Boulder:
+                if (r < 30) give(ItemId::Rupees, 20);
+                else if (r < 42) give(ItemId::Rupees, 50);
+                else if (r < 58) give(ItemId::ArrowAmmo, 10);
+                else if (r < 66) give(ItemId::SeedAmmo, 12);
+                else if (r < 76) give(ItemId::BombAmmo, 3);
+                else if (r < 84) give(ItemId::BombchuAmmo, 3);
+                else if (r < 90) give(ItemId::NutAmmo, 5);
+                else give(ItemId::Rupees, 5);
+                break;
+            default: break;
+        }
+        if (!d.any) return d;
+        if (d.item == ItemId::Rupees) {
+            p->rupees += d.amount;
+        } else {
+            const AmmoKind k = AmmoGivenBy(d.item);
+            int& n = p->ammo[static_cast<int>(k)];
+            n = (std::min)(AmmoCapOf(*p, k), n + d.amount);
+        }
+        p->dirty = true;
+        return d;
     }
 
     // Pick up loot entry `index`. Weapons, shields, abilities and gear swap with what the player already has in that slot (the old
@@ -443,7 +526,17 @@ class Match {
                 p->potions.push_back({s.item, s.rarity});
                 break;
             case ItemKind::Instant:
-                if (!UseInstant(*p, s.item, s.rarity)) return false;
+                if (InstantOf(s.item) == InstantEffect::Rupees) {
+                    p->rupees += (std::max)(1, static_cast<int>(s.amount));
+                } else if (InstantOf(s.item) == InstantEffect::Ammo) {
+                    const AmmoKind k = AmmoGivenBy(s.item);
+                    int& n = p->ammo[static_cast<int>(k)];
+                    const int cap = AmmoCapOf(*p, k);
+                    if (n >= cap) return false;                               // already full: leave it for someone else
+                    n = (std::min)(cap, n + (std::max)(1, static_cast<int>(s.amount)));
+                } else if (!UseInstant(*p, s.item, s.rarity)) {
+                    return false;
+                }
                 break;
             case ItemKind::Ability:
                 if (p->hasAbility) DropEquipment(*p, p->ability);
@@ -460,6 +553,10 @@ class Match {
                 p->gearMask = static_cast<uint8_t>(p->gearMask | (1 << slot));
                 break;
             }
+        }
+        if (KindOf(s.item) == ItemKind::Weapon) {
+            GiveStarterAmmo(*p, s.item);
+            if (!p->reserve.empty()) GiveStarterAmmo(*p, p->reserve.back().item);
         }
         p->dirty = true;
         if (s.container) p->chestsOpened++;
@@ -640,7 +737,8 @@ class Match {
         MiniBoss* b = nullptr;
         for (auto& x : bosses) if (x.id == bossId) b = &x;
         if (!a || !b || !a->alive || !b->alive) return r;
-        const WeaponStats w = WeaponOf(a->weapon.item);
+        const bool hadAmmo = HasAmmo(*a, a->weapon.item);
+        const WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
         if (w.damage <= 0 || clock < a->attackReadyAt || clock < a->stunUntil || clock < a->frozenUntil) return r;
         const bool dragon = IsDragonKind(b->kind);
         const bool airborne = dragon && b->y > kDragonAirborneAbove;
@@ -648,9 +746,10 @@ class Match {
         if (Distance(a->pos, b->pos) > w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius)) return r; // it is big: you can hit it from further off
         a->attackReadyAt = clock + w.cooldown;
         r.ok = true;
+        if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (!hit) return r;
         const GearTotals ag = TotalsOf(*a);
-        r.damage = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);
+        r.damage = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, b->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee);
         if (dragon) r.damage *= airborne ? 0.75f : (b->mode == DragonMode::Landed ? 1.25f : 1.0f); // landed: it is dazed and takes extra
         r.hit = true;
         const float dealt = (std::min)(r.damage, b->health);
@@ -975,7 +1074,7 @@ class Match {
         return p;
     }
 
-    static bool IsStarter(const Equipped& e) { return e.item == ItemId::DekuStick && e.rarity == Rarity::Common; }
+    static bool IsStarter(const Equipped& e) { return e.item == ItemId::BasicSword && e.rarity == Rarity::Common; }
     void DropEquipment(const PlayerState& p, const Equipped& e) {
         // Put it down a step in front of the player, so it isn't underfoot (and re-grabbed) the instant it lands.
         const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
@@ -1006,6 +1105,28 @@ class Match {
             if (p.gearMask & (1 << slot)) DropEquipment(p, p.gear[slot]);
         }
         for (const Equipped& potion : p.potions) DropEquipment(p, potion);
+        // Their money and ammo too, in a few piles so it isn't one jackpot: rupees in lumps of up to 50, each kind of ammo in one pile.
+        const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
+        int pile = 0;
+        auto spot = [&]() {
+            const float a = facing + 1.2f + 0.9f * static_cast<float>(pile++);
+            Vec2 at = {p.pos.x + std::sin(a) * 110.0f, p.pos.z + std::cos(a) * 110.0f};
+            if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = p.pos;
+            return at;
+        };
+        for (int left = p.rupees; left > 0 && pile < 8;) {
+            const int lump = (std::min)(left, 50);
+            LootSpawn l = {spot(), ItemId::Rupees, Rarity::Common, false, false};
+            l.amount = static_cast<uint16_t>(lump);
+            AddLoot(l);
+            left -= lump;
+        }
+        for (int k = 0; k < kAmmoKinds; k++) {
+            if (p.ammo[static_cast<size_t>(k)] <= 0) continue;
+            LootSpawn l = {spot(), AmmoItem(static_cast<AmmoKind>(k)), Rarity::Common, false, false};
+            l.amount = static_cast<uint16_t>(p.ammo[static_cast<size_t>(k)]);
+            AddLoot(l);
+        }
     }
 
     // A Fairy in the bag brings a dying player back with half their hearts and a moment of safety.

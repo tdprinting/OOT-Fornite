@@ -87,6 +87,7 @@ class GameServer {
         props = GenerateProps(seed, map, propCount, valid);
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings and caves are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
+        broken.assign(props.size(), false);
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetBossCount(bossCount);
@@ -119,6 +120,26 @@ class GameServer {
         std::random_device rd;
         return (static_cast<uint64_t>(rd()) << 32) ^ rd() ^ 0x9E3779B97F4A7C15ull;
     }
+
+    // A player broke a rock or cut a bush. The first report for a prop wins; it must be a breakable kind, and the player close enough to have done
+    // it. What was inside is rolled by the match from the seed and the prop's number, so it is the same however the report arrives.
+    bool SmashProp(uint32_t playerId, size_t index) {
+        if (index >= props.size() || broken.size() != props.size() || broken[index]) return false;
+        const Prop& prop = props[index];
+        if (prop.kind != PropKind::Rock && prop.kind != PropKind::Boulder && prop.kind != PropKind::Bush) return false;
+        const PlayerState* p = sim.match.Find(playerId);
+        if (!p || !p->alive || (sim.match.State() != MatchState::InMatch && sim.match.State() != MatchState::Drop)) return false;
+        if (Distance(p->pos, prop.pos) > kSmashReach) return false;
+        broken[index] = true;
+        const Match::PropDrop drop = sim.match.GrantPropLoot(playerId, prop.kind, index);
+        net::EvPropBroken ev;
+        ev.index = static_cast<uint16_t>(index);
+        ev.by = static_cast<uint16_t>(playerId);
+        if (drop.any) { ev.item = static_cast<uint8_t>(drop.item); ev.amount = static_cast<uint16_t>(drop.amount); }
+        Broadcast(ev);
+        return true;
+    }
+    static constexpr float kSmashReach = 280.0f;
 
     // The host chooses where the match is played (lobby only). Everyone is sent a rebuilt world on that map's guessed size; the host's game
     // measures the real scene when the match starts and rebuilds it once more.
@@ -285,6 +306,12 @@ class GameServer {
                 if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::PropSmashRequest: {
+                net::PropSmashRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!SmashProp(c->playerId, m.index)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::SelectMapRequest: {
                 net::SelectMapRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -429,6 +456,8 @@ class GameServer {
         n.rarity = static_cast<uint8_t>(l.spawn.rarity);
         n.chest = l.spawn.container; // the client draws these as treasure chests
         n.taken = l.taken;
+        n.special = l.spawn.special;
+        n.amount = l.spawn.amount;
         return n;
     }
 
@@ -567,6 +596,8 @@ class GameServer {
             net::EvInventory inv;
             inv.maxHealth = p->maxHealth;
             inv.heartPieces = static_cast<uint8_t>(p->heartPieces);
+            inv.rupees = static_cast<uint16_t>((std::min)(p->rupees, 65535));
+            for (int k = 0; k < kAmmoKinds; k++) inv.ammo[static_cast<size_t>(k)] = static_cast<uint8_t>((std::min)(p->ammo[static_cast<size_t>(k)], 255));
             for (const Equipped& e : p->potions) inv.potions.push_back({static_cast<uint8_t>(e.item), static_cast<uint8_t>(e.rarity)});
             for (const Equipped& e : p->reserve) inv.reserve.push_back({static_cast<uint8_t>(e.item), static_cast<uint8_t>(e.rarity)});
             inv.hasAbility = p->hasAbility;
@@ -654,8 +685,9 @@ class GameServer {
     int mapId = 0;
     bool majorBoss = true;
     std::vector<Prop> props;
+    std::vector<bool> broken;   // which props have been smashed, by prop index
     std::vector<Poi> pois;
-    int propCount = 350;
+    int propCount = 560;
     int poiCount = 12;
     int bossCount = 0;
     int playerLimit = kMaxPlayers;

@@ -20,7 +20,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 12; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 13; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -28,10 +28,10 @@ constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N oth
 constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -115,6 +115,14 @@ struct UseShieldRequest {
     bool Read(ByteReader& r) { return r.ok; }
 };
 
+// A player broke a rock or cut a bush: the server decides what was inside.
+struct PropSmashRequest {
+    static constexpr MsgType kType = MsgType::PropSmashRequest;
+    uint16_t index = 0;
+    void Write(ByteWriter& w) const { w.U16(index); }
+    bool Read(ByteReader& r) { index = r.U16(); return r.ok && index < kMaxProps; }
+};
+
 // The host picks which place the match is played in (lobby only).
 struct SelectMapRequest {
     static constexpr MsgType kType = MsgType::SelectMapRequest;
@@ -149,11 +157,13 @@ struct LootNet {
     float x = 0, z = 0;
     uint8_t item = 0, rarity = 0;
     bool chest = false, taken = false;
-    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); w.U8(item); w.U8(rarity); w.U8(static_cast<uint8_t>((chest ? 1 : 0) | (taken ? 2 : 0))); }
+    bool special = false;     // a heart container chest
+    uint16_t amount = 0;      // rupees and ammo: how many
+    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); w.U8(item); w.U8(rarity); w.U8(static_cast<uint8_t>((chest ? 1 : 0) | (taken ? 2 : 0) | (special ? 4 : 0))); w.U16(amount); }
     bool Read(ByteReader& r) {
-        x = r.F32(); z = r.F32(); item = r.U8(); rarity = r.U8(); uint8_t f = r.U8();
-        chest = f & 1; taken = f & 2;
-        return r.ok && Finite(x) && Finite(z) && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount && f <= 3;
+        x = r.F32(); z = r.F32(); item = r.U8(); rarity = r.U8(); uint8_t f = r.U8(); amount = r.U16();
+        chest = f & 1; taken = f & 2; special = f & 4;
+        return r.ok && Finite(x) && Finite(z) && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount && f <= 7 && amount <= 5000;
     }
 };
 
@@ -347,6 +357,16 @@ struct EvBossDown {
     bool Read(ByteReader& r) { boss = r.U16(); killer = r.U16(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && Finite(x) && Finite(z); }
 };
 
+// A rock or bush is gone for everybody. If somebody's hit broke it, `by` is who and `item`/`amount` what was inside (item 255 for nothing).
+struct EvPropBroken {
+    static constexpr MsgType kType = MsgType::EvPropBroken;
+    uint16_t index = 0, by = kNoPlayer16;
+    uint8_t item = 255;
+    uint16_t amount = 0;
+    void Write(ByteWriter& w) const { w.U16(index); w.U16(by); w.U8(item); w.U16(amount); }
+    bool Read(ByteReader& r) { index = r.U16(); by = r.U16(); item = r.U8(); amount = r.U16(); return r.ok && index < kMaxProps && (item == 255 || item < static_cast<uint8_t>(ItemId::Count)) && amount <= 5000; }
+};
+
 // A blast is coming: a ring at (x, z) that goes off `delay` seconds from now (the dragon's fireballs, meteors and dive).
 struct EvStrike {
     static constexpr MsgType kType = MsgType::EvStrike;
@@ -487,6 +507,8 @@ struct EvInventory {
     bool hasAbility = false;
     ItemRef ability;
     float abilityReadyIn = 0;
+    uint16_t rupees = 0;
+    std::array<uint8_t, kAmmoKinds> ammo = {};
     bool hasMark = false;                   // Farore's Wind has a spot marked
     uint8_t gearMask = 0;
     std::array<ItemRef, kGearSlots> gear = {};
@@ -494,6 +516,8 @@ struct EvInventory {
 
     void Write(ByteWriter& w) const {
         w.F32(maxHealth); w.F32(shield); w.U8(heartPieces);
+        w.U16(rupees);
+        for (uint8_t a : ammo) w.U8(a);
         w.U8(static_cast<uint8_t>(potions.size()));
         for (const auto& p : potions) { w.U8(p.item); w.U8(p.rarity); }
         w.U8(static_cast<uint8_t>(reserve.size()));
@@ -507,6 +531,8 @@ struct EvInventory {
     }
     bool Read(ByteReader& r) {
         maxHealth = r.F32(); shield = r.F32(); heartPieces = r.U8();
+        rupees = r.U16();
+        for (uint8_t& a : ammo) a = r.U8();
         if (!Finite(shield) || shield < 0 || shield > kMaxShield + 0.001f) return false;
         size_t n = r.U8();
         if (n > static_cast<size_t>(kMaxPotions)) return false;

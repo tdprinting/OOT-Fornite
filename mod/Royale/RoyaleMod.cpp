@@ -158,11 +158,32 @@ s16 RarityDropType(royale::Rarity r) {
         default: return ITEM00_RUPEE_ORANGE;
     }
 }
+// Dropped piles of money and ammo use the game's own models for them (rupee colour by how much; arrows, seeds, bombs and nuts as themselves).
+s16 DropTypeFor(royale::ItemId item, royale::Rarity rarity, int amount) {
+    using royale::ItemId;
+    switch (item) {
+        case ItemId::Rupees: return amount >= 50 ? ITEM00_RUPEE_PURPLE : amount >= 20 ? ITEM00_RUPEE_RED : amount >= 5 ? ITEM00_RUPEE_BLUE : ITEM00_RUPEE_GREEN;
+        case ItemId::ArrowAmmo: return ITEM00_ARROWS_MEDIUM;
+        case ItemId::SeedAmmo: return ITEM00_SEEDS;
+        case ItemId::BombAmmo: return ITEM00_BOMBS_A;
+        case ItemId::BombchuAmmo: return ITEM00_BOMBS_B;
+        case ItemId::NutAmmo: return ITEM00_NUTS;
+        default: return RarityDropType(rarity);
+    }
+}
 const char* ItemName(royale::ItemId id) {
     return royale::kItems[static_cast<int>(id)].name;
 }
 std::string ItemLabel(royale::ItemId id, royale::Rarity r) {
+    if (!royale::InPool(id) && id != royale::ItemId::BasicSword) return ItemName(id);   // money and ammo have no rarity
     return std::string(ItemName(id)) + " [" + RarityName(r) + "]";
+}
+// What a pile on the ground is called: "20 Rupees", "9 Deku Seeds", or the item and its rarity.
+std::string LootLabel(const royale::net::LootNet& l) {
+    const royale::ItemId id = static_cast<royale::ItemId>(l.item);
+    if (royale::InstantOf(id) == royale::InstantEffect::Rupees || royale::InstantOf(id) == royale::InstantEffect::Ammo)
+        return std::to_string(std::max<int>(1, l.amount)) + " " + ItemName(id);
+    return ItemLabel(id, static_cast<royale::Rarity>(l.rarity));
 }
 
 // ---- the real map -----------------------------------------------------------------------------------------------------------
@@ -261,11 +282,14 @@ struct Look {
 Look LookFor(royale::ItemId weapon) {
     using royale::ItemId;
     switch (weapon) {
+        case ItemId::BasicSword:
         case ItemId::KokiriSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_KOKIRI, ITEM_SWORD_KOKIRI };
         case ItemId::MasterSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };
         case ItemId::BiggoronSword: return { PLAYER_MODELGROUP_BGS, PLAYER_IA_SWORD_BIGGORON, ITEM_SWORD_BGS };
+        case ItemId::GiantsHammer:
         case ItemId::MegatonHammer: return { PLAYER_MODELGROUP_HAMMER, PLAYER_IA_HAMMER, ITEM_HAMMER };
         case ItemId::FairyBow: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };
+        case ItemId::TripleSlingshot:
         case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
         default: return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE }; // sticks, bombs, spells: empty-handed for now
@@ -973,7 +997,10 @@ void Prop_Destroy(Actor* actor, PlayState* play) {
         const size_t i = idx->second;
         auto pa = gProps.find(i);
         if (pa != gProps.end()) { orig = pa->second.origDestroy; gProps.erase(pa); }
-        if (gCulledProps.erase(i) == 0) gBrokenProps.insert(i);
+        if (gCulledProps.erase(i) == 0) {                      // broken, not just put away because it is far off
+            gBrokenProps.insert(i);
+            if (gSession.Client() && !gSession.Client()->BrokenProps().count(i)) gSession.ReportPropSmashed(i);   // the server decides what was inside
+        }
         gPropOf.erase(idx);
     }
     if (orig) orig(actor, play);
@@ -1279,6 +1306,11 @@ void ReconcileProps(const royale::HudState& hud) {
         ClearProps();
         return;
     }
+    for (size_t broken : gSession.Client()->BrokenProps()) { // somebody else broke these: they are gone for everyone
+        gBrokenProps.insert(broken);
+        auto it = gProps.find(broken);
+        if (it != gProps.end() && gCulledProps.insert(broken).second) Actor_Kill(it->second.actor);
+    }
     for (auto& [i, pa] : gProps) {
         const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
         if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
@@ -1300,7 +1332,7 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     if (l.chest) { SpawnChest(index, l, groundY); return; } // generated loot is in chests; only dropped items lie on the ground
     royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
     gSpawningLoot = true;
-    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ITEM00, l.x, groundY + 22.0f, l.z, 0, 0, 0, RarityDropType(rarity), false);
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ITEM00, l.x, groundY + 22.0f, l.z, 0, 0, 0, DropTypeFor(static_cast<royale::ItemId>(l.item), rarity, l.amount), false);
     gSpawningLoot = false;
     if (actor == nullptr) return;
     // Keep the game's rupee model and drawing, but replace its behaviour: no vanilla pickup, our own spin and server-checked grab.
@@ -1309,7 +1341,7 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     gLoot[index] = { actor, groundY, 0 };
     gLoot[index].rarity = rarity;
     gLootOf[actor] = index;
-    std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), rarity);
+    std::string label = LootLabel(l);
     NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", 26, RarityColor(rarity) });
 }
 
@@ -1634,6 +1666,7 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
 
     switch (id) {
         case ItemId::DekuStick: dl->AddLine(P(-0.5f, 0.7f), P(0.5f, -0.7f), wood, th * 2.2f); dl->AddCircleFilled(P(0.55f, -0.75f), u * 0.18f, orange, 8); break;
+        case ItemId::BasicSword: sword(IM_COL32(170, 178, 190, 255), wood, 0.7f, 1.2f); break;
         case ItemId::KokiriSword: sword(steel, green, 0.8f, 1.5f); break;
         case ItemId::MasterSword: sword(cyan, blue, 1.0f, 1.8f); dl->AddCircleFilled(P(-0.35f, 0.35f), u * 0.12f, gold, 8); break;
         case ItemId::BiggoronSword: sword(white, red, 1.0f, 2.8f); break;
@@ -1648,6 +1681,39 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
             dl->AddLine(P(0, 0.1f), P(0.55f, -0.65f), wood, th * 1.8f);
             dl->AddLine(P(-0.55f, -0.65f), P(0.55f, -0.65f), red, th * 0.8f);
             break;
+        case ItemId::TripleSlingshot:
+            dl->AddLine(P(0, 0.75f), P(0, 0.1f), wood, th * 1.8f);
+            dl->AddLine(P(0, 0.1f), P(-0.6f, -0.55f), wood, th * 1.8f);
+            dl->AddLine(P(0, 0.1f), P(0.6f, -0.55f), wood, th * 1.8f);
+            for (int i = -1; i <= 1; i++) dl->AddCircleFilled(P(i * 0.3f, -0.62f - (i == 0 ? 0.15f : 0.0f)), u * 0.14f, orange, 8);
+            break;
+        case ItemId::GiantsHammer:
+            dl->AddLine(P(-0.7f, 0.8f), P(0.3f, -0.3f), wood, th * 2.2f);
+            dl->AddRectFilled(P(-0.15f, -0.95f), P(0.95f, -0.05f), gold, 3.0f);
+            dl->AddRect(P(-0.15f, -0.95f), P(0.95f, -0.05f), IM_COL32(160, 110, 30, 255), 3.0f, 0, th);
+            break;
+        case ItemId::HomingBombchus:
+            dl->AddRectFilled(P(-0.3f, -0.55f), P(0.3f, 0.5f), purple, u * 0.3f);
+            dl->AddCircleFilled(P(-0.35f, -0.55f), u * 0.22f, IM_COL32(255, 200, 255, 255), 10);
+            dl->AddCircleFilled(P(0.35f, -0.55f), u * 0.22f, IM_COL32(255, 200, 255, 255), 10);
+            dl->AddLine(P(0, 0.5f), P(0.3f, 0.8f), orange, th);
+            dl->AddCircle(c, u * 0.9f, IM_COL32(220, 150, 255, 200), 20, th * 0.8f);   // the ring says it seeks
+            break;
+        case ItemId::Rupees: gem(green); break;
+        case ItemId::ArrowAmmo: for (int i = -1; i <= 1; i++) { dl->AddLine(P(-0.5f + i * 0.2f, 0.7f), P(0.4f + i * 0.2f, -0.6f), wood, th); dl->AddTriangleFilled(P(0.5f + i * 0.2f, -0.8f), P(0.2f + i * 0.2f, -0.55f), P(0.45f + i * 0.2f, -0.4f), steel); } break;
+        case ItemId::SeedAmmo: dl->AddCircleFilled(P(-0.3f, 0.15f), u * 0.3f, IM_COL32(190, 150, 90, 255), 12); dl->AddCircleFilled(P(0.3f, -0.1f), u * 0.3f, IM_COL32(150, 190, 90, 255), 12); dl->AddCircleFilled(P(0.0f, 0.5f), u * 0.3f, orange, 12); break;
+        case ItemId::BombAmmo:
+            dl->AddCircleFilled(P(0, 0.2f), u * 0.58f, IM_COL32(35, 40, 55, 255), 20);
+            dl->AddCircle(P(0, 0.2f), u * 0.58f, steel, 20, th * 0.7f);
+            dl->AddLine(P(0.3f, -0.25f), P(0.55f, -0.55f), wood, th * 1.2f);
+            dl->AddCircleFilled(P(0.6f, -0.62f), u * 0.14f, orange, 8);
+            break;
+        case ItemId::BombchuAmmo:
+            dl->AddRectFilled(P(-0.3f, -0.55f), P(0.3f, 0.5f), red, u * 0.3f);
+            dl->AddCircleFilled(P(-0.35f, -0.55f), u * 0.22f, white, 10);
+            dl->AddCircleFilled(P(0.35f, -0.55f), u * 0.22f, white, 10);
+            break;
+        case ItemId::NutAmmo: dl->AddCircleFilled(c, u * 0.55f, wood, 18); dl->AddCircle(c, u * 0.55f, IM_COL32(95, 60, 30, 255), 18, th); dl->AddLine(P(0, -0.55f), P(0, -0.8f), green, th * 1.4f); break;
         case ItemId::FairyBow:
             dl->AddBezierQuadratic(P(-0.2f, -0.8f), P(0.95f, 0.0f), P(-0.2f, 0.8f), wood, th * 1.8f);
             dl->AddLine(P(-0.2f, -0.8f), P(-0.2f, 0.8f), white, th * 0.6f);
@@ -1779,16 +1845,17 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
 // The item bar, like Fortnite's: weapons (the one in hand highlighted), shield, potions and your ability. D-pad Left cycles weapons;
 // on a touch screen you can tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; };
+    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; };
     const ImU32 grey = IM_COL32(120, 120, 130, 255);
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
-    slots.push_back({ ShortName(h.weapon), RarityName(h.weaponRarity), RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon });
+    auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
+    slots.push_back({ ShortName(h.weapon), h.weapon == royale::ItemId::BasicSword ? std::string("Starter") : std::string(RarityName(h.weaponRarity)), RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
     for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
         if (i < static_cast<int>(h.inv.reserve.size())) {
             const auto& r = h.inv.reserve[i];
             const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            slots.push_back({ ShortName(id), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id });
+            slots.push_back({ ShortName(id), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
         } else {
             slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
         }
@@ -1827,12 +1894,29 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         const float ts = 11.5f * scale;
         dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
         dl->AddText(font, ts * 0.9f, ImVec2(a.x + 5 * scale, a.y + 3 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
+        if (sl.filled && sl.ammo >= 0) { // how many shots are left
+            const std::string n = "x" + std::to_string(sl.ammo);
+            const ImVec2 nsz = font->CalcTextSizeA(ts * 1.15f, FLT_MAX, 0.0f, n.c_str());
+            dl->AddText(font, ts * 1.15f, ImVec2(b.x - nsz.x - 5 * scale + 1, a.y + 4 * scale + 1), IM_COL32(0, 0, 0, 220), n.c_str());
+            dl->AddText(font, ts * 1.15f, ImVec2(b.x - nsz.x - 5 * scale, a.y + 4 * scale), sl.ammo > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), n.c_str());
+        }
         if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
             if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
             else if (sl.action == 10 && !h.inv.potions.empty()) gSession.RequestUsePotion();
             else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f) gSession.UseAbility();
         }
         x += w + gap;
+    }
+
+    // Money, at the right end of the bar.
+    {
+        const std::string n = std::to_string(h.rupees);
+        const float ts = 20.0f * scale;
+        const ImVec2 nsz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, n.c_str());
+        const float rx = (ds.x + total) * 0.5f, ry = y - 34.0f * scale;
+        DrawItemIcon(dl, royale::ItemId::Rupees, ImVec2(rx - nsz.x - 22.0f * scale, ry + 12.0f * scale), 26.0f * scale, IM_COL32(110, 240, 130, 255));
+        dl->AddText(font, ts, ImVec2(rx - nsz.x + 1, ry + 1), IM_COL32(0, 0, 0, 220), n.c_str());
+        dl->AddText(font, ts, ImVec2(rx - nsz.x, ry), IM_COL32(150, 255, 160, 255), n.c_str());
     }
 
     // What you wear: one small icon per gear slot, just above the bar (tunic, boots, gauntlets, mask, scale, pack, charm).
@@ -2010,6 +2094,30 @@ void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
     const double now = ImGui::GetTime();
     gBanners.push_back({ text, colour, now + seconds, now });
     if (gBanners.size() > 3) gBanners.erase(gBanners.begin());
+}
+
+// Small "+5 Rupees" lines that float up on the right when something drops out of a rock or bush.
+struct Gain { std::string text; ImU32 colour; double at; };
+std::vector<Gain> gGains;
+void ShowGain(const std::string& text, ImU32 colour) {
+    gGains.push_back({ text, colour, ImGui::GetTime() });
+    if (gGains.size() > 5) gGains.erase(gGains.begin());
+}
+void DrawGains(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime();
+    float y = ds.y * 0.42f;
+    for (const Gain& g : gGains) {
+        const double age = now - g.at;
+        if (age > 1.8) continue;
+        const float a = static_cast<float>(std::min(1.0, (1.8 - age) / 0.5));
+        const float size = 22.0f * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, g.text.c_str());
+        const ImVec2 pos(ds.x - sz.x - 24.0f * scale, y - static_cast<float>(age) * 26.0f * scale);
+        dl->AddText(font, size, ImVec2(pos.x + 1.5f, pos.y + 1.5f), IM_COL32(0, 0, 0, static_cast<int>(220 * a)), g.text.c_str());
+        dl->AddText(font, size, pos, (g.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), g.text.c_str());
+        y += 28.0f * scale;
+    }
+    gGains.erase(std::remove_if(gGains.begin(), gGains.end(), [&](const Gain& g) { return now - g.at > 1.8; }), gGains.end());
 }
 
 struct PickupFx { royale::ItemId item; royale::Rarity rarity; float x, y, z; double at; };
@@ -2260,6 +2368,7 @@ void DrawOverlay() {
     if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
 
     DrawPickupFx(dl, ds, scale);
+    DrawGains(dl, font, ds, scale);
     DrawHitEffects(dl, font, ds, scale);
     DrawBanners(dl, font, ds, scale);
 
@@ -2624,6 +2733,36 @@ void NoticePoi(Player* player, const royale::HudState& hud) {
 int gNextWeaponSlot = 1;
 int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
 
+// A swing that finds no player cuts the bush or breaks the rock in front of Link (a boulder needs something heavy or explosive).
+void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
+    if (!gSession.Client()) return;
+    const auto& props = gSession.Client()->Props();
+    size_t best = props.size();
+    float bestDist = 1e9f;
+    for (const auto& [i, pa] : gProps) {
+        if (i >= props.size() || !pa.actor) continue;
+        const royale::PropKind kind = props[i].kind;
+        if (kind != royale::PropKind::Rock && kind != royale::PropKind::Boulder && kind != royale::PropKind::Bush) continue;
+        if (kind == royale::PropKind::Boulder && w.damage < 1.5f && w.splashRadius <= 0) continue;
+        const float dx = props[i].pos.x - player->actor.world.pos.x, dz = props[i].pos.z - player->actor.world.pos.z;
+        const float reach = royale::PropRadius(kind) + std::clamp(w.range, 90.0f, 170.0f);
+        const float d = std::sqrt(dx * dx + dz * dz);
+        if (d > reach) continue;
+        const s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        if (std::abs(static_cast<int>(static_cast<s16>(toTarget - player->actor.shape.rot.y))) > 0x2800 && d > 50.0f) continue;
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    if (best >= props.size()) return;
+    auto it = gProps.find(best);
+    if (it == gProps.end()) return;
+    float y = player->actor.world.pos.y;
+    FloorAt(props[best].pos.x, props[best].pos.z, &y);
+    SparkBurst(gPlayState, props[best].pos.x, y + 20.0f, props[best].pos.z, props[best].kind == royale::PropKind::Bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
+    Vec3f at = { props[best].pos.x, y + 20.0f, props[best].pos.z };
+    Audio_PlaySoundGeneral(props[best].kind == royale::PropKind::Bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    Actor_Kill(it->second.actor);   // Prop_Destroy tells the server it was broken
+}
+
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
@@ -2690,8 +2829,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
-    royale::WeaponStats w = royale::WeaponOf(hud.weapon);
+    const royale::AmmoKind ammoKind = royale::AmmoUsedBy(hud.weapon);
+    const bool hasAmmo = ammoKind == royale::AmmoKind::None || hud.ammo[static_cast<size_t>(ammoKind)] > 0;
+    royale::WeaponStats w = royale::ActiveWeapon(hud.weapon, hasAmmo);   // no ammo: the weapon is only bashed with
     if (w.damage <= 0) return;
+    if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
     uint16_t best = 0;
@@ -2720,7 +2862,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
         }
     }
-    if (bestDist < 1e8f) gSession.ReportAttack(best, true);
+    if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
+    SmashPropInFront(player, w);
 }
 
 // The match-start skydive, as in Fortnite: you spawn high above your spawn point, hang there during the countdown, then fall
@@ -2898,6 +3041,21 @@ void ReportEvents(const royale::HudState& hud) {
                     auto a = gActorOf.find(who);
                     if (a != gActorOf.end()) Audio_PlaySoundGeneral(sfx, &a->second->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 };
+                {   // Homing bombchus leave a purple streak from the thrower to what they hit.
+                    royale::ItemId weapon = royale::ItemId::BasicSword;
+                    float fx = 0, fz = 0, tx2 = 0, tz2 = 0, fy = me->actor.world.pos.y;
+                    bool haveFrom = false, haveTo = false;
+                    if (e.other == hud.selfId) { weapon = hud.weapon; fx = me->actor.world.pos.x; fz = me->actor.world.pos.z; haveFrom = true; }
+                    else if (gState.count(e.other)) { weapon = gState[e.other].weapon; fx = gState[e.other].x; fz = gState[e.other].z; haveFrom = true; }
+                    if (e.id == hud.selfId) { tx2 = me->actor.world.pos.x; tz2 = me->actor.world.pos.z; haveTo = true; }
+                    else if (gState.count(e.id)) { tx2 = gState[e.id].x; tz2 = gState[e.id].z; haveTo = true; }
+                    if (haveFrom && haveTo && weapon == royale::ItemId::HomingBombchus) {
+                        for (int i = 0; i <= 14; i++) {
+                            const float k = i / 14.0f;
+                            SparkBurst(gPlayState, fx + (tx2 - fx) * k + (Rand_ZeroOne() - 0.5f) * 30.0f, fy + 25.0f + std::sin(k * 3.14159f) * 40.0f, fz + (tz2 - fz) * k + (Rand_ZeroOne() - 0.5f) * 30.0f, { 200, 100, 255, 255 }, 1, 0.8f);
+                        }
+                    }
+                }
                 if (e.id == hud.selfId) {
                     // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
                     Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
@@ -2938,7 +3096,7 @@ void ReportEvents(const royale::HudState& hud) {
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
-                    const std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), got);
+                    const std::string label = LootLabel(l);
                     Say((l.chest ? "Opened a chest: " : "Picked up ") + label);
                     NotePickup(label, got, l.chest);
                     const royale::ItemId itemId = static_cast<royale::ItemId>(l.item);
@@ -2961,6 +3119,20 @@ void ReportEvents(const royale::HudState& hud) {
                 const int kind = gBossKindSeen.count(e.id) ? gBossKindSeen[e.id] : 0;
                 const std::string killer = e.other == hud.selfId ? std::string("You") : nameOf(e.other);
                 Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
+                break;
+            }
+            case royale::ClientEvent::Type::PropBroken: {
+                if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
+                const auto& props = gSession.Client()->Props();
+                float py = GET_PLAYER(gPlayState)->actor.world.pos.y, px = GET_PLAYER(gPlayState)->actor.world.pos.x, pz = GET_PLAYER(gPlayState)->actor.world.pos.z;
+                if (e.index < props.size()) { px = props[e.index].pos.x; pz = props[e.index].pos.z; FloorAt(px, pz, &py); }
+                if (e.item == 255) { SparkBurst(gPlayState, px, py + 25.0f, pz, { 150, 150, 150, 255 }, 4, 2.0f); break; } // nothing inside
+                const royale::ItemId item = static_cast<royale::ItemId>(e.item);
+                const bool money = item == royale::ItemId::Rupees;
+                const std::string what = std::string("+") + std::to_string(e.count) + " " + ItemName(item);
+                ShowGain(what, money ? (e.count >= 20 ? IM_COL32(255, 90, 90, 255) : e.count >= 5 ? IM_COL32(110, 170, 255, 255) : IM_COL32(110, 240, 130, 255)) : IM_COL32(255, 220, 120, 255));
+                SparkBurst(gPlayState, px, py + 25.0f, pz, money ? Color_RGBA8{ 120, 255, 140, 255 } : Color_RGBA8{ 255, 220, 120, 255 }, 7, 3.0f);
+                Audio_PlaySoundGeneral(money ? NA_SE_SY_GET_RUPY : NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
             case royale::ClientEvent::Type::BossSpawned: {
