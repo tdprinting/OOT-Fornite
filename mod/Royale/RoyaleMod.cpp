@@ -64,6 +64,7 @@ extern PlayState* gPlayState;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
+extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 }
@@ -547,6 +548,16 @@ std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
 
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
+// Sprinting, seen on anyone: the run cycle sped up (Link's own follows his real speed) and small puffs of dust from the heels.
+constexpr float kSprintAnimSpeed = 1.45f;
+void SprintDust(PlayState* play, Actor* actor, u32 frame) {
+    if (frame % 3 != 0) return;
+    Vec3f at = actor->world.pos;
+    const float back = actor->shape.rot.y * (3.14159265f / 32768.0f);
+    at.x -= std::sin(back) * 12.0f;
+    at.z -= std::cos(back) * 12.0f;
+    Actor_SpawnFloorDustRing(play, actor, &at, 8.0f, 1, 4.0f, 70, 15, true);
+}
 // Actions are played once, from their first frame, each time one begins (see Puppet_Update); `combo` varies a sword's slash.
 bool OneShotAnim(uint8_t anim) {
     switch (static_cast<royale::Anim>(anim)) {
@@ -590,6 +601,7 @@ LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemI
         case royale::Anim::Emote5: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;      // the chicken dance poses the limbs itself (ApplyChickenDance)
         case royale::Anim::Walk:
         case royale::Anim::Run:
+        case royale::Anim::Sprint:   // the same run, played faster (see Puppet_Update)
             return (LinkAnimationHeader*)&gPlayerAnim_link_normal_run;
         default: // Idle, Attack, Hurt, Dead and anything newer than this build: stand still for now
             return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;
@@ -742,6 +754,12 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         if (OneShotAnim(s.anim) || restart) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
         else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
         gPlaying[actor] = (const void*)want;
+    }
+    if (s.anim == static_cast<uint8_t>(royale::Anim::Sprint)) {   // legs pump faster and dust kicks up, like the local player's sprint
+        player->skelAnime.playSpeed = kSprintAnimSpeed;
+        if (actor->bgCheckFlags & 1) SprintDust(play, actor, play->gameplayFrames);
+    } else if (s.anim == static_cast<uint8_t>(royale::Anim::Run) || s.anim == static_cast<uint8_t>(royale::Anim::Walk)) {
+        player->skelAnime.playSpeed = 1.0f;
     }
     LinkAnimation_Update(play, &player->skelAnime);
     if (s.anim == static_cast<uint8_t>(royale::Anim::Emote5)) {
@@ -2861,7 +2879,8 @@ bool gSkydiving = false;   // falling in from the sky at the start of the match 
 
 // Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
 // It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
-// click, so it is read from SDL directly. Purely local, like the other speed buffs (see ApplySpeedBuffs): the server trusts your position.
+// click, so it is read from SDL directly. The game's own top run speed is raised (patches/0011), so Link's legs, footsteps and turning
+// keep up with it; others see the Sprint pose (see ClassifyAnim). Purely local: the server trusts your position.
 constexpr float kSprintMult = 1.35f;        // run speed while sprinting
 constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
 constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
@@ -2869,7 +2888,6 @@ constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the 
 constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
 float gStamina = 1.0f;
 float gStaminaRestLeft = 0.0f;
-float gSprintMult = 1.0f;                   // read by ApplySpeedBuffs
 bool gSprinting = false;
 bool gSprintButtonWasDown = false;
 double gStaminaFullAt = 0.0;                // when the bar last filled, so it can fade away
@@ -2890,7 +2908,7 @@ void UpdateSprint(Player* player, const royale::HudState& hud) {
     gSprintButtonWasDown = down;
 
     if (!LiveAndAlive(hud)) {   // a fresh bar for every match
-        gStamina = 1.0f; gSprinting = false; gSprintMult = 1.0f;
+        gStamina = 1.0f; gSprinting = false;
         return;
     }
     const Input& in = gPlayState->state.input[0];
@@ -2913,7 +2931,8 @@ void UpdateSprint(Player* player, const royale::HudState& hud) {
         gStamina = std::min(1.0f, gStamina + dt / kStaminaRefill);
         if (gStamina >= 1.0f) gStaminaFullAt = ImGui::GetTime();
     }
-    gSprintMult = gSprinting ? kSprintMult : 1.0f;
+    gRoyaleRunSpeedScale = gSprinting ? kSprintMult : 1.0f;
+    if (gSprinting && (player->actor.bgCheckFlags & 1) && std::fabs(player->linearVelocity) > 4.0f) SprintDust(gPlayState, &player->actor, gPlayState->gameplayFrames);
 }
 
 // A thin bar under the magic meter, the width of the hearts, like the shield and magic bars above it. No text. It only shows while you are using
@@ -4713,8 +4732,10 @@ uint8_t ClassifyAnim(Player* player) {
     if (gActionFrames > 0) return static_cast<uint8_t>(gActionAnim);
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
     float v = std::fabs(player->linearVelocity);
-    if (v > 7.5f && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
+    const float runTop = gSprinting ? 7.5f * kSprintMult : 7.5f;
+    if (v > runTop && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
     if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
+    if (gSprinting && v >= 4.0f) return static_cast<uint8_t>(royale::Anim::Sprint);
     return static_cast<uint8_t>(v < 4.0f ? royale::Anim::Walk : royale::Anim::Run);
 }
 
@@ -5085,7 +5106,7 @@ royale::Vec2 gLastPos = {};
 bool gHaveLastPos = false;
 void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     const bool active = LiveAndAlive(hud) && InField();
-    const float mult = hud.speedMult * gSprintMult;
+    const float mult = hud.speedMult;
     if (active && gHaveLastPos && std::fabs(mult - 1.0f) > 0.01f) {
         const float dx = player->actor.world.pos.x - gLastPos.x, dz = player->actor.world.pos.z - gLastPos.z;
         if (dx * dx + dz * dz < 40.0f * 40.0f) {
@@ -5123,6 +5144,7 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
 }
 
 void OnPlayerUpdate() {
+    gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     if (!gSession.Joined() || !InGame()) return;
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();

@@ -8,7 +8,7 @@ namespace royale {
 // as Idle, so new states can be added later without breaking older clients.
 enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, Dead = 5, Emote1 = 6, Emote2 = 7, Emote3 = 8, Emote4 = 9, Emote5 = 10,
                         Roll = 11, SideL = 12, SideR = 13, Back = 14, Stance = 15,
-                        Shoot = 16, Throw = 17, Drink = 18, Play = 19, Cast = 20, Count };  // the item-use poses: loose an arrow or seed, throw a bomb, drink a potion, play an ocarina song, cast a spell // Roll: a dodge roll; SideL/SideR/Back/Stance: the lock-on (Z-target) footwork
+                        Shoot = 16, Throw = 17, Drink = 18, Play = 19, Cast = 20, Sprint = 21, Count };  // the item-use poses: loose an arrow or seed, throw a bomb, drink a potion, play an ocarina song, cast a spell // Sprint: running with the left stick clicked; Roll: a dodge roll; SideL/SideR/Back/Stance: the lock-on (Z-target) footwork
 
 // Emotes: a player stands still and does a gesture the others can see. They travel as the player's anim value like everything else.
 constexpr int kEmoteCount = 5;
