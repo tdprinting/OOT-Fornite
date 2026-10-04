@@ -1,6 +1,6 @@
 # Building and running OOT Royale
 
-Platforms: **Windows** and **Android** (target device: AYN Odin 2 Portal). Linux is not supported; it is only used here
+Platform: **Android only** (target device: AYN Odin 2 Portal). Linux is not supported; it is only used here
 to run unit tests and as a quick compiler check.
 
 You need your own legally obtained copy of *The Legend of Zelda: Ocarina of Time*. Only certain ROM versions work; the list
@@ -21,7 +21,7 @@ committed to this repo.
 | `mod/Royale/` | `RoyaleMod.cpp/.h` (the game-facing glue, copied into the fork) and `RoyaleSession.h` (host/join layer). |
 | `shared/`, `server/`, `client/` | Match, bots, storm, loot, protocol, `GameServer`, `GameClient`, transports. Plain C++17, unit-tested. |
 | `cmake/royale.cmake` | Pulled into the fork's CMake by patch 0002: builds ENet and our transport and links them into the game. |
-| `scripts/` | `apply_patches`, `link_mod` (`.ps1` for Windows, `.sh` elsewhere), `check_mod_compile.sh`. |
+| `scripts/` | `apply_patches`, `link_mod` (shell scripts), `check_mod_compile.sh`. |
 
 ## Get the code
 
@@ -41,37 +41,8 @@ cmake --build build/tests --config Release
 ctest --test-dir build/tests -C Release --output-on-failure
 ```
 Four test programs run: game logic and bots, the network layer over an in-memory network, the network layer over real UDP
-on localhost, and the host/join session. CI runs these on Windows (MSVC), cross-compiles them for Android arm64, and runs
+on localhost, and the host/join session. CI cross-compiles them for Android arm64, and runs
 them on Linux under AddressSanitizer and UBSan.
-
-## Windows
-
-Requirements (from the fork's own build guide):
-- Visual Studio 2022 or newer with the **Desktop development with C++** workload (MSVC v143 toolset and a Windows SDK)
-- CMake 3.20 or newer, Git, Python 3
-- At least 8 GB of RAM (4 GB machines have seen compiler failures)
-
-From a PowerShell prompt in the repo root:
-
-```powershell
-# 1. Apply our patches to the fork and copy the mod into it. Safe to re-run.
-./scripts/apply_patches.ps1
-./scripts/link_mod.ps1
-
-# 2. Configure. The fork downloads and builds its own dependencies through vcpkg (slow the first time).
-cmake -S third_party/Shipwright-Android -B build/x64 -G "Visual Studio 17 2022" -T v143 -A x64
-#   If you have a newer Visual Studio instead, drop -G and -T and let CMake choose.
-
-# 3. Generate soh.otr, then build.
-cmake --build build/x64 --target GenerateSohOtr --config Release
-cmake --build build/x64 --config Release
-
-# 4. Run build/x64/soh/Release/soh.exe
-```
-First launch asks for your ROM and extracts the game assets (`oot.otr`), as with stock Ship of Harkinian.
-
-Re-run `./scripts/link_mod.ps1` and rebuild whenever you edit `mod/Royale/RoyaleMod.cpp`. Edits to `shared/`, `server/`
-or `client/` are picked up by the normal build because they are included by path.
 
 ## Android (AYN Odin 2 Portal and other arm64 phones)
 
@@ -86,7 +57,7 @@ cd third_party/Shipwright-Android/Android
 ./gradlew assembleRelease        # or assembleDebug
 ```
 The APK lands in `third_party/Shipwright-Android/Android/app/build/outputs/apk/release/` (the release build is arm64-v8a only,
-which is right for the Odin 2 Portal). On Windows use `gradlew.bat` and run the two scripts' `.ps1` versions first.
+which is right for the Odin 2 Portal).
 
 Install it with `adb install` or by copying the APK to the device. Following the fork's own README: open the app, allow the
 file permissions it asks for, answer **Yes** to generating the OTR, **Yes** to looking for a ROM, and pick your ROM file.
@@ -103,7 +74,6 @@ stands in **Hyrule Field**: players only see each other there.
 2. **Host:** set your name and a port (default 7777) and press **Host**. Share your IP address and port.
    - Same Wi-Fi: use your device's local IP address.
    - Over the internet: forward UDP port 7777 on your router, or have everyone join a VPN such as Tailscale or ZeroTier. (Join codes are planned, not built.)
-   - Allow the game through Windows Firewall when it asks.
 3. **Join:** enter the host's address and port, press **Join**.
 4. The host presses **Start match**. Empty slots fill with bots up to 32. After a short countdown everyone is dropped at a
    spawn point; the storm closes in; health is controlled by the server.
@@ -138,4 +108,4 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 - **Health is overridden during a live match.** The mod saves your real hearts when the match goes live and restores them when
   you leave or it ends, but if the game crashes or you save mid-match your save file could keep the 3-heart value. Use a
   throwaway save for testing.
-- **Full builds on Windows and Android run in CI.** If one of those jobs is red, that is the first thing to look at.
+- **The full Android build runs in CI.** If one of those jobs is red, that is the first thing to look at.

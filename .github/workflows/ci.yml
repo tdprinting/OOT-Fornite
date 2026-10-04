@@ -8,21 +8,6 @@ on:
   pull_request:
 
 jobs:
-  windows-msvc:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - name: Fetch ENet only
-        run: git submodule update --init --depth 1 third_party/enet
-      - name: Configure (MSVC)
-        run: cmake -S server -B build -A x64
-      - name: Build
-        run: cmake --build build --config Release
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
-
   android-ndk:
     runs-on: ubuntu-latest
     steps:

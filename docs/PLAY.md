@@ -11,10 +11,9 @@ GitHub builds the game for you automatically. You download the finished files fr
 ## Step 1: download the files
 
 1. Open <https://github.com/tdprinting/OOT-Fornite/actions/workflows/game-build.yml>
-2. Click the newest run with a **green tick** (the name starts with the latest change, e.g. "CI: package the Windows build...").
+2. Click the newest run with a **green tick** .
 3. Scroll to the bottom of the run page to **Artifacts** and click to download:
    - **royale-android-apk** for your Odin 2 Portal or any Android phone
-   - **royale-windows** for a Windows PC (appears once the Windows build is green)
 4. The download is a `.zip`. Unzip it.
 
 A red cross on a run means that build failed, and there's nothing to download from that platform for that run. Tell me and I'll fix it.
@@ -27,20 +26,13 @@ A red cross on a run means that build failed, and there's nothing to download fr
 4. When asked, answer **Yes** to generating the data file, **Yes** to looking for a ROM, and pick your Ocarina of Time ROM file. Wait for the extraction to finish.
 5. Press **Back / Select / -** on the controller to open the menu.
 
-## Windows
-
-1. Unzip the `royale-windows` download somewhere permanent (for example `C:\Games\OOT-Royale`).
-2. Run `soh.exe`. Allow it through Windows Firewall if asked (needed for multiplayer).
-3. The first launch asks for your ROM and extracts the game files.
-4. Press **F1** to open the menu.
-
 ## Playing a match
 
 **Important: the game plays exactly like normal Ocarina of Time until you Host or Join from the menu.** Walking around Hyrule Field
 does nothing by itself. Nothing is added to the world until a lobby is open.
 
 1. Start the game and load any save file (use a throwaway one).
-2. Open the menu (**Back / Select / -** on Android, **F1** on Windows) and choose **Battle Royale**.
+2. Open the menu (**Back / Select / -**) and choose **Battle Royale**.
 3. **To host:** type a name and press **Host a lobby**. The lobby screen shows your address (for example `192.168.1.23:7777`) with a **Copy** button. Tell your friends the numbers before the colon.
    - Same Wi-Fi: that address works as shown.
    - Over the internet: use a free VPN like Tailscale on every device (easiest), or forward UDP port 7777 on your router.

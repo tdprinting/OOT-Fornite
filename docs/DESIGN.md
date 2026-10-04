@@ -4,8 +4,8 @@ Status: design draft v2. Written and unit-tested so far: match, storm, loot with
 layer (all in plain C++, tested on Linux only). Not yet done: anything inside the game itself (the mod is a logging stub that has
 not been compiled), and nothing has been built or run on Windows or Android.
 
-Platforms: **Windows and Android only**. Linux is not a target; this repo's Linux container is used only to build and run the unit tests.
-Decisions so far: **zero-build** (no Fortnite-style building at all); **Hyrule Field** is the v1 map. Targets are **Windows and Android** (primary Android device: AYN Odin 2 Portal).
+Platform: **Android only** (Windows was dropped; the code still builds nothing for it). Linux is not a target; this repo's Linux container is used only to build and run the unit tests.
+Decisions so far: **zero-build** (no Fortnite-style building at all); **Hyrule Field** is the v1 map. Target is **Android** (AYN Odin 2 Portal).
 Minimum 1 human to start; **bots fill the remaining slots up to 32**. We use our own protocol and do not stay compatible with Shipwright's Anchor.
 Matches are **host-run**: whoever starts a game hosts it (listen server), no dedicated servers required.
 Base: [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android), a fork of [HarbourMasters/Shipwright](https://github.com/HarbourMasters/Shipwright) (Ship of Harkinian, "SoH") 9.0.2 that already runs on Android. One codebase for Windows and Android.

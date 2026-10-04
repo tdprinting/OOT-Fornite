@@ -18,37 +18,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fetch submodules (fork, its submodules, ENet)
-        run: git submodule update --init --recursive --depth 1
-      - name: Apply patches and copy the mod into the fork
-        shell: pwsh
-        run: |
-          ./scripts/apply_patches.ps1
-          ./scripts/link_mod.ps1
-      - name: Show toolchain
-        shell: pwsh
-        run: |
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -format json | Select-String "displayName|installationVersion"
-          cmake --version
-      - name: Configure (the fork bootstraps vcpkg itself)
-        run: cmake -S third_party/Shipwright-Android -B build/x64 -A x64
-      - name: "Generate soh.otr (the game's own data file, no ROM involved)"
-        run: cmake --build build/x64 --target GenerateSohOtr --config Release --parallel
-      - name: Build the game and its ROM extractor
-        run: cmake --build build/x64 --config Release --parallel
-      - name: "Package with the fork's own CPack ZIP (game, soh.otr, extractor files)"
-        working-directory: build/x64
-        run: cpack -G ZIP -C Release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: royale-windows
-          path: build/x64/*.zip
-
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 150
