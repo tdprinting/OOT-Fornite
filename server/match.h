@@ -924,6 +924,23 @@ class Match {
                     Cleanse(p);
                     did = true;
                     break;
+                case EffectType::Shockwave: {
+                    // Everyone near is thrown straight away from the user (the server moves them; their game follows), then left dazed.
+                    ForOthersNear(p, fx.radius, [&](PlayerState& o) {
+                        float dx = o.pos.x - p.pos.x, dz = o.pos.z - p.pos.z;
+                        float len = std::hypot(dx, dz);
+                        if (len < 1.0f) { dx = 1.0f; dz = 0.0f; len = 1.0f; }
+                        const float push = fx.amount * s;
+                        Vec2 to = {o.pos.x + dx / len * push, o.pos.z + dz / len * push};
+                        const float off = Distance(to, map.center);
+                        if (off > map.radius - 20.0f) to = {map.center.x + (to.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (to.z - map.center.z) / off * (map.radius - 20.0f)};
+                        if (placement && !placement(to)) to = {o.pos.x + dx / len * push * 0.4f, o.pos.z + dz / len * push * 0.4f}; // no ground there: a shorter throw
+                        Teleport(o, to);
+                        if (!TotalsOf(o).stunImmune) { o.stunUntil = (std::max)(o.stunUntil, clock + fx.seconds * s); o.dirty = true; }
+                    });
+                    did = true;
+                    break;
+                }
                 case EffectType::RandomSong: {
                     ItemId songs[kItemCount];
                     int n = 0;

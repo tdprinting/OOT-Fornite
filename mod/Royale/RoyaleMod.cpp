@@ -10,6 +10,7 @@
 #include "map.h"
 #include "meshes.h"
 #include "skins.h"
+#include "tune.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -30,6 +31,7 @@
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/SohGui/SohMenu.h"
 #include "soh/cvar_prefixes.h"
+#include <SDL2/SDL.h>
 #include <imgui.h>
 #include <libultraship/libultraship.h>
 #include <spdlog/spdlog.h>
@@ -250,8 +252,67 @@ const royale::PuppetState* StateOf(const Actor* actor) {
     return st == gState.end() ? nullptr : &st->second;
 }
 
+// The chicken dance, made from scratch: Link's standing animation with his limbs posed over it, in four one-second bars that repeat -
+// beak (hands snapping open and shut in front), wings (elbows out, flapping), tail (shaking the hips while bobbing down) and a clap.
+// `t` is seconds. Limb axes were worked out from the skeleton's layout, not from seeing it, so the amplitudes are modest.
+float ChickenDanceBob(float t) {
+    const float bar = std::fmod(t, 4.0f);
+    return bar >= 2.0f && bar < 3.0f ? -std::fabs(std::sin(t * 12.0f)) * 9.0f : 0.0f; // squatting through the tail wiggle
+}
+
+void ApplyChickenDance(Player* p, float t) {
+    constexpr float deg = 32768.0f / 180.0f;
+    Vec3s* j = p->skelAnime.jointTable;
+    const int bar = static_cast<int>(std::fmod(t, 4.0f));
+    const float beat = t * 6.2831853f * 2.5f; // 2.5 flaps or snaps a second
+    const float s = std::sin(beat);
+    auto add = [&](int limb, float rx, float ry, float rz) {
+        j[limb].x = static_cast<s16>(j[limb].x + rx * deg);
+        j[limb].y = static_cast<s16>(j[limb].y + ry * deg);
+        j[limb].z = static_cast<s16>(j[limb].z + rz * deg);
+    };
+    switch (bar) {
+        case 0: { // beak: forearms up and forward, snapping
+            const float snap = s > 0 ? 1.0f : 0.0f;
+            add(PLAYER_LIMB_L_SHOULDER, 0, 0, 50.0f);
+            add(PLAYER_LIMB_R_SHOULDER, 0, 0, -50.0f);
+            add(PLAYER_LIMB_L_FOREARM, 0, 0, 55.0f - 40.0f * snap);
+            add(PLAYER_LIMB_R_FOREARM, 0, 0, -55.0f + 40.0f * snap);
+            break;
+        }
+        case 1: { // wings: arms out, elbows flapping
+            add(PLAYER_LIMB_L_SHOULDER, 0, 0, 70.0f + 10.0f * s);
+            add(PLAYER_LIMB_R_SHOULDER, 0, 0, -70.0f - 10.0f * s);
+            add(PLAYER_LIMB_L_FOREARM, 0, 0, 40.0f * s);
+            add(PLAYER_LIMB_R_FOREARM, 0, 0, -40.0f * s);
+            break;
+        }
+        case 2: { // tail: hands tucked at the back, hips shaking
+            add(PLAYER_LIMB_L_SHOULDER, 0, 0, 25.0f);
+            add(PLAYER_LIMB_R_SHOULDER, 0, 0, -25.0f);
+            add(PLAYER_LIMB_L_FOREARM, 0, 0, 70.0f);
+            add(PLAYER_LIMB_R_FOREARM, 0, 0, -70.0f);
+            add(PLAYER_LIMB_WAIST, 0, 28.0f * std::sin(t * 6.2831853f * 4.0f), 0);
+            break;
+        }
+        default: { // clap: arms swinging in together
+            const float clap = 0.5f + 0.5f * s;
+            add(PLAYER_LIMB_L_SHOULDER, 0, 0, 20.0f + 35.0f * (1.0f - clap));
+            add(PLAYER_LIMB_R_SHOULDER, 0, 0, -20.0f - 35.0f * (1.0f - clap));
+            add(PLAYER_LIMB_L_FOREARM, 0, 0, 30.0f);
+            add(PLAYER_LIMB_R_FOREARM, 0, 0, -30.0f);
+            break;
+        }
+    }
+}
+
 LinkAnimationHeader* AnimFor(uint8_t anim) {
     switch (static_cast<royale::Anim>(anim)) {
+        case royale::Anim::Emote1: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_bikkuri;     // startled: "Wow!"
+        case royale::Anim::Emote2: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_jibunmiru;   // looks at his own hands
+        case royale::Anim::Emote3: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kaoage;      // looks up
+        case royale::Anim::Emote4: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kenmiru1;    // admires a sword
+        case royale::Anim::Emote5: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;      // the chicken dance poses the limbs itself (ApplyChickenDance)
         case royale::Anim::Walk:
         case royale::Anim::Run:
             return (LinkAnimationHeader*)&gPlayerAnim_link_normal_run;
@@ -332,6 +393,11 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         gPlaying[actor] = (const void*)want;
     }
     LinkAnimation_Update(play, &player->skelAnime);
+    if (s.anim == static_cast<uint8_t>(royale::Anim::Emote5)) {
+        const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+        ApplyChickenDance(player, t);
+        actor->world.pos.y += ChickenDanceBob(t);
+    }
     // Cancel the animation's own root motion: the network decides where the puppet is.
     Vec3f ignored;
     SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
@@ -427,6 +493,8 @@ struct Corpse {
     royale::ItemId weapon = royale::ItemId::DekuStick;
     uint32_t tunic = royale::SkinRgb(0);
     bool animStarted = false;
+    bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
+    int emote = 0;
 };
 std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
@@ -443,6 +511,26 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     if (of == gCorpseOf.end()) { Actor_Kill(actor); return; }
     Corpse& c = gCorpses[of->second];
     Player* player = reinterpret_cast<Player*>(actor);
+    if (c.pinned) { // the emote double
+        Player* local = GET_PLAYER(play);
+        actor->world.pos = local->actor.world.pos;
+        actor->shape.rot.y = local->actor.shape.rot.y;
+        actor->world.rot.y = actor->shape.rot.y;
+        actor->shape.shadowAlpha = 255;
+        if (!c.animStarted) {
+            LinkAnimation_PlayLoop(play, &player->skelAnime, AnimFor(royale::EmoteAnim(c.emote)));
+            c.animStarted = true;
+        }
+        LinkAnimation_Update(play, &player->skelAnime);
+        if (c.emote == royale::kChickenDanceEmote) {
+            const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+            ApplyChickenDance(player, t);
+            actor->world.pos.y += ChickenDanceBob(t);
+        }
+        Vec3f ignored;
+        SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
+        return;
+    }
     const float dt = 1.0f / royale::kTickHz;
     c.age += dt;
     if (c.age > 25.0f) { Actor_Kill(actor); return; }
@@ -487,6 +575,27 @@ void Corpse_Draw(Actor* actor, PlayState* play) {
     Player_Draw(actor, play);
     if (gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
+}
+
+// An emote: a copy of the local player's character stands where they are and plays the gesture, while the real one is hidden. Moving or attacking
+// ends it. Returns the actor so the caller can remove it.
+Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
+    if (gCorpses.size() >= 14 || gPlayState == nullptr) return nullptr;
+    const uint16_t id = gNextCorpse++;
+    if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
+    gSpawningPuppet = id;
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
+    gSpawningPuppet = 0;
+    if (actor == nullptr) return nullptr;
+    Corpse c;
+    c.actor = actor;
+    c.pinned = true;
+    c.emote = emote;
+    c.weapon = s.weapon;
+    c.tunic = s.tunic;
+    gCorpses[id] = c;
+    gCorpseOf[actor] = id;
+    return actor;
 }
 
 void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
@@ -1319,6 +1428,31 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     }
 }
 
+bool gEmotePanelOpen = false;
+void StartEmote(int index, const royale::HudState& hud); // below, with the emote logic
+
+// The emote button (bottom right): tap it to open the list, tap an emote to play it. C-Right plays them in turn.
+void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!h.selfAlive || !InField()) return;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
+    const float w = 128.0f * scale, hgt = 40.0f * scale;
+    const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
+    auto inside = [&](ImVec2 p0, ImVec2 p1) { return io.MousePos.x >= p0.x && io.MousePos.x <= p1.x && io.MousePos.y >= p0.y && io.MousePos.y <= p1.y; };
+    dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 200), 6.0f * scale);
+    dl->AddRect(a, b, gEmotePanelOpen ? IM_COL32(255, 236, 120, 255) : IM_COL32(190, 190, 200, 255), 6.0f * scale, 0, 2.5f * scale);
+    dl->AddText(font, 16.0f * scale, ImVec2(a.x + 12 * scale, a.y + 10 * scale), IM_COL32(255, 255, 255, 255), "EMOTE");
+    if (tap && inside(a, b)) gEmotePanelOpen = !gEmotePanelOpen;
+    if (!gEmotePanelOpen) return;
+    for (int i = 0; i < royale::kEmoteCount; i++) {
+        const ImVec2 ea(a.x - 40.0f * scale, a.y - (i + 1) * (hgt + 6.0f * scale)), eb(b.x, ea.y + hgt);
+        dl->AddRectFilled(ea, eb, IM_COL32(8, 18, 28, 215), 6.0f * scale);
+        dl->AddRect(ea, eb, IM_COL32(120, 200, 255, 255), 6.0f * scale, 0, 2.0f * scale);
+        dl->AddText(font, 15.0f * scale, ImVec2(ea.x + 10 * scale, ea.y + 11 * scale), IM_COL32(255, 255, 255, 255), royale::kEmoteNames[i]);
+        if (tap && inside(ea, eb)) StartEmote(i, h);
+    }
+}
+
 // The end-of-match standings.
 void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.results.empty()) return;
@@ -1514,6 +1648,7 @@ void DrawOverlay() {
     DrawPoiLabels(dl, font, ds, scale, h);
     DrawMinimap(dl, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
+    DrawEmotes(dl, font, ds, scale, h);
 
     // Top left: the numbers.
     float x = 16 * scale, y = 14 * scale, line = 24 * scale;
@@ -1598,7 +1733,102 @@ void EnsureHudWindow() {
 
 // ---- local player <-> session ----------------------------------------------------------------------------------------
 
+// ---- emotes -------------------------------------------------------------------------------------------------------------------
+
+struct EmoteState {
+    int id = -1;               // which emote is playing, -1 for none
+    double endAt = 0;
+    Actor* actor = nullptr;    // the double that performs it
+};
+EmoteState gEmote;
+int gNextEmote = 0;            // what C-Right plays next
+
+void StopEmote() {
+    if (gEmote.id < 0) return;
+    if (gEmote.actor) Actor_Kill(gEmote.actor);
+    gEmote = EmoteState{};
+}
+
+void StartEmote(int index, const royale::HudState& hud) {
+    if (!LiveAndAlive(hud) || !InField() || gSkydiving) return;
+    StopEmote();
+    Player* player = GET_PLAYER(gPlayState);
+    royale::PuppetState me;
+    me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
+    me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic;
+    Actor* a = SpawnEmoteDouble(me, index);
+    if (a == nullptr) return;
+    gEmote.id = index;
+    gEmote.actor = a;
+    gEmote.endAt = ImGui::GetTime() + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
+    gEmotePanelOpen = false;
+}
+
+// While an emote plays, the real character is hidden and any movement, attack or a few seconds ends it.
+void UpdateEmote(Player* player, const royale::HudState& hud) {
+    if (gEmote.id < 0) return;
+    const Input& in = gPlayState->state.input[0];
+    const bool moved = std::fabs(static_cast<float>(in.cur.stick_x)) > 25.0f || std::fabs(static_cast<float>(in.cur.stick_y)) > 25.0f;
+    if (!LiveAndAlive(hud) || !InField() || ImGui::GetTime() > gEmote.endAt || moved || (in.press.button & (BTN_B | BTN_A | BTN_CUP | BTN_DDOWN | BTN_DUP))) {
+        StopEmote();
+        return;
+    }
+    player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
+}
+
+// The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
+// when somebody doing it is near: louder the closer they are.
+struct ChickenMusic {
+    SDL_AudioDeviceID device = 0;
+    std::vector<int16_t> cycle;
+    size_t pos = 0;
+    bool playing = false;
+    bool failed = false;
+};
+ChickenMusic gMusic;
+
+void StopChickenMusic() {
+    if (gMusic.device != 0 && gMusic.playing) SDL_ClearQueuedAudio(gMusic.device);
+    gMusic.playing = false;
+}
+
+void UpdateChickenMusic() {
+    float volume = 0.0f;
+    if (gEmote.id == royale::kChickenDanceEmote) volume = 1.0f;
+    else if (gPlayState != nullptr && InField() && GET_PLAYER(gPlayState) != nullptr) {
+        Player* me = GET_PLAYER(gPlayState);
+        for (const auto& [id, st] : gState) {
+            if (!st.alive || st.anim != static_cast<uint8_t>(royale::Anim::Emote5)) continue;
+            const float d = std::hypot(st.x - me->actor.world.pos.x, st.z - me->actor.world.pos.z);
+            const float v = std::clamp(1.0f - d / 1800.0f, 0.0f, 1.0f);
+            volume = std::max(volume, v * v * 0.8f);
+        }
+    }
+    volume *= std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.7f;
+    if (volume < 0.01f || gMusic.failed) { StopChickenMusic(); return; }
+    if (gMusic.device == 0) {
+        SDL_AudioSpec want = {}, have = {};
+        want.freq = royale::kTuneRate; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 1024; want.callback = nullptr;
+        gMusic.device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (gMusic.device == 0) { gMusic.failed = true; return; } // no second audio stream available: the dance just stays silent
+        SDL_PauseAudioDevice(gMusic.device, 0);
+        gMusic.cycle = royale::BuildChickenTune();
+    }
+    // Keep about a third of a second queued, in quarter-second pieces at the current volume.
+    const Uint32 bytesPerSecond = royale::kTuneRate * 2;
+    if (SDL_GetQueuedAudioSize(gMusic.device) > bytesPerSecond / 3) return;
+    const size_t chunk = royale::kTuneRate / 4;
+    std::vector<int16_t> out(chunk);
+    for (size_t i = 0; i < chunk; i++) {
+        out[i] = static_cast<int16_t>(gMusic.cycle[gMusic.pos] * volume);
+        gMusic.pos = (gMusic.pos + 1) % gMusic.cycle.size();
+    }
+    SDL_QueueAudio(gMusic.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
+    gMusic.playing = true;
+}
+
 uint8_t ClassifyAnim(Player* player) {
+    if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
     float v = std::fabs(player->linearVelocity);
     if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
@@ -1683,6 +1913,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             player->actor.velocity.y = std::max(player->actor.velocity.y, 7.0f);
             if (rise < 14.0f) player->actor.world.pos.y = ledge + 1.0f;  // close enough: on top
         }
+    }
+
+    if ((in.press.button & BTN_CRIGHT) && gEmote.id < 0) {
+        StartEmote(gNextEmote, hud);
+        gNextEmote = (gNextEmote + 1) % royale::kEmoteCount;
     }
 
     if (in.press.button & BTN_DDOWN) {
@@ -1838,6 +2073,7 @@ void OnPlayerUpdate() {
     }
 
     UpdateSkydive(player, hud);
+    UpdateEmote(player, hud);
     NoticePoi(player, hud);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
@@ -2050,6 +2286,7 @@ void OnGameFrameUpdate() {
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
+    UpdateChickenMusic();
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
 

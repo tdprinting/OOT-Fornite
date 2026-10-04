@@ -66,7 +66,7 @@ Farore's Wind), and Hyrule Field's large open map.
 
 ### 4.2 Combat and items
 
-The loot pool holds 82 Ocarina of Time items in six kinds (the full list is in section 4.2.1). Each kind works differently:
+The loot pool holds 83 items, 82 of them from Ocarina of Time and the Shockwave Grenade in six kinds (the full list is in section 4.2.1). Each kind works differently:
 
 | Kind | How you use it | Slots |
 |---|---|---|
@@ -141,6 +141,7 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 | Nocturne of Shadow | Ability | Rare to Epic | Vanish and reappear somewhere else |
 | Requiem of Spirit | Ability | Rare to Epic | Stuns and hurts everyone near you |
 | Prelude of Light | Ability | Rare to Epic | Heals 1 heart and protects you briefly |
+| Shockwave Grenade | Ability | Uncommon to Legendary | Blasts everyone near you away and leaves them dazed |
 | Kokiri Tunic | Gear | Common to Uncommon | Plain: slightly less damage taken |
 | Goron Tunic | Gear | Uncommon to Epic | Half damage from fire and explosions |
 | Zora Tunic | Gear | Uncommon to Epic | Less storm damage |

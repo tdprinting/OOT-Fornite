@@ -2,6 +2,7 @@
 #include "../sim.h"
 #include "../nav.h"
 #include "../../shared/meshes.h"
+#include "../../shared/tune.h"
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include <set>
@@ -448,7 +449,7 @@ static void CatalogIsConsistent() {
     CHECK(kItemCount >= 80);
     CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 14 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 9 && perKind[static_cast<int>(ItemKind::Instant)] == 4);
-    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 21 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
+    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
     int perSlot[kGearSlots] = {};
@@ -1493,6 +1494,76 @@ static void PlayerLimitSlider() {
     CHECK(big.SetPlayerLimit(12) && big.Start() && big.Players().size() == 12);
 }
 
+static void ChickenTune() {
+    const std::vector<int16_t> a = BuildChickenTune(), b = BuildChickenTune();
+    CHECK(a.size() == static_cast<size_t>(kTuneSeconds * kTuneRate));                 // exactly one cycle of the dance, so it loops cleanly
+    CHECK(a == b);                                                                    // deterministic
+    int peak = 0;
+    double energy = 0;
+    for (int16_t v : a) { peak = (std::max)(peak, std::abs(static_cast<int>(v))); energy += static_cast<double>(v) * v; }
+    CHECK(peak > 20000 && peak < 32768);                                              // loud but not clipping
+    CHECK(std::sqrt(energy / a.size()) > 2500.0);                                     // and not mostly silence
+    // Every second has sound in it: the tune is busy through all four bars of the dance.
+    for (int bar = 0; bar < 4; bar++) {
+        double e = 0;
+        for (int i = bar * kTuneRate; i < (bar + 1) * kTuneRate; i++) e += static_cast<double>(a[static_cast<size_t>(i)]) * a[static_cast<size_t>(i)];
+        CHECK(std::sqrt(e / kTuneRate) > 1500.0);
+    }
+    // The loop point is quiet-ish at both ends (no click when it wraps): the last few samples are well under the peak.
+    int tail = 0;
+    for (size_t i = a.size() - 40; i < a.size(); i++) tail = (std::max)(tail, std::abs(static_cast<int>(a[i])));
+    CHECK(tail < peak / 3);
+}
+
+static void ShockwaveGrenade() {
+    CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Ability && !IsSong(ItemId::ShockwaveGrenade));
+    CHECK(AbilityOf(ItemId::ShockwaveGrenade).fx[0].type == EffectType::Shockwave && AbilityOf(ItemId::ShockwaveGrenade).cooldown > 0);
+    Simulation sim = Duel(5, {100, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* user = m.Find(1);
+    PlayerState* near = m.Find(1000);
+    // A third player well outside the blast.
+    PlayerState* far = m.Find(1001);
+    far->alive = true;
+    far->pos = {1500, 0};
+    user->pos = {0, 0};
+    near->pos = {200, 0};
+    user->ability = {ItemId::ShockwaveGrenade, Rarity::Rare};
+    user->hasAbility = true;
+    user->abilityReadyAt = 0;
+    const float nearBefore = Distance(near->pos, user->pos);
+    m.DrainEvents();
+    CHECK(m.UseAbility(1));
+    CHECK(Distance(near->pos, user->pos) > nearBefore + 250.0f);                          // thrown away from the user
+    CHECK(near->pos.z == 0 && near->pos.x > 200.0f);                                       // straight away, not sideways
+    CHECK(m.Stunned(*near) && !m.Stunned(*user));                                           // dazed, and the user is fine
+    CHECK(Distance(far->pos, {1500, 0}) < 0.01f);                                           // out of range: untouched
+    CHECK(Distance(user->pos, {0, 0}) < 0.01f && near->health == near->maxHealth);          // no damage, and the user stays put
+    bool teleported = false;
+    for (const auto& e : m.DrainEvents()) teleported |= e.type == MatchEvent::Type::Teleported && e.a == 1000;
+    CHECK(teleported);
+    CHECK(!m.UseAbility(1));                                                                // recharging
+    // The edge of the map stops the throw, and ground that isn't there shortens it.
+    Simulation edge = Duel(5, {100, 0}, {0, 0});
+    edge.match.Find(1)->pos = {1900, 0};
+    edge.match.Find(1000)->pos = {1960, 0};
+    edge.match.Find(1)->ability = {ItemId::ShockwaveGrenade, Rarity::Legendary};
+    edge.match.Find(1)->hasAbility = true;
+    CHECK(edge.match.UseAbility(1));
+    CHECK(Distance(edge.match.Find(1000)->pos, MapCircle().center) <= MapCircle().radius);
+    // A bot uses it when an enemy is on top of it and it is losing.
+    Simulation botFight = Duel(5, {100, 0}, {0, 0});
+    PlayerState* b = botFight.match.Find(1000);
+    b->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
+    b->hasAbility = true;
+    b->health = 1.0f;
+    botFight.match.Find(1)->pos = {150, 0};
+    botFight.match.Find(1)->weapon = {ItemId::BiggoronSword, Rarity::Epic};
+    bool used = false;
+    for (int i = 0; i < 3 * kTickHz; i++) { botFight.Tick(kDt); used |= b->abilityReadyAt > 0; }
+    CHECK(used);
+}
+
 int main() {
     StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
@@ -1501,7 +1572,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropEverythingAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

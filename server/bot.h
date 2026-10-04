@@ -303,6 +303,7 @@ class BotController {
         switch (id) {
             case ItemId::NayrusLove: base = 1.0f; break;
             case ItemId::Hookshot: case ItemId::Longshot: base = 0.9f; break;
+            case ItemId::ShockwaveGrenade: base = 0.7f; break;
             case ItemId::DinsFire: case ItemId::RequiemOfSpirit: case ItemId::SongOfStorms: case ItemId::SongOfTime: base = 0.85f; break;
             case ItemId::FaroresWind: case ItemId::PreludeOfLight: case ItemId::SerenadeOfWater: base = 0.75f; break;
             case ItemId::LensOfTruth: case ItemId::MagicBeans: case ItemId::FairyOcarina: base = 0.35f; break;
@@ -439,6 +440,7 @@ class BotController {
             case ItemId::NocturneOfShadow: want = (s.fleeing && critical && foeNear) || (s.outsideZone && Distance(p.pos, m.GetStorm().SafeZoneAt(m.StormTime()).center) > 1500.0f); break;
             case ItemId::RequiemOfSpirit:  want = foeNear && d < 650; break;
             case ItemId::PreludeOfLight:   want = hurt && foeNear && d < 500; break;
+            case ItemId::ShockwaveGrenade: want = foeNear && d < 330 && (s.fleeing || critical || s.advantage < 1.1f); break;
             case ItemId::FairyOcarina:
             case ItemId::OcarinaOfTime:    want = (foeNear && d < 500) || hurt; break; // a gamble: any song might come out
             default: break;

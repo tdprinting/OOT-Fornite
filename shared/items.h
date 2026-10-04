@@ -33,7 +33,7 @@ enum class ItemId : uint8_t {
     // ---- abilities
     DinsFire, FaroresWind, NayrusLove, Hookshot, Longshot, LensOfTruth, MagicBeans, FairyOcarina, OcarinaOfTime,
     ZeldasLullaby, EponasSong, SariasSong, SunsSong, SongOfTime, SongOfStorms, MinuetOfForest, BoleroOfFire,
-    SerenadeOfWater, NocturneOfShadow, RequiemOfSpirit, PreludeOfLight,
+    SerenadeOfWater, NocturneOfShadow, RequiemOfSpirit, PreludeOfLight, ShockwaveGrenade,
     // ---- gear
     KokiriTunic, GoronTunic, ZoraTunic,
     KokiriBoots, IronBoots, HoverBoots,
@@ -128,6 +128,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rU, rL, "Blasts everyone near you away and leaves them dazed"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
@@ -290,6 +291,7 @@ enum class EffectType : uint8_t {
     Regen,         // amount = hearts per second, seconds
     Cleanse,
     RandomSong,    // radius: 0 = simple songs only, 1 = any song
+    Shockwave,     // radius, amount = how far everyone in range is thrown from you, seconds = how long they are dazed
 };
 
 struct Effect {
@@ -328,6 +330,7 @@ constexpr AbilityDef AbilityOf(ItemId id) {
         case ItemId::NocturneOfShadow: return {30, {{{T::RandomTeleport}}}};
         case ItemId::RequiemOfSpirit:  return {26, {{{T::StunNearby, 700, 0, 1.0f}, {T::AoeDamage, 700, 0.6f, 0}}}};
         case ItemId::PreludeOfLight:   return {26, {{{T::Heal, 0, 1.0f, 0}, {T::Invulnerable, 0, 0, 1.5f}}}};
+        case ItemId::ShockwaveGrenade: return {16, {{{T::Shockwave, 450, 380, 0.8f}}}};
         default:                       return {};
     }
 }
