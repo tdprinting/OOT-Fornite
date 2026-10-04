@@ -58,7 +58,14 @@ extern "C" {
 #include "objects/object_ik/object_ik.h"           // the Iron Knuckle (a mini boss)
 #include "objects/object_wf/object_wf.h"           // the Wolfos (a mini boss)
 #include "objects/object_sk2/object_sk2.h"         // the Stalfos (a mini boss)
-#include "objects/object_fd2/object_fd2.h"         // Volvagia (the dragons)
+#include "objects/object_fd2/object_fd2.h"         // Volvagia (Death Mountain Crater's major boss)
+#include "objects/object_zf/object_zf.h"           // the Lizalfos (a mini boss)
+#include "objects/object_bigokuta/object_bigokuta.h" // the Big Octo (a mini boss)
+#include "objects/object_dh/object_dh.h"           // the Dead Hand and its hands (a mini boss)
+#include "objects/object_mo/object_mo.h"           // Morpha (Lake Hylia's major boss)
+#include "objects/object_gnd/object_gnd.h"         // Phantom Ganon (Hyrule Field's major boss)
+#include "objects/object_sst/object_sst.h"         // Bongo Bongo (Kakariko's major boss)
+#include "objects/object_tw/object_tw.h"           // Twinrova (Desert Colossus's major boss)
 #include "regs.h"                                // WREG, for the game's own minimap switch
 extern PlayState* gPlayState;
 
@@ -1420,199 +1427,7 @@ void ClearProps() {
     for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
 }
 
-// ---- mini bosses ---------------------------------------------------------------------------------------------------------------
-
-// Each boss is drawn by a stand-in actor (the game's small rock with its logic switched off) using our golem model. The server decides
-// everything about it; here we only smooth what the snapshots say and animate it.
-struct BossActor {
-    Actor* actor = nullptr;
-    ActorFunc origDestroy = nullptr;
-    int kind = 0;
-    float x = 0, z = 0;          // smoothed position
-    float tx = 0, tz = 0;        // latest from the server
-    int16_t rot = 0, trot = 0;
-    float hp = 1.0f;
-    float smashAge = 10.0f;      // seconds since it last swung
-    float moved = 0;             // distance covered lately, for the walking bob
-    float alt = 0, talt = 0;     // height above the ground, smoothed / latest (the dragon flies)
-    int mode = 0;                // royale::DragonMode
-    bool initialised = false;
-    // the game's own enemy model for the mini bosses (see BossModelOf)
-    SkelAnime sk;
-    Vec3s joint[64] = {};
-    Vec3s morph[64] = {};
-    bool skReady = false;
-    const void* playing = nullptr;
-    float hurtAge = 10.0f;       // seconds since it was last hurt
-    float lastHp = 1.0f;
-    int swings = 0;              // which of its two attacks comes next
-    float walkBlend = 0.0f;
-};
-std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
-std::unordered_map<const Actor*, uint32_t> gBossOf;
-std::unordered_map<uint32_t, int> gBossKindSeen;      // remembered after it is gone, for the messages
-
-// The seven mini bosses are the game's own enemies, each with its real skeleton and animations: a Dodongo, two Iron Knuckles, a Wolfos and a white
-// Wolfos, and a Stalfos. They are drawn just as the game draws them (same skeleton, same colour tricks); the server decides where they go and what they
-// hit, and tells us when a blow starts so the right swing plays (the blow lands about half a second in).
-struct BossModel {
-    const char* skeleton;
-    int limbs;
-    bool flex;
-    const char* idle; const char* walk; const char* attack[2]; const char* hurt;
-    float scale;            // the game's own actor scale
-    float idleSpeed;        // 0 holds the first frame (the Iron Knuckle's stance)
-    int look;               // 0 plain, 1 Iron Knuckle gold, 2 Iron Knuckle green, 3 Wolfos, 4 white Wolfos, 5 Stalfos
-};
-BossModel BossModelOf(int kind) {
-    switch (kind) {
-        case 0: case 6: return { gDodongoSkel, 31, false, gDodongoWaitAnim, gDodongoWalkAnim, { gDodongoSweepTailRightAnim, gDodongoSweepTailLeftAnim }, gDodongoDamageAnim, 0.01875f, 1.0f, 0 };
-        case 1: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleVerticalAttackAnim, gIronKnuckleHorizontalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 1 };
-        case 5: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleHorizontalAttackAnim, gIronKnuckleVerticalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 2 };
-        case 2: return { gWolfosWhiteSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.01f, 1.0f, 4 };
-        case 3: return { gWolfosNormalSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.0075f, 1.0f, 3 };
-        default: return { gStalfosSkel, 61, false, gStalfosMiddleGuardAnim, gStalfosSlowAdvanceAnim, { gStalfosDownSlashAnim, gStalfosUpSlashAnim }, gStalfosFlinchFromHitFrontAnim, 0.015f, 1.0f, 5 };
-    }
-}
-
-Gfx* BossEnvDl(PlayState* play, u8 pr, u8 pg, u8 pb, u8 er, u8 eg, u8 eb) {
-    Gfx* dl = static_cast<Gfx*>(Graph_Alloc(play->state.gfxCtx, 4 * sizeof(Gfx)));
-    Gfx* h = dl;
-    gDPPipeSync(h++);
-    gDPSetPrimColor(h++, 0, 0, pr, pg, pb, 255);
-    gDPSetEnvColor(h++, er, eg, eb, 255);
-    gSPEndDisplayList(h++);
-    return dl;
-}
-
-int gBossLook = 0;
-s32 Boss_OverrideLimb(PlayState* play, s32 limb, Gfx** dList, Vec3f*, Vec3s*, void*) {
-    if (gBossLook == 1 || gBossLook == 2) {   // Iron Knuckle: only the whole-armour pieces are drawn (the broken-armour limbs are not)
-        if (limb == 28 || limb == 29) *dList = nullptr;
-    } else if (gBossLook == 5 && limb == 11) {   // the Stalfos' eyes glow, pulsing
-        OPEN_DISPS(play->state.gfxCtx);
-        gDPPipeSync(POLY_OPA_DISP++);
-        gDPSetEnvColor(POLY_OPA_DISP++, 80 + std::abs(static_cast<int>(std::sin(play->gameplayFrames * 0.1f) * 175.0f)), 0, 0, 255);
-        CLOSE_DISPS(play->state.gfxCtx);
-    }
-    return 0;
-}
-
-void Boss_PostLimb(PlayState* play, s32 limb, Gfx**, Vec3s*, void*) {
-    if (gBossLook != 1 && gBossLook != 2) return;
-    OPEN_DISPS(play->state.gfxCtx);
-    auto xlu = [&](const char* dl) {
-        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-        gSPDisplayList(POLY_XLU_DISP++, (Gfx*)dl);
-    };
-    switch (limb) {   // the armour's see-through decals, as the game's Iron Knuckle draws them
-        case 12: xlu(object_ik_DL_016D88); break;
-        case 22: xlu(object_ik_DL_016F88); break;
-        case 24: xlu(object_ik_DL_016EE8); break;
-        case 26: xlu(gIronKnuckleArmorRivetAndSymbolDL); break;
-        case 27: xlu(object_ik_DL_016CD8); break;
-        default: break;
-    }
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void MiniBoss_Update(Actor* actor, PlayState* play, BossActor& b) {
-    const BossModel m = BossModelOf(b.kind);
-    if (!b.skReady) {
-        if (m.flex) SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
-        else SkelAnime_Init(play, &b.sk, (SkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
-        b.skReady = true;
-        b.lastHp = b.hp;
-    }
-    const float dt = 1.0f / royale::kTickHz;
-    b.hurtAge += dt;
-    if (b.hp < b.lastHp - 0.02f) b.hurtAge = 0.0f;
-    b.lastHp = b.hp;
-    static std::unordered_map<const Actor*, float> lastSmash;
-    float& before = lastSmash[actor];
-    const bool newSwing = b.smashAge < 0.05f && before >= 0.05f;
-    before = b.smashAge;
-    const bool swinging = b.smashAge < 1.1f;
-    const char* want;
-    float speed = 1.0f;
-    bool loop = true;
-    if (newSwing) b.swings++;
-    if (swinging) { want = m.attack[(b.swings & 1)]; loop = false; }
-    else if (b.hurtAge < 0.45f) { want = m.hurt; loop = false; }
-    else if (b.moved > 0.5f) want = m.walk;
-    else { want = m.idle; speed = m.idleSpeed; }
-    if (b.playing != (const void*)want || newSwing) {
-        Animation_Change(&b.sk, (AnimationHeader*)want, speed, 0.0f, Animation_GetLastFrame((void*)want), loop ? ANIMMODE_LOOP : ANIMMODE_ONCE, -4.0f);
-        b.playing = want;
-    }
-    SkelAnime_Update(&b.sk);
-}
-
-void MiniBoss_Draw(Actor* actor, PlayState* play, const BossActor& b) {
-    if (!b.skReady) return;
-    const BossModel m = BossModelOf(b.kind);
-    const float scale = m.scale * 1.55f * royale::kBossDefs[b.kind].scale;   // mini bosses are bigger than the game's own
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-    switch (m.look) {
-        case 1:
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 245, 225, 155, 30, 30, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 255, 40, 0, 40, 0, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 255, 255, 255, 20, 40, 30));
-            break;
-        case 2:
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 55, 65, 55, 0, 0, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
-            break;
-        case 3: case 4: {
-            static const char* normal[4] = { gWolfosNormalEyeOpenTex, gWolfosNormalEyeHalfTex, gWolfosNormalEyeNarrowTex, gWolfosNormalEyeHalfTex };
-            static const char* white[4] = { gWolfosWhiteEyeOpenTex, gWolfosWhiteEyeHalfTex, gWolfosWhiteEyeNarrowTex, gWolfosWhiteEyeHalfTex };
-            const int eye = (play->gameplayFrames / 6) % 40 == 0 ? 2 : 0;
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)(m.look == 3 ? normal : white)[eye]);
-            break;
-        }
-        default: break;
-    }
-    // Damage flash: white for a moment after a hit
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gBossLook = m.look;
-    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Boss_OverrideLimb, Boss_PostLimb, actor);
-    gBossLook = 0;
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b);
-
-void Boss_Update(Actor* actor, PlayState* play) {
-    auto of = gBossOf.find(actor);
-    if (of == gBossOf.end()) { Actor_Kill(actor); return; }
-    BossActor& b = gBosses[of->second];
-    const float dt = 1.0f / royale::kTickHz;
-    if (!b.initialised) { b.x = b.tx; b.z = b.tz; b.rot = b.trot; b.initialised = true; }
-    const float nx = b.x + (b.tx - b.x) * 0.4f, nz = b.z + (b.tz - b.z) * 0.4f;
-    b.moved = b.moved * 0.8f + std::hypot(nx - b.x, nz - b.z);
-    b.x = nx; b.z = nz;
-    const s16 diff = static_cast<s16>(b.trot - b.rot);
-    b.rot = static_cast<s16>(b.rot + diff * 0.35f);
-    b.smashAge += dt;
-    actor->world.pos.x = b.x;
-    actor->world.pos.z = b.z;
-    b.alt += (b.talt - b.alt) * 0.25f;
-    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) {
-        const float ground = GroundY(play, b.x, b.z, GET_PLAYER(play)->actor.world.pos.y);
-        actor->world.pos.y = ground + b.alt;
-    } else {
-        actor->world.pos.y = GroundY(play, b.x, b.z, actor->world.pos.y);
-    }
-    actor->shape.rot.y = b.rot;
-    actor->world.rot.y = b.rot;
-    if (!royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) MiniBoss_Update(actor, play, b);
-    else Dragon_UpdateModel(actor, play, b);
-}
+#include "RoyaleBosses.h"   // the bosses: mini bosses, the major boss of each map, their effects
 
 // ---- the glider ---------------------------------------------------------------------------------------------------------------
 // Everyone skydives under a striped glider. Other players' gliders are drawn along with them (Puppet_Draw); yours is a stand-in actor that
@@ -1716,248 +1531,6 @@ void ReconcileLocalGlider(bool want) {
         gLocalGlider = nullptr;
     }
 }
-
-constexpr float kDragonDrawScale = 0.55f; // the mesh is 1200 across with its wings out
-
-void Dragon_DrawBlocks(Actor* actor, PlayState* play, const BossActor& b) {
-    const royale::BossKind kind = static_cast<royale::BossKind>(b.kind);
-    const uint32_t theme = static_cast<uint32_t>(kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    // Wings: a steady beat while it flies (up, level, down, level), folded down when it has landed.
-    static const uint32_t kBeat[4] = { 0, 1, 2, 1 };
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const float rate = b.mode == static_cast<int>(royale::DragonMode::Swoop) ? 9.0f : 4.5f;
-    const uint32_t pose = landed ? 2u : kBeat[static_cast<int>(t * rate) & 3];
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Dragon, pose + 4u * theme);
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
-    float pitch = 0.0f;                                                  // nose down in a dive, up as it climbs
-    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.35f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Breath)) pitch = 0.18f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-
-// The major bosses are Volvagia, the game's own dragon boss (the Fire Temple's), with its real skeleton, eyes, scrolling-lava skin and animations: its
-// idle sway, its fire-breathing, its claw swipe, and the vulnerable pose when it comes down. Each map's dragon is tinted for its place.
-const char* DragonAnim(int mode) {
-    switch (static_cast<royale::DragonMode>(mode)) {
-        case royale::DragonMode::Breath: return gHoleVolvagiaBreatheFireAnim;
-        case royale::DragonMode::Cast: return gHoleVolvagiaClawSwipeAnim;
-        case royale::DragonMode::Swoop: return gHoleVolvagiaHitAnim;
-        case royale::DragonMode::Landed: return gHoleVolvagiaVulnerableAnim;
-        case royale::DragonMode::Climb: return gHoleVolvagiaTurnAnim;
-        default: return gHoleVolvagiaIdleAnim;
-    }
-}
-
-void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b) {
-    if (!b.skReady) {
-        SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)gHoleVolvagiaSkel, nullptr, b.joint, b.morph, 37);
-        b.skReady = true;
-        b.lastHp = b.hp;
-    }
-    b.hurtAge += 1.0f / royale::kTickHz;
-    if (b.hp < b.lastHp - 0.01f) b.hurtAge = 0.0f;
-    b.lastHp = b.hp;
-    const char* want = b.hurtAge < 0.5f && b.mode != static_cast<int>(royale::DragonMode::Breath) ? gHoleVolvagiaDamagedAnim : DragonAnim(b.mode);
-    if (b.playing != (const void*)want) {
-        const bool loopIt = want == gHoleVolvagiaIdleAnim || want == gHoleVolvagiaVulnerableAnim;
-        Animation_Change(&b.sk, (AnimationHeader*)want, 1.0f, 0.0f, Animation_GetLastFrame((void*)want), loopIt ? ANIMMODE_LOOP : ANIMMODE_ONCE, -6.0f);
-        b.playing = want;
-    }
-    SkelAnime_Update(&b.sk);
-}
-
-float gDragonJaw = 0.0f;
-s32 Dragon_OverrideLimb(PlayState* play, s32 limb, Gfx**, Vec3f*, Vec3s* rot, void*) {
-    switch (limb) {
-        case 35: case 36: rot->z = static_cast<s16>(rot->z - gDragonJaw * 0.1f); break;
-        case 32: rot->z = static_cast<s16>(rot->z + gDragonJaw); break;
-        default: break;
-    }
-    if (limb == 32 || limb == 35 || limb == 36) {
-        OPEN_DISPS(play->state.gfxCtx);
-        gDPPipeSync(POLY_OPA_DISP++);
-        gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 0);
-        CLOSE_DISPS(play->state.gfxCtx);
-    }
-    return 0;
-}
-
-// ---- custom model files (the dragon) -----------------------------------------------------------------------------------------------------------
-// Put dragon.obj (and its dragon.mtl) in the "models" folder inside the game's data folder and it replaces the dragon. Parts are animated by their names
-// in the file: "wing" (flaps; left or right comes from which side of the body it is on), "jaw" (opens when it breathes fire), "tail" (sways) and "head"
-// (nods); everything else is the body. A model that is one piece still bobs, banks and tilts. An optional dragon.cfg changes how it is fitted:
-//   scale=1.0   size multiplier      yaw=0   degrees to turn it so its nose points along the flight direction (try 180 or 90)
-//   lift=0      raise it             flap=35 how far the wings beat, in degrees
-// The game draws these with vertex colours and its own lighting, so colours come from the .mtl (Kd) or from per-vertex colours; textures are not used.
-struct CustomPart {
-    std::unique_ptr<GpuMesh> gpu;
-    royale::ObjRole role = royale::ObjRole::Body;
-    float centre[3] = {0, 0, 0}, mn[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
-    float side = 1.0f;   // wings: +1 on the +x side, -1 on the other
-};
-struct CustomModel {
-    bool tried = false, ok = false;
-    std::string status = "No custom dragon: put dragon.obj in the models folder";
-    std::vector<CustomPart> parts;
-    float flapDegrees = 35.0f;
-    size_t triangles = 0;
-};
-CustomModel gDragonModel;
-
-std::filesystem::path ModelsFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("models")); }
-
-bool ReadWholeFile(const std::filesystem::path& file, std::string* out) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) return false;
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    *out = ss.str();
-    return true;
-}
-
-void LoadCustomDragon() {
-    CustomModel& cm = gDragonModel;
-    cm = CustomModel{};
-    cm.tried = true;
-    std::error_code ec;
-    std::filesystem::create_directories(ModelsFolder(), ec);
-    std::string obj, mtl, cfg;
-    if (!ReadWholeFile(ModelsFolder() / "dragon.obj", &obj)) { cm.status = "No custom dragon: put dragon.obj in " + ModelsFolder().string(); return; }
-    ReadWholeFile(ModelsFolder() / "dragon.mtl", &mtl);
-    ReadWholeFile(ModelsFolder() / "dragon.cfg", &cfg);
-    float extra = 1.0f, yaw = 0.0f, lift = 0.0f;
-    {
-        std::istringstream in(cfg);
-        std::string line;
-        while (std::getline(in, line)) {
-            const size_t eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            const std::string key = line.substr(0, eq);
-            const float val = static_cast<float>(std::atof(line.c_str() + eq + 1));
-            if (key == "scale") extra = std::clamp(val, 0.1f, 10.0f);
-            else if (key == "yaw") yaw = val;
-            else if (key == "lift") lift = val;
-            else if (key == "flap") cm.flapDegrees = std::clamp(val, 0.0f, 80.0f);
-        }
-    }
-    royale::ObjModel model = royale::ParseObj(obj, mtl);
-    if (!model.ok) { cm.status = "dragon.obj could not be used: " + model.error; return; }
-    royale::FitObjModel(model, 1200.0f, extra, yaw, lift);
-    for (auto& part : model.parts) {
-        CustomPart cp;
-        cp.gpu = std::make_unique<GpuMesh>();
-        if (!BuildGpuMesh(part.mesh, *cp.gpu)) continue;
-        cp.role = royale::RoleOf(part.name);
-        for (int i = 0; i < 3; i++) { cp.centre[i] = part.centre[i]; cp.mn[i] = part.mn[i]; cp.mx[i] = part.mx[i]; }
-        cp.side = part.centre[0] >= 0 ? 1.0f : -1.0f;
-        cm.parts.push_back(std::move(cp));
-    }
-    cm.triangles = model.triangles;
-    cm.ok = !cm.parts.empty();
-    int wings = 0, jaws = 0, tails = 0, heads = 0;
-    for (const auto& p : cm.parts) { wings += p.role == royale::ObjRole::Wing; jaws += p.role == royale::ObjRole::Jaw; tails += p.role == royale::ObjRole::Tail; heads += p.role == royale::ObjRole::Head; }
-    cm.status = "Custom dragon loaded: " + std::to_string(cm.triangles) + " triangles, " + std::to_string(cm.parts.size()) + " parts (" + std::to_string(wings) + " wing, " +
-                std::to_string(jaws) + " jaw, " + std::to_string(tails) + " tail, " + std::to_string(heads) + " head)";
-}
-
-void DrawCustomDragon(Actor* actor, PlayState* play, const BossActor& b) {
-    const CustomModel& cm = gDragonModel;
-    const float t = static_cast<float>(ImGui::GetTime());
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const bool breathing = b.mode == static_cast<int>(royale::DragonMode::Breath);
-    const bool swoop = b.mode == static_cast<int>(royale::DragonMode::Swoop);
-    const float rate = swoop ? 9.0f : 4.5f;
-    const float flap = landed ? -0.5f : std::sin(t * rate) * cm.flapDegrees * 0.0174533f;
-    float pitch = 0.0f;
-    if (swoop) pitch = 0.5f; else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f; else if (breathing) pitch = 0.18f;
-    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    CLOSE_DISPS(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_RotateZ(landed ? 0.0f : std::sin(t * 1.3f) * 0.06f, MTXMODE_APPLY);   // a slow bank
-    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
-    for (const CustomPart& p : cm.parts) {
-        Matrix_Push();
-        switch (p.role) {
-            case royale::ObjRole::Wing:   // flaps about the root, the edge nearest the body
-                Matrix_Translate(p.side > 0 ? p.mn[0] : p.mx[0], p.centre[1], p.centre[2], MTXMODE_APPLY);
-                Matrix_RotateZ(p.side * flap, MTXMODE_APPLY);
-                Matrix_Translate(-(p.side > 0 ? p.mn[0] : p.mx[0]), -p.centre[1], -p.centre[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Jaw:    // opens about its back edge
-                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
-                Matrix_RotateX(breathing ? 0.55f + std::sin(t * 9.0f) * 0.08f : 0.05f + std::sin(t * 1.5f) * 0.04f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Tail:   // sways from where it joins the body
-                Matrix_Translate(p.centre[0], p.centre[1], p.mx[2], MTXMODE_APPLY);
-                Matrix_RotateY(std::sin(t * 2.0f) * 0.3f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mx[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Head:   // nods
-                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
-                Matrix_RotateX((breathing ? 0.2f : 0.0f) + std::sin(t * 1.1f) * 0.06f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
-                break;
-            default: break;
-        }
-        OPEN_DISPS(play->state.gfxCtx);
-        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(p.gpu->dl.data()));
-        CLOSE_DISPS(play->state.gfxCtx);
-        Matrix_Pop();
-    }
-}
-
-void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
-    if (!gDragonModel.tried) LoadCustomDragon();
-    if (gDragonModel.ok) { DrawCustomDragon(actor, play, b); return; }
-    if (!b.skReady) { Dragon_DrawBlocks(actor, play, b); return; }
-    const uint32_t theme = static_cast<uint32_t>(b.kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
-    static const u8 tint[5][3] = { {255, 255, 255}, {130, 190, 255}, {170, 255, 150}, {195, 150, 255}, {255, 228, 165} };
-    static const char* eyes[3] = { gHoleVolvagiaEyeOpenTex, gHoleVolvagiaEyeHalfTex, gHoleVolvagiaEyeClosedTex };
-    const float t = static_cast<float>(play->gameplayFrames);
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const float bob = landed ? 0.0f : std::sin(t * 0.11f) * 14.0f;
-    float pitch = 0.0f;
-    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f;
-    gDragonJaw = b.mode == static_cast<int>(royale::DragonMode::Breath) ? 2600.0f + std::sin(t * 0.7f) * 500.0f : (std::sin(t * 0.05f) + 1.0f) * 150.0f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)eyes[(play->gameplayFrames / 7) % 60 == 0 ? 2 : 0]);
-    gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)Gfx_TwoTexScroll(play->state.gfxCtx, 0, static_cast<u32>(play->gameplayFrames * 1) % 0x80, static_cast<u32>(play->gameplayFrames * 2) % 0x80, 0x20, 0x20, 1,
-                                                                    static_cast<u32>(play->gameplayFrames * 3) % 0x80, static_cast<u32>(play->gameplayFrames * -2) % 0x80, 0x20, 0x20));
-    gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, tint[theme % 5][0], tint[theme % 5][1], tint[theme % 5][2], 255);
-    gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 128);
-    const float scale = 0.014f;
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f) + 3.14159265f, MTXMODE_APPLY);   // it faces the way the dragon goes
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Dragon_OverrideLimb, nullptr, actor);
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
 
 // ---- foliage, snow and puddles on the ground and the weather the game itself draws ------------------------------------------
 // Patches of swaying grass, trees (a different set of leaves for each season) and, when it snows, mounds of snow that build up on the ground and
@@ -2474,111 +2047,6 @@ void ReconcileProjectileActor() {
     } else if (!InField() && gProjectileActor != nullptr) {
         gProjectileActor = nullptr;   // the scene is changing: the actor goes with it
         gProjectiles.clear();
-    }
-}
-
-void Boss_Draw(Actor* actor, PlayState* play) {
-    auto of = gBossOf.find(actor);
-    if (of == gBossOf.end()) return;
-    const BossActor& b = gBosses[of->second];
-    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) { Dragon_Draw(actor, play, b); return; }
-    if (b.skReady) { MiniBoss_Draw(actor, play, b); return; }
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Golem, static_cast<uint32_t>(b.kind));
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    const float bob = b.moved > 0.5f ? std::fabs(std::sin(t * 6.0f)) * 9.0f : std::sin(t * 1.5f) * 2.0f;
-    const float lean = b.smashAge < 0.45f ? 0.55f * std::sin(b.smashAge / 0.45f * 3.14159f) : 0.0f; // a swing: it pitches forward
-    const float scale = royale::kBossDefs[b.kind].scale;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(lean, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void Boss_Destroy(Actor* actor, PlayState* play) {
-    ActorFunc orig = nullptr;
-    auto of = gBossOf.find(actor);
-    if (of != gBossOf.end()) {
-        auto b = gBosses.find(of->second);
-        if (b != gBosses.end()) { orig = b->second.origDestroy; gBosses.erase(b); }
-        gBossOf.erase(of);
-    }
-    if (orig) orig(actor, play);
-}
-
-void ReconcileBosses(const royale::HudState& hud) {
-    const bool show = gSession.Joined() && InField() && gSession.Client() &&
-                      (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch || hud.state == royale::MatchState::Ending);
-    std::unordered_map<uint32_t, bool> wanted;
-    if (show) {
-        for (const royale::net::BossNet& n : gSession.Client()->Bosses()) {
-            const uint32_t id = n.Id();
-            wanted[id] = true;
-            gBossKindSeen[id] = n.kind;
-            auto it = gBosses.find(id);
-            if (it == gBosses.end()) {
-                float y = 0;
-                if (!FloorAt(n.x, n.z, &y)) {
-                    if (!royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) continue;
-                    y = GET_PLAYER(gPlayState)->actor.world.pos.y; // it flies: over a gap or the lava there may be no floor
-                }
-                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
-                if (actor == nullptr) continue;
-                BossActor b;
-                b.actor = actor; b.origDestroy = actor->destroy; b.kind = n.kind; b.alt = b.talt = n.y; b.mode = n.mode;
-                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.rot = n.rot; b.x = n.x; b.z = n.z; b.initialised = true;
-                gBosses[id] = b;
-                gBossOf[actor] = id;
-                actor->update = Boss_Update;
-                actor->draw = Boss_Draw;
-                actor->destroy = Boss_Destroy;
-                actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
-                actor->uncullZoneForward = 5000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
-                if (royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) {
-                    actor->flags |= ACTOR_FLAG_DRAW_CULLING_DISABLED;
-                    actor->uncullZoneForward = 12000.0f; actor->uncullZoneScale = 4000.0f; actor->uncullZoneDownward = 4000.0f;
-                    actor->shape.shadowScale = 0.0f;
-                } else {
-                    actor->shape.shadowScale = 70.0f * royale::kBossDefs[n.kind].scale;
-                }
-            } else {
-                BossActor& b = it->second;
-                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f; b.talt = n.y; b.mode = n.mode;
-                if (n.smashing && b.smashAge > 0.3f) b.smashAge = 0.0f;
-            }
-        }
-    }
-    for (auto& [id, b] : gBosses) if (!wanted.count(id) && b.actor) Actor_Kill(b.actor);
-}
-
-// Name and health bar over each boss.
-void DrawBossBars(ImDrawList* dl, ImFont* font, float scale) {
-    if (!InField()) return;
-    Player* pl = GET_PLAYER(gPlayState);
-    for (const auto& [id, b] : gBosses) {
-        if (!b.actor) continue;
-        const float dx = b.x - pl->actor.world.pos.x, dz = b.z - pl->actor.world.pos.z;
-        const float d = std::sqrt(dx * dx + dz * dz);
-        const bool dragon = royale::IsDragonKind(static_cast<royale::BossKind>(b.kind));
-        if (d > (dragon ? 9000.0f : 3800.0f)) continue;
-        ImVec2 at;
-        if (!WorldToScreen(b.x, b.actor->world.pos.y + (dragon ? 300.0f : 330.0f * royale::kBossDefs[b.kind].scale), b.z, &at)) continue;
-        const float w = 130.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.55f, 1.4f), h = 11.0f * scale;
-        const char* name = royale::kBossDefs[b.kind].name;
-        const float ts = 17.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f);
-        const ImVec2 sz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, name);
-        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f + 1.5f, at.y - h - sz.y + 1.5f), IM_COL32(0, 0, 0, 230), name);
-        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f, at.y - h - sz.y), IM_COL32(255, 120, 90, 255), name);
-        dl->AddRectFilled(ImVec2(at.x - w * 0.5f - 2, at.y - h - 2), ImVec2(at.x + w * 0.5f + 2, at.y + 2), IM_COL32(0, 0, 0, 200));
-        const ImU32 col = b.hp > 0.5f ? IM_COL32(120, 220, 90, 255) : b.hp > 0.25f ? IM_COL32(240, 200, 60, 255) : IM_COL32(230, 70, 60, 255);
-        dl->AddRectFilled(ImVec2(at.x - w * 0.5f, at.y - h), ImVec2(at.x - w * 0.5f + w * std::clamp(b.hp, 0.0f, 1.0f), at.y), col);
     }
 }
 
@@ -3943,8 +3411,8 @@ void DrawQuestLabel() {
 }
 
 // ---- banners, chest-opening and boss effects --------------------------------------------------------------------------------
-// A big line of text across the top for the moments that matter (the dragon arriving, what a chest gave you), an item that floats up out of
-// a chest you open, and the world-space effects of the dragon: warning rings on the ground, the blast, and its breath.
+// A big line of text across the top for the moments that matter (a major boss arriving, what a chest gave you), and an item that floats up out of
+// a chest you open. (The bosses' own effects are in RoyaleBosses.h.)
 struct Banner { std::string text; ImU32 colour; double until; double start; };
 std::vector<Banner> gBanners;
 void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
@@ -4004,8 +3472,6 @@ void DrawGains(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 struct PickupFx { royale::ItemId item; royale::Rarity rarity; float x, y, z; double at; };
 std::vector<PickupFx> gPickupFx;
 
-struct StrikeFx { float x, z, radius; double land; bool boomed; bool bolt; };   // bolt: lightning from a thunderstorm
-std::vector<StrikeFx> gStrikeFx;
 
 void DrawBanners(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
@@ -4049,82 +3515,6 @@ void DrawPickupFx(ImDrawList* dl, ImVec2 ds, float scale) {
         DrawItemIcon(dl, f.item, at, R * 1.25f, IM_COL32(c.r, c.g, c.b, 255));
     }
     gPickupFx.erase(std::remove_if(gPickupFx.begin(), gPickupFx.end(), [&](const PickupFx& f) { return now - f.at > 1.7; }), gPickupFx.end());
-}
-
-Color_RGBA8 BossThemeColour(int kind) {
-    switch (static_cast<royale::BossKind>(kind)) {
-        case royale::BossKind::DragonWater: return { 90, 200, 255, 255 };
-        case royale::BossKind::DragonForest: return { 120, 235, 90, 255 };
-        case royale::BossKind::DragonShadow: return { 210, 90, 255, 255 };
-        case royale::BossKind::DragonSand: return { 255, 205, 90, 255 };
-        default: return { 255, 120, 40, 255 };
-    }
-}
-
-void SparkBurst(PlayState* play, float x, float y, float z, Color_RGBA8 prim, int count, float speed) {
-    Color_RGBA8 env = { 255, 255, 255, 255 };
-    for (int i = 0; i < count; i++) {
-        const float a = Rand_ZeroOne() * 6.2831853f, up = 0.3f + Rand_ZeroOne() * 0.9f;
-        Vec3f pos = { x, y, z };
-        Vec3f vel = { std::cos(a) * speed * (0.4f + Rand_ZeroOne()), speed * up, std::sin(a) * speed * (0.4f + Rand_ZeroOne()) };
-        Vec3f accel = { 0.0f, -0.35f, 0.0f };
-        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
-    }
-}
-
-// Every game frame: strike rings and blasts, the dragon's breath.
-void UpdateBossWorldFx() {
-    if (!InField() || gPlayState == nullptr) { gStrikeFx.clear(); return; }
-    const double now = ImGui::GetTime();
-    Player* pl = GET_PLAYER(gPlayState);
-    for (StrikeFx& s : gStrikeFx) {
-        const float ground = GroundY(gPlayState, s.x, s.z, pl->actor.world.pos.y);
-        if (now < s.land) {
-            const float danger = static_cast<float>(1.0 - (s.land - now) / 1.4);   // sparks come faster as the blast gets close
-            const int n = 5 + static_cast<int>(danger * 9.0f);
-            Color_RGBA8 prim = { 255, static_cast<u8>(210 - danger * 150.0f), 40, 255 }, env = { 255, 60, 20, 255 };
-            if (s.bolt) { prim = { 210, 225, 255, 255 }; env = { 90, 120, 255, 255 }; }   // lightning crackles blue-white
-            for (int i = 0; i < n; i++) {
-                const float a = Rand_ZeroOne() * 6.2831853f;
-                Vec3f pos = { s.x + std::cos(a) * s.radius, ground + 6.0f, s.z + std::sin(a) * s.radius };
-                Vec3f vel = { 0.0f, 1.2f + Rand_ZeroOne() * 1.5f, 0.0f };
-                Vec3f accel = { 0.0f, 0.0f, 0.0f };
-                EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 25, 32);
-            }
-        } else if (!s.boomed) {
-            s.boomed = true;
-            Vec3f pos = { s.x, ground + 20.0f, s.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
-            if (s.bolt) {
-                gBoltFlashUntil = now + 0.35;
-                for (int k = 0; k < 14; k++) {   // the bolt itself: a column of white sparks from the sky
-                    Vec3f col = { s.x + (Rand_ZeroOne() - 0.5f) * 16.0f, ground + 40.0f + k * 55.0f, s.z + (Rand_ZeroOne() - 0.5f) * 16.0f };
-                    Vec3f v = { 0, 0, 0 }, a = { 0, 0, 0 };
-                    Color_RGBA8 p = { 240, 245, 255, 255 }, e2 = { 120, 150, 255, 255 };
-                    EffectSsKiraKira_SpawnDispersed(gPlayState, &col, &v, &a, &p, &e2, 260, 10);
-                }
-                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 190, 210, 255, 255 }, 30, 8.0f);
-            } else {
-                EffectSsBomb2_SpawnLayered(gPlayState, &pos, &vel, &accel, 90, 14);
-                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 255, 190, 60, 255 }, 26, 7.0f);
-            }
-            Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-        }
-    }
-    gStrikeFx.erase(std::remove_if(gStrikeFx.begin(), gStrikeFx.end(), [&](const StrikeFx& s) { return now > s.land + 0.8; }), gStrikeFx.end());
-    // Breath: a stream of sparks out of its mouth along the way it faces.
-    for (const auto& [id, b] : gBosses) {
-        if (!b.actor || !royale::IsDragonKind(static_cast<royale::BossKind>(b.kind)) || b.mode != static_cast<int>(royale::DragonMode::Breath)) continue;
-        const float ang = b.rot * (3.14159265f / 32768.0f), fx = std::sin(ang), fz = std::cos(ang);
-        Color_RGBA8 prim = BossThemeColour(b.kind), env = { 255, 255, 255, 255 };
-        for (int i = 0; i < 14; i++) {
-            const float spread = (Rand_ZeroOne() - 0.5f) * 0.45f, sp = 20.0f + Rand_ZeroOne() * 18.0f;
-            const float dx = fx * std::cos(spread) - fz * std::sin(spread), dz = fz * std::cos(spread) + fx * std::sin(spread);
-            Vec3f pos = { b.x + fx * 190.0f, b.actor->world.pos.y + 120.0f, b.z + fz * 190.0f };
-            Vec3f vel = { dx * sp, -sp * 0.28f, dz * sp };
-            Vec3f accel = { 0.0f, -0.4f, 0.0f };
-            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 30, 70);
-        }
-    }
 }
 
 // ---- hit effects -------------------------------------------------------------------------------------------------------------
@@ -5273,13 +4663,13 @@ void ReportEvents(const royale::HudState& hud) {
             }
             case royale::ClientEvent::Type::BossSpawned: {
                 const char* name = royale::kBossDefs[std::min<int>(e.item, royale::kBossKindCount - 1)].name;
-                Say(std::string("The ") + name + " has arrived! Ranged weapons reach it in the air; it lands after a dive");
+                Say(std::string(name) + " has arrived! " + BossArrivalTip(e.item));
                 ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 4.0f);
-                Audio_PlaySoundGeneral(NA_SE_EN_VALVAISA_FIRE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                Audio_PlaySoundGeneral(BossArrivalSound(e.item), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
             case royale::ClientEvent::Type::Strike:
-                gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false, e.id == royale::net::kNoPlayer16 });
+                AddStrikeFx(e.x, e.z, e.amount, e.health, e.id == royale::net::kNoPlayer16 ? static_cast<uint8_t>(royale::StrikeStyle::Bolt) : e.item, e.id);
                 break;
             case royale::ClientEvent::Type::AllyChanged: {
                 const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
@@ -6935,7 +6325,7 @@ struct UiState {
     int playerLimit = royale::kMaxPlayers; // the host's slider
     bool autoStart = true;                 // the lobby starts the match by itself after two minutes
     int mapId = 0;                         // which place to play (host)
-    bool majorBoss = true;                 // the map's dragon arrives halfway through (host)
+    bool majorBoss = true;                 // the map's major boss arrives halfway through (host)
     int weatherSeason = royale::kSeasonRandom;   // 0-3 or kSeasonRandom (host)
     int weatherIntensity = 60;             // 0 = no weather (host)
     int weatherChange = 50;                // how often the weather changes (host)
@@ -7077,7 +6467,7 @@ void DrawMinimapOptions() {
     ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
     ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Custom dragon model: put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
+    ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
     if (!gDragonModel.tried) LoadCustomDragon();
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
     if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
@@ -7236,7 +6626,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
             }
             ImGui::EndCombo();
         }
-        if (ImGui::Checkbox("A dragon boss arrives halfway through the match", &ui.majorBoss)) {
+        if (ImGui::Checkbox("The map's major boss arrives halfway through the match", &ui.majorBoss)) {
             gSession.SetMajorBoss(ui.majorBoss);
             SaveUi(ui);
         }

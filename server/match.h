@@ -8,8 +8,10 @@
 #include "../shared/replay.h"
 #include "../shared/storm.h"
 #include "../shared/weather.h"
+#include "nav.h"
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <vector>
 
 namespace royale {
@@ -108,10 +110,27 @@ struct MiniBoss {
     float attackReadyAt = 0;
     float lastSmashAt = -10;   // for the animation
     float windupUntil = -1;    // a blow is being wound up (it lands then, on whoever is still in front of it)
-    // The dragon only:
-    float y = 0;               // height above the ground
+    float y = 0;               // height above the ground (the major boss flies; a mini boss leaps)
     DragonMode mode = DragonMode::Patrol;
     float modeUntil = 0;
+    uint8_t aux = 0;           // which variant of the current move (for the client: which hand, fire or ice)
+    int moves = 0;             // special moves made so far (they take turns)
+    float specialReadyAt = 0;  // its own special move is ready again
+    Vec2 from = {}, to = {};   // the line of a leap, a charge or a hidden trip
+    float moveStart = 0;
+    float chargeSpeed = 0;
+    DragonMode next = DragonMode::Chase;   // what it does when the current move ends
+    float nextSeconds = 0;                 // ...for how long, when that is a daze
+    std::vector<uint32_t> hitThisMove;     // who a charge has already hit
+    std::vector<Vec2> path;                // its way around walls (with a navigation grid)
+    size_t pathIdx = 0;
+    float repathAt = 0;
+    Vec2 pathGoal = {};
+    bool chainAfterSlam = false;           // Morpha: the core drops out after the swing
+    Vec2 chargeThrough = {};               // Phantom Ganon: where you stood when he went into his portal
+    float trail = 0;                       // the Magma Dodongo: distance rolled since the last patch of fire
+    bool reassembled = false;              // the Stalfos has already pulled itself back together once
+    // The major boss only:
     Vec2 waypoint = {};
     float swoopReadyAt = 0;
     Vec2 swoopAt = {};
@@ -127,6 +146,7 @@ struct Strike {
     uint32_t by = 0;
     bool applied = false;
     bool lightning = false;   // a bolt from a thunderstorm: plain damage, no burning
+    StrikeStyle style = StrikeStyle::Fire;   // what it does besides the damage (and how it looks)
 };
 
 struct AttackResult {
@@ -741,7 +761,7 @@ class Match {
         if (IsBossId(targetId)) {
             for (auto& b : bosses) {
                 if (b.id != targetId || !b.alive) continue;
-                if (IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee) return false;
+                if ((IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee) || BossHidden(b.mode)) return false;
                 act.x = b.pos.x; act.z = b.pos.z; events.push_back(act);
                 const float dmg = def.damage * (IsDragonKind(b.kind) ? 0.7f : 1.0f);
                 const float dealt = (std::min)(dmg, b.health);
@@ -751,7 +771,7 @@ class Match {
                 MatchEvent e{MatchEvent::Type::Damaged};
                 e.a = targetId; e.b = owner->id; e.amount = dmg; e.health = (std::max)(0.0f, b.health);
                 events.push_back(e);
-                if (b.health <= 0) KillBoss(b, *owner);
+                if (b.health <= 0 && !StalfosGetsUp(b)) KillBoss(b, *owner);
                 return true;
             }
             return false;
@@ -882,6 +902,7 @@ class Match {
         if (w.damage <= 0 || clock < a->attackReadyAt || clock < a->stunUntil || clock < a->frozenUntil) return r;
         const bool dragon = IsDragonKind(b->kind);
         const bool airborne = dragon && b->y > kDragonAirborneAbove;
+        if (BossHidden(b->mode)) return r;                                             // underground, under water, in shadow: nothing reaches it
         if (airborne && !w.ranged) return r;                                           // up in the sky: only arrows and the like reach it
         if (Distance(a->pos, b->pos) > w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius)) return r; // it is big: you can hit it from further off
         a->attackReadyAt = clock + w.cooldown;
@@ -890,7 +911,8 @@ class Match {
         if (!hit) return r;
         const GearTotals ag = TotalsOf(*a);
         r.damage = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, b->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
-        if (dragon) r.damage *= airborne ? 0.75f : (b->mode == DragonMode::Landed ? 1.25f : 1.0f); // landed: it is dazed and takes extra
+        if (BossDazed(b->mode)) r.damage *= kBossStunnedTakes;                        // down or dazed: it takes extra
+        else if (airborne) r.damage *= 0.75f;
         r.hit = true;
         const float dealt = (std::min)(r.damage, b->health);
         b->health -= r.damage;
@@ -900,7 +922,7 @@ class Match {
         MatchEvent e{MatchEvent::Type::Damaged};
         e.a = bossId; e.b = attackerId; e.amount = r.damage; e.health = (std::max)(0.0f, b->health);
         events.push_back(e);
-        if (b->health <= 0) {
+        if (b->health <= 0 && !StalfosGetsUp(*b)) {
             r.killed = true;
             KillBoss(*b, *a);
         }
@@ -1003,18 +1025,21 @@ class Match {
         const float ang = static_cast<float>(rng.Unit()) * 6.2831853f, off = static_cast<float>(rng.Unit()) * 320.0f;
         Strike s;
         s.at = {victim->pos.x + std::cos(ang) * off, victim->pos.z + std::sin(ang) * off};
-        s.radius = kLightningRadius; s.damage = kLightningDamage; s.hitAt = clock + kLightningWarning; s.by = kNoPlayer; s.lightning = true;
+        s.radius = kLightningRadius; s.damage = kLightningDamage; s.hitAt = clock + kLightningWarning; s.by = kNoPlayer; s.lightning = true; s.style = StrikeStyle::Bolt;
         strikes.push_back(s);
         MatchEvent e{MatchEvent::Type::Strike};
-        e.a = kNoPlayer; e.x = s.at.x; e.z = s.at.z; e.amount = s.radius; e.health = kLightningWarning;
+        e.a = kNoPlayer; e.x = s.at.x; e.z = s.at.z; e.amount = s.radius; e.health = kLightningWarning; e.item = static_cast<uint8_t>(StrikeStyle::Bolt);
         events.push_back(e);
     }
 
     void SetMajorBoss(bool on) { majorBoss = on; }
     bool MajorBossEnabled() const { return majorBoss; }
     const std::vector<Strike>& Strikes() const { return strikes; }
+    // The walkability grid the host's game measured (the same one the bots use). Bosses path around walls, water and cliffs with it, and use
+    // their own way across when there is no path. Without one (the tests, a plain match) they walk straight.
+    void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); }
 
-    // The fire dragon arrives halfway through the storm timeline, somewhere inside the safe zone, and everybody is told.
+    // The major boss arrives halfway through the storm timeline, somewhere inside the safe zone, and everybody is told.
     void MaybeSpawnDragon() {
         if (!majorBoss || dragonSpawned || stormTime < DragonSpawnTime()) return;
         dragonSpawned = true;
@@ -1031,9 +1056,10 @@ class Match {
         d.kind = MapOf(mapId).major;
         d.home = d.pos = at;
         d.maxHealth = d.health = BossOf(d.kind).health;
-        d.y = kDragonAltitude;
+        d.y = BossOf(d.kind).altitude;
         d.waypoint = at;
         d.swoopReadyAt = clock + 8.0f;
+        d.specialReadyAt = clock + 20.0f;   // it shows itself off in the air before its first big move
         bosses.push_back(d);
         MatchEvent e{MatchEvent::Type::BossSpawned};
         e.a = d.id; e.x = at.x; e.z = at.z;
@@ -1045,20 +1071,46 @@ class Match {
         return total * 0.5f;
     }
 
-    void AddStrike(Vec2 at, float radius, float damage, float delay, uint32_t by) {
+    // What a boss's blasts do when nothing more particular is asked: Volvagia's burn, the others' hold you for a moment.
+    StrikeStyle StyleOf(uint32_t by) const {
+        const MiniBoss* src = FindBoss(by);
+        if (!src) return StrikeStyle::Fire;
+        switch (src->kind) {
+            case BossKind::DragonWater: case BossKind::Tide: return StrikeStyle::Water;
+            case BossKind::DragonForest: return StrikeStyle::Magic;
+            case BossKind::DragonShadow: case BossKind::Shade: return StrikeStyle::Shadow;
+            case BossKind::Frost: return StrikeStyle::Ice;
+            case BossKind::Moss: return StrikeStyle::Spore;
+            case BossKind::Stone: case BossKind::Dune: return StrikeStyle::Rock;
+            default: return StrikeStyle::Fire;
+        }
+    }
+
+    void AddStrike(Vec2 at, float radius, float damage, float delay, uint32_t by) { AddStrike(at, radius, damage, delay, by, StyleOf(by)); }
+    void AddStrike(Vec2 at, float radius, float damage, float delay, uint32_t by, StrikeStyle style) {
         Strike s;
-        s.at = at; s.radius = radius; s.damage = damage; s.hitAt = clock + delay; s.by = by;
+        s.at = at; s.radius = radius; s.damage = damage; s.hitAt = clock + delay; s.by = by; s.style = style;
         strikes.push_back(s);
         MatchEvent e{MatchEvent::Type::Strike};
-        e.a = by; e.x = at.x; e.z = at.z; e.amount = radius; e.health = delay;
+        e.a = by; e.x = at.x; e.z = at.z; e.amount = radius; e.health = delay; e.item = static_cast<uint8_t>(style);
         events.push_back(e);
     }
 
-    // The fire dragon sets people alight; the others (water, forest, shadow, sand) leave their victims stunned for a moment instead.
-    void ApplyElement(PlayerState& p, uint32_t by, float seconds, float dps) {
-        const MiniBoss* src = FindBoss(by);
-        if (src && src->kind != BossKind::DragonFire) { p.stunUntil = (std::max)(p.stunUntil, clock + 0.5f + seconds * 0.15f); p.dirty = true; }
-        else ApplyBurn(p, by, seconds, dps);
+    // What a blast does to whoever it catches, on top of the damage.
+    void ApplyStyle(PlayerState& p, const Strike& s) {
+        auto hold = [&](float seconds) {
+            if (TotalsOf(p).stunImmune) return;
+            p.stunUntil = (std::max)(p.stunUntil, clock + seconds);
+            p.dirty = true;
+        };
+        switch (s.style) {
+            case StrikeStyle::Fire: ApplyBurn(p, s.by, 3.0f, 0.3f); break;
+            case StrikeStyle::Ice: if (!TotalsOf(p).stunImmune) { p.frozenUntil = (std::max)(p.frozenUntil, clock + 1.2f); p.dirty = true; } break;
+            case StrikeStyle::Water: hold(0.6f); break;
+            case StrikeStyle::Shadow: hold(0.95f); break;
+            case StrikeStyle::Magic: hold(0.5f); break;
+            default: break;
+        }
     }
 
     void ApplyBurn(PlayerState& p, uint32_t by, float seconds, float dps) {
@@ -1075,20 +1127,369 @@ class Match {
             s.applied = true;
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
-                if (s.lightning) { Damage(p.id, s.damage, s.by, DamageKind::Normal); continue; }
-                Damage(p.id, s.damage, s.by, DamageKind::Fire);
-                if (p.alive) ApplyElement(p, s.by, 3.0f, 0.3f);
+                if (s.lightning || s.style == StrikeStyle::Bolt) { Damage(p.id, s.damage, s.by, DamageKind::Normal); continue; }
+                const DamageKind kind = s.style == StrikeStyle::Fire ? DamageKind::Fire : (s.style == StrikeStyle::Rock ? DamageKind::Explosion : DamageKind::Normal);
+                Damage(p.id, s.damage, s.by, kind);
+                if (p.alive) ApplyStyle(p, s);
             }
         }
         strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [&](const Strike& s) { return s.applied && clock > s.hitAt + 1.0f; }), strikes.end());
     }
 
+    // ---- how bosses move ----------------------------------------------------------------------------------------------------------
+
+    static int16_t FaceRot(Vec2 from, Vec2 to) { return static_cast<int16_t>(static_cast<int32_t>(std::atan2(to.x - from.x, to.z - from.z) * (32768.0f / 3.14159265358979f))); }
+    // How far p is from straight ahead of the boss, in radians (0 = dead ahead).
+    static float OffFacing(const MiniBoss& b, Vec2 p) {
+        float off = std::atan2(p.x - b.pos.x, p.z - b.pos.z) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
+        while (off > 3.14159265f) off -= 6.2831853f;
+        while (off < -3.14159265f) off += 6.2831853f;
+        return off;
+    }
+    static Vec2 Ahead(const MiniBoss& b, float dist, float turn = 0.0f) {
+        const float a = static_cast<float>(b.rot) * (3.14159265f / 32768.0f) + turn;
+        return {b.pos.x + std::sin(a) * dist, b.pos.z + std::cos(a) * dist};
+    }
+    static bool Step(Vec2& pos, Vec2 to, float dist) {
+        const float dx = to.x - pos.x, dz = to.z - pos.z, d = std::hypot(dx, dz);
+        if (d <= dist || d < 0.001f) { pos = to; return true; }
+        pos.x += dx / d * dist; pos.z += dz / d * dist;
+        return false;
+    }
+    bool Inside(Vec2 p) const { return Distance(p, map.center) <= map.radius && (!placement || placement(p)); }
+    Vec2 SnapToGround(Vec2 p) const {
+        Vec2 out = p;
+        if (nav && nav->Snap(p, &out)) return out;
+        return p;
+    }
+
+    // Walks a boss toward `goal` at `speed`: straight when the way is clear, along a path around walls when it is not, and with its own trick
+    // (a leap, a climb, a swim, a burrow, a roll) when there is no path at all.
+    void BossWalk(MiniBoss& b, Vec2 goal, float speed, float dt) {
+        const BossDef def = BossOf(b.kind);
+        Vec2 next = goal;
+        float pace = speed;
+        b.aux = 0;
+        if (nav && Distance(b.pos, goal) > NavGrid::kCell) {
+            const bool onGround = nav->Walkable(b.pos);
+            Vec2 from = b.pos;
+            if (!onGround) nav->Snap(b.pos, &from);   // just off the edge of the grid (a corner, a landing): reckon from the nearest open cell
+            if (!onGround && def.traverse == Traverse::Climb) { b.mode = DragonMode::Climb; pace = speed * 0.75f; }   // up the wall, straight on
+            else if (!onGround && def.traverse == Traverse::Swim) { b.aux = 1; pace = speed * 0.85f; }                 // through the water, straight on
+            else if (!nav->LineClear(from, goal)) {
+                if (clock >= b.repathAt || Distance(b.pathGoal, goal) > 150.0f) {
+                    b.repathAt = clock + 0.7f;
+                    b.pathGoal = goal;
+                    b.pathIdx = 0;
+                    if (!nav->FindPath(b.pos, goal, b.path)) b.path.clear();
+                }
+                while (b.pathIdx < b.path.size() && Distance(b.pos, b.path[b.pathIdx]) < NavGrid::kCell * 0.6f) b.pathIdx++;
+                if (b.pathIdx < b.path.size()) next = b.path[b.pathIdx];
+                else if (CrossGap(b, goal)) return;
+            }
+        }
+        if (b.mode == DragonMode::Climb && (!nav || nav->Walkable(b.pos))) b.mode = DragonMode::Chase;
+        b.rot = FaceRot(b.pos, next);
+        Step(b.pos, next, pace * dt);
+    }
+
+    // No path to where it wants to be: its own way across. Returns true if it started something (a leap, a burrow, a roll).
+    bool CrossGap(MiniBoss& b, Vec2 goal) {
+        const BossDef def = BossOf(b.kind);
+        const float d = Distance(b.pos, goal);
+        switch (def.traverse) {
+            case Traverse::Leap:
+                if (d > 750.0f) return false;
+                StartLeap(b, SnapToGround(goal), false);
+                return true;
+            case Traverse::Burrow:
+                StartBurrow(b, SnapToGround(goal), 0.6f + d / (def.speed * 2.2f));
+                return true;
+            case Traverse::Roll:
+                if (d > 1000.0f) return false;
+                StartCharge(b, goal, 430.0f, DragonMode::Stunned, 1.2f);
+                return true;
+            case Traverse::Climb:
+                b.mode = DragonMode::Climb;   // over the wall, straight at it
+                return false;
+            default:
+                return false;   // swimmers just go straight
+        }
+    }
+
+    void StartLeap(MiniBoss& b, Vec2 to, bool attack) {
+        const float d = Distance(b.pos, to);
+        b.mode = DragonMode::Leap;
+        b.from = b.pos; b.to = to;
+        b.moveStart = clock;
+        b.modeUntil = clock + 0.45f + d / 900.0f;
+        b.aux = attack ? 1 : 0;
+        b.rot = FaceRot(b.pos, to);
+        b.next = DragonMode::Chase;
+        b.lastSmashAt = clock;
+    }
+    void StartBurrow(MiniBoss& b, Vec2 to, float seconds) {
+        b.mode = DragonMode::Hidden;
+        b.from = b.pos; b.to = to;
+        b.moveStart = clock;
+        b.modeUntil = clock + seconds;
+    }
+    void StartCharge(MiniBoss& b, Vec2 to, float speed, DragonMode after, float afterSeconds) {
+        b.mode = DragonMode::Charge;
+        b.from = b.pos; b.to = to;
+        b.moveStart = clock;
+        b.chargeSpeed = speed;
+        b.modeUntil = clock + Distance(b.pos, to) / speed + 0.2f;
+        b.rot = FaceRot(b.pos, to);
+        b.next = after; b.nextSeconds = afterSeconds;
+        b.hitThisMove.clear();
+        b.lastSmashAt = clock;
+    }
+    // A boss doing something that takes a while and then moves on to `after` (for `afterSeconds`, when that is a daze).
+    void StartMove(MiniBoss& b, DragonMode mode, float seconds, DragonMode after = DragonMode::Chase, float afterSeconds = 0.0f, uint8_t aux = 0) {
+        b.mode = mode;
+        b.moveStart = clock;
+        b.modeUntil = clock + seconds;
+        b.next = after; b.nextSeconds = afterSeconds;
+        b.aux = aux;
+        b.lastSmashAt = clock;
+    }
+    void FinishMove(MiniBoss& b) {
+        const DragonMode after = b.next;
+        b.next = DragonMode::Chase;
+        b.mode = after;
+        b.moveStart = clock;
+        b.modeUntil = clock + b.nextSeconds;
+        b.nextSeconds = 0.0f;
+        if (after == DragonMode::Chase || after == DragonMode::Climb) b.aux = 0;
+    }
+    // Everyone within `radius` of the boss gets hit once per move (a roll, a spin, a charge).
+    void BodyHits(MiniBoss& b, float radius, float damage, float stun) {
+        for (auto& p : players) {
+            if (!p.alive || clock < p.invulnUntil || Distance(p.pos, b.pos) > radius) continue;
+            if (std::find(b.hitThisMove.begin(), b.hitThisMove.end(), p.id) != b.hitThisMove.end()) continue;
+            b.hitThisMove.push_back(p.id);
+            Damage(p.id, damage, b.id);
+            if (p.alive && stun > 0 && !TotalsOf(p).stunImmune) { p.stunUntil = (std::max)(p.stunUntil, clock + stun); p.dirty = true; }
+        }
+    }
+    // Damage to everyone in a cone in front of the boss, every tick (breath).
+    void ConeHits(MiniBoss& b, float range, float halfAngle, float dps, float dt, bool burn) {
+        for (auto& p : players) {
+            if (!p.alive || clock < p.invulnUntil) continue;
+            if (Distance(p.pos, b.pos) > range || std::fabs(OffFacing(b, p.pos)) > halfAngle) continue;
+            Damage(p.id, dps * dt, b.id, burn ? DamageKind::Fire : DamageKind::Normal, false);
+            if (p.alive && burn) ApplyBurn(p, b.id, 2.5f, 0.3f);
+        }
+    }
+
+    // ---- mini bosses ------------------------------------------------------------------------------------------------------------
+
+    // The Iron Knuckle's armour comes off at half health.
+    static bool ArmourOff(const MiniBoss& b) { return b.kind == BossKind::Dune && b.health < b.maxHealth * 0.5f; }
+    // A blow that would finish the Stalfos the first time only knocks it to pieces: it lies there a moment and pulls itself back together.
+    // Returns true if that is what happened (and it is not dead).
+    bool StalfosGetsUp(MiniBoss& b) {
+        if (b.kind != BossKind::Stone || b.reassembled || b.health > 0) return false;
+        b.reassembled = true;
+        b.health = b.maxHealth * kStalfosGetsUpWith;
+        b.windupUntil = -1.0f;
+        StartMove(b, DragonMode::Stunned, 2.2f, DragonMode::Chase, 0.0f, 3);   // aux 3: in pieces on the ground
+        b.y = 0;
+        return true;
+    }
+
+    // Moves that take a while: carried on every tick until they finish. Returns false when the boss is free to choose again.
+    bool TickMiniMove(MiniBoss& b, float dt) {
+        const BossDef def = BossOf(b.kind);
+        switch (b.mode) {
+            case DragonMode::Leap: {
+                const float span = (std::max)(0.05f, b.modeUntil - b.moveStart);
+                const float t = (std::min)(1.0f, (clock - b.moveStart) / span);
+                b.pos = {b.from.x + (b.to.x - b.from.x) * t, b.from.z + (b.to.z - b.from.z) * t};
+                b.y = std::sin(t * 3.14159265f) * (110.0f + Distance(b.from, b.to) * 0.18f);
+                if (t >= 1.0f) { b.y = 0; b.aux = 0; FinishMove(b); }
+                return true;
+            }
+            case DragonMode::Charge: {
+                const Vec2 was = b.pos;
+                const bool done = Step(b.pos, b.to, b.chargeSpeed * dt);
+                BodyHits(b, 95.0f * def.scale, def.damage, b.kind == BossKind::Tide ? 0.7f : 0.4f);
+                if (b.kind == BossKind::Lava) {   // the Magma Dodongo's roll leaves a trail of fire
+                    b.trail += Distance(was, b.pos);
+                    if (b.trail > 110.0f) { b.trail = 0.0f; AddStrike(was, 75.0f, def.damage * 0.35f, 0.35f, b.id, StrikeStyle::Fire); }
+                }
+                if (done || clock >= b.modeUntil) FinishMove(b);
+                return true;
+            }
+            case DragonMode::Hidden: {
+                const float left = (std::max)(0.05f, b.modeUntil - clock);
+                Step(b.pos, b.to, Distance(b.pos, b.to) / left * dt);
+                if (clock >= b.modeUntil) {
+                    b.pos = b.to;
+                    StartMove(b, DragonMode::Emerge, 0.6f);
+                    AddStrike(b.pos, 105.0f, def.damage, 0.5f, b.id, StrikeStyle::Shadow);   // it bursts up out of the ground under you
+                }
+                return true;
+            }
+            case DragonMode::Breath:
+                ConeHits(b, 400.0f, 0.55f, def.damage * 0.55f, dt, true);
+                b.lastSmashAt = clock;
+                if (clock >= b.modeUntil) FinishMove(b);
+                return true;
+            case DragonMode::Slam: case DragonMode::Summon: case DragonMode::Emerge: case DragonMode::Stunned:
+                if (clock >= b.modeUntil) FinishMove(b);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Each mini boss's own move, from what it does in the game. Returns true if it started one.
+    bool StartMiniSpecial(MiniBoss& b, const PlayerState& target, float d) {
+        const BossDef def = BossOf(b.kind);
+        Rng rng(seed ^ (static_cast<uint64_t>(clock * 977.0f) * 0x9E3779B97F4A7C15ull) ^ b.id);
+        const Vec2 at = target.pos;
+        b.rot = FaceRot(b.pos, at);
+        bool started = false;
+        float busy = 0.0f;
+        switch (b.kind) {
+            case BossKind::Stone:   // Stalfos: a jump slash, landing where you stand
+                if (d > 170.0f && d < 520.0f) {
+                    StartLeap(b, SnapToGround(at), true);
+                    AddStrike(b.to, 110.0f, def.damage, b.modeUntil - clock, b.id, StrikeStyle::Rock);
+                    busy = b.modeUntil - clock; started = true;
+                }
+                break;
+            case BossKind::Lava:    // Magma Dodongo: fire breath up close, a roll from further off that leaves fire behind (and dizzy after)
+                if (d < 220.0f) { StartMove(b, DragonMode::Breath, 1.6f, DragonMode::Chase); busy = 1.6f; started = true; }
+                else if (d < 950.0f) {
+                    Vec2 to = {b.pos.x + (at.x - b.pos.x) / d * (d + 260.0f), b.pos.z + (at.z - b.pos.z) / d * (d + 260.0f)};
+                    if (!Inside(to)) to = at;
+                    StartCharge(b, to, 430.0f, DragonMode::Stunned, 1.6f);
+                    busy = b.modeUntil - clock + 1.6f; started = true;
+                }
+                break;
+            case BossKind::Frost:   // White Wolfos: an icy howl that freezes everyone close, or a pounce
+                if (d < 250.0f) {
+                    StartMove(b, DragonMode::Summon, 0.75f);
+                    AddStrike(b.pos, 240.0f, def.damage * 0.7f, 0.7f, b.id, StrikeStyle::Ice);
+                    busy = 0.75f; started = true;
+                } else if (d < 480.0f) {
+                    StartLeap(b, SnapToGround(at), true);
+                    AddStrike(b.to, 95.0f, def.damage, b.modeUntil - clock, b.id, StrikeStyle::Ice);
+                    busy = b.modeUntil - clock; started = true;
+                }
+                break;
+            case BossKind::Moss:    // Moss Lizalfos: lobs spore pods that burst around you, then hops in for a slash
+                if (d < 650.0f) {
+                    StartMove(b, DragonMode::Summon, 1.0f, DragonMode::Chase);
+                    for (int i = 0; i < 3; i++) {
+                        const float a = static_cast<float>(rng.Unit()) * 6.2831853f, r = i == 0 ? 0.0f : 90.0f + static_cast<float>(rng.Unit()) * 90.0f;
+                        AddStrike({at.x + std::cos(a) * r, at.z + std::sin(a) * r}, 95.0f, def.damage * 0.8f, 1.4f + 0.3f * i, b.id, StrikeStyle::Spore);
+                    }
+                    busy = 1.0f; started = true;
+                }
+                break;
+            case BossKind::Tide:    // Big Octo: a spinning charge through you, dizzy after
+                if (d > 150.0f && d < 800.0f) {
+                    Vec2 to = {b.pos.x + (at.x - b.pos.x) / d * (d + 200.0f), b.pos.z + (at.z - b.pos.z) / d * (d + 200.0f)};
+                    if (!Inside(to)) to = at;
+                    StartCharge(b, to, 380.0f, DragonMode::Stunned, 1.2f);
+                    b.aux = 2;
+                    busy = b.modeUntil - clock + 1.2f; started = true;
+                }
+                break;
+            case BossKind::Shade:   // Dead Hand: hands grab you out of the ground, then it burrows over to bite
+                if (d < 600.0f) {
+                    StartMove(b, DragonMode::Summon, 1.0f, DragonMode::Hidden, 0.9f);
+                    AddStrike(at, 80.0f, def.damage * 0.6f, 1.0f, b.id, StrikeStyle::Shadow);
+                    for (int i = 0; i < 3; i++) {
+                        const float a = 2.0943951f * i + static_cast<float>(rng.Unit());
+                        AddStrike({at.x + std::cos(a) * 140.0f, at.z + std::sin(a) * 140.0f}, 75.0f, def.damage * 0.6f, 1.0f, b.id, StrikeStyle::Shadow);
+                    }
+                    b.from = b.pos; b.to = SnapToGround({at.x + (b.pos.x - at.x) / (std::max)(d, 1.0f) * 70.0f, at.z + (b.pos.z - at.z) / (std::max)(d, 1.0f) * 70.0f});
+                    b.moveStart = clock;
+                    busy = 2.6f; started = true;
+                }
+                break;
+            case BossKind::Dune:    // Iron Knuckle: an overhead cleave that sends a shockwave along the sand; the axe sticks (not once the armour is off)
+                if (d < 260.0f) {
+                    StartMove(b, DragonMode::Slam, ArmourOff(b) ? 0.7f : 1.0f, ArmourOff(b) ? DragonMode::Chase : DragonMode::Stunned, 1.3f);
+                    AddStrike(Ahead(b, 120.0f), 140.0f, def.damage * 1.5f, 1.0f, b.id, StrikeStyle::Rock);
+                    AddStrike(Ahead(b, 270.0f), 105.0f, def.damage * 0.7f, 1.2f, b.id, StrikeStyle::Rock);
+                    AddStrike(Ahead(b, 410.0f), 105.0f, def.damage * 0.7f, 1.4f, b.id, StrikeStyle::Rock);
+                    busy = 2.3f; started = true;
+                }
+                break;
+            default: break;
+        }
+        if (started) {
+            b.specialReadyAt = clock + busy + 6.0f + static_cast<float>(rng.Unit()) * 3.0f;
+            b.attackReadyAt = (std::max)(b.attackReadyAt, clock + busy + def.cooldown * 0.5f);
+            b.moves++;
+        }
+        return started;
+    }
+
+    void TickMini(MiniBoss& b, float dt) {
+        const BossDef def = BossOf(b.kind);
+        if (TickMiniMove(b, dt)) return;
+        // Notice the nearest player in range (the current target is kept while it stays in reach).
+        PlayerState* target = Find(b.target);
+        if (target && (!target->alive || Distance(target->pos, b.home) > kBossLeash + kBossAggroRange)) target = nullptr;
+        if (!target) {
+            float best = kBossAggroRange;
+            for (auto& p : players) {
+                if (!p.alive || clock < p.invulnUntil) continue;
+                const float d = Distance(p.pos, b.pos);
+                if (d < best) { best = d; target = &p; }
+            }
+            if (target) b.specialReadyAt = (std::max)(b.specialReadyAt, clock + 1.5f);   // it closes in a little before its first trick
+        }
+        if (target) { b.target = target->id; b.lostTargetAt = clock; }
+        else if (clock - b.lostTargetAt > 4.0f) b.target = kNoPlayer;
+
+        if (b.windupUntil >= 0.0f) {   // winding up a blow: feet planted, then it strikes everyone still in front of it
+            if (clock >= b.windupUntil) {
+                b.windupUntil = -1.0f;
+                for (auto& p : players) {
+                    if (!p.alive || clock < p.invulnUntil) continue;
+                    if (Distance(p.pos, b.pos) > kBossReach + 40.0f || std::fabs(OffFacing(b, p.pos)) > 1.25f) continue;
+                    Damage(p.id, def.damage, b.id);
+                }
+            }
+            return;
+        }
+        if (target && Distance(b.pos, b.home) <= kBossLeash + 200.0f) {
+            const float d = Distance(b.pos, target->pos);
+            if (b.mode == DragonMode::Patrol) b.mode = DragonMode::Chase;
+            if (clock >= b.specialReadyAt && clock >= b.attackReadyAt && StartMiniSpecial(b, *target, d)) return;
+            if (d > kBossReach * 0.75f) BossWalk(b, target->pos, def.speed * (ArmourOff(b) ? kIronKnuckleBareSpeed : 1.0f), dt);
+            b.rot = FaceRot(b.pos, target->pos);
+            if (d <= kBossReach + 20.0f && clock >= b.attackReadyAt) {
+                b.attackReadyAt = clock + def.cooldown * (ArmourOff(b) ? kIronKnuckleBareSwing : 1.0f);
+                b.lastSmashAt = clock;
+                b.windupUntil = clock + kBossWindupSeconds;   // it rears back first: that half second is the player's chance to roll away
+            }
+        } else {
+            // Lost them (or they ran too far): walk home and recover.
+            b.target = kNoPlayer;
+            if (Distance(b.pos, b.home) > 8.0f) BossWalk(b, b.home, def.speed * 0.8f, dt);
+            if (b.mode != DragonMode::Climb) b.mode = DragonMode::Patrol;
+            b.health = (std::min)(b.maxHealth, b.health + 1.2f * dt);
+        }
+    }
+
+    // ---- the major bosses ---------------------------------------------------------------------------------------------------------
+
     void TickDragon(MiniBoss& b, float dt) {
         const BossDef def = BossOf(b.kind);
-        auto face = [&](Vec2 to) { b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(to.x - b.pos.x, to.z - b.pos.z) * (32768.0f / 3.14159265358979f))); };
+        const float cruise = def.altitude;
+        auto face = [&](Vec2 to) { b.rot = FaceRot(b.pos, to); };
         auto fly = [&](Vec2 to, float speed) {
-            const float dx = to.x - b.pos.x, dz = to.z - b.pos.z, d = std::hypot(dx, dz);
-            if (d > 1.0f) { const float step = (std::min)(d, speed * dt); b.pos.x += dx / d * step; b.pos.z += dz / d * step; }
+            const float d = Distance(b.pos, to);
+            Step(b.pos, to, speed * dt);
             return d;
         };
         auto climbTo = [&](float alt, float rate) { b.y += (std::max)(-rate * dt, (std::min)(rate * dt, alt - b.y)); };
@@ -1102,19 +1503,24 @@ class Match {
         }
         if (target) { b.target = target->id; b.lostTargetAt = clock; } else b.target = kNoPlayer;
         const float hpFrac = b.health / b.maxHealth;
+        Rng rng(seed ^ static_cast<uint64_t>(clock * 977.0f) ^ b.id);
 
         switch (b.mode) {
             case DragonMode::Landed:
                 climbTo(0.0f, 300.0f);
                 if (clock >= b.modeUntil) b.mode = DragonMode::Climb;
                 return;
-            case DragonMode::Climb:
-                climbTo(kDragonAltitude, 160.0f);
-                if (b.y >= kDragonAltitude - 5.0f) b.mode = DragonMode::Chase;
+            case DragonMode::Stunned:   // dazed where it is (Morpha's core lies exposed on the ground)
+                climbTo(b.kind == BossKind::DragonWater ? 40.0f : 0.0f, 300.0f);
+                if (clock >= b.modeUntil) { b.mode = b.kind == BossKind::DragonWater ? DragonMode::Hidden : DragonMode::Climb; b.modeUntil = clock + 1.5f; b.from = b.to = b.pos; b.moveStart = clock; }
                 return;
-            case DragonMode::Swoop: {
+            case DragonMode::Climb:
+                climbTo(cruise, 160.0f);
+                if (std::fabs(b.y - cruise) < 5.0f) b.mode = DragonMode::Chase;
+                return;
+            case DragonMode::Swoop: {   // a dive at someone (Volvagia's swoop, Bongo Bongo's head charge, Twinrova's broom dive)
                 const float t = (std::min)(1.0f, 1.0f - (b.modeUntil - clock) / kDragonStrikeDelay);
-                b.y = kDragonAltitude * (1.0f - t);
+                b.y = cruise * (1.0f - t);
                 fly(b.swoopAt, def.speed * 2.2f);
                 face(b.swoopAt);
                 if (clock >= b.modeUntil) { // it hits the ground and sits there, dazed
@@ -1131,43 +1537,152 @@ class Match {
                 if (target) face(target->pos);
                 for (auto& p : players) {
                     if (!p.alive || clock < p.invulnUntil) continue;
-                    const float dx = p.pos.x - b.pos.x, dz = p.pos.z - b.pos.z, d = std::hypot(dx, dz);
-                    if (d > kDragonBreathRange) continue;
-                    float off = std::atan2(dx, dz) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
-                    while (off > 3.14159265f) off -= 6.2831853f;
-                    while (off < -3.14159265f) off += 6.2831853f;
-                    if (std::fabs(off) > kDragonBreathHalfAngle) continue;
+                    if (Distance(p.pos, b.pos) > kDragonBreathRange || std::fabs(OffFacing(b, p.pos)) > kDragonBreathHalfAngle) continue;
                     Damage(p.id, kDragonBreathDps * dt, b.id, DamageKind::Fire, false);
-                    if (p.alive) ApplyElement(p, b.id, 2.5f, 0.3f);
+                    if (p.alive) ApplyBurn(p, b.id, 2.5f, 0.3f);
                 }
                 if (clock >= b.modeUntil) b.mode = DragonMode::Chase;
                 return;
-            case DragonMode::Cast:
+            case DragonMode::Cast: case DragonMode::Slam: case DragonMode::Beam: case DragonMode::Summon:
                 if (target) face(target->pos);
-                if (clock >= b.modeUntil) b.mode = DragonMode::Chase;
+                if (clock >= b.modeUntil) FinishMove(b);
                 return;
+            case DragonMode::Hidden: {   // underground, under water, in shadow or in a portal, on its way somewhere
+                climbTo(HiddenAltitude(b.kind), 600.0f);
+                if (b.kind == BossKind::DragonWater) {   // Morpha follows you about under the water and comes up when it is ready
+                    if (target) b.to = MorphaSurfaceSpot(b, target->pos);
+                    const bool there = Step(b.pos, b.to, def.speed * dt);
+                    if (there && target && clock >= b.attackReadyAt) {
+                        b.attackReadyAt = clock + def.cooldown + 0.8f + 1.5f + 3.0f;
+                        Emerge(b, target, rng);
+                    } else if (there && !target) {
+                        b.to = PatrolSpot();
+                    }
+                    return;
+                }
+                const float left = (std::max)(0.05f, b.modeUntil - clock);
+                Step(b.pos, b.to, (std::max)(def.speed * 0.6f, Distance(b.pos, b.to) / left) * dt);
+                if (clock >= b.modeUntil) Emerge(b, target, rng);
+                return;
+            }
+            case DragonMode::Emerge:
+                climbTo(EmergeAltitude(b.kind), 500.0f);
+                if (clock >= b.modeUntil) FinishMove(b);
+                return;
+            case DragonMode::Charge: {   // Phantom Ganon's charge out of a portal, Twinrova's broom dash
+                climbTo(b.kind == BossKind::DragonForest ? 100.0f : cruise, 400.0f);
+                const bool done = Step(b.pos, b.to, b.chargeSpeed * dt);
+                face(b.to);
+                if (b.kind == BossKind::DragonForest) BodyHits(b, 140.0f, 1.3f, 0.5f);
+                if (done || clock >= b.modeUntil) FinishMove(b);
+                return;
+            }
             default: break;
         }
-        climbTo(kDragonAltitude + 30.0f * std::sin(clock * 1.6f), 120.0f);
+
+        // Morpha lives under the water: when it is not doing something it is sliding about out of sight.
+        if (b.kind == BossKind::DragonWater) {
+            b.mode = DragonMode::Hidden;
+            b.from = b.pos;
+            b.moveStart = clock;
+            b.to = target ? MorphaSurfaceSpot(b, target->pos) : PatrolSpot();
+            return;
+        }
+
+        climbTo(cruise + 30.0f * std::sin(clock * 1.6f), 120.0f);
         if (!target) { // nobody near: cruise between spots in the safe zone
             b.mode = DragonMode::Patrol;
-            if (fly(b.waypoint, 110.0f) < 90.0f) {
-                Rng rng(seed ^ static_cast<uint64_t>(clock * 1000.0f) ^ 0x70617472ull);
-                b.waypoint = RandomPointIn(rng, storm.SafeZoneAt(stormTime), placement, 0.8f);
-            }
+            if (fly(b.waypoint, 110.0f) < 90.0f) b.waypoint = PatrolSpot();
             face(b.waypoint);
             return;
         }
         b.mode = DragonMode::Chase;
         const float d = Distance(b.pos, target->pos);
         face(target->pos);
+        // Getting to you: each one its own way.
+        if (d > 850.0f && clock >= b.attackReadyAt) {
+            const float a = static_cast<float>(rng.Unit()) * 6.2831853f;
+            const Vec2 near = SnapToGround({target->pos.x + std::cos(a) * 380.0f, target->pos.z + std::sin(a) * 380.0f});
+            if (b.kind == BossKind::DragonForest || b.kind == BossKind::DragonShadow) {   // through a portal / into the shadows, and out beside you
+                StartBurrow(b, Inside(near) ? near : target->pos, 1.1f);
+                b.next = DragonMode::Chase;
+                return;
+            }
+            if (b.kind == BossKind::DragonSand) {   // a broom dash
+                StartCharge(b, Inside(near) ? near : target->pos, def.speed * 3.0f, DragonMode::Chase, 0.0f);
+                b.aux = 2;
+                return;
+            }
+        }
         if (d > 480.0f) fly(target->pos, def.speed);              // close in to about 480 units and hover
         if (clock < b.attackReadyAt) return;
-        Rng rng(seed ^ static_cast<uint64_t>(clock * 977.0f) ^ b.id);
+        switch (b.kind) {
+            case BossKind::DragonForest: PhantomGanonAttack(b, *target, d, hpFrac, rng); break;
+            case BossKind::DragonShadow: BongoAttack(b, *target, d, hpFrac, rng); break;
+            case BossKind::DragonSand: TwinrovaAttack(b, *target, d, hpFrac, rng); break;
+            default: VolvagiaAttack(b, *target, d, hpFrac, rng); break;
+        }
+    }
+
+    static float HiddenAltitude(BossKind k) { return k == BossKind::DragonForest || k == BossKind::DragonShadow ? BossOf(k).altitude : 0.0f; }
+    static float EmergeAltitude(BossKind k) { return k == BossKind::DragonWater ? BossOf(k).altitude : (k == BossKind::DragonFire ? 60.0f : BossOf(k).altitude); }
+    Vec2 PatrolSpot() {
+        Rng rng(seed ^ static_cast<uint64_t>(clock * 1000.0f) ^ 0x70617472ull);
+        return RandomPointIn(rng, storm.SafeZoneAt(stormTime), placement, 0.8f);
+    }
+    // Where Morpha's tentacle comes up: beside you, on its side.
+    Vec2 MorphaSurfaceSpot(const MiniBoss& b, Vec2 at) const {
+        const float d = (std::max)(1.0f, Distance(b.pos, at));
+        Vec2 p = {at.x + (b.pos.x - at.x) / d * 230.0f, at.z + (b.pos.z - at.z) / d * 230.0f};
+        return Inside(p) ? p : at;
+    }
+
+    // It comes back out at the end of a hidden trip.
+    void Emerge(MiniBoss& b, PlayerState* target, Rng& rng) {
+        b.pos = b.to;
+        switch (b.kind) {
+            case BossKind::DragonFire:   // Volvagia bursts out of the ground, rocks come down, and it lies there for a moment
+                StartMove(b, DragonMode::Emerge, 0.7f, DragonMode::Landed, 3.0f);
+                for (int i = 0; i < 6; i++) {
+                    const float a = static_cast<float>(rng.Unit()) * 6.2831853f, r = 160.0f + static_cast<float>(rng.Unit()) * 380.0f;
+                    AddStrike({b.pos.x + std::cos(a) * r, b.pos.z + std::sin(a) * r}, 95.0f, 0.7f, 1.0f + 0.25f * i, b.id, StrikeStyle::Rock);
+                }
+                break;
+            case BossKind::DragonWater: {   // Morpha's tentacle rises, swings at you, and (when hurt) throws up geysers; then the core is out
+                StartMove(b, DragonMode::Emerge, 0.8f, DragonMode::Slam, 1.5f);
+                AddStrike(b.pos, 120.0f, 1.0f, 0.7f, b.id, StrikeStyle::Water);
+                if (target) {
+                    b.rot = FaceRot(b.pos, target->pos);
+                    for (int i = 0; i < 3; i++) AddStrike(Ahead(b, 180.0f + 110.0f * i, (i - 1) * 0.35f), 100.0f, 1.0f, 1.6f + 0.15f * i, b.id, StrikeStyle::Water);
+                    if (b.health < b.maxHealth * 0.5f) {
+                        for (int i = 0; i < 5; i++) {
+                            const float a = static_cast<float>(rng.Unit()) * 6.2831853f, r = 60.0f + static_cast<float>(rng.Unit()) * 320.0f;
+                            AddStrike({target->pos.x + std::cos(a) * r, target->pos.z + std::sin(a) * r}, 90.0f, 0.8f, 1.9f + 0.2f * i, b.id, StrikeStyle::Water);
+                        }
+                    }
+                }
+                b.chainAfterSlam = true;
+                break;
+            }
+            default:   // Phantom Ganon out of his portal (into his charge), Bongo Bongo out of the shadows
+                StartMove(b, DragonMode::Emerge, 0.5f, b.next == DragonMode::Charge ? DragonMode::Charge : DragonMode::Chase);
+                break;
+        }
+    }
+
+    void VolvagiaAttack(MiniBoss& b, PlayerState& target, float d, float hpFrac, Rng& rng) {
+        const BossDef def = BossOf(b.kind);
+        if (clock >= b.specialReadyAt && rng.Unit() < 0.35) {      // down into the ground, and up under you
+            StartBurrow(b, SnapToGround(target.pos), 2.0f);
+            b.specialReadyAt = clock + 18.0f;
+            b.attackReadyAt = clock + 2.0f + 0.7f + 3.0f + def.cooldown;
+            AddStrike(b.to, 170.0f, 1.4f, 2.0f, b.id, StrikeStyle::Fire);
+            return;
+        }
         if (clock >= b.swoopReadyAt && rng.Unit() < 0.4) {         // dive at them
             b.mode = DragonMode::Swoop;
             b.modeUntil = clock + kDragonStrikeDelay;
-            b.swoopAt = target->pos;
+            b.swoopAt = target.pos;
             b.swoopReadyAt = clock + 15.0f;
             b.attackReadyAt = clock + 2.0f;
             AddStrike(b.swoopAt, 140.0f, 1.6f, kDragonStrikeDelay, b.id);
@@ -1176,16 +1691,112 @@ class Match {
             b.modeUntil = clock + kDragonBreathSeconds;
             b.attackReadyAt = clock + def.cooldown + kDragonBreathSeconds;
         } else {                                                    // far: fireballs, and meteors when it is hurt
-            b.mode = DragonMode::Cast;
-            b.modeUntil = clock + 1.0f;
+            StartMove(b, DragonMode::Cast, 1.0f);
             b.attackReadyAt = clock + def.cooldown + 1.0f;
-            AddStrike(target->pos, kDragonStrikeRadius, kDragonStrikeDamage, kDragonStrikeDelay, b.id);
+            AddStrike(target.pos, kDragonStrikeRadius, kDragonStrikeDamage, kDragonStrikeDelay, b.id);
             const int extra = hpFrac < 0.5f ? 6 : 2;
             for (int i = 0; i < extra; i++) {
                 const float a = static_cast<float>(rng.Unit() * 6.2831853), dist = 80.0f + static_cast<float>(rng.Unit()) * (hpFrac < 0.5f ? 520.0f : 260.0f);
-                AddStrike({target->pos.x + std::cos(a) * dist, target->pos.z + std::sin(a) * dist}, kDragonStrikeRadius * 0.8f, kDragonStrikeDamage * 0.8f, kDragonStrikeDelay + 0.1f * i, b.id);
+                AddStrike({target.pos.x + std::cos(a) * dist, target.pos.z + std::sin(a) * dist}, kDragonStrikeRadius * 0.8f, kDragonStrikeDamage * 0.8f, kDragonStrikeDelay + 0.1f * i, b.id);
             }
         }
+    }
+
+    void PhantomGanonAttack(MiniBoss& b, PlayerState& target, float d, float hpFrac, Rng& rng) {
+        const BossDef def = BossOf(b.kind);
+        (void)d;
+        if (clock >= b.specialReadyAt) {   // into a portal, out of another one across from you, and a charge straight through
+            const float a = static_cast<float>(rng.Unit()) * 6.2831853f;
+            Vec2 start = {target.pos.x + std::cos(a) * 750.0f, target.pos.z + std::sin(a) * 750.0f};
+            if (!Inside(start)) start = {target.pos.x - std::cos(a) * 750.0f, target.pos.z - std::sin(a) * 750.0f};
+            if (!Inside(start)) start = b.pos;
+            StartBurrow(b, start, 1.0f);
+            b.next = DragonMode::Charge;
+            b.chargeThrough = target.pos;
+            b.specialReadyAt = clock + 16.0f;
+            b.attackReadyAt = clock + 4.5f + def.cooldown;
+            return;
+        }
+        if ((b.moves++ & 1) == 0) {   // a volley of energy balls, one after the other
+            StartMove(b, DragonMode::Beam, 1.4f, DragonMode::Chase, 0.0f, 0);
+            const int balls = hpFrac < 0.5f ? 5 : 3;
+            for (int i = 0; i < balls; i++) {
+                const float a = static_cast<float>(rng.Unit()) * 6.2831853f, r = i == 0 ? 0.0f : static_cast<float>(rng.Unit()) * 160.0f;
+                AddStrike({target.pos.x + std::cos(a) * r, target.pos.z + std::sin(a) * r}, 110.0f, 0.8f, 1.0f + 0.32f * i, b.id, StrikeStyle::Magic);
+            }
+        } else {                      // the spear raised: lightning comes down around you
+            StartMove(b, DragonMode::Cast, 1.2f, DragonMode::Chase, 0.0f, 1);
+            for (int i = 0; i < 4; i++) {
+                const float a = 1.5707963f * i + static_cast<float>(rng.Unit()) * 0.8f, r = i == 0 ? 0.0f : 150.0f + static_cast<float>(rng.Unit()) * 120.0f;
+                AddStrike({target.pos.x + std::cos(a) * r, target.pos.z + std::sin(a) * r}, 120.0f, 1.0f, 1.2f + 0.12f * i, b.id, StrikeStyle::Bolt);
+            }
+        }
+        b.attackReadyAt = clock + def.cooldown + 1.4f;
+    }
+
+    void BongoAttack(MiniBoss& b, PlayerState& target, float d, float hpFrac, Rng& rng) {
+        const BossDef def = BossOf(b.kind);
+        if (clock >= b.swoopReadyAt && rng.Unit() < 0.3) {   // the head charges down at you, and lies there with its eye open
+            b.mode = DragonMode::Swoop;
+            b.modeUntil = clock + kDragonStrikeDelay;
+            b.swoopAt = target.pos;
+            b.swoopReadyAt = clock + 16.0f;
+            b.attackReadyAt = clock + 2.0f;
+            AddStrike(b.swoopAt, 150.0f, 1.6f, kDragonStrikeDelay, b.id, StrikeStyle::Shadow);
+            return;
+        }
+        const int pick = static_cast<int>(rng.Below(hpFrac < 0.5f ? 4 : 3));
+        if (pick < 2) {   // one hand comes down on you
+            StartMove(b, DragonMode::Slam, 1.1f, DragonMode::Chase, 0.0f, static_cast<uint8_t>(b.moves++ & 1));
+            AddStrike(target.pos, 140.0f, 1.2f, 1.0f, b.id, StrikeStyle::Shadow);
+        } else if (pick == 2) {   // both hands together: a clap
+            StartMove(b, DragonMode::Slam, 1.4f, DragonMode::Chase, 0.0f, 2);
+            AddStrike(target.pos, 210.0f, 1.8f, 1.3f, b.id, StrikeStyle::Shadow);
+        } else {   // a drum beat: shockwaves go out around it
+            StartMove(b, DragonMode::Summon, 1.8f);
+            for (int i = 0; i < 8; i++) {
+                const float a = 0.785398f * i, r = 220.0f + 60.0f * (i & 1);
+                AddStrike({b.pos.x + std::cos(a) * r, b.pos.z + std::sin(a) * r}, 120.0f, 0.7f, 0.6f + 0.15f * i, b.id, StrikeStyle::Rock);
+            }
+            AddStrike(target.pos, 120.0f, 0.7f, 1.8f, b.id, StrikeStyle::Rock);
+        }
+        (void)d;
+        b.attackReadyAt = clock + def.cooldown + 1.2f;
+    }
+
+    void TwinrovaAttack(MiniBoss& b, PlayerState& target, float d, float hpFrac, Rng& rng) {
+        const BossDef def = BossOf(b.kind);
+        if (clock >= b.swoopReadyAt && rng.Unit() < 0.3) {   // a dive on her brooms
+            b.mode = DragonMode::Swoop;
+            b.modeUntil = clock + kDragonStrikeDelay;
+            b.swoopAt = target.pos;
+            b.swoopReadyAt = clock + 15.0f;
+            b.attackReadyAt = clock + 2.0f;
+            AddStrike(b.swoopAt, 140.0f, 1.6f, kDragonStrikeDelay, b.id, (b.moves & 1) ? StrikeStyle::Ice : StrikeStyle::Fire);
+            return;
+        }
+        if (hpFrac < 0.5f && clock >= b.specialReadyAt) {   // both at once: a ring of fire and ice around you
+            StartMove(b, DragonMode::Summon, 1.6f, DragonMode::Chase, 0.0f, 3);
+            for (int i = 0; i < 8; i++) {
+                const float a = 0.785398f * i;
+                AddStrike({target.pos.x + std::cos(a) * 280.0f, target.pos.z + std::sin(a) * 280.0f}, 120.0f, 0.9f, 1.3f, b.id, (i & 1) ? StrikeStyle::Ice : StrikeStyle::Fire);
+            }
+            AddStrike(target.pos, 130.0f, 1.0f, 1.7f, b.id, rng.Unit() < 0.5 ? StrikeStyle::Ice : StrikeStyle::Fire);
+            b.specialReadyAt = clock + 14.0f;
+            b.attackReadyAt = clock + def.cooldown + 1.6f;
+            return;
+        }
+        // Koume's fire and Kotake's ice, in turn: a beam that scorches (or freezes) a line along the ground through you.
+        const bool ice = (b.moves++ & 1) != 0;
+        StartMove(b, DragonMode::Beam, 1.3f, DragonMode::Chase, 0.0f, ice ? 1 : 0);
+        const float len = (std::max)(d, 1.0f);
+        const float dx = (target.pos.x - b.pos.x) / len, dz = (target.pos.z - b.pos.z) / len;
+        for (int i = 0; i < 6; i++) {
+            const float along = len - 240.0f + 120.0f * i;
+            const Vec2 at = {b.pos.x + dx * along, b.pos.z + dz * along};
+            AddStrike(at, 100.0f, 0.8f, 0.9f + 0.08f * i, b.id, ice ? StrikeStyle::Ice : StrikeStyle::Fire);
+        }
+        b.attackReadyAt = clock + def.cooldown + 1.3f;
     }
 
     void TickBosses(float dt) {
@@ -1193,65 +1804,25 @@ class Match {
         TickStrikes();
         for (auto& b : bosses) {
             if (!b.alive) continue;
-            if (IsDragonKind(b.kind)) { TickDragon(b, dt); continue; }
-            const BossDef def = BossOf(b.kind);
-            // Notice the nearest player in range (the current target is kept while it stays in reach).
-            PlayerState* target = Find(b.target);
-            if (target && (!target->alive || Distance(target->pos, b.home) > kBossLeash + kBossAggroRange)) target = nullptr;
-            if (!target) {
-                float best = kBossAggroRange;
-                for (auto& p : players) {
-                    if (!p.alive || clock < p.invulnUntil) continue;
-                    const float d = Distance(p.pos, b.pos);
-                    if (d < best) { best = d; target = &p; }
+            if (IsDragonKind(b.kind)) {
+                const DragonMode before = b.mode;
+                TickDragon(b, dt);
+                // Phantom Ganon came out of his portal: now the charge through where you stood.
+                if (b.kind == BossKind::DragonForest && before == DragonMode::Emerge && b.mode == DragonMode::Charge && b.moveStart == clock) {
+                    const float d = (std::max)(1.0f, Distance(b.pos, b.chargeThrough));
+                    Vec2 to = {b.chargeThrough.x + (b.chargeThrough.x - b.pos.x) / d * 500.0f, b.chargeThrough.z + (b.chargeThrough.z - b.pos.z) / d * 500.0f};
+                    if (!Inside(to)) to = b.chargeThrough;
+                    StartCharge(b, to, 650.0f, DragonMode::Climb, 0.0f);
                 }
-            }
-            if (target) { b.target = target->id; b.lostTargetAt = clock; }
-            else if (clock - b.lostTargetAt > 4.0f) b.target = kNoPlayer;
-
-            if (b.windupUntil >= 0.0f) {   // winding up a blow: feet planted, then it strikes everyone still in front of it
-                if (clock >= b.windupUntil) {
-                    b.windupUntil = -1.0f;
-                    for (auto& p : players) {
-                        if (!p.alive || clock < p.invulnUntil) continue;
-                        const float ex = p.pos.x - b.pos.x, ez = p.pos.z - b.pos.z;
-                        if (std::hypot(ex, ez) > kBossReach + 40.0f) continue;
-                        float off = std::atan2(ex, ez) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
-                        while (off > 3.14159265f) off -= 6.2831853f;
-                        while (off < -3.14159265f) off += 6.2831853f;
-                        if (std::fabs(off) > 1.25f) continue;
-                        Damage(p.id, def.damage, b.id);
-                    }
+                // Morpha's swing is over: the core drops out, exposed.
+                if (b.kind == BossKind::DragonWater && before == DragonMode::Slam && b.mode != DragonMode::Slam && b.chainAfterSlam) {
+                    b.chainAfterSlam = false;
+                    b.mode = DragonMode::Stunned;
+                    b.modeUntil = clock + 3.0f;
                 }
                 continue;
             }
-            if (target && Distance(b.pos, b.home) <= kBossLeash + 200.0f) {
-                const float dx = target->pos.x - b.pos.x, dz = target->pos.z - b.pos.z;
-                const float d = std::hypot(dx, dz);
-                b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(dx, dz) * (32768.0f / 3.14159265358979f)));
-                if (d > kBossReach * 0.75f) {
-                    const float step = (std::min)(d, def.speed * dt);
-                    b.pos.x += dx / d * step;
-                    b.pos.z += dz / d * step;
-                }
-                if (d <= kBossReach + 20.0f && clock >= b.attackReadyAt) {
-                    b.attackReadyAt = clock + def.cooldown;
-                    b.lastSmashAt = clock;
-                    b.windupUntil = clock + kBossWindupSeconds;   // it rears back first: that half second is the player's chance to roll away
-                }
-            } else {
-                // Lost them (or they ran too far): walk home and recover.
-                b.target = kNoPlayer;
-                const float dx = b.home.x - b.pos.x, dz = b.home.z - b.pos.z;
-                const float d = std::hypot(dx, dz);
-                if (d > 8.0f) {
-                    const float step = (std::min)(d, def.speed * 0.8f * dt);
-                    b.pos.x += dx / d * step;
-                    b.pos.z += dz / d * step;
-                    b.rot = static_cast<int16_t>(static_cast<int32_t>(std::atan2(dx, dz) * (32768.0f / 3.14159265358979f)));
-                }
-                b.health = (std::min)(b.maxHealth, b.health + 1.2f * dt);
-            }
+            TickMini(b, dt);
         }
     }
 
@@ -1605,6 +2176,7 @@ class Match {
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
     std::vector<Strike> strikes;
+    std::shared_ptr<const NavGrid> nav;
     std::vector<AllyState> allies;
     Replay replay;
     float replayNextAt = 0;

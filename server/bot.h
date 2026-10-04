@@ -292,7 +292,7 @@ class BotController {
         const MiniBoss* best = nullptr;
         float bestD = range;
         for (const MiniBoss& b : m.Bosses()) {
-            if (!b.alive) continue;
+            if (!b.alive || BossHidden(b.mode)) continue;
             const float d = Distance(p.pos, b.pos);
             if (d < bestD) { bestD = d; best = &b; }
         }

@@ -117,6 +117,11 @@ static void MessagesRoundTrip() {
     { Snapshot a, b; BossNet n; n.index = 3; n.kind = 2; n.x = 10; n.z = -4; n.rot = -123; n.hp = 77; n.smashing = true; a.bosses = {n};
       CHECK(RoundTrips(a, b) && b.bosses.size() == 1 && b.bosses[0].Id() == kBossIdBase + 3 && b.bosses[0].kind == 2 && b.bosses[0].rot == -123 && b.bosses[0].hp == 77 && b.bosses[0].smashing); }
     { Snapshot bad, out; BossNet n; n.index = 9; bad.bosses = {n}; CHECK(!RoundTrips(bad, out)); }   // index out of range
+    { Snapshot a, b; BossNet n; n.mode = static_cast<uint8_t>(DragonMode::Stunned); n.aux = 2; a.bosses = {n};
+      CHECK(RoundTrips(a, b) && b.bosses[0].mode == static_cast<uint8_t>(DragonMode::Stunned) && b.bosses[0].aux == 2); }   // what it is doing, and which variant
+    { Snapshot bad, out; BossNet n; n.mode = static_cast<uint8_t>(DragonMode::Count); bad.bosses = {n}; CHECK(!RoundTrips(bad, out)); }
+    { EvStrike a, b; a.by = kDragonId; a.radius = 100; a.delay = 1; a.style = static_cast<uint8_t>(StrikeStyle::Ice); CHECK(RoundTrips(a, b) && b.style == a.style); }
+    { EvStrike bad, out; bad.style = static_cast<uint8_t>(StrikeStyle::Count); CHECK(!RoundTrips(bad, out)); }
     { UseShieldRequest a, b; CHECK(RoundTrips(a, b)); }
     { EvInventory a, b; a.shield = 2.5f; CHECK(RoundTrips(a, b) && b.shield == 2.5f); }
     { EvInventory bad, out; bad.shield = 9.0f; CHECK(!RoundTrips(bad, out)); }
@@ -617,6 +622,7 @@ static void BossesOverTheWire() {
     CHECK(rig.M().FindBoss(boss.id)->health < boss.maxHealth);
     MiniBoss* live = const_cast<MiniBoss*>(rig.M().FindBoss(boss.id));
     live->health = 0.1f;
+    live->reassembled = true;   // a Stalfos would otherwise get back up once
     rig.M().Find(1)->health = rig.M().Find(1)->maxHealth;
     rig.Run(0.8f);
     a.ReportAttack(static_cast<uint16_t>(boss.id), true);

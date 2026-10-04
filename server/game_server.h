@@ -107,6 +107,7 @@ class GameServer {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
             sim.bots.SetNav(grid);
+            sim.match.SetNav(grid);   // the bosses find their way around with it too
         }
         sim.match.RegenerateLoot(lootCount);
         for (uint32_t id : humans) sim.match.AddHuman(id);
@@ -568,7 +569,7 @@ class GameServer {
                 case MatchEvent::Type::Strike: {
                     net::EvStrike st;
                     st.by = static_cast<uint16_t>(e.a);
-                    st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health;
+                    st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health; st.style = e.item;
                     Broadcast(st);
                     break;
                 }
@@ -739,6 +740,7 @@ class GameServer {
                 n.smashing = sim.match.Clock() - b.lastSmashAt < 0.4f;
                 n.y = static_cast<int16_t>(std::lround((std::max)(0.0f, (std::min)(b.y, 3000.0f))));
                 n.mode = static_cast<uint8_t>(b.mode);
+                n.aux = b.aux;
                 s.bosses.push_back(n);
             }
             for (const AllyState& a : sim.match.Allies()) {
