@@ -155,5 +155,31 @@ const on = Array.from({ length: F }, (_, i) => { const r = new Float32Array(88);
 const bn = S.BP.toNotes(fr, on, 0.5, 0.3, 11, 11);
 ok(bn.length === 1 && bn[0].pitch === 60 && near(bn[0].start, 20 * 256 / 22050, 0.03) && near(bn[0].end - bn[0].start, 100 * 256 / 22050, 0.05), 'Basic Pitch output is turned into notes: ' + JSON.stringify(bn.map(n => [n.pitch, +n.start.toFixed(2), +n.end.toFixed(2)])));
 
+// tidying found notes: a held note heard twice is one note, a kick drum is not a bass note, the top line is the melody
+{
+    const nt = (start, end, pitch, amp, extra) => Object.assign({ start, end, pitch, amp, vel: 90, onset: true, strike: 0.9, rise: 0.3 }, extra || {});
+    const raw = [nt(0, 0.5, 76, 0.6), nt(0.5, 1.0, 76, 0.5, { strike: 0.5, rise: 0.05 }), nt(1.0, 1.5, 79, 0.6),
+        nt(0, 1.5, 60, 0.4), nt(0, 1.5, 64, 0.4), nt(0, 0.7, 43, 0.7), nt(0.75, 1.5, 43, 0.7), nt(1.0, 1.1, 36, 0.3)];
+    const out = S.cleanNotes(raw, { drums: [{ time: 1.0, kind: 'kick' }] });
+    const mel = out.filter(n => n.part === 'melody').map(n => n.pitch + '@' + n.start + '-' + n.end).join(' ');
+    ok(mel === '76@0-1 79@1-1.5', 'a held note heard twice becomes one, and the top line is the melody: ' + mel);
+    ok(out.filter(n => n.part === 'bass').map(n => n.pitch).join() === '43,43', 'the bass is the low line; a kick heard as a low note is dropped');
+    ok(out.filter(n => n.part === 'harmony').length === 2, 'the chord under the melody is the harmony');
+}
+// how a part sounds: a held tone and a plucked one are told apart
+{
+    const tone = (decay) => { const y = new Float32Array(sr); for (let i = 0; i < sr; i++) y[i] = Math.exp(-i / sr * decay) * (Math.sin(2 * Math.PI * 440 * i / sr) + 0.5 * Math.sin(4 * Math.PI * 440 * i / sr)); return y; };
+    const held = S.timbreOf(tone(0), sr, [{ start: 0, end: 0.8, pitch: 69 }]), plucked = S.timbreOf(tone(8), sr, [{ start: 0, end: 0.8, pitch: 69 }]);
+    ok(held.decay > -1 && plucked.decay < -20, 'a held note holds and a plucked one dies away (' + held.decay.toFixed(1) + ' and ' + plucked.decay.toFixed(1) + ' dB/s)');
+    ok(S.timbreDistance(held, held) === 0 && S.timbreDistance(held, plucked) > 1, 'the tone distance tells them apart');
+}
+// a part far from an instrument's range is moved by octaves; the bass by one at most
+ok(S.fitShift({ center: 72 }, 'melody', 40) === 24 && S.fitShift({ center: 72 }, 'bass', 36) === 12 && S.fitShift({ center: 60 }, 'harmony', 64) === 0, 'parts are moved by whole octaves to suit the instrument');
+{
+    const [L1] = S.render([{ start: 0, end: 0.6, pitch: 48, vel: 100, part: 'melody' }], m, { melody: i0 }, 0, 44100, null, { shift: { melody: 12 } });
+    let c = 0; for (let i = 4411; i < 4411 + 11025; i++) if (L1[i - 1] <= 0 && L1[i] > 0) c++;
+    ok(near(c * 4, 440, 8), 'a part moved up an octave plays an octave up (' + c * 4 + ' Hz)');
+}
+
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');
 process.exit(fails ? 1 : 0);
