@@ -6,6 +6,7 @@
 #include "game_client.h"
 #include "game_server.h"
 #include "map.h"
+#include <algorithm>
 #include <memory>
 #include <random>
 #include <string>
@@ -20,11 +21,21 @@ struct PuppetState {
     float x = 0, y = 0, z = 0;
     int16_t rot = 0;
     uint8_t anim = 0;
+    uint8_t scene = 0; // game scene this player is in; only draw them if it matches yours
     bool alive = true;
     bool isBot = false;
     float health = kMaxHealth;
     ItemId weapon = ItemId::DekuStick;
     Rarity weaponRarity = Rarity::Common;
+};
+
+// One line of the lobby list.
+struct RosterRow {
+    uint16_t id = 0;
+    std::string name;
+    bool host = false;
+    bool ready = false;
+    bool self = false;
 };
 
 struct HudState {
@@ -41,9 +52,15 @@ struct HudState {
     Circle map;
     Circle safeZone;
     float stormDamagePerSecond = 0;      // at the local player's position
-    std::vector<std::pair<uint16_t, std::string>> roster;
+    std::vector<RosterRow> roster;
     uint16_t hostPort = 0;
-    int humanCount = 0;
+    int humanCount = 0;           // people in the lobby (hosts count the server's view)
+    int botSlots = 0;             // empty slots the host's Start will fill with bots
+    bool isHost = false;
+    bool selfReady = false;
+    float countdownLeft = 0;      // seconds until the drop, while the state is Countdown
+    uint16_t winnerId = 0xFFFF;   // once the match has ended
+    std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
 };
 
 class RoyaleSession {
@@ -59,9 +76,13 @@ class RoyaleSession {
         std::random_device rd;
         uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         server = std::make_unique<GameServer>(*hostTransport, seed, kHyruleFieldMap);
+        // A secret only this process knows: the server uses it to recognise the host's own player.
+        uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        if (token == 0) token = 1;
+        server->SetHostToken(token);
         clientTransport = net::ENetTransport::Connect("127.0.0.1", hostTransport->Port(), &err);
         if (!clientTransport) { Leave(); Fail(error, err); return false; }
-        client = std::make_unique<GameClient>(*clientTransport, playerName);
+        client = std::make_unique<GameClient>(*clientTransport, playerName, token);
         mode = Mode::Hosting;
         return true;
     }
@@ -105,7 +126,9 @@ class RoyaleSession {
     }
 
     // Game to server.
-    void SendLocalPose(float x, float y, float z, int16_t rot, uint8_t anim) { if (Joined()) client->SendInput(x, y, z, rot, anim); }
+    void SendLocalPose(float x, float y, float z, int16_t rot, uint8_t anim, uint8_t scene) { if (Joined()) client->SendInput(x, y, z, rot, anim, scene); }
+    // Lobby only.
+    void SetReady(bool ready) { if (Joined()) client->SetReady(ready); }
     void ReportAttack(uint16_t target, bool hit) { if (Joined()) client->ReportAttack(target, hit); }
     void RequestPickup(uint32_t lootIndex) { if (Joined()) client->RequestPickup(lootIndex); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
@@ -120,8 +143,8 @@ class RoyaleSession {
             PuppetState s;
             s.id = id;
             auto it = client->Roster().find(id);
-            s.name = it != client->Roster().end() ? it->second : (p.flags & net::PlayerNet::kBot ? "Bot " + std::to_string(id) : "Player " + std::to_string(id));
-            s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim;
+            s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? "Bot " + std::to_string(id) : "Player " + std::to_string(id));
+            s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
             s.health = p.Health();
@@ -136,7 +159,6 @@ class RoyaleSession {
         HudState h;
         h.mode = mode == Mode::Hosting ? HudState::Mode::Hosting : mode == Mode::Joined ? HudState::Mode::Joined : HudState::Mode::Idle;
         h.hostPort = hostTransport ? hostTransport->Port() : 0;
-        h.humanCount = server ? server->HumanCount() : 0;
         if (!client) {
             h.status = lastEnded.empty() ? "Not in a match" : lastEnded;
             return h;
@@ -148,7 +170,21 @@ class RoyaleSession {
         h.selfId = client->PlayerId();
         h.map = client->Map();
         h.safeZone = client->SafeZone();
-        for (const auto& [id, name] : client->Roster()) h.roster.push_back({id, name});
+        for (const auto& [id, info] : client->Roster()) {
+            RosterRow row;
+            row.id = id; row.name = info.name; row.host = info.host; row.ready = info.ready; row.self = id == client->PlayerId();
+            h.isHost = h.isHost || (row.self && row.host);
+            h.selfReady = h.selfReady || (row.self && row.ready);
+            h.roster.push_back(std::move(row));
+        }
+        h.humanCount = static_cast<int>(h.roster.size());
+        h.botSlots = kMaxPlayers - h.humanCount;
+        if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        h.winnerId = client->Winner();
+        if (h.winnerId != net::kNoPlayer16) {
+            auto w = client->Roster().find(h.winnerId);
+            h.winnerName = w != client->Roster().end() ? w->second.name : "Bot " + std::to_string(h.winnerId - 999);
+        }
         if (const net::PlayerNet* self = client->Self()) {
             h.haveSelf = true;
             h.selfHealth = self->Health();

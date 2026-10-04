@@ -17,19 +17,23 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 1;
+constexpr uint16_t kProtocolVersion = 2; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
 constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N others, plus self
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
+    EvReady = 76,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
+
+// Roster flags, in Welcome and EvPlayerJoined.
+constexpr uint8_t kRosterHost = 1, kRosterReady = 2;
 
 inline bool Finite(float f) { return std::isfinite(f); }
 
@@ -47,8 +51,10 @@ struct Hello {
     static constexpr MsgType kType = MsgType::Hello;
     uint16_t version = kProtocolVersion;
     std::string name;
-    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); }
-    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); return r.ok; }
+    // Secret the hosting process generated; a Hello carrying it is the host's own player. 0 for everyone else.
+    uint64_t hostToken = 0;
+    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); w.U64(hostToken); }
+    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); hostToken = r.U64(); return r.ok; }
 };
 
 struct Input {
@@ -58,9 +64,10 @@ struct Input {
     float x = 0, y = 0, z = 0;
     int16_t rot = 0;
     uint8_t anim = 0;
-    void Write(ByteWriter& w) const { w.U16(seq); w.U8(epoch); w.F32(x); w.F32(y); w.F32(z); w.I16(rot); w.U8(anim); }
+    uint8_t scene = 0;  // which game scene the sender is in; others only draw you if they are in the same one
+    void Write(ByteWriter& w) const { w.U16(seq); w.U8(epoch); w.F32(x); w.F32(y); w.F32(z); w.I16(rot); w.U8(anim); w.U8(scene); }
     bool Read(ByteReader& r) {
-        seq = r.U16(); epoch = r.U8(); x = r.F32(); y = r.F32(); z = r.F32(); rot = r.I16(); anim = r.U8();
+        seq = r.U16(); epoch = r.U8(); x = r.F32(); y = r.F32(); z = r.F32(); rot = r.I16(); anim = r.U8(); scene = r.U8();
         return r.ok && Finite(x) && Finite(y) && Finite(z);
     }
 };
@@ -86,6 +93,13 @@ struct UsePotionRequest {
     bool Read(ByteReader& r) { return r.ok; }
 };
 
+struct SetReady {
+    static constexpr MsgType kType = MsgType::SetReady;
+    bool ready = false;
+    void Write(ByteWriter& w) const { w.U8(ready ? 1 : 0); }
+    bool Read(ByteReader& r) { uint8_t v = r.U8(); ready = v == 1; return r.ok && v <= 1; }
+};
+
 // ---- server to client ------------------------------------------------------------------------------------------
 
 struct LootNet {
@@ -102,6 +116,7 @@ struct LootNet {
 
 struct RosterEntry {
     uint16_t id = 0;
+    uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
 };
 
@@ -121,7 +136,7 @@ struct Welcome {
         w.U16(static_cast<uint16_t>(loot.size()));
         for (const auto& l : loot) l.Write(w);
         w.U8(static_cast<uint8_t>(roster.size()));
-        for (const auto& e : roster) { w.U16(e.id); w.Str(e.name); }
+        for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); }
     }
     bool Read(ByteReader& r) {
         playerId = r.U16(); version = r.U16(); seed = r.U64();
@@ -133,7 +148,7 @@ struct Welcome {
         for (auto& l : loot) if (!l.Read(r)) return false;
         size_t m = r.U8();
         roster.assign(m, {});
-        for (auto& e : roster) { e.id = r.U16(); e.name = r.Str(kMaxNameLen); }
+        for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); if (e.flags > 3) r.ok = false; }
         return r.ok;
     }
 };
@@ -149,11 +164,12 @@ struct MatchStateMsg {
     static constexpr MsgType kType = MsgType::MatchStateMsg;
     uint8_t state = 0; // MatchState
     uint8_t alive = 0;
-    void Write(ByteWriter& w) const { w.U8(state); w.U8(alive); }
-    bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); return r.ok && state <= 4; }
+    uint16_t winner = kNoPlayer16; // set when state is Ending and somebody is left standing
+    void Write(ByteWriter& w) const { w.U8(state); w.U8(alive); w.U16(winner); }
+    bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); return r.ok && state <= 4; }
 };
 
-// One player as seen in a snapshot. 22 bytes.
+// One player as seen in a snapshot. 23 bytes.
 struct PlayerNet {
     static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4;
     uint16_t id = 0;
@@ -164,6 +180,7 @@ struct PlayerNet {
     uint8_t weapon = 0, weaponRarity = 0;
     uint8_t potions = 0;
     uint8_t anim = 0;
+    uint8_t scene = 0;
     static uint8_t QuantizeHealth(float h) {
         float v = h / kMaxHealth * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -171,11 +188,11 @@ struct PlayerNet {
     float Health() const { return health / 255.0f * kMaxHealth; }
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
-        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim);
+        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene);
     }
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
-        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8();
+        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8();
         return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 7 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount;
     }
@@ -238,9 +255,18 @@ struct EvLootAdded {
 struct EvPlayerJoined {
     static constexpr MsgType kType = MsgType::EvPlayerJoined;
     uint16_t id = 0;
+    uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
-    void Write(ByteWriter& w) const { w.U16(id); w.Str(name); }
-    bool Read(ByteReader& r) { id = r.U16(); name = r.Str(kMaxNameLen); return r.ok; }
+    void Write(ByteWriter& w) const { w.U16(id); w.U8(flags); w.Str(name); }
+    bool Read(ByteReader& r) { id = r.U16(); flags = r.U8(); name = r.Str(kMaxNameLen); return r.ok && flags <= 3; }
+};
+
+struct EvReady {
+    static constexpr MsgType kType = MsgType::EvReady;
+    uint16_t id = 0;
+    bool ready = false;
+    void Write(ByteWriter& w) const { w.U16(id); w.U8(ready ? 1 : 0); }
+    bool Read(ByteReader& r) { id = r.U16(); uint8_t v = r.U8(); ready = v == 1; return r.ok && v <= 1; }
 };
 
 struct EvPlayerLeft {

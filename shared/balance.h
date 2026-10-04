@@ -8,6 +8,11 @@ namespace royale {
 constexpr int kMaxPlayers = 32;
 constexpr int kTickHz = 20;
 
+// Match timing, shared so clients can show the same countdown the server runs.
+constexpr float kCountdownSec = 10.0f; // from Start to the drop
+constexpr float kDropSec = 5.0f;       // spawn protection
+constexpr float kEndingSec = 10.0f;
+
 // World units are OoT units. Link runs about 100 units/s.
 constexpr float kRunSpeed = 100.0f;
 constexpr float kPickupRange = 50.0f;

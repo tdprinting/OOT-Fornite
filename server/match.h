@@ -1,6 +1,7 @@
 #pragma once
 #include "../shared/balance.h"
 #include "../shared/combat.h"
+#include "../shared/map.h"
 #include "../shared/storm.h"
 #include <vector>
 
@@ -21,6 +22,7 @@ struct PlayerState {
     float y = 0;
     int16_t rot = 0; // OoT binary angle: 0x10000 = 360 degrees
     uint8_t anim = 0;
+    uint8_t scene = 0; // game scene the player is in (relayed). Bots are always in Hyrule Field.
     Equipped weapon = {ItemId::DekuStick, Rarity::Common}; // starter weapon, like Fortnite's pickaxe
     bool hasShield = false;
     Equipped shield = {ItemId::DekuShield, Rarity::Common};
@@ -58,9 +60,9 @@ struct AttackResult {
 // or in unit tests. Feed it Tick(dt) at kTickHz and call the event methods as messages arrive.
 class Match {
   public:
-    static constexpr float kCountdownSec = 10.0f;
-    static constexpr float kDropSec = 5.0f; // spawn invulnerability
-    static constexpr float kEndingSec = 10.0f;
+    static constexpr float kCountdownSec = royale::kCountdownSec;
+    static constexpr float kDropSec = royale::kDropSec; // spawn protection
+    static constexpr float kEndingSec = royale::kEndingSec;
 
     Match(uint64_t seed, Circle map, int lootCount = 400) : seed(seed), map(map), storm(seed, map) {
         for (const LootSpawn& l : GenerateLoot(seed, map, lootCount, 0.15f)) loot.push_back({l, false});
@@ -269,6 +271,7 @@ class Match {
         PlayerState p;
         p.id = id;
         p.isBot = isBot;
+        if (isBot) p.scene = static_cast<uint8_t>(kHyruleFieldScene);
         return p;
     }
 

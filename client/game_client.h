@@ -12,12 +12,20 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
     size_t index = 0;    // LootTaken / LootAdded
     MatchState state = MatchState::Lobby;
+    bool ready = false;  // ReadyChanged
+};
+
+// One entry of the lobby list: every human in the match, whether or not they are nearby.
+struct RosterInfo {
+    std::string name;
+    bool host = false;
+    bool ready = false;
 };
 
 // Client side of the protocol: connects, mirrors the server's world, and smooths remote players for rendering.
@@ -31,7 +39,9 @@ class GameClient {
     static constexpr float kInterpDelay = 0.1f; // seconds; two snapshots at 20 Hz
     static constexpr size_t kHistoryMax = 40;
 
-    GameClient(net::Transport& transport, std::string playerName) : link(transport), name(std::move(playerName)) {}
+    // `hostToken` is only passed by the hosting process for its own player (see GameServer::SetHostToken).
+    GameClient(net::Transport& transport, std::string playerName, uint64_t hostToken = 0)
+        : link(transport), name(std::move(playerName)), token(hostToken) {}
 
     void Update(float dt) {
         localClock += dt;
@@ -41,6 +51,7 @@ class GameClient {
                 case net::NetEvent::Type::Connected: {
                     net::Hello h;
                     h.name = name;
+                    h.hostToken = token;
                     Send(h);
                     break;
                 }
@@ -56,17 +67,19 @@ class GameClient {
     }
 
     // ---- what the game sends ----
-    void SendInput(float x, float y, float z, int16_t rot, uint8_t anim) {
+    void SendInput(float x, float y, float z, int16_t rot, uint8_t anim, uint8_t scene = 0) {
         if (status != Status::Joined) return;
         net::Input in;
         in.seq = ++inputSeq;
         in.epoch = epoch;
-        in.x = x; in.y = y; in.z = z; in.rot = rot; in.anim = anim;
+        in.x = x; in.y = y; in.z = z; in.rot = rot; in.anim = anim; in.scene = scene;
         Send(in, false);
     }
     void ReportAttack(uint16_t target, bool hit) { net::AttackReport m; m.target = target; m.hit = hit; SendIfJoined(m); }
     void RequestPickup(uint32_t index) { net::PickupRequest m; m.index = index; SendIfJoined(m); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
+    // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
+    void SetReady(bool ready) { net::SetReady m; m.ready = ready; SendIfJoined(m); }
     void Leave() { link.Disconnect(0); }
 
     // ---- what the game reads ----
@@ -78,7 +91,11 @@ class GameClient {
     uint8_t Epoch() const { return epoch; }
     const Circle& Map() const { return map; }
     const std::vector<net::LootNet>& Loot() const { return loot; }
-    const std::map<uint16_t, std::string>& Roster() const { return roster; }
+    const std::map<uint16_t, RosterInfo>& Roster() const { return roster; }
+    // Who won, once the match is Ending (net::kNoPlayer16 if nobody or not over yet).
+    uint16_t Winner() const { return winner; }
+    // Seconds since the match state last changed, by the local clock (drives the lobby countdown).
+    float StateElapsed() const { return localClock - stateSince; }
     uint64_t Seed() const { return seed; }
     uint32_t LastSnapshotTick() const { return lastTick; }
     uint64_t DesyncCount() const { return desyncs; }
@@ -149,6 +166,11 @@ class GameClient {
     template <class T>
     void SendIfJoined(const T& m) { if (status == Status::Joined) Send(m); }
 
+    void SetState(MatchState next) {
+        if (next != state) stateSince = localClock;
+        state = next;
+    }
+
     float RenderServerTime() const { return localClock + serverOffset - kInterpDelay; }
 
     void OnData(const std::vector<uint8_t>& data) {
@@ -166,8 +188,9 @@ class GameClient {
             case net::MsgType::MatchStateMsg: {
                 net::MatchStateMsg m;
                 if (!net::Decode(data, m)) break;
-                state = static_cast<MatchState>(m.state);
+                SetState(static_cast<MatchState>(m.state));
                 alive = m.alive;
+                winner = m.winner;
                 ClientEvent e{ClientEvent::Type::StateChanged};
                 e.state = state;
                 events.push_back(e);
@@ -213,9 +236,20 @@ class GameClient {
             case net::MsgType::EvPlayerJoined: {
                 net::EvPlayerJoined m;
                 if (!net::Decode(data, m)) break;
-                roster[m.id] = m.name;
+                roster[m.id] = RosterInfo{m.name, (m.flags & net::kRosterHost) != 0, (m.flags & net::kRosterReady) != 0};
                 ClientEvent e{ClientEvent::Type::PlayerJoined};
                 e.id = m.id;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvReady: {
+                net::EvReady m;
+                if (!net::Decode(data, m)) break;
+                auto it = roster.find(m.id);
+                if (it != roster.end()) it->second.ready = m.ready;
+                ClientEvent e{ClientEvent::Type::ReadyChanged};
+                e.id = m.id;
+                e.ready = m.ready;
                 events.push_back(e);
                 break;
             }
@@ -242,7 +276,9 @@ class GameClient {
         storm = std::make_unique<Storm>(w.map, w.stormEnds);
         loot = w.loot;
         roster.clear();
-        for (const auto& r : w.roster) roster[r.id] = r.name;
+        for (const auto& r : w.roster) {
+            roster[r.id] = RosterInfo{r.name, (r.flags & net::kRosterHost) != 0, (r.flags & net::kRosterReady) != 0};
+        }
         status = Status::Joined;
     }
 
@@ -257,7 +293,7 @@ class GameClient {
         lastTick = s.tick;
         snapshotArrival = localClock;
         stormTimeAtSnapshot = s.stormTime;
-        state = static_cast<MatchState>(s.state);
+        SetState(static_cast<MatchState>(s.state));
         alive = s.alive;
         epoch = s.epoch;
 
@@ -273,6 +309,7 @@ class GameClient {
 
     net::Transport& link;
     std::string name;
+    uint64_t token = 0;
     Status status = Status::Connecting;
     net::RejectReason rejectReason = net::RejectReason::BadHello;
     uint16_t playerId = 0;
@@ -280,10 +317,12 @@ class GameClient {
     Circle map;
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
-    std::map<uint16_t, std::string> roster;
+    std::map<uint16_t, RosterInfo> roster;
     std::map<uint16_t, Remote> players;
     std::vector<ClientEvent> events;
     MatchState state = MatchState::Lobby;
+    uint16_t winner = net::kNoPlayer16;
+    float stateSince = 0;
     int alive = 0;
     uint8_t epoch = 0;
     uint16_t inputSeq = 0;

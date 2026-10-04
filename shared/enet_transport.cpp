@@ -1,9 +1,19 @@
 #include "enet_transport.h"
 #include <enet/enet.h>
 #include <cerrno>
+#include <cstdio>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <vector>
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#endif
 
 namespace royale::net {
 
@@ -38,6 +48,59 @@ void ConfigureTimeouts(ENetPeer* peer, bool connecting) {
     else enet_peer_timeout(peer, 32, 2000, 8000);
 }
 } // namespace
+
+namespace {
+// 0 = private LAN (best to share), 1 = other routable, -1 = not useful (loopback, link-local, unspecified).
+int AddressRank(uint32_t hostOrder) {
+    uint8_t a = hostOrder >> 24, b = (hostOrder >> 16) & 0xFF;
+    if (a == 127 || a == 0 || (a == 169 && b == 254)) return -1;
+    if (a == 10 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)) return 0;
+    return 1;
+}
+} // namespace
+
+std::vector<std::string> LocalIPv4Addresses() {
+    std::vector<std::pair<int, std::string>> found;
+    auto add = [&](uint32_t hostOrder) {
+        int rank = AddressRank(hostOrder);
+        if (rank < 0) return;
+        char text[32];
+        std::snprintf(text, sizeof(text), "%u.%u.%u.%u", hostOrder >> 24, (hostOrder >> 16) & 0xFF, (hostOrder >> 8) & 0xFF, hostOrder & 0xFF);
+        for (auto& f : found) if (f.second == text) return;
+        found.push_back({rank, text});
+    };
+#ifdef _WIN32
+    if (AcquireENet()) { // Winsock must be started before gethostname
+        char name[256];
+        if (gethostname(name, sizeof(name)) == 0) {
+            addrinfo hints = {};
+            hints.ai_family = AF_INET;
+            addrinfo* list = nullptr;
+            if (getaddrinfo(name, nullptr, &hints, &list) == 0) {
+                for (addrinfo* a = list; a; a = a->ai_next) {
+                    add(ntohl(reinterpret_cast<sockaddr_in*>(a->ai_addr)->sin_addr.s_addr));
+                }
+                freeaddrinfo(list);
+            }
+        }
+        ReleaseENet();
+    }
+#else
+    ifaddrs* list = nullptr;
+    if (getifaddrs(&list) == 0) {
+        for (ifaddrs* a = list; a; a = a->ifa_next) {
+            if (a->ifa_addr && a->ifa_addr->sa_family == AF_INET && (a->ifa_flags & 1 /* IFF_UP */)) {
+                add(ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_addr)->sin_addr.s_addr));
+            }
+        }
+        freeifaddrs(list);
+    }
+#endif
+    std::stable_sort(found.begin(), found.end(), [](const auto& l, const auto& r) { return l.first < r.first; });
+    std::vector<std::string> out;
+    for (auto& f : found) out.push_back(f.second);
+    return out;
+}
 
 std::unique_ptr<ENetTransport> ENetTransport::Host(uint16_t port, size_t maxClients, std::string* error) {
     if (!AcquireENet()) { SetError(error, "enet_initialize failed"); return nullptr; }

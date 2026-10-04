@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct _ENetHost;
 struct _ENetPeer;
@@ -11,6 +12,10 @@ struct _ENetPeer;
 namespace royale::net {
 
 constexpr uint16_t kDefaultPort = 7777;
+
+// This device's IPv4 addresses worth telling a friend (private LAN ranges first, then any other non-loopback address).
+// Empty if none can be found, e.g. no network.
+std::vector<std::string> LocalIPv4Addresses();
 
 // Real UDP transport on top of ENet (reliable and sequenced-unreliable channels, fragmentation, connection handshake,
 // timeouts). Plain C sockets underneath, so the same code runs on Windows (Winsock) and Android (NDK).

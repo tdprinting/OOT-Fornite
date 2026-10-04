@@ -29,6 +29,10 @@ class GameServer {
     GameServer(net::Transport& transport, uint64_t seed, Circle map, int lootCount = 400)
         : link(transport), sim(seed, map, lootCount), mapCircle(map) {}
 
+    // The hosting process generates a random token and gives it both to the server (here) and to its own client's Hello, so
+    // the server can tell which connected player is the host without trusting addresses or join order.
+    void SetHostToken(uint64_t token) { hostToken = token; }
+
     // Host presses "Start". Needs at least one human in the lobby; the remaining slots fill with bots.
     bool StartMatch() {
         if (!sim.match.Start()) return false;
@@ -79,6 +83,8 @@ class GameServer {
         uint16_t lastSeq = 0;
         bool hasSeq = false;
         float lastInputClock = 0;
+        bool isHost = false;
+        bool ready = false;
     };
 
     Client* FindByPeer(net::PeerId peer) {
@@ -171,6 +177,20 @@ class GameServer {
                 if (!sim.match.PickUp(c->playerId, m.index)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::SetReady: {
+                net::SetReady m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                // Ready flags only mean something while the lobby is open.
+                if (sim.match.State() != MatchState::Lobby) { stats.rejectedActions++; break; }
+                if (c->ready != m.ready) {
+                    c->ready = m.ready;
+                    net::EvReady ev;
+                    ev.id = static_cast<uint16_t>(c->playerId);
+                    ev.ready = m.ready;
+                    Broadcast(ev);
+                }
+                break;
+            }
             case net::MsgType::UsePotionRequest: {
                 net::UsePotionRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -181,6 +201,10 @@ class GameServer {
                 stats.badPackets++;
                 break;
         }
+    }
+
+    static uint8_t RosterFlags(const Client& c) {
+        return static_cast<uint8_t>((c.isHost ? net::kRosterHost : 0) | (c.ready ? net::kRosterReady : 0));
     }
 
     uint32_t NextPlayerId() {
@@ -202,6 +226,10 @@ class GameServer {
         c.joined = true;
         c.playerId = id;
         c.name = net::SanitizeName(hello.name);
+        if (c.name.empty()) c.name = "Player " + std::to_string(id);
+        bool haveHost = false;
+        for (const auto& o : clients) haveHost |= o.joined && o.isHost;
+        c.isHost = hostToken != 0 && hello.hostToken == hostToken && !haveHost;
         c.lastInputClock = clock;
 
         net::Welcome w;
@@ -210,11 +238,12 @@ class GameServer {
         w.map = mapCircle;
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
-        for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), o.name});
+        for (const auto& o : clients) if (o.joined) w.roster.push_back({static_cast<uint16_t>(o.playerId), RosterFlags(o), o.name});
         SendTo(c, w);
 
         net::EvPlayerJoined joined;
         joined.id = static_cast<uint16_t>(id);
+        joined.flags = RosterFlags(c);
         joined.name = c.name;
         for (auto& o : clients) if (o.joined && o.peer != c.peer) SendTo(o, joined);
     }
@@ -245,6 +274,7 @@ class GameServer {
         p->y = in.y;
         p->rot = in.rot;
         p->anim = in.anim;
+        p->scene = in.scene;
     }
 
     static net::LootNet ToNet(const LootEntry& l) {
@@ -272,6 +302,7 @@ class GameServer {
                     net::MatchStateMsg m;
                     m.state = static_cast<uint8_t>(e.state);
                     m.alive = static_cast<uint8_t>(sim.match.Alive());
+                    if (const PlayerState* w = sim.match.Winner()) m.winner = static_cast<uint16_t>(w->id);
                     Broadcast(m);
                     break;
                 }
@@ -323,6 +354,7 @@ class GameServer {
         n.weaponRarity = static_cast<uint8_t>(p.weapon.rarity);
         n.potions = static_cast<uint8_t>(p.potions.size());
         n.anim = p.anim;
+        n.scene = p.scene;
         return n;
     }
 
@@ -362,6 +394,7 @@ class GameServer {
     float accumulator = 0;
     float clock = 0;
     uint32_t tick = 0;
+    uint64_t hostToken = 0;
 };
 
 } // namespace royale

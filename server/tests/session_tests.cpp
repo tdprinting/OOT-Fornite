@@ -26,7 +26,8 @@ static bool PumpUntil(std::vector<RoyaleSession*> sessions, F cond, float maxWal
 static void IdleSessionIsHarmless() {
     RoyaleSession s;
     s.Update(0.1f);
-    s.SendLocalPose(1, 2, 3, 4, 5);
+    s.SendLocalPose(1, 2, 3, 4, 5, 6);
+    s.SetReady(true);
     s.ReportAttack(1, true);
     s.RequestPickup(0);
     s.RequestUsePotion();
@@ -65,10 +66,10 @@ static void HostCanStartAndBotsAppear() {
     CHECK(guest.Hud().safeZone.radius > 0 && guest.Hud().map.radius == kHyruleFieldMap.radius);
 
     // Poses travel between players.
-    guest.SendLocalPose(kHyruleFieldMap.center.x + 12, 34, kHyruleFieldMap.center.z + 5, 77, 2);
+    guest.SendLocalPose(kHyruleFieldMap.center.x + 12, 34, kHyruleFieldMap.center.z + 5, 77, 2, 0x51);
     // (the epoch bump at match start means the guest must have seen a snapshot first, which PumpUntil above ensured)
     bool seen = PumpUntil({&host, &guest}, [&] {
-        for (auto& p : host.Puppets()) if (p.id == guest.Hud().selfId) return std::abs(p.y - 34) < 0.5f && p.rot == 77 && p.anim == 2;
+        for (auto& p : host.Puppets()) if (p.id == guest.Hud().selfId) return std::abs(p.y - 34) < 0.5f && p.rot == 77 && p.anim == 2 && p.scene == 0x51;
         return false;
     });
     CHECK(seen);
@@ -135,9 +136,73 @@ static void CanHostAgainAfterLeaving() {
     CHECK(PumpUntil({&s}, [&] { return s.Joined(); }));
 }
 
+static void LobbyRosterHostAndReady() {
+    RoyaleSession host, guest;
+    CHECK(host.Host(0, "Alice"));
+    CHECK(guest.Join("127.0.0.1", host.Hud().hostPort, "Bob"));
+    CHECK(PumpUntil({&host, &guest}, [&] { return host.Joined() && guest.Joined() && guest.Hud().roster.size() == 2; }));
+
+    HudState h = host.Hud(), g = guest.Hud();
+    CHECK(h.isHost && !g.isHost);
+    CHECK(h.humanCount == 2 && h.botSlots == kMaxPlayers - 2);
+    int hostRows = 0;
+    for (auto& r : g.roster) {
+        hostRows += r.host;
+        if (r.self) CHECK(r.name == "Bob" && !r.host);
+        else CHECK(r.name == "Alice" && r.host);
+    }
+    CHECK(hostRows == 1);
+    CHECK(!g.selfReady);
+
+    guest.SetReady(true);
+    CHECK(PumpUntil({&host, &guest}, [&] {
+        for (auto& r : host.Hud().roster) if (r.name == "Bob") return r.ready;
+        return false;
+    }));
+    CHECK(guest.Hud().selfReady && !host.Hud().selfReady);
+    guest.SetReady(false);
+    CHECK(PumpUntil({&host, &guest}, [&] { return !guest.Hud().selfReady; }));
+}
+
+static void CountdownAndWinnerReachTheHud() {
+    RoyaleSession host, guest;
+    CHECK(host.Host(0, "Alice"));
+    CHECK(guest.Join("127.0.0.1", host.Hud().hostPort, "Bob"));
+    CHECK(PumpUntil({&host, &guest}, [&] { return host.Joined() && guest.Joined(); }));
+    CHECK(host.Hud().countdownLeft == 0 && host.Hud().winnerName.empty());
+    CHECK(host.StartMatch());
+    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().state == MatchState::Countdown; }));
+    float first = guest.Hud().countdownLeft;
+    CHECK(first > 0 && first <= kCountdownSec);
+    for (int i = 0; i < 40; i++) Pump({&host, &guest});            // 2 s of game time
+    float later = guest.Hud().countdownLeft;
+    CHECK(later < first && later >= 0);
+    CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().state == MatchState::InMatch; }, 15));
+    CHECK(guest.Hud().countdownLeft == 0);                         // only meaningful during the countdown
+}
+
+static void LocalAddressesLookSane() {
+    auto addrs = net::LocalIPv4Addresses();
+    for (const auto& a : addrs) {
+        unsigned b[4]; char extra;
+        CHECK(std::sscanf(a.c_str(), "%u.%u.%u.%u%c", &b[0], &b[1], &b[2], &b[3], &extra) == 4);
+        CHECK(b[0] != 127 && b[0] != 0 && !(b[0] == 169 && b[1] == 254));          // never loopback or link-local
+    }
+    // Private LAN addresses are listed before anything else.
+    bool seenPublic = false;
+    for (const auto& a : addrs) {
+        unsigned x, y, z, w;
+        std::sscanf(a.c_str(), "%u.%u.%u.%u", &x, &y, &z, &w);
+        bool priv = x == 10 || (x == 192 && y == 168) || (x == 172 && y >= 16 && y <= 31);
+        if (!priv) seenPublic = true;
+        else CHECK(!seenPublic);
+    }
+    std::printf("  local addresses found: %zu\n", addrs.size());
+}
+
 int main() {
     IdleSessionIsHarmless(); HostCanStartAndBotsAppear(); BadAddressesAndPorts(); LateJoinerSeesWhy();
-    HostLeavingEndsGuestSession(); CanHostAgainAfterLeaving();
+    HostLeavingEndsGuestSession(); CanHostAgainAfterLeaving(); LobbyRosterHostAndReady(); CountdownAndWinnerReachTheHud(); LocalAddressesLookSane();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all session tests passed\n");
     return 0;

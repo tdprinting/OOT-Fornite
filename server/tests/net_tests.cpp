@@ -78,14 +78,14 @@ static Welcome SampleWelcome() {
     w.playerId = 7; w.seed = 0x1122334455667788ull; w.map = {{1, 2}, 3000};
     for (int i = 0; i < kStormPhaseCount; i++) w.stormEnds[i] = {{float(i), float(-i)}, 100.0f - i};
     w.loot = {{10, 20, 3, 2, true, false}, {-5, 6, 7, 4, false, true}};
-    w.roster = {{1, "Link"}, {7, "Zelda"}};
+    w.roster = {{1, kRosterHost, "Link"}, {7, kRosterReady, "Zelda"}};
     return w;
 }
 
 static void MessagesRoundTrip() {
-    { Hello a, b; a.name = "Link"; CHECK(RoundTrips(a, b) && b.name == "Link" && b.version == kProtocolVersion); }
-    { Input a, b; a.seq = 65535; a.epoch = 3; a.x = -1.5f; a.y = 2; a.z = 3.25f; a.rot = -1234; a.anim = 9;
-      CHECK(RoundTrips(a, b) && b.seq == 65535 && b.epoch == 3 && b.x == -1.5f && b.z == 3.25f && b.rot == -1234 && b.anim == 9); }
+    { Hello a, b; a.name = "Link"; a.hostToken = 0xABCDEF0123456789ull; CHECK(RoundTrips(a, b) && b.name == "Link" && b.version == kProtocolVersion && b.hostToken == a.hostToken); }
+    { Input a, b; a.seq = 65535; a.epoch = 3; a.x = -1.5f; a.y = 2; a.z = 3.25f; a.rot = -1234; a.anim = 9; a.scene = 0x43;
+      CHECK(RoundTrips(a, b) && b.seq == 65535 && b.epoch == 3 && b.x == -1.5f && b.z == 3.25f && b.rot == -1234 && b.anim == 9 && b.scene == 0x43); }
     { AttackReport a, b; a.target = 12; a.hit = true; CHECK(RoundTrips(a, b) && b.target == 12 && b.hit); }
     { PickupRequest a, b; a.index = 123456; CHECK(RoundTrips(a, b) && b.index == 123456); }
     { UsePotionRequest a, b; CHECK(RoundTrips(a, b)); }
@@ -93,19 +93,21 @@ static void MessagesRoundTrip() {
       CHECK(b.playerId == 7 && b.seed == a.seed && b.map.radius == 3000 && b.loot.size() == 2 && b.roster[1].name == "Zelda");
       CHECK(b.loot[0].chest && !b.loot[0].taken && b.loot[1].taken && b.stormEnds[5].radius == 95.0f); }
     { Reject a, b; a.reason = RejectReason::LobbyFull; CHECK(RoundTrips(a, b) && b.reason == RejectReason::LobbyFull); }
-    { MatchStateMsg a, b; a.state = 3; a.alive = 17; CHECK(RoundTrips(a, b) && b.state == 3 && b.alive == 17); }
+    { MatchStateMsg a, b; a.state = 3; a.alive = 17; a.winner = 1003; CHECK(RoundTrips(a, b) && b.state == 3 && b.alive == 17 && b.winner == 1003); }
+    { SetReady a, b; a.ready = true; CHECK(RoundTrips(a, b) && b.ready); }
+    { EvReady a, b; a.id = 9; a.ready = true; CHECK(RoundTrips(a, b) && b.id == 9 && b.ready); }
     { Snapshot a, b; a.tick = 99; a.stormTime = 12.5f; a.state = 3; a.alive = 9; a.epoch = 2;
       PlayerNet p; p.id = 1031; p.x = 1; p.y = 2; p.z = 3; p.rot = -5; p.health = PlayerNet::QuantizeHealth(1.5f);
-      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7;
+      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7; p.scene = 0x51;
       a.players = {p, p};
-      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2);
+      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51);
       CHECK(std::abs(b.players[0].Health() - 1.5f) < 0.01f);
-      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 22); } // documented per-player size
+      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 23); } // documented per-player size
     { EvDamaged a, b; a.target = 1; a.attacker = 2; a.amount = 1.5f; a.health = 0.5f; CHECK(RoundTrips(a, b) && b.amount == 1.5f && b.attacker == 2); }
     { EvEliminated a, b; a.victim = 3; CHECK(RoundTrips(a, b) && b.victim == 3 && b.killer == kNoPlayer16); }
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
     { EvLootAdded a, b; a.index = 400; a.loot = {1, 2, 3, 4, true, false}; CHECK(RoundTrips(a, b) && b.index == 400 && b.loot.item == 3); }
-    { EvPlayerJoined a, b; a.id = 5; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi"); }
+    { EvPlayerJoined a, b; a.id = 5; a.flags = kRosterHost | kRosterReady; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi" && b.flags == 3); }
     { EvPlayerLeft a, b; a.id = 5; CHECK(RoundTrips(a, b) && b.id == 5); }
 }
 
@@ -138,6 +140,8 @@ static void DecodeRejectsMangled() {
     EvLootTaken lt; RejectsMangled(lt);
     EvLootAdded la; RejectsMangled(la);
     EvPlayerJoined pj; pj.name = "x"; RejectsMangled(pj);
+    SetReady sr; sr.ready = true; RejectsMangled(sr);
+    EvReady er; RejectsMangled(er);
     EvPlayerLeft pl; RejectsMangled(pl);
 }
 
@@ -155,6 +159,10 @@ static void DecodeRejectsBadValues() {
     bytes = Encode(rj);
     bytes.back() = 0;
     CHECK(!Decode(bytes, rjOut));
+    SetReady srv, srOut;
+    bytes = Encode(srv);
+    bytes.back() = 2; // ready must be 0 or 1
+    CHECK(!Decode(bytes, srOut));
     LootNet bad;
     bad.item = static_cast<uint8_t>(ItemId::Count);
     ByteWriter w; w.U8(static_cast<uint8_t>(MsgType::EvLootAdded)); w.U32(0); bad.Write(w);
@@ -250,7 +258,7 @@ static void JoinAndWelcome() {
     CHECK(a.PlayerId() == 1);
     CHECK(a.Seed() == 11 && a.Map().radius == 2000);
     CHECK(a.Loot().size() == rig.M().Loot().size() && a.Loot().size() == 400);
-    CHECK(a.Roster().size() == 1 && a.Roster().at(1) == "Link");
+    CHECK(a.Roster().size() == 1 && a.Roster().at(1).name == "Link" && !a.Roster().at(1).host);
     // The client rebuilt the same storm from the 6 circles.
     for (float t : {0.0f, 100.0f, 150.0f, 300.0f, 500.0f, 660.0f}) {
         Circle s = rig.M().GetStorm().SafeZoneAt(t), c = Storm(a.Map(), rig.M().GetStorm().PhaseEnds()).SafeZoneAt(t);
@@ -262,7 +270,7 @@ static void JoinAndWelcome() {
     rig.Run(1);
     bool sawJoin = false;
     for (auto& e : a.DrainEvents()) if (e.type == ClientEvent::Type::PlayerJoined && e.id == 2) sawJoin = true;
-    CHECK(sawJoin && a.Roster().size() == 2 && a.Roster().at(2) == "Zelda");
+    CHECK(sawJoin && a.Roster().size() == 2 && a.Roster().at(2).name == "Zelda" && !a.Roster().at(2).host);
     CHECK(rig.server.HumanCount() == 2);
 }
 
@@ -739,6 +747,164 @@ static void ServerSurvivesHostileClient() {
     CHECK(rig.M().State() == MatchState::InMatch || rig.M().State() == MatchState::Ending);
 }
 
+// ---- lobby ----------------------------------------------------------------------------------------------------
+
+static void ReadyFlowAndRosterFlags() {
+    Rig rig(11, 0);
+    GameClient& a = rig.Add("Link");
+    GameClient& b = rig.Add("Zelda");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.Run(0.5f);
+    CHECK(!a.Roster().at(1).ready && !b.Roster().at(2).ready);
+
+    b.SetReady(true);
+    rig.Run(0.5f);
+    CHECK(a.Roster().at(2).ready && b.Roster().at(2).ready);        // everybody sees it, including the sender
+    bool sawEvent = false;
+    for (auto& e : a.DrainEvents()) sawEvent |= e.type == ClientEvent::Type::ReadyChanged && e.id == 2 && e.ready;
+    CHECK(sawEvent);
+
+    // Someone who joins later learns the current flags from Welcome.
+    GameClient& c = rig.Add("Late");
+    CHECK(rig.RunUntil([&] { return c.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(c.Roster().at(2).ready && !c.Roster().at(1).ready);
+
+    b.SetReady(false);
+    rig.Run(0.5f);
+    CHECK(!a.Roster().at(2).ready && !c.Roster().at(2).ready);
+
+    // Setting the flag it already has sends nothing new.
+    a.DrainEvents();
+    b.SetReady(false);
+    rig.Run(0.3f);
+    bool again = false;
+    for (auto& e : a.DrainEvents()) again |= e.type == ClientEvent::Type::ReadyChanged;
+    CHECK(!again);
+
+    // Once the match starts ready flags are meaningless and the server refuses them.
+    a.SetReady(true);
+    rig.Run(0.3f);
+    uint64_t rejected = rig.server.GetStats().rejectedActions;
+    CHECK(rig.server.StartMatch());
+    a.SetReady(false);
+    rig.Run(0.3f);
+    CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
+}
+
+static void HostIsIdentifiedByToken() {
+    Rig rig(11, 0);
+    rig.server.SetHostToken(0x1234567890ABCDEFull);
+    // A normal client first (no token): not the host, even though it joined first.
+    GameClient& guest = rig.Add("Guest");
+    CHECK(rig.RunUntil([&] { return guest.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(!guest.Roster().at(1).host);
+    // A client with a wrong token is not the host either.
+    GameClient wrong(rig.network.NewClient(), "Faker", 0xDEADBEEFull);
+    for (int i = 0; i < 20; i++) { rig.Step(); wrong.Update(kDt); }
+    CHECK(wrong.GetStatus() == GameClient::Status::Joined && !wrong.Roster().at(wrong.PlayerId()).host);
+    // The real host token marks exactly that player, and everyone is told.
+    GameClient host(rig.network.NewClient(), "Host", 0x1234567890ABCDEFull);
+    for (int i = 0; i < 20; i++) { rig.Step(); host.Update(kDt); wrong.Update(kDt); }
+    CHECK(host.GetStatus() == GameClient::Status::Joined && host.Roster().at(host.PlayerId()).host);
+    CHECK(guest.Roster().at(host.PlayerId()).host);
+    // A second client replaying the token does not become a second host.
+    GameClient copycat(rig.network.NewClient(), "Copycat", 0x1234567890ABCDEFull);
+    for (int i = 0; i < 20; i++) { rig.Step(); copycat.Update(kDt); host.Update(kDt); wrong.Update(kDt); }
+    CHECK(copycat.GetStatus() == GameClient::Status::Joined && !copycat.Roster().at(copycat.PlayerId()).host);
+    int hosts = 0;
+    for (auto& [id, info] : guest.Roster()) hosts += info.host;
+    CHECK(hosts == 1);
+}
+
+static void NoTokenMeansNoHost() {
+    Rig rig(11, 0);              // server never given a token
+    GameClient a(rig.network.NewClient(), "A", 0);
+    for (int i = 0; i < 20; i++) { rig.Step(); a.Update(kDt); }
+    CHECK(a.GetStatus() == GameClient::Status::Joined && !a.Roster().at(a.PlayerId()).host);
+    GameClient b(rig.network.NewClient(), "B", 0);   // 0 must not match an unset token
+    for (int i = 0; i < 20; i++) { rig.Step(); a.Update(kDt); b.Update(kDt); }
+    CHECK(!b.Roster().at(b.PlayerId()).host);
+}
+
+static void SceneIsRelayedBetweenPlayers() {
+    Rig rig(11, 0);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    a.SendInput(10, 20, 30, 0, 0, 0x43);   // A is in the waiting room
+    b.SendInput(10, 20, 30, 0, 0, 0x51);   // B is out in the field
+    rig.Run(0.5f);
+    PlayerNet seenOfA, seenOfB;
+    CHECK(b.Sample(1, seenOfA) && seenOfA.scene == 0x43);
+    CHECK(a.Sample(2, seenOfB) && seenOfB.scene == 0x51);
+}
+
+static void BotsReportTheFieldScene() {
+    Rig rig(5);
+    GameClient& me = rig.Add("Me");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    rig.StartAndGoLive();
+    rig.Run(1.0f);
+    bool sawBot = false;
+    for (uint16_t id : me.VisiblePlayers()) {
+        PlayerNet p;
+        if (me.Sample(id, p) && (p.flags & PlayerNet::kBot)) { sawBot = true; CHECK(p.scene == 0x51); }
+    }
+    CHECK(sawBot);
+}
+
+static void OldProtocolVersionIsRejected() {
+    Rig rig;
+    Transport& raw = rig.network.NewClient();
+    rig.Run(0.3f);
+    Hello h; h.version = 1; h.name = "OldBuild";   // what a version-1 client would send
+    raw.Send(0, Encode(h), true);
+    rig.Run(0.5f);
+    NetEvent ev; Reject rj; bool got = false;
+    while (raw.Poll(ev)) if (ev.type == NetEvent::Type::Data && Decode(ev.data, rj)) got = rj.reason == RejectReason::VersionMismatch;
+    CHECK(got && rig.server.HumanCount() == 0);
+    // A genuine v1 Hello is shorter than a v2 one (no host token), so the server must also survive decoding it as garbage.
+    ByteWriter v1; v1.U8(static_cast<uint8_t>(MsgType::Hello)); v1.U16(1); v1.Str("OldBuild");
+    Transport& raw2 = rig.network.NewClient();
+    rig.Run(0.3f);
+    raw2.Send(0, v1.buf, true);
+    rig.Run(0.5f);
+    CHECK(rig.server.HumanCount() == 0);
+}
+
+static void EmptyNameGetsADefault() {
+    Rig rig(11, 0);
+    GameClient a(rig.network.NewClient(), "\x01\x02\x03");   // sanitizes to nothing
+    for (int i = 0; i < 20; i++) { rig.Step(); a.Update(kDt); }
+    CHECK(a.GetStatus() == GameClient::Status::Joined);
+    CHECK(a.Roster().at(a.PlayerId()).name == "Player " + std::to_string(a.PlayerId()));
+}
+
+static void WinnerIsAnnounced() {
+    Rig rig(77, 0);
+    GameClient& me = rig.Add("Solo");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Ending; }, 1500));
+    rig.Run(1.0f);
+    const PlayerState* w = rig.M().Winner();
+    CHECK(w != nullptr);
+    CHECK(w && me.Winner() == w->id);
+}
+
+static void CountdownElapsedTracksState() {
+    Rig rig(11, 0);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return a.State() == MatchState::Countdown; }));
+    rig.Run(4.0f);
+    CHECK(a.State() == MatchState::Countdown);
+    CHECK(a.StateElapsed() > 3.0f && a.StateElapsed() < kCountdownSec);   // about 4 s into a 10 s countdown
+    CHECK(rig.RunUntil([&] { return a.State() == MatchState::Drop; }, 15));
+    CHECK(a.StateElapsed() < 1.0f);                                        // reset on the state change
+}
+
 int main() {
     ByteReaderBounds(); MessagesRoundTrip(); DecodeRejectsMangled(); DecodeRejectsBadValues(); FuzzNeverCrashes();
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
@@ -746,6 +912,8 @@ int main() {
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
     AttackOverTheWire(); PickupAndPotionOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
+    ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
+    OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");
