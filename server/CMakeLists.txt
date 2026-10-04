@@ -6,16 +6,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Header-only game logic: match, bots, storm, loot, protocol, server, client, loopback network.
 add_library(royale_core INTERFACE)
 target_include_directories(royale_core INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../shared ${CMAKE_CURRENT_SOURCE_DIR}/../client)
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../shared ${CMAKE_CURRENT_SOURCE_DIR}/../client
+    ${CMAKE_CURRENT_SOURCE_DIR}/../mod/Royale)
 
 # Real UDP transport. ENet is plain C on Winsock / BSD sockets, so this builds for Windows and the Android NDK.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet ${CMAKE_CURRENT_BINARY_DIR}/enet EXCLUDE_FROM_ALL)
 add_library(royale_net STATIC ${CMAKE_CURRENT_SOURCE_DIR}/../shared/enet_transport.cpp)
 target_link_libraries(royale_net PUBLIC royale_core enet)
+if(WIN32)
+    # ENet's own CMake only links these for MinGW, so MSVC consumers must do it themselves.
+    target_link_libraries(royale_net PUBLIC ws2_32 winmm)
+endif()
 target_include_directories(royale_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet/include)
 
 enable_testing()
-foreach(t tests net_tests enet_tests)
+foreach(t tests net_tests enet_tests session_tests)
     add_executable(royale_${t} tests/${t}.cpp)
     target_link_libraries(royale_${t} royale_net)
     if(MSVC)
