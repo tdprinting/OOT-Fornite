@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Song to Ocarina of Time</title>
+<style>
+/* Layout: one narrow column of three steps (ROM, song, result), each a panel; Kokiri-forest greens with a Triforce-gold accent */
+:root{--bg:#f3f5ef;--panel:#ffffff;--line:#d5dccb;--fg:#1d2419;--dim:#5d6957;--accent:#2f7d46;--on-accent:#ffffff;--gold:#a67c00;--soft:#e8eedf;--over:#dcebd3;--log:#2f6b3d;
+  --display:"Cinzel",Georgia,serif;--body:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11160f;--panel:#1a2117;--line:#2e3a29;--fg:#e4eadb;--dim:#9aa891;--accent:#3f9c5a;--on-accent:#ffffff;--gold:#e0b84a;--soft:#232c1f;--over:#25361f;--log:#9fd39a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11160f;--panel:#1a2117;--line:#2e3a29;--fg:#e4eadb;--dim:#9aa891;--accent:#3f9c5a;--on-accent:#ffffff;--gold:#e0b84a;--soft:#232c1f;--over:#25361f;--log:#9fd39a;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 var(--body);background:var(--bg);color:var(--fg)}
+main{max-width:820px;margin:0 auto;padding-block:20px 32px;padding-inline:16px;display:flex;flex-direction:column;gap:14px}
+h1{font:600 28px/1.15 var(--display);letter-spacing:.02em;margin:0;text-wrap:balance}
+h1 span{color:var(--gold)}
+.sub{color:var(--dim);margin:0;max-width:62ch}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+section h2{font:600 17px/1.2 var(--display);margin:0;display:flex;align-items:center;gap:8px}
+.step{width:24px;height:24px;flex:none;clip-path:polygon(50% 0,100% 100%,0 100%);background:var(--gold);color:var(--panel);font:700 11px/30px var(--body);text-align:center}
+.drop{border:2px dashed var(--accent);border-radius:10px;padding:18px;text-align:center;cursor:pointer;color:var(--dim)}
+.drop:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.drop.over{background:var(--over)}
+.drop b{color:var(--fg)}
+button{background:var(--accent);border:0;color:var(--on-accent);padding:8px 13px;border-radius:6px;cursor:pointer;font:inherit}
+button.alt{background:var(--soft);color:var(--fg);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+select,input[type=range]{font:inherit;background:var(--soft);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px;max-width:100%}
+input[type=range]{accent-color:var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.row label{min-width:90px;color:var(--dim)}
+.ok{color:var(--accent)}
+#log{font:12px/1.45 var(--mono);white-space:pre-wrap;max-height:150px;overflow:auto;color:var(--log);background:var(--soft);border-radius:6px;padding:8px}
+#log:empty{display:none}
+#presets{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+.pr{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line)}
+.pr span{flex:1;min-width:150px;font:13px var(--mono);font-variant-numeric:tabular-nums}
+.pr button{padding:2px 9px;font-size:12px}
+audio{width:100%}
+small{color:var(--dim)}
+.note{color:var(--dim);font-size:13px;max-width:70ch;margin:0}
+@media (max-width:560px){.row label{min-width:100%}}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap"></head><body><main>
+<h1>Song to <span>Ocarina of Time</span></h1>
+<p class="sub">Replays any song with the game's own instruments. It all runs in this page, and nothing you add here is uploaded anywhere.</p>
+
+<section>
+<h2><span class="step">1</span>Your Ocarina of Time ROM</h2>
+<div class="drop" id="romDrop" tabindex="0" role="button"><b>Drop your ROM here</b> (.z64, .v64 or .n64) or click to pick it<br><small>The instruments are read out of your own copy of the game.</small></div>
+<input type="file" id="romFile" accept=".z64,.n64,.v64" hidden>
+<div class="row"><button id="bSf2" class="alt" disabled>Save as .sf2 (for other music programs)</button></div>
+<div id="presetBox" hidden>
+<small>No instrument names are stored in the ROM, so press ▶ to hear one, then choose which part it plays.</small>
+<div id="presets"></div>
+</div>
+</section>
+
+<section>
+<h2><span class="step">2</span>The song</h2>
+<div class="drop" id="songDrop" tabindex="0" role="button"><b>Drop a song here</b> (mp3, wav, ogg, flac, m4a or a MIDI file) or click to pick it<br><small>A MIDI file is played back note for note. A recording has its notes worked out first.</small></div>
+<input type="file" id="songFile" accept="audio/*,.mid,.midi" hidden>
+<div class="row"><label>Melody</label><select id="selMelody"></select></div>
+<div class="row"><label>Harmony</label><select id="selHarmony"></select></div>
+<div class="row"><label>Bass</label><select id="selBass"></select></div>
+<div class="row"><label>Reverb</label><input type="range" id="reverb" min="0" max="1" step="0.05" value="0.25"><span id="reverbV">0.25</span></div>
+<div class="row"><label>Sensitivity</label><input type="range" id="sens" min="0.05" max="0.5" step="0.01" value="0.22"><span id="sensV">0.22</span><small>lower finds quieter notes</small></div>
+<div class="row"><label>Voices</label><input type="range" id="voices" min="1" max="8" step="1" value="5"><span id="voicesV">5</span><small>most notes at once</small></div>
+</section>
+
+<section>
+<h2><span class="step">3</span>Make it</h2>
+<div class="row"><button id="bGo" disabled>Make the Ocarina of Time version</button></div>
+<audio id="player" controls hidden></audio>
+<div class="row"><button id="bWav" class="alt" disabled>Save .wav</button><button id="bMp3" class="alt" disabled>Save .mp3</button><button id="bMid" class="alt" disabled>Save .mid (the notes it found)</button></div>
+<div id="log"></div>
+</section>
+<p class="note">Finding notes in a finished recording is the hard part: clear melodies come out well, while dense mixes give the right tune and harmony rather than a copy. Drums are not picked up. The ROM and the .sf2 made from it are yours alone, so don't share them.</small></p>
+</main>
+<script>
+// BEGIN_LIB
+// ===== OOTSONG: the ROM reading, soundfont, note finding and playing. No page code in here, so the tests can run it under Node. =====
+const OOTSONG = (function () {
+    'use strict';
+    const OUTPUT_RATE = 32000;     // the game's mixer rate: a sample with tuning 1.0 plays at 32 kHz on middle C
+    const MIDI_OFFSET = 21;        // the game's note 0 is A0 (MIDI 21), so its note 39 is middle C
+    const ENV_TICK = 1 / 240;      // one envelope step: a quarter of a 60 Hz frame
+    const be32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
+    const s16 = (b, o) => { const v = (b[o] << 8) | b[o + 1]; return v & 0x8000 ? v - 0x10000 : v; };
+    const s8 = v => (v & 0x80 ? v - 0x100 : v);
+    const f32 = (b, o) => new DataView(b.buffer, b.byteOffset + o, 4).getFloat32(0, false);
+
+    // ---- the ROM file --------------------------------------------------------------------------------------------------------------
+    function normalizeRom(buffer) {
+        const u8 = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+        if (u8.length < 0x100000) throw new Error('That file is too small to be an Ocarina of Time ROM.');
+        const magic = be32(u8, 0);
+        if (magic === 0x80371240) return u8;
+        const out = new Uint8Array(u8.length);
+        if (magic === 0x37804012) { for (let i = 0; i + 1 < u8.length; i += 2) { out[i] = u8[i + 1]; out[i + 1] = u8[i]; } return out; }
+        if (magic === 0x40123780) { for (let i = 0; i + 3 < u8.length; i += 4) { out[i] = u8[i + 3]; out[i + 1] = u8[i + 2]; out[i + 2] = u8[i + 1]; out[i + 3] = u8[i]; } return out; }
+        throw new Error('That does not look like an N64 ROM (unknown header).');
+    }
+
+    function yaz0(src) {
+        if (!(src[0] === 0x59 && src[1] === 0x61 && src[2] === 0x7A && src[3] === 0x30)) return src;
+        const size = be32(src, 4), out = new Uint8Array(size);
+        let sp = 16, dp = 0;
+        while (dp < size && sp < src.length) {
+            const code = src[sp++];
+            for (let bit = 0x80; bit && dp < size; bit >>= 1) {
+                if (code & bit) { out[dp++] = src[sp++]; continue; }
+                const b1 = src[sp++], b2 = src[sp++];
+                const dist = (((b1 & 0x0F) << 8) | b2) + 1;
+                let n = b1 >> 4;
+                n = n === 0 ? src[sp++] + 0x12 : n + 2;
+                for (let i = 0; i < n && dp < size; i++, dp++) out[dp] = dp - dist >= 0 ? out[dp - dist] : 0;
+            }
+        }
+        return out;
+    }
+
+    function findDmaTable(rom) {
+        const limit = Math.min(rom.length - 0x40, 0x400000);
+        for (let o = 0; o < limit; o += 0x10) {
+            if (be32(rom, o) === 0 && be32(rom, o + 4) === 0x1060 && be32(rom, o + 8) === 0 && be32(rom, o + 12) === 0 && be32(rom, o + 16) === 0x1060) {
+                const rows = [];
+                for (let i = 0; i < 6000 && o + i * 16 + 16 <= rom.length; i++) {
+                    const p = o + i * 16;
+                    const e = { vs: be32(rom, p), ve: be32(rom, p + 4), ps: be32(rom, p + 8), pe: be32(rom, p + 12) };
+                    if (i > 2 && e.vs === 0 && e.ve === 0 && e.ps === 0 && e.pe === 0) break;
+                    if (e.ve < e.vs || e.vs > 0x10000000) break;
+                    rows.push(e);
+                }
+                if (rows.length > 100) return rows;
+            }
+        }
+        throw new Error('Could not find the ROM\'s file table. Is this an Ocarina of Time ROM?');
+    }
+
+    function fileBytes(rom, e) {
+        if (e.ps === 0xFFFFFFFF || e.ve <= e.vs) return null;
+        if (e.pe === 0) return rom.subarray(e.ps, e.ps + (e.ve - e.vs));
+        return yaz0(rom.subarray(e.ps, e.pe));
+    }
+
+    // ---- the audio tables ------------------------------------------------------------------------------------------------------------
+    // Audiobank (instruments) and Audiotable (samples) are files 3 and 5 of every version. Which part of them is which soundfont and sample
+    // bank is in two tables in the code file, at addresses that differ between versions, so they are found by their shape:
+    //   s16 count, s16, u32, 8 bytes padding; then count rows of u32 offset, u32 size, s8 medium, s8 cache policy, s16 x3.
+    function tableRows(d, o, n) {
+        const rows = [];
+        for (let k = 0; k < n; k++) { const p = o + 16 + k * 16; rows.push({ off: be32(d, p), size: be32(d, p + 4), medium: s8(d[p + 8]), sd1: s16(d, p + 10), sd2: s16(d, p + 12), sd3: s16(d, p + 14) }); }
+        return rows;
+    }
+    function isFontTable(d, o, bankSize) {
+        const n = s16(d, o);
+        if (n < 8 || n > 0x80 || o + 16 + n * 16 > d.length) return false;
+        const rows = tableRows(d, o, n);
+        if (rows[0].off !== 0) return false;
+        let end = 0, inst = 0;
+        for (const r of rows) {
+            if (r.size === 0 || r.off + r.size > bankSize || r.medium < 0 || r.medium > 3 || r.sd3 < 0) return false;
+            if (((r.sd2 >> 8) & 0xFF) > 0x7F || (r.sd2 & 0xFF) > 0x7F || ((r.sd1 >> 8) & 0xFF) > 0x20) return false;
+            end = Math.max(end, r.off + r.size); inst += (r.sd2 >> 8) & 0xFF;
+        }
+        return end >= bankSize * 0.9 && inst > 0;      // the sequence table has the same shape but no instruments
+    }
+    function isSampleBankTable(d, o, tableSize) {
+        const n = s16(d, o);
+        if (n < 1 || n > 0x20 || o + 16 + n * 16 > d.length) return false;
+        const rows = tableRows(d, o, n);
+        if (rows[0].off !== 0 || rows[0].size === 0) return false;
+        let end = 0;
+        for (const r of rows) {
+            if (r.size === 0) { if (r.off >= n) return false; }       // a size of 0 points at another bank by number
+            else if (r.off + r.size > tableSize || r.medium < 0 || r.medium > 3) return false;
+            end = Math.max(end, r.off + r.size);
+        }
+        return end >= tableSize * 0.5;
+    }
+    function findAudio(rom, log) {
+        const dma = findDmaTable(rom);
+        if (dma.length < 30) throw new Error('The ROM\'s file table is too short for Ocarina of Time.');
+        const bank = fileBytes(rom, dma[3]), table = fileBytes(rom, dma[5]);
+        if (!bank || !table) throw new Error('The audio files are missing from this ROM.');
+        let fonts = null, banks = null;
+        for (let i = 6; i < Math.min(dma.length, 60) && !(fonts && banks); i++) {
+            const e = dma[i], size = e.ve - e.vs;
+            if (size < 0x80000 || size > 0x400000) continue;
+            const d = fileBytes(rom, e);
+            if (!d) continue;
+            for (let o = 0; o + 0x20 < d.length; o += 4) {
+                if (d[o] !== 0) continue;
+                if (!fonts && isFontTable(d, o, bank.length)) {
+                    fonts = tableRows(d, o, s16(d, o)).map(r => ({ off: r.off, size: r.size, nIns: (r.sd2 >> 8) & 0xFF, nDrums: r.sd2 & 0xFF, b1: (r.sd1 >> 8) & 0xFF, b2: r.sd1 & 0xFF }));
+                    log('Soundfont table: file ' + i + ' at 0x' + o.toString(16) + ', ' + fonts.length + ' soundfonts');
+                } else if (!banks && isSampleBankTable(d, o, table.length)) {
+                    banks = tableRows(d, o, s16(d, o)).map(r => ({ off: r.off, size: r.size }));
+                    log('Sample bank table: file ' + i + ' at 0x' + o.toString(16) + ', ' + banks.length + ' banks');
+                }
+                if (fonts && banks) break;
+            }
+        }
+        if (!fonts || !banks) throw new Error('Could not find the game\'s audio tables in this ROM. Is it Ocarina of Time?');
+        return { bank, table, fonts, banks };
+    }
+
+    // ---- samples (VADPCM, the N64's compressed audio) --------------------------------------------------------------------------------
+    // Each frame: a header byte (scale, predictor) then 16 residuals. Each half frame of 8 outputs is predicted from the last `order` outputs.
+    function decodeVadpcm(raw, book, order, frameSize) {
+        frameSize = frameSize || 9;
+        const nFrames = Math.floor(raw.length / frameSize), npred = book.length;
+        const out = new Int16Array(nFrames * 16);
+        const prev = new Array(order).fill(0), x = new Array(16);
+        for (let f = 0; f < nFrames; f++) {
+            const p0 = f * frameSize, head = raw[p0], scale = 1 << (head >> 4), pred = Math.min(head & 15, npred - 1);
+            for (let i = 0; i < 16; i++) {
+                let v;
+                if (frameSize === 9) { const b = raw[p0 + 1 + (i >> 1)]; v = i & 1 ? b & 15 : b >> 4; v = v >= 8 ? v - 16 : v; }
+                else { const b = raw[p0 + 1 + (i >> 2)]; v = ((b >> (6 - 2 * (i & 3))) & 3) << 2; v = v >= 8 ? v - 16 : v; }   // small kind: 2 bits in the top of a nibble
+                x[i] = v * scale;
+            }
+            const bk = book[pred];
+            for (let h = 0; h < 2; h++) {
+                const o8 = [];
+                for (let i = 0; i < 8; i++) {
+                    let acc = 0;
+                    for (let j = 0; j < order; j++) acc += bk[j][i] * prev[j];
+                    for (let k = 0; k < i; k++) acc += bk[order - 1][i - k - 1] * x[h * 8 + k];
+                    let v = Math.floor(acc / 2048) + x[h * 8 + i];
+                    v = v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+                    o8.push(v); out[f * 16 + h * 8 + i] = v;
+                }
+                for (let j = 0; j < order; j++) prev[j] = o8[8 - order + j];
+            }
+        }
+        return out;
+    }
+
+    const CODEC = { ADPCM: 0, S8: 1, S16_INMEMORY: 2, SMALL_ADPCM: 3, REVERB: 4, S16: 5 };
+
+    function readSample(font, ptr, bankOffs, table) {
+        if (ptr === 0 || ptr + 16 > font.length) return null;
+        const w0 = be32(font, ptr), addr = be32(font, ptr + 4), loopPtr = be32(font, ptr + 8), bookPtr = be32(font, ptr + 12);
+        const codec = w0 >>> 28, medium = (w0 >>> 26) & 3, size = w0 & 0xFFFFFF;
+        if (medium > 1 || bankOffs[medium] == null) return null;
+        const base = bankOffs[medium], raw = table.subarray(base + addr, base + addr + size);
+        let pcm;
+        if (codec === CODEC.ADPCM || codec === CODEC.SMALL_ADPCM) {
+            if (bookPtr + 8 > font.length) return null;
+            const order = be32(font, bookPtr) | 0, npred = be32(font, bookPtr + 4) | 0;
+            if (order < 1 || order > 8 || npred < 1 || npred > 16) return null;
+            const book = [];
+            let q = bookPtr + 8;
+            for (let p = 0; p < npred; p++) { const rows = []; for (let j = 0; j < order; j++) { const r = []; for (let i = 0; i < 8; i++, q += 2) r.push(s16(font, q)); rows.push(r); } book.push(rows); }
+            pcm = decodeVadpcm(raw, book, order, codec === CODEC.ADPCM ? 9 : 5);
+        } else if (codec === CODEC.S16 || codec === CODEC.S16_INMEMORY) {
+            pcm = new Int16Array(raw.length >> 1);
+            for (let i = 0; i < pcm.length; i++) pcm[i] = s16(raw, i * 2);
+        } else if (codec === CODEC.S8) {
+            pcm = new Int16Array(raw.length);
+            for (let i = 0; i < pcm.length; i++) pcm[i] = s8(raw[i]) << 8;
+        } else return null;
+        const ls = be32(font, loopPtr), le = be32(font, loopPtr + 4), count = be32(font, loopPtr + 8) | 0;
+        const loop = count !== 0 && le > ls + 8 && ls < pcm.length ? [ls, Math.min(le, pcm.length)] : null;
+        return { key: (base + addr) + ':' + size + ':' + codec, pcm, loop };
+    }
+
+    // ---- instruments -------------------------------------------------------------------------------------------------------------------
+    function releaseSeconds(index) {
+        if (index === 0) return 0.25;
+        let frames;
+        if (index >= 251) frames = { 251: 0.75, 252: 0.66, 253: 0.5, 254: 0.33, 255: 0.25 }[index];
+        else if (index >= 128) frames = 252 - index;
+        else if (index >= 16) frames = 4 * (143 - index);
+        else frames = 60 * (23 - index);
+        return frames / 60;
+    }
+
+    // the game's envelope: pairs of (steps to take, level to reach); 0 ends the note, -1 holds, -2 jumps back, -3 restarts
+    function readEnvelope(font, ptr) {
+        if (ptr === 0 || ptr + 4 > font.length) return { attack: 0, decay: 0, sustain: 1, peak: 1 };
+        let t = 0, silentEnd = false;
+        const pts = [];
+        for (let k = 0; k < 32 && ptr + 4 * k + 4 <= font.length; k++) {
+            const delay = s16(font, ptr + 4 * k), level = s16(font, ptr + 4 * k + 2);
+            if (delay > 0) { t += delay * ENV_TICK; pts.push([t, Math.max(0, level) / 32767]); continue; }
+            silentEnd = delay === 0;
+            break;
+        }
+        if (!pts.length) return { attack: 0, decay: 0, sustain: 1, peak: 1 };
+        let pi = 0;
+        for (let i = 1; i < pts.length; i++) if (pts[i][1] > pts[pi][1]) pi = i;
+        const peak = pts[pi][1];
+        return { attack: pts[pi][0], decay: pts[pts.length - 1][0] - pts[pi][0], sustain: silentEnd ? 0 : peak > 0 ? pts[pts.length - 1][1] / peak : 0, peak };
+    }
+
+    // ROM bytes -> { samples: [{name, pcm Int16Array, loop}], presets: [{name, bank, program, zones}] }
+    // zone: { lo, hi, sample, tuning, fixedKey (drums: the key that plays at the plain tuning), attack, decay, sustain, release, peak, pan }
+    function extract(romBytes, log) {
+        log = log || (() => {});
+        const rom = normalizeRom(romBytes);
+        const { bank, table, fonts, banks } = findAudio(rom, log);
+        const bankOffset = (i, depth) => {
+            depth = depth || 0;
+            if (i === 0xFF || i >= banks.length || depth > 4) return null;
+            return banks[i].size === 0 ? bankOffset(banks[i].off, depth + 1) : banks[i].off;
+        };
+        const samples = [], index = new Map(), presets = [];
+        const zoneSample = (font, offs, ptr) => {
+            const s = readSample(font, ptr, offs, table);
+            if (!s || s.pcm.length < 2) return null;
+            if (!index.has(s.key)) { index.set(s.key, samples.length); samples.push({ name: 's' + samples.length, pcm: s.pcm, loop: s.loop }); }
+            return index.get(s.key);
+        };
+        fonts.forEach((fd, f) => {
+            const font = bank.subarray(fd.off, fd.off + fd.size);
+            if (font.length < 8) return;
+            const offs = [bankOffset(fd.b1), bankOffset(fd.b2)];
+            const drumsPtr = be32(font, 0);
+            for (let i = 0; i < fd.nIns && 8 + 4 * i + 4 <= font.length; i++) {
+                const ip = be32(font, 8 + 4 * i);
+                if (ip === 0 || ip + 0x20 > font.length) continue;
+                const lo = font[ip + 1], hi = font[ip + 2], rel = font[ip + 3], env = readEnvelope(font, be32(font, ip + 4));
+                const ranges = [lo > 0 ? [0, lo + MIDI_OFFSET - 1] : null, [lo + MIDI_OFFSET, hi + MIDI_OFFSET], hi < 127 ? [hi + MIDI_OFFSET + 1, 127] : null];
+                const zones = [];
+                for (let slot = 0; slot < 3; slot++) {
+                    const sp = be32(font, ip + 8 + slot * 8), tuning = f32(font, ip + 12 + slot * 8);
+                    if (!ranges[slot] || sp === 0) continue;
+                    const klo = Math.max(0, ranges[slot][0]), khi = Math.min(127, ranges[slot][1]);
+                    if (klo > khi) continue;
+                    const si = zoneSample(font, offs, sp);
+                    if (si == null) continue;
+                    zones.push({ lo: klo, hi: khi, sample: si, tuning, fixedKey: null, ...env, release: releaseSeconds(rel), pan: 0 });
+                }
+                if (zones.length) presets.push({ name: 'OoT f' + String(f).padStart(2, '0') + ' i' + String(i).padStart(2, '0'), bank: f, program: i, zones });
+            }
+            if (fd.nDrums && drumsPtr && drumsPtr + 4 * fd.nDrums <= font.length) {
+                const zones = [];
+                for (let d = 0; d < fd.nDrums; d++) {
+                    const dp = be32(font, drumsPtr + 4 * d), key = d + MIDI_OFFSET;
+                    if (key > 127) break;
+                    if (dp === 0 || dp + 0x10 > font.length) continue;
+                    const si = zoneSample(font, offs, be32(font, dp + 4));
+                    if (si == null) continue;
+                    zones.push({ lo: key, hi: key, sample: si, tuning: f32(font, dp + 8), fixedKey: key, ...readEnvelope(font, be32(font, dp + 12)),
+                        release: releaseSeconds(font[dp]), pan: (font[dp + 1] - 64) / 64 });
+                }
+                if (zones.length) presets.push({ name: 'OoT f' + String(f).padStart(2, '0') + ' drums', bank: 128, program: f, zones });
+            }
+        });
+        if (!presets.length) throw new Error('No instruments were found in this ROM\'s audio.');
+        log(presets.length + ' instruments and drum kits, ' + samples.length + ' samples');
+        return { samples, presets };
+    }
+
+    // ---- writing a .sf2 ------------------------------------------------------------------------------------------------------------------
+    function writeSf2(model, title) {
+        const parts = [];
+        const u16 = v => [v & 255, (v >> 8) & 255], u32 = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+        const name20 = s => { const a = new Array(20).fill(0); for (let i = 0; i < Math.min(19, s.length); i++) a[i] = s.charCodeAt(i) & 0x7F; return a; };
+        const chunk = (tag, body) => { const b = body instanceof Uint8Array ? body : Uint8Array.from(body); const pad = b.length & 1;
+            const o = new Uint8Array(8 + b.length + pad); for (let i = 0; i < 4; i++) o[i] = tag.charCodeAt(i); o.set(u32(b.length), 4); o.set(b, 8); return o; };
+        const cat = arrs => { const n = arrs.reduce((a, b) => a + b.length, 0), o = new Uint8Array(n); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
+        const list = (tag, chunks) => chunk('LIST', cat([Uint8Array.from([...tag].map(c => c.charCodeAt(0)))].concat(chunks)));
+        const tc = s => Math.max(-12000, Math.min(8000, Math.round(1200 * Math.log2(Math.max(s, 0.001)))));
+        const cb = l => l <= 0 ? 1440 : Math.max(0, Math.min(1440, Math.round(-200 * Math.log10(l))));
+        // samples
+        let total = 0;
+        for (const s of model.samples) total += s.pcm.length + 46;
+        const smpl = new Uint8Array(total * 2), shdr = [];
+        let pos = 0;
+        model.samples.forEach(s => {
+            const n = s.pcm.length, [ls, le] = s.loop || [0, n];
+            for (let i = 0; i < n; i++) { smpl[(pos + i) * 2] = s.pcm[i] & 255; smpl[(pos + i) * 2 + 1] = (s.pcm[i] >> 8) & 255; }
+            shdr.push(...name20(s.name), ...u32(pos), ...u32(pos + n), ...u32(pos + ls), ...u32(pos + le), ...u32(OUTPUT_RATE), 60, 0, ...u16(0), ...u16(1));
+            pos += n + 46;
+        });
+        shdr.push(...name20('EOS'), ...new Array(26).fill(0));
+        // instruments: one per preset
+        const inst = [], ibag = [], igen = [], phdr = [], pbag = [], pgen = [];
+        let ngen = 0, nbag = 0;
+        const gen = (op, v) => { igen.push(...u16(op), ...u16(v & 0xFFFF)); ngen++; };
+        model.presets.forEach((p, k) => {
+            inst.push(...name20(p.name), ...u16(nbag));
+            for (const z of p.zones) {
+                ibag.push(...u16(ngen), ...u16(0)); nbag++;
+                igen.push(...u16(43), z.lo, z.hi); ngen++;
+                const s = 12 * Math.log2(z.tuning > 0 ? z.tuning : 1), r = Math.round(s);
+                const root = z.fixedKey == null ? 60 - r : z.fixedKey - r;     // a drum plays at its tuning on its own key
+                gen(58, Math.max(0, Math.min(127, root))); gen(52, Math.round((s - r) * 100));
+                gen(34, tc(z.attack)); gen(36, tc(z.decay)); gen(37, cb(z.sustain)); gen(38, tc(z.release));
+                if (z.peak < 1) gen(48, cb(z.peak));
+                if (z.pan) gen(17, Math.round(z.pan * 500));
+                gen(54, model.samples[z.sample].loop ? 1 : 0); gen(53, z.sample);
+            }
+            phdr.push(...name20(p.name), ...u16(p.program), ...u16(p.bank), ...u16(k), ...u32(0), ...u32(0), ...u32(0));
+            pbag.push(...u16(k), ...u16(0));
+            pgen.push(...u16(41), ...u16(k));
+        });
+        const np = model.presets.length;
+        inst.push(...name20('EOI'), ...u16(nbag)); ibag.push(...u16(ngen), 0, 0); igen.push(0, 0, 0, 0);
+        phdr.push(...name20('EOP'), 0, 0, 0, 0, ...u16(np), ...new Array(12).fill(0)); pbag.push(...u16(np), 0, 0); pgen.push(0, 0, 0, 0);
+        const str = s => Uint8Array.from([...s].map(c => c.charCodeAt(0)).concat([0]));
+        const info = list('INFO', [chunk('ifil', [2, 0, 1, 0]), chunk('isng', str('EMU8000')), chunk('INAM', str(title || 'Ocarina of Time')),
+            chunk('ICMT', str('Made from the owner\'s own ROM. Do not share.'))]);
+        const sdta = list('sdta', [chunk('smpl', smpl)]);
+        const pdta = list('pdta', [chunk('phdr', phdr), chunk('pbag', pbag), chunk('pmod', new Array(10).fill(0)), chunk('pgen', pgen), chunk('inst', inst),
+            chunk('ibag', ibag), chunk('imod', new Array(10).fill(0)), chunk('igen', igen), chunk('shdr', shdr)]);
+        const body = cat([str('sfbk').subarray(0, 4), info, sdta, pdta]);
+        return cat([str('RIFF').subarray(0, 4), Uint8Array.from(u32(body.length)), body]);
+    }
+
+    // ---- playing a note ------------------------------------------------------------------------------------------------------------------
+    function renderNote(model, preset, key, vel, dur, sr) {
+        const outs = [];
+        for (const z of preset.zones) {
+            if (key < z.lo || key > z.hi) continue;
+            const s = model.samples[z.sample], pcm = s.pcm, n0 = pcm.length;
+            const semis = z.fixedKey == null ? key - 60 : 0;
+            const ratio = z.tuning * Math.pow(2, semis / 12) * OUTPUT_RATE / sr;
+            const release = Math.max(z.release, 0.03), total = dur + release, n = Math.floor(total * sr) + 1;
+            const attack = Math.max(z.attack, 0.001), decay = Math.max(z.decay, 0.001);
+            const amp = z.peak * Math.pow(vel / 127, 1.2) / 32768;
+            const sig = new Float32Array(n);
+            let pos = 0, relFrom = null;
+            for (let i = 0; i < n; i++) {
+                if (s.loop && pos >= s.loop[1]) pos = s.loop[0] + ((pos - s.loop[0]) % (s.loop[1] - s.loop[0]));
+                if (!s.loop && pos >= n0 - 1) break;
+                const ip = pos | 0, fr = pos - ip, a = pcm[ip], b = pcm[Math.min(ip + 1, n0 - 1)];
+                const t = i / sr;
+                let env = t < attack ? t / attack : t < attack + decay ? 1 + (z.sustain - 1) * (t - attack) / decay : z.sustain;
+                if (t >= dur) { if (relFrom === null) relFrom = env; env = relFrom * Math.max(0, 1 - (t - dur) / release); }
+                sig[i] = (a + (b - a) * fr) * env * amp;
+                pos += ratio;
+            }
+            const pan = Math.max(-1, Math.min(1, z.pan)) * 0.5 + 0.5;
+            outs.push([sig, Math.cos(pan * Math.PI / 2), Math.sin(pan * Math.PI / 2)]);
+        }
+        if (!outs.length) return null;
+        const n = Math.max(...outs.map(o => o[0].length)), L = new Float32Array(n), R = new Float32Array(n);
+        for (const [sig, gl, gr] of outs) for (let i = 0; i < sig.length; i++) { L[i] += sig[i] * gl; R[i] += sig[i] * gr; }
+        return [L, R];
+    }
+
+    // ---- FFT (in place, radix 2) -----------------------------------------------------------------------------------------------------------
+    function fft(re, im) {
+        const n = re.length;
+        for (let i = 1, j = 0; i < n; i++) {
+            let bit = n >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+            if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+        }
+        for (let len = 2; len <= n; len <<= 1) {
+            const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+            for (let i = 0; i < n; i += len) {
+                let cr = 1, ci = 0;
+                for (let j = 0; j < len / 2; j++) {
+                    const a = i + j, b = a + len / 2;
+                    const xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+                    re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+                    const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+                }
+            }
+        }
+    }
+
+    // ---- finding the notes in a recording (the same method as song_to_oot.py) ---------------------------------------------------------
+    const LOW = 31, HIGH = 100, N_FFT = 4096, HOP = 512;
+
+    function transcribe(y, sr, opts) {
+        opts = opts || {};
+        const maxVoices = opts.voices || 5, minNoteMs = opts.minNoteMs || 90, sensitivity = opts.sensitivity || 0.22;
+        const nb = N_FFT / 2 + 1, pad = N_FFT / 2;
+        const frames = Math.max(0, 1 + Math.floor((y.length + 2 * pad - N_FFT) / HOP));
+        if (!frames) return [];
+        const win = new Float64Array(N_FFT);
+        for (let i = 0; i < N_FFT; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N_FFT - 1));
+        const mag = new Float32Array(frames * nb), re = new Float64Array(N_FFT), im = new Float64Array(N_FFT);
+        let mx = 0;
+        for (let f = 0; f < frames; f++) {
+            const s0 = f * HOP - pad;
+            for (let i = 0; i < N_FFT; i++) { const k = s0 + i; re[i] = (k >= 0 && k < y.length ? y[k] : 0) * win[i]; im[i] = 0; }
+            fft(re, im);
+            for (let b = 0; b < nb; b++) { const v = Math.hypot(re[b], im[b]); mag[f * nb + b] = v; if (v > mx) mx = v; }
+        }
+        for (let i = 0; i < mag.length; i++) mag[i] = Math.log1p(40 * mag[i] / (mx + 1e-9));
+        // whiten each frequency a little so a loud bass does not hide everything
+        const col = new Float32Array(frames);
+        for (let b = 0; b < nb; b++) {
+            for (let f = 0; f < frames; f++) col[f] = mag[f * nb + b];
+            const sorted = Float32Array.from(col).sort();
+            const med = frames & 1 ? sorted[frames >> 1] : 0.5 * (sorted[frames / 2 - 1] + sorted[frames / 2]);
+            for (let f = 0; f < frames; f++) { const v = mag[f * nb + b]; mag[f * nb + b] = Math.max(0, v - 0.6 * Math.min(v, med)); }
+        }
+        const binhz = sr / N_FFT, np = HIGH - LOW + 1, nh = 7;
+        const lo = [], hi = [], valid = [], w = [];
+        for (let h = 0; h < nh; h++) w.push(Math.pow(0.82, h));
+        for (let p = 0; p < np; p++) {
+            const f0 = 440 * Math.pow(2, (LOW + p - 69) / 12);
+            lo.push([]); hi.push([]); valid.push([]);
+            for (let h = 0; h < nh; h++) {
+                const c = f0 * (h + 1) / binhz;
+                valid[p].push(c < N_FFT / 2 - 2);
+                const l = Math.min(Math.max(Math.floor(c * Math.pow(2, -1 / 36)), 0), N_FFT / 2);
+                lo[p].push(l); hi[p].push(Math.max(l, Math.min(Math.max(Math.ceil(c * Math.pow(2, 1 / 36)), 0), N_FFT / 2)));
+            }
+        }
+        const salience = (f, s) => {
+            const base = f * nb;
+            for (let p = 0; p < np; p++) {
+                let tot = 0;
+                for (let h = 0; h < nh; h++) {
+                    if (!valid[p][h]) continue;
+                    let best = 0;
+                    for (let b = lo[p][h]; b <= hi[p][h]; b++) if (mag[base + b] > best) best = mag[base + b];
+                    tot += w[h] * best;
+                }
+                s[p] = tot;
+            }
+        };
+        const roll = new Float32Array(np * frames), sal = new Float64Array(np), fmax = new Float64Array(frames);
+        for (let f = 0; f < frames; f++) { salience(f, sal); let m = 0; for (let p = 0; p < np; p++) if (sal[p] > m) m = sal[p]; fmax[f] = m; }
+        const sortedMax = Float64Array.from(fmax).sort();
+        const q = 0.95 * (frames - 1), qi = Math.floor(q);
+        const gmax = sortedMax[qi] + (sortedMax[Math.min(qi + 1, frames - 1)] - sortedMax[qi]) * (q - qi) + 1e-9;
+        // voice by voice: the strongest pitch of each frame, then take its harmonics out and look again
+        for (let f = 0; f < frames; f++) {
+            for (let v = 0; v < maxVoices; v++) {
+                salience(f, sal);
+                let pick = 0;
+                for (let p = 1; p < np; p++) if (sal[p] > sal[pick]) pick = p;
+                if (!(sal[pick] > sensitivity * gmax * Math.pow(0.8, v))) break;
+                roll[pick * frames + f] = Math.max(roll[pick * frames + f], sal[pick] / gmax);
+                for (let h = 0; h < nh; h++) if (valid[pick][h]) for (let b = lo[pick][h]; b <= hi[pick][h]; b++) mag[f * nb + b] *= 0.15;
+            }
+        }
+        // clean up: fill 1-2 frame gaps, then turn runs of frames into notes
+        const sec = HOP / sr, minFrames = Math.max(2, Math.round(minNoteMs / 1000 / sec)), notes = [];
+        for (let p = 0; p < np; p++) {
+            const on = new Uint8Array(frames), r = roll.subarray(p * frames, (p + 1) * frames);
+            let last = -1;
+            for (let f = 0; f < frames; f++) if (r[f] > 0) { if (last >= 0 && f - last > 1 && f - last <= 3) for (let k = last; k <= f; k++) on[k] = 1; on[f] = 1; last = f; }
+            let f = 0;
+            while (f < frames) {
+                if (!on[f]) { f++; continue; }
+                const a = f;
+                while (f < frames && on[f]) f++;
+                const b = f;
+                if (b - a < minFrames) continue;
+                const cut = [a];
+                for (let k = a + 6; k < b - 3; k++) {
+                    const before = (r[k - 4] + r[k - 3] + r[k - 2] + r[k - 1]) / 4 + 1e-9;
+                    if (r[k] > 1.7 * before && r[k] >= r[k - 1] && k - cut[cut.length - 1] >= 5) cut.push(k);
+                }
+                cut.push(b);
+                for (let i = 0; i + 1 < cut.length; i++) {
+                    if (cut[i + 1] - cut[i] < minFrames) continue;
+                    let m = 0;
+                    for (let k = cut[i]; k < cut[i + 1]; k++) m = Math.max(m, r[k]);
+                    notes.push({ start: cut[i] * sec, end: cut[i + 1] * sec, pitch: LOW + p, vel: Math.round(Math.min(120, Math.max(35, 45 + 80 * m))), part: 'harmony' });
+                }
+            }
+        }
+        notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+        return notes;
+    }
+
+    // bass is the low notes, melody the top voice, harmony what is left
+    function assignParts(notes, bassBelow) {
+        bassBelow = bassBelow || 50;
+        for (const n of notes) n.part = n.pitch < bassBelow ? 'bass' : 'harmony';
+        const live = notes.filter(n => n.part !== 'bass');
+        const ev = [...new Set(live.flatMap(n => [n.start, n.end]))].sort((a, b) => a - b);
+        const top = new Map();
+        const byStart = live.slice().sort((a, b) => a.start - b.start);
+        for (let i = 0; i + 1 < ev.length; i++) {
+            const mid = 0.5 * (ev[i] + ev[i + 1]);
+            let best = null;
+            for (const n of byStart) { if (n.start > mid) break; if (n.end > mid && (!best || n.pitch > best.pitch)) best = n; }
+            if (best) top.set(best, (top.get(best) || 0) + ev[i + 1] - ev[i]);
+        }
+        for (const n of live) if ((top.get(n) || 0) > 0.5 * (n.end - n.start)) n.part = 'melody';
+        return notes;
+    }
+
+    // ---- MIDI files -----------------------------------------------------------------------------------------------------------------------
+    function readMidi(data) {
+        const d = data instanceof Uint8Array ? data : new Uint8Array(data);
+        if (String.fromCharCode(d[0], d[1], d[2], d[3]) !== 'MThd') throw new Error('That is not a MIDI file.');
+        const ntracks = (d[10] << 8) | d[11], division = (d[12] << 8) | d[13];
+        if (division & 0x8000) throw new Error('SMPTE time MIDI files are not supported.');
+        let pos = 14;
+        const events = [];
+        for (let t = 0; t < ntracks && pos + 8 <= d.length; t++) {
+            if (String.fromCharCode(d[pos], d[pos + 1], d[pos + 2], d[pos + 3]) !== 'MTrk') break;
+            const end = pos + 8 + be32(d, pos + 4);
+            let i = pos + 8, tick = 0, run = 0;
+            const vlq = () => { let v = 0, b; do { b = d[i++]; v = (v << 7) | (b & 0x7F); } while (b & 0x80 && i < end); return v; };
+            while (i < end) {
+                tick += vlq();
+                const st = d[i];
+                if (st === 0xFF) { const typ = d[i + 1]; i += 2; const l = vlq(); if (typ === 0x51 && l === 3) events.push([tick, 0, (d[i] << 16) | (d[i + 1] << 8) | d[i + 2]]); i += l; continue; }
+                if (st === 0xF0 || st === 0xF7) { i++; i += vlq(); continue; }
+                if (st & 0x80) { run = st; i++; }
+                const kind = run & 0xF0, ch = run & 0x0F;
+                if (kind === 0xC0 || kind === 0xD0) { i++; continue; }
+                const a = d[i], b = d[i + 1]; i += 2;
+                if (kind === 0x90 && b > 0) events.push([tick, 1, ch, a, b]);
+                else if (kind === 0x80 || kind === 0x90) events.push([tick, 2, ch, a]);
+            }
+            pos = end;
+        }
+        events.sort((a, b) => a[0] - b[0] || (a[1] === 0 ? -1 : 0) - (b[1] === 0 ? -1 : 0));
+        let tempo = 500000, lastTick = 0, secs = 0;
+        const open = new Map(), notes = [];
+        for (const e of events) {
+            secs += (e[0] - lastTick) * tempo / 1e6 / division; lastTick = e[0];
+            if (e[1] === 0) tempo = e[2];
+            else if (e[1] === 1 && e[2] !== 9) open.set(e[2] + ':' + e[3], [secs, e[4]]);
+            else if (e[1] === 2 && open.has(e[2] + ':' + e[3])) {
+                const [s, v] = open.get(e[2] + ':' + e[3]); open.delete(e[2] + ':' + e[3]);
+                if (secs - s > 0.03) notes.push({ start: s, end: secs, pitch: e[3], vel: v, part: 'harmony' });
+            }
+        }
+        notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+        return notes;
+    }
+
+    function writeMidi(notes) {
+        const vlq = v => { const o = [v & 0x7F]; v >>= 7; while (v) { o.push((v & 0x7F) | 0x80); v >>= 7; } return o.reverse(); };
+        const tick = t => Math.round(t * 960);                  // 120 bpm at 480 per beat: a second is 960 ticks
+        const tracks = [[...vlq(0), 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20, ...vlq(0), 0xFF, 0x2F, 0x00]];
+        ['melody', 'harmony', 'bass'].forEach((part, ch) => {
+            const ev = [];
+            for (const n of notes) if (n.part === part) { ev.push([tick(n.start), 1, n.pitch, n.vel]); ev.push([tick(n.end), 0, n.pitch, 0]); }
+            ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+            const data = [...vlq(0), 0xC0 | ch, [79, 46, 32][ch]];
+            let last = 0;
+            for (const [t, on, p, v] of ev) { data.push(...vlq(t - last), (on ? 0x90 : 0x80) | ch, p & 0x7F, v & 0x7F); last = t; }
+            data.push(...vlq(0), 0xFF, 0x2F, 0x00);
+            tracks.push(data);
+        });
+        const out = [0x4D, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length, 0x01, 0xE0];
+        for (const t of tracks) out.push(0x4D, 0x54, 0x72, 0x6B, (t.length >>> 24) & 255, (t.length >> 16) & 255, (t.length >> 8) & 255, t.length & 255, ...t);
+        return Uint8Array.from(out);
+    }
+
+    // ---- the whole song ---------------------------------------------------------------------------------------------------------------------
+    // a 1.4 s decaying noise tail, convolved block by block with FFTs (overlap-add)
+    function reverb(L, R, amount, sr) {
+        if (amount <= 0) return;
+        let seed = 7;
+        const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF; return seed / 0x7FFFFFFF; };
+        const nIr = Math.floor(sr * 1.4), ir = new Float64Array(nIr);
+        for (let i = Math.floor(0.012 * sr); i < nIr; i++) ir[i] = (rnd() + rnd() + rnd() - 1.5) * 2 * Math.exp(-i / sr * 3.4);
+        let size = 1;
+        while (size < 2 * nIr) size <<= 1;
+        const block = size - nIr + 1;
+        [L, R].forEach((x, ch) => {
+            const hr = new Float64Array(size), hi = new Float64Array(size);
+            for (let i = 0; i < nIr; i++) hr[(i + 37 * ch) % nIr] = ir[i];
+            fft(hr, hi);
+            const n = x.length, wet = new Float32Array(n), re = new Float64Array(size), im = new Float64Array(size);
+            for (let a = 0; a < n; a += block) {
+                re.fill(0); im.fill(0);
+                for (let i = 0; i < block && a + i < n; i++) re[i] = x[a + i];
+                fft(re, im);
+                for (let i = 0; i < size; i++) { const r = re[i] * hr[i] - im[i] * hi[i]; im[i] = -(re[i] * hi[i] + im[i] * hr[i]); re[i] = r; }   // conjugate: an inverse FFT via the forward one
+                fft(re, im);
+                for (let i = 0; i < size && a + i < n; i++) wet[a + i] += re[i] / size;
+            }
+            for (let i = 0; i < n; i++) x[i] = x[i] * (1 - 0.5 * amount) + wet[i] * amount * 0.12;
+        });
+    }
+
+    function render(notes, model, programs, reverbAmount, sr, progress) {
+        if (!notes.length) throw new Error('No notes were found in the song.');
+        sr = sr || 44100;
+        const total = Math.max(...notes.map(n => n.end)) + 3, n = Math.floor(total * sr);
+        const L = new Float32Array(n), R = new Float32Array(n), gain = { melody: 1, harmony: 0.55, bass: 0.8 };
+        notes.forEach((nt, i) => {
+            const preset = programs[nt.part];
+            if (!preset) return;
+            const r = renderNote(model, preset, nt.pitch, nt.vel, Math.max(0.05, nt.end - nt.start), sr);
+            if (!r) return;
+            const a = Math.floor(nt.start * sr), g = gain[nt.part] || 0.7, m = Math.min(r[0].length, n - a);
+            for (let k = 0; k < m; k++) { L[a + k] += r[0][k] * g; R[a + k] += r[1][k] * g; }
+            if (progress && i % 200 === 0) progress('playing the notes ' + i + '/' + notes.length);
+        });
+        reverb(L, R, reverbAmount, sr);
+        let peak = 1e-6;
+        for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]));
+        for (let i = 0; i < n; i++) { L[i] *= 0.89 / peak; R[i] *= 0.89 / peak; }
+        return [L, R];
+    }
+
+    function wav(L, R, sr) {
+        const n = L.length, b = new Uint8Array(44 + n * 4), dv = new DataView(b.buffer);
+        const s = (o, t) => { for (let i = 0; i < 4; i++) b[o + i] = t.charCodeAt(i); };
+        s(0, 'RIFF'); dv.setUint32(4, 36 + n * 4, true); s(8, 'WAVE'); s(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 2, true);
+        dv.setUint32(24, sr, true); dv.setUint32(28, sr * 4, true); dv.setUint16(32, 4, true); dv.setUint16(34, 16, true); s(36, 'data'); dv.setUint32(40, n * 4, true);
+        for (let i = 0; i < n; i++) {
+            dv.setInt16(44 + i * 4, Math.max(-32768, Math.min(32767, Math.round(L[i] * 32767))), true);
+            dv.setInt16(46 + i * 4, Math.max(-32768, Math.min(32767, Math.round(R[i] * 32767))), true);
+        }
+        return b;
+    }
+
+    return { normalizeRom, yaz0, findDmaTable, findAudio, decodeVadpcm, readSample, readEnvelope, releaseSeconds, extract, writeSf2, renderNote,
+        fft, transcribe, assignParts, readMidi, writeMidi, render, wav, CODEC, OUTPUT_RATE };
+})();
+// END_LIB
+
+// ===== page =====
+if (typeof document !== 'undefined') (function () {
+    const $ = id => document.getElementById(id);
+    const log = t => { $('log').textContent += t + '\n'; $('log').scrollTop = 1e9; };
+    const SR = 44100;
+    let model = null, song = null, songName = 'song', result = null, ctx = null, playing = null;
+    const audio = () => (ctx = ctx || new (window.AudioContext || window.webkitAudioContext)());
+
+    // Inside a Claude page, files go out through its save prompt, which only takes certain types: audio is wrapped in a .zip there.
+    // Opened as a plain file, it is a normal download.
+    function crc32(d) { let c, t = crc32.t; if (!t) { t = crc32.t = new Uint32Array(256); for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } }
+        c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = t[(c ^ d[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+    function zip(name, data) {
+        const nm = new TextEncoder().encode(name), crc = crc32(data), n = data.length;
+        const loc = new Uint8Array(30 + nm.length), cen = new Uint8Array(46 + nm.length), end = new Uint8Array(22);
+        const L = new DataView(loc.buffer), C = new DataView(cen.buffer), E = new DataView(end.buffer);
+        L.setUint32(0, 0x04034b50, true); L.setUint16(4, 20, true); L.setUint32(14, crc, true); L.setUint32(18, n, true); L.setUint32(22, n, true); L.setUint16(26, nm.length, true); loc.set(nm, 30);
+        C.setUint32(0, 0x02014b50, true); C.setUint16(4, 20, true); C.setUint16(6, 20, true); C.setUint32(16, crc, true); C.setUint32(20, n, true); C.setUint32(24, n, true); C.setUint16(28, nm.length, true); cen.set(nm, 46);
+        E.setUint32(0, 0x06054b50, true); E.setUint16(8, 1, true); E.setUint16(10, 1, true); E.setUint32(12, cen.length, true); E.setUint32(16, loc.length + n, true);
+        return new Blob([loc, data, cen, end]);
+    }
+    let downloads;
+    async function save(name, data, type) {
+        if (window.claude && downloads === undefined) { try { downloads = await window.claude.use('downloads'); } catch (e) { downloads = null; } }
+        if (downloads) {
+            const bytes = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data;
+            try { await downloads.save({ filename: name + '.zip', data: zip(name, bytes) }); log('Saved ' + name + '.zip (unzip it to get ' + name + ').'); }
+            catch (e) { if (e && e.code !== 'declined') log('Could not save: ' + (e.message || e.code)); }
+            return;
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type }));
+        a.download = name; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }
+    function dropZone(zone, input, onFile) {
+        zone.onclick = () => input.click();
+        zone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
+        input.onchange = () => input.files[0] && onFile(input.files[0]);
+        zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
+        zone.ondragleave = () => zone.classList.remove('over');
+        zone.ondrop = e => { e.preventDefault(); zone.classList.remove('over'); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0]); };
+    }
+    const tick = () => new Promise(r => setTimeout(r, 20));
+
+    function audition(p) {
+        const c = audio();
+        if (playing) { try { playing.stop(); } catch (e) { } }
+        const keys = p.bank === 128 ? p.zones.slice(0, 8).map(z => z.lo) : [60, 64, 67, 72, 67, 64, 60];
+        const step = 0.32, L = new Float32Array(Math.floor((keys.length * step + 1.5) * SR)), R = new Float32Array(L.length);
+        keys.forEach((k, i) => {
+            const r = OOTSONG.renderNote(model, p, k, 100, step * 0.9, SR);
+            if (!r) return;
+            const a = Math.floor(i * step * SR), m = Math.min(r[0].length, L.length - a);
+            for (let j = 0; j < m; j++) { L[a + j] += r[0][j] * 0.7; R[a + j] += r[1][j] * 0.7; }
+        });
+        const buf = c.createBuffer(2, L.length, SR);
+        buf.copyToChannel(L, 0); buf.copyToChannel(R, 1);
+        const src = c.createBufferSource(); src.buffer = buf; src.connect(c.destination); src.start(); playing = src;
+    }
+
+    function fillPresets() {
+        const box = $('presets'); box.innerHTML = '';
+        const sels = { melody: $('selMelody'), harmony: $('selHarmony'), bass: $('selBass') };
+        for (const s of Object.values(sels)) s.innerHTML = '';
+        model.presets.forEach((p, i) => {
+            const row = document.createElement('div'); row.className = 'pr';
+            const label = p.bank === 128 ? 'font ' + p.program + ' drums' : 'font ' + p.bank + ' instrument ' + p.program;
+            row.innerHTML = '<button>▶</button><span>' + label + '</span>';
+            row.querySelector('button').onclick = () => audition(p);
+            if (p.bank !== 128) for (const part of ['melody', 'harmony', 'bass']) {      // drum kits can be heard, but drums are not played
+                const b = document.createElement('button'); b.className = 'use'; b.textContent = part;
+                b.onclick = () => { sels[part].value = i; };
+                row.appendChild(b);
+                const o = document.createElement('option'); o.value = i; o.textContent = label; sels[part].appendChild(o);
+            }
+            box.appendChild(row);
+        });
+        const melodic = model.presets.map((p, i) => [p, i]).filter(([p]) => p.bank !== 128);
+        sels.melody.value = melodic[0][1]; sels.harmony.value = melodic[Math.min(1, melodic.length - 1)][1]; sels.bass.value = melodic[Math.min(2, melodic.length - 1)][1];
+        $('presetBox').hidden = false;
+    }
+
+    dropZone($('romDrop'), $('romFile'), async f => {
+        $('log').textContent = '';
+        log('Reading ' + f.name + '...'); await tick();
+        try {
+            const t0 = performance.now();
+            model = OOTSONG.extract(new Uint8Array(await f.arrayBuffer()), m => log('  ' + m));
+            log('Ready in ' + ((performance.now() - t0) / 1000).toFixed(1) + ' s.');
+            $('romDrop').innerHTML = '<b class="ok">✓ ' + f.name + '</b><br><small>' + model.presets.length + ' instruments and drum kits read. Click to pick another ROM.</small>';
+            $('bSf2').disabled = false; fillPresets();
+            $('bGo').disabled = !song;
+        } catch (e) { log('Error: ' + e.message); model = null; }
+    });
+
+    dropZone($('songDrop'), $('songFile'), async f => {
+        songName = f.name.replace(/\.[^.]+$/, '');
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        if (/\.midi?$/i.test(f.name) || String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'MThd') song = { midi: bytes };
+        else {
+            try {
+                log('Reading ' + f.name + '...'); await tick();
+                const dec = await audio().decodeAudioData(bytes.buffer.slice(0));
+                const off = new OfflineAudioContext(1, Math.ceil(dec.duration * 22050), 22050);
+                const src = off.createBufferSource(); src.buffer = dec; src.connect(off.destination); src.start();
+                song = { audio: (await off.startRendering()).getChannelData(0), sr: 22050 };
+                log('  ' + dec.duration.toFixed(1) + ' s of audio');
+            } catch (e) { log('Could not read that song: ' + (e.message || e)); song = null; return; }
+        }
+        $('songDrop').innerHTML = '<b class="ok">✓ ' + f.name + '</b><br><small>Click to pick another song.</small>';
+        $('bGo').disabled = !model;
+    });
+
+    for (const [id, out] of [['reverb', 'reverbV'], ['sens', 'sensV'], ['voices', 'voicesV']]) $(id).oninput = () => { $(out).textContent = $(id).value; };
+
+    $('bSf2').onclick = () => save('oot.sf2', OOTSONG.writeSf2(model), 'audio/x-soundfont');
+
+    $('bGo').onclick = async () => {
+        $('bGo').disabled = true;
+        try {
+            let notes;
+            if (song.midi) { log('Reading the MIDI file...'); notes = OOTSONG.readMidi(song.midi); }
+            else {
+                log('Finding the notes (this takes a while for long songs)...'); await tick();
+                notes = OOTSONG.transcribe(song.audio, song.sr, { voices: +$('voices').value, sensitivity: +$('sens').value });
+            }
+            if (!notes.length) throw new Error('No notes were found. If the song is very quiet, lower the sensitivity.');
+            OOTSONG.assignParts(notes);
+            const c = p => notes.filter(n => n.part === p).length;
+            log('Found ' + notes.length + ' notes (' + c('melody') + ' melody, ' + c('harmony') + ' harmony, ' + c('bass') + ' bass). Playing them...'); await tick();
+            const programs = { melody: model.presets[+$('selMelody').value], harmony: model.presets[+$('selHarmony').value], bass: model.presets[+$('selBass').value] };
+            const [L, R] = OOTSONG.render(notes, model, programs, +$('reverb').value, SR);
+            result = { L, R, notes, wav: OOTSONG.wav(L, R, SR) };
+            const p = $('player'); p.src = URL.createObjectURL(new Blob([result.wav], { type: 'audio/wav' })); p.hidden = false;
+            $('bWav').disabled = $('bMp3').disabled = $('bMid').disabled = false;
+            log('Done. Press play, or save it below.');
+        } catch (e) { log('Error: ' + e.message); }
+        $('bGo').disabled = false;
+    };
+
+    $('bWav').onclick = () => save(songName + '_oot.wav', result.wav, 'audio/wav');
+    $('bMid').onclick = () => save(songName + '_oot.mid', OOTSONG.writeMidi(result.notes), 'audio/midi');
+    $('bMp3').onclick = async () => {
+        $('bMp3').disabled = true;
+        try {
+            if (!window.lamejs) {
+                log('Loading the mp3 encoder...');
+                await new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js'; s.onload = ok;
+                    s.onerror = () => bad(new Error('could not load the mp3 encoder (are you offline?). Save the .wav instead.')); document.head.appendChild(s); });
+            }
+            const enc = new lamejs.Mp3Encoder(2, SR, 192), out = [];
+            const toI16 = a => { const o = new Int16Array(a.length); for (let i = 0; i < a.length; i++) o[i] = Math.max(-32768, Math.min(32767, Math.round(a[i] * 32767))); return o; };
+            const l = toI16(result.L), r = toI16(result.R);
+            for (let i = 0; i < l.length; i += 1152) { const m = enc.encodeBuffer(l.subarray(i, i + 1152), r.subarray(i, i + 1152)); if (m.length) out.push(m); }
+            out.push(enc.flush());
+            await save(songName + '_oot.mp3', new Blob(out.map(b => new Uint8Array(b))), 'audio/mpeg');
+        } catch (e) { log('Error: ' + e.message); }
+        $('bMp3').disabled = false;
+    };
+})();
+</script>
+</body></html>

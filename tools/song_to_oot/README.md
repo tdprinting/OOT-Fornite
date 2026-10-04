@@ -1,5 +1,8 @@
 # Song to Ocarina of Time
 
+**No Python?** Open `tools/song-to-oot.html` in a browser instead: it does everything below (ROM to soundfont, hearing the instruments,
+finding the notes, saving .wav/.mp3/.mid/.sf2) inside the page, and nothing is uploaded. `node tools/test_song_to_oot_html.js` tests it.
+
 Turns any song into a version played with the Ocarina of Time instruments: it works out the notes, then plays them again with a SoundFont.
 You get a `.wav`, an `.mp3`, and the `.mid` of the notes it found.
 
