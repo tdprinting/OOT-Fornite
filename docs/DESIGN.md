@@ -151,7 +151,7 @@ each player supplies their own OoT ROM, as with stock SoH.
 - Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
 - State machine: `Lobby -> Countdown -> Drop -> InMatch -> Ending`.
 - Deterministic storm: seeded circle centres derived from the match seed and published at match start.
-- Server-run bots fill every empty slot at match start (a solo player gets 31 bots). Bots are server entities with simple AI (loot, path to storm centre, fight nearest), sent to clients as ordinary puppets, which also makes them the load test for puppet rendering.
+- Server-run bots fill every empty slot at match start (a solo player gets 31 bots). Bots are server entities with simple AI: loot (walk to the nearest useful item and equip the best weapon and shield), path to the storm centre, and fight the nearest player, sent to clients as ordinary puppets, which also makes them the load test for puppet rendering.
 
 ## 6. Risks
 
@@ -223,6 +223,7 @@ Android is pulled forward as a feasibility spike because it could change the who
 | 6 | Join codes and relay, bots, balance | Cross-network play between Windows and Android |
 
 ## 10. Open questions
-1. Android: build on a community fork, or port from upstream? (Needs the spike in 1b.)
-2. Bot AI scope for v1 (walk to the storm circle and fight nearby players vs. looting too)?
-3. Join-code lookup: OK with a free-tier serverless function?
+1. Android: build on a community fork, or port from upstream? (Needs the spike in milestone 1b.)
+
+Resolved: Hyrule Field for v1, Windows and Android, host-run matches, 1 human minimum with bots that loot and fight,
+own protocol, join codes via STUN hole punching with a free-tier serverless lookup.
