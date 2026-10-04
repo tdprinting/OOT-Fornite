@@ -111,3 +111,9 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
   you leave or it ends, but if the game crashes or you save mid-match your save file could keep the 3-heart value. Use a
   throwaway save for testing.
 - **The full Android build runs in CI.** If one of those jobs is red, that is the first thing to look at.
+
+## The logo and the launcher icon
+`assets/logo.png` is the logo. `scripts/apply_logo.sh` (run by the build after the patches) turns it into the Android launcher icons and the in-game copy (`mod/Royale/logo_data.h`) with `scripts/make_logo_assets.py` (needs `pip install pillow`); the generated files are also committed, so a build without Pillow still has them. To change the logo, replace `assets/logo.png` (a transparent or white-background picture; its lettering is black, so it is shown on a pale backdrop).
+
+## Patches
+`patches/0009-player-hat-limb-hook.patch` adds the hook the cap physics uses. Patches are applied in order and each is checked to be "already applied" on re-runs, so a patch must not touch lines next to another patch's changes.

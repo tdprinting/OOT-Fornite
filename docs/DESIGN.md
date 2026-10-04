@@ -540,3 +540,26 @@ Android is pulled forward as a feasibility spike because it could change the who
 
 Resolved: Zero Build (no building), Android via Waterdish/Shipwright-Android, Hyrule Field for v1, Windows and Android, host-run matches, 1 human minimum with bots that loot and fight,
 own protocol, join codes via STUN hole punching with a free-tier serverless lookup.
+
+---
+
+## Appendix: what was built beyond the original design (October 2026)
+
+Everything below is implemented, covered by the server tests, and described for players in `docs/PLAY.md`.
+
+| Area | Where it lives |
+|---|---|
+| Five maps with themes, bosses, dragons, 24 place names each; Hyrule Field's ten signature places | `shared/map.h`, `shared/poi.h`, `shared/boss.h`, `docs/MAPS.md` |
+| Real map data from the ROM (extractor tool, measured arenas, exit and loading-zone avoidance) | `tools/rom-extractor.html`, `docs/MAPS.md` |
+| Seasons and weather (deterministic from the seed, per-map tables), lightning, fog and sand effects on bot sight | `shared/weather.h`, `server/match.h` (`TickWeather`) |
+| Economy: rupees, ammo, special weapons, death drops (half the kit), supply drops | `shared/items.h`, `shared/combat.h`, `server/match.h` |
+| Magic meter (`kMaxMagic`), Adult Power, Heart Container chests | `shared/balance.h`, `server/match.h` |
+| Hireable allies (four kinds, follow and fight, healed or freed when the owner falls) | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
+| Climbs, hideaway chests, spaced chest sites | `shared/poi.h`, `shared/loot.h` |
+| Smarter bots (rolls, lock-on footwork, hazards, calm opening, gear first, magic aware) | `server/bot.h` |
+| Cloth and wind (glider canopy, cap tail) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch` |
+| Match replay (recorded by the server, sent at the end, drawn top-down) | `shared/replay.h`, `server/match.h` (`TickReplay`) |
+| Logo everywhere (launcher icons, title screen, menus) | `assets/logo.png`, `scripts/make_logo_assets.py`, `scripts/apply_logo.sh` |
+| The sign in the middle of every map, and Maya the Kokiri | `RoyaleMod.cpp` (sign, Maya), `shared/map.h` |
+
+Balance is tuned with a headless simulator (`royale_balance [matches] [easy|normal|hard] [map] [players]`): the targets are the first kill within about 20 seconds, 20+ players alive at one minute, matches of roughly four to six minutes (longer on the big maps), few storm deaths, and the dragon a threat rather than the main killer. The protocol version is 18.
