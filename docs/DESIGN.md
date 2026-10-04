@@ -212,7 +212,7 @@ each player supplies their own OoT ROM, as with stock SoH.
 ### 5.4 Server
 - Runs inside the host's game process (or headless) and hosts one match with a fixed 20 Hz tick loop. Horizontally scale by running one process per match.
 - State machine: `Lobby -> Countdown -> Drop -> InMatch -> Ending`.
-- Deterministic storm: seeded circle centres derived from the match seed and published at match start.
+- Storm: seeded circle centres generated on the server and sent to clients at match start (6 circles). Clients interpolate between them. Clients do not re-derive them from the seed, since trig results can differ slightly between Windows (x86) and Android (ARM). Loot positions are likewise sent by the server.
 - Server-run bots fill every empty slot at match start (a solo player gets 31 bots). Bots are server entities with simple AI: loot (walk to the nearest useful item and equip the best weapon and shield), path to the storm centre, and fight the nearest player, sent to clients as ordinary puppets, which also makes them the load test for puppet rendering.
 
 ## 6. Risks
