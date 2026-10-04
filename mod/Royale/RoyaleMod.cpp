@@ -196,13 +196,67 @@ std::string LootLabel(const royale::net::LootNet& l) {
 // ---- the real map -----------------------------------------------------------------------------------------------------------
 
 // Is there floor under (x, z)? Used to measure the map and to keep loot, spawns and storm centres on ground.
-bool FloorAt(float x, float z, float* outY = nullptr) {
+bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
     CollisionPoly poly;
     Vec3f pos = { x, 4000.0f, z };
     float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
     if (y <= BGCHECK_Y_MIN + 1.0f) return false;
     if (outY) *outY = y;
+    return true;
+}
+
+// ---- climbing blocks ---------------------------------------------------------------------------------------------------------
+// The scene's collision can't be changed, so the stone blocks of the climbs (shared/props.h) are solid in the mod's own terms: FloorAt knows
+// their tops (chests and the ledge assist see them as floor), and ApplyPlatforms holds the player on top of them and out of their sides.
+std::vector<size_t> gPlatformIdx;
+const royale::Prop* gPlatformSrc = nullptr;
+size_t gPlatformSrcCount = 0;
+std::unordered_map<size_t, float> gPlatformBase;   // floor height under each block's middle
+
+void RefreshPlatforms() {
+    if (!gSession.Client()) { gPlatformIdx.clear(); gPlatformSrc = nullptr; gPlatformSrcCount = 0; return; }
+    const auto& props = gSession.Client()->Props();
+    if (props.data() == gPlatformSrc && props.size() == gPlatformSrcCount) return;
+    gPlatformSrc = props.data();
+    gPlatformSrcCount = props.size();
+    gPlatformIdx.clear();
+    gPlatformBase.clear();
+    for (size_t i = 0; i < props.size(); i++) if (royale::IsPlatform(props[i].kind)) gPlatformIdx.push_back(i);
+}
+
+float PlatformBase(size_t i) {
+    auto it = gPlatformBase.find(i);
+    if (it != gPlatformBase.end()) return it->second;
+    float y = 0;
+    const auto& p = gSession.Client()->Props()[i];
+    if (!RawFloorAt(p.pos.x, p.pos.z, &y)) return -1.0e9f;   // not measurable yet: don't remember it
+    gPlatformBase[i] = y;
+    return y;
+}
+
+// The top of the highest block covering (x, z), widened by `margin` all round.
+bool PlatformTopAt(float x, float z, float* top, float margin = 0.0f) {
+    RefreshPlatforms();
+    bool found = false;
+    for (size_t i : gPlatformIdx) {
+        const royale::Prop& p = gSession.Client()->Props()[i];
+        if (std::fabs(x - p.pos.x) > royale::kPlatformHalf + margin || std::fabs(z - p.pos.z) > royale::kPlatformHalf + margin) continue;
+        const float base = PlatformBase(i);
+        if (base < -1.0e8f) continue;
+        const float t = base + royale::PlatformHeight(p.kind);
+        if (!found || t > *top) { *top = t; found = true; }
+    }
+    return found;
+}
+
+bool FloorAt(float x, float z, float* outY = nullptr) {
+    float raw = 0, top = 0;
+    const bool haveRaw = RawFloorAt(x, z, &raw);
+    if (!InField()) return false;
+    if (PlatformTopAt(x, z, &top) && (!haveRaw || top > raw)) { if (outY) *outY = top; return true; }
+    if (!haveRaw) return false;
+    if (outY) *outY = raw;
     return true;
 }
 
@@ -1022,9 +1076,11 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
         case royale::PropKind::Pillar: id = ACTOR_EN_ISHI; params = 0x3CC1; break;
         case royale::PropKind::Bush: id = ACTOR_EN_KUSA; params = 0; break;
         case royale::PropKind::Roof: id = ACTOR_EN_ISHI; params = 0; break; // a stand-in actor to hang our roof model on
+        case royale::PropKind::PlatformLow: case royale::PropKind::PlatformMid: case royale::PropKind::PlatformHigh: id = ACTOR_EN_ISHI; params = 0; break; // likewise for the climbing blocks
         default: return;
     }
     int meshKind = -1;
+    if (royale::IsPlatform(p.kind)) meshKind = static_cast<int>(royale::MeshKind::Platform);   // the blocks only exist as our own model, whatever the scenery setting
     if (CustomSceneryOn()) {
         switch (p.kind) {
             case royale::PropKind::Rock: meshKind = static_cast<int>(royale::MeshKind::Rock); break;
@@ -1042,7 +1098,7 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     pa.actor = actor;
     pa.origDestroy = actor->destroy;
     pa.meshKind = meshKind;
-    pa.variant = p.rot >> 4;
+    pa.variant = royale::IsPlatform(p.kind) ? static_cast<uint32_t>(p.kind) - static_cast<uint32_t>(royale::PropKind::PlatformLow) : static_cast<uint32_t>(p.rot >> 4);
     gProps[index] = pa;
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
@@ -1052,9 +1108,9 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
         case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f; break;
         case royale::PropKind::Pillar: actor->shape.shadowScale = 40.0f; break;
         case royale::PropKind::Roof: actor->shape.shadowScale = 0.0f; break;
-        default: break;
+        default: if (royale::IsPlatform(p.kind)) actor->shape.shadowScale = 0.0f; break;
     }
-    if (p.kind == royale::PropKind::Roof) {
+    if (p.kind == royale::PropKind::Roof || royale::IsPlatform(p.kind)) {
         actor->update = Prop_NoUpdate;                // floating stand-in: no collision, no breaking
         actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
         actor->uncullZoneForward = 3000.0f; actor->uncullZoneScale = 1200.0f; actor->uncullZoneDownward = 1200.0f;
@@ -1324,14 +1380,17 @@ void ReconcileProps(const royale::HudState& hud) {
     }
     if (gProps.size() >= kMaxPropActors) return;
     int spawned = 0;
-    for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
-        if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
-        const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
-        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
-        float y;
-        if (!FloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
-        SpawnProp(i, props[i], y);
-        spawned++;
+    for (int pass = 0; pass < 2; pass++) {              // the climbing blocks first: without them the climbs are just chests in the air
+        for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
+            if (royale::IsPlatform(props[i].kind) != (pass == 0)) continue;
+            if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
+            const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
+            if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
+            float y;
+            if (!RawFloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
+            SpawnProp(i, props[i], y);
+            spawned++;
+        }
     }
 }
 
@@ -2770,6 +2829,36 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
     Actor_Kill(it->second.actor);   // Prop_Destroy tells the server it was broken
 }
 
+// Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
+// the game has settled Link on the scene's own floor.
+void ApplyPlatforms(Player* player) {
+    if (!InField()) return;
+    RefreshPlatforms();
+    if (gPlatformIdx.empty()) return;
+    const auto& props = gSession.Client()->Props();
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    float py = player->actor.world.pos.y;
+    for (size_t i : gPlatformIdx) {
+        const royale::Prop& p = props[i];
+        const float dx = px - p.pos.x, dz = pz - p.pos.z;
+        if (std::fabs(dx) > royale::kPlatformHalf + 40.0f || std::fabs(dz) > royale::kPlatformHalf + 40.0f) continue;
+        const float base = PlatformBase(i);
+        if (base < -1.0e8f) continue;
+        const float top = base + royale::PlatformHeight(p.kind);
+        const bool onTop = std::fabs(dx) <= royale::kPlatformHalf && std::fabs(dz) <= royale::kPlatformHalf;
+        if (onTop && py >= top - 28.0f && player->actor.velocity.y <= 0.5f) {         // standing on it
+            player->actor.world.pos.y = py = top;
+            player->actor.velocity.y = 0.0f;
+            player->actor.bgCheckFlags |= 1;
+            player->actor.floorHeight = top;
+        } else if (py < top - 28.0f && std::fabs(dx) <= royale::kPlatformHalf + 16.0f && std::fabs(dz) <= royale::kPlatformHalf + 16.0f) {   // against its side: pushed out
+            const float penX = royale::kPlatformHalf + 16.0f - std::fabs(dx), penZ = royale::kPlatformHalf + 16.0f - std::fabs(dz);
+            if (penX < penZ) player->actor.world.pos.x += (dx >= 0 ? penX : -penX);
+            else player->actor.world.pos.z += (dz >= 0 ? penZ : -penZ);
+        }
+    }
+}
+
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
@@ -2787,7 +2876,9 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         const float yaw = player->actor.shape.rot.y * (3.14159265f / 32768.0f);
         const float fx = std::sin(yaw), fz = std::cos(yaw);
         float ledge = 0;
-        const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, player->actor.world.pos.y - 1.0f);
+        float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, player->actor.world.pos.y - 1.0f);
+        float standingOn = 0;
+        if (PlatformTopAt(player->actor.world.pos.x, player->actor.world.pos.z, &standingOn) && player->actor.world.pos.y >= standingOn - 30.0f) ground = std::max(ground, standingOn);   // the step you are on counts as the ground
         for (float reach : { 28.0f, 48.0f }) {
             float y;
             if (FloorAt(player->actor.world.pos.x + fx * reach, player->actor.world.pos.z + fz * reach, &y) && y > ledge) ledge = y;
@@ -2970,6 +3061,7 @@ void OnPlayerUpdate() {
     UpdateEmote(player, hud);
     if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
+    ApplyPlatforms(player);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     ApplySpeedBuffs(player, hud);

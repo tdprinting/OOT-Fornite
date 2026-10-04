@@ -1102,6 +1102,79 @@ static void BotsPickUpFairiesAndHearts() {
     CHECK(b->maxHealth > kMaxHealth);
 }
 
+static void ClimbsAndSpreadOutChests() {
+    // A climb is three platforms side by side, each a step higher, with the best chest on the top one.
+    {
+        PoiLayout out;
+        AddClimb(out, {500, 300}, 1, nullptr);
+        CHECK(out.props.size() == 3 && out.sites.size() == 1);
+        CHECK(out.props[0].kind == PropKind::PlatformLow && out.props[1].kind == PropKind::PlatformMid && out.props[2].kind == PropKind::PlatformHigh);
+        CHECK(PlatformHeight(PropKind::PlatformMid) - PlatformHeight(PropKind::PlatformLow) == 60.0f && PlatformHeight(PropKind::PlatformHigh) - PlatformHeight(PropKind::PlatformMid) == 60.0f);
+        for (int i = 0; i < 2; i++) CHECK(std::abs(Distance(out.props[i].pos, out.props[i + 1].pos) - kPlatformHalf * 2.0f) < 0.01f);   // edge to edge: one step up the next
+        CHECK(Distance(out.sites[0].pos, out.props[2].pos) < 0.01f && out.sites[0].bonus == 2 && IsPlatform(out.props[0].kind));
+        PoiLayout blocked;
+        AddClimb(blocked, {0, 0}, 0, [](Vec2 p) { return p.x < 100.0f; });                // the last step would hang over a drop
+        CHECK(blocked.props.empty() && blocked.sites.empty());
+    }
+    // Every town has a climb, and the map gets climbs and hideaways of its own, all spread apart.
+    for (uint64_t seed = 5; seed < 9; seed++) {
+        const Circle map = {{0, 0}, 4000};
+        PoiLayout layout = GeneratePois(seed, map, 12, nullptr, 0);
+        size_t platformsInTowns = 0;
+        for (const Prop& p : layout.props) platformsInTowns += IsPlatform(p.kind);
+        CHECK(platformsInTowns >= 3 * layout.pois.size());
+        const std::vector<Prop> scenery = GenerateProps(seed, map, 560, nullptr);
+        const size_t sitesBefore = layout.sites.size();
+        GenerateWilds(layout, seed, map, scenery, layout.lootSpots, 6, 30, nullptr);
+        int climbs = 0, hideaways = 0;
+        for (size_t i = sitesBefore; i < layout.sites.size(); i++) { climbs += layout.sites[i].bonus == 2; hideaways += layout.sites[i].bonus == 1; }
+        CHECK(climbs >= 4 && hideaways >= 20);
+        // Wild sites keep their distance from each other, from the town chests and from the towns themselves.
+        const float apart = std::max(380.0f, map.radius * 0.1f);
+        for (size_t i = sitesBefore; i < layout.sites.size(); i++) {
+            for (size_t j = sitesBefore; j < i; j++) CHECK(Distance(layout.sites[i].pos, layout.sites[j].pos) >= apart - 0.01f);
+            for (const Vec2& q : layout.lootSpots) CHECK(Distance(layout.sites[i].pos, q) >= apart - 0.01f);
+            for (const Poi& poi : layout.pois) CHECK(Distance(layout.sites[i].pos, poi.center) >= poi.radius * 0.8f - 0.01f);
+        }
+        // A hideaway is behind a boulder, on the far side from the middle of the map.
+        for (size_t i = sitesBefore; i < layout.sites.size(); i++) {
+            if (layout.sites[i].bonus != 1) continue;
+            bool behind = false;
+            for (const Prop& b : scenery) {
+                if (b.kind != PropKind::Boulder || std::abs(Distance(b.pos, layout.sites[i].pos) - 130.0f) > 0.5f) continue;
+                behind |= Distance(layout.sites[i].pos, map.center) > Distance(b.pos, map.center);
+            }
+            CHECK(behind);
+        }
+    }
+    // The world a server builds: chests on the good tiers up on the climbs, and the scattered ones kept apart.
+    {
+        Simulation sim(21, {{0, 0}, 4000}, 0);
+        sim.match.AddHuman(1);
+        const PoiLayout layout = GeneratePois(21, {{0, 0}, 4000}, 12, nullptr, 0);
+        PoiLayout wild = layout;
+        const std::vector<Prop> scenery = GenerateProps(21, {{0, 0}, 4000}, 560, nullptr);
+        GenerateWilds(wild, 21, {{0, 0}, 4000}, scenery, wild.lootSpots, 6, 30, nullptr);
+        sim.match.SetLootSpots(wild.lootSpots);
+        sim.match.SetChestSites(wild.sites);
+        sim.match.RegenerateLoot(100);
+        const auto& loot = sim.match.Loot();
+        CHECK(loot.size() == 100 + wild.lootSpots.size() + wild.sites.size());
+        for (size_t i = 100 + wild.lootSpots.size(), k = 0; i < loot.size(); i++, k++) {
+            const Rarity floor = wild.sites[k].bonus >= 2 ? Rarity::Epic : wild.sites[k].bonus == 1 ? Rarity::Rare : Rarity::Common;
+            CHECK(Distance(loot[i].spawn.pos, wild.sites[k].pos) < 0.01f && loot[i].spawn.rarity >= floor);
+        }
+        // Scattered chests: nearly all have no other chest within the spacing.
+        int lonely = 0;
+        for (size_t i = 0; i < 100; i++) {
+            bool alone = true;
+            for (size_t j = 0; j < loot.size(); j++) if (j != i && Distance(loot[i].spawn.pos, loot[j].spawn.pos) < 4000 * 0.11f * 0.6f && j < 100 + wild.lootSpots.size()) alone = false;
+            lonely += alone;
+        }
+        CHECK(lonely >= 80);
+    }
+}
+
 static void StartingSwordAndAmmo() {
     // Everyone starts with the basic sword: weak, but never out of ammo.
     {
@@ -1536,6 +1609,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
+            if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }
@@ -2001,7 +2075,7 @@ static void ShieldBar() {
 }
 
 int main() {
-    StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

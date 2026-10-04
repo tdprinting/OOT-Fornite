@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -289,6 +289,25 @@ inline MeshData Dragon(uint32_t variant) {
     return b.mesh;
 }
 
+// A climbing block: 150 across, 60 (variant 0), 120 (variant 1) or 180 (variant 2) tall, with a lighter slab on top, an inset panel and darker
+// stripes around the sides, so it reads as a stone step from far off.
+inline MeshData Platform(uint32_t variant) {
+    const float h = 60.0f * static_cast<float>(variant % 3 + 1), half = 75.0f;
+    const Rgb body = {156, 150, 138}, dark = {112, 106, 98}, top = {196, 190, 172}, panel = {170, 160, 140};
+    Builder b;
+    auto box = [&](float x0, float y0, float z0, float x1, float y1, float z1, Rgb col) {
+        b.inside = {(x0 + x1) * 0.5f, (y0 + y1) * 0.5f, (z0 + z1) * 0.5f};
+        const V3 p[8] = {{x0, y0, z0}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z0}, {x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    box(-half, 0, -half, half, h - 8.0f, half, body);                 // the block
+    box(-half - 4.0f, h - 12.0f, -half - 4.0f, half + 4.0f, h, half + 4.0f, top); // the slab on top, a little proud
+    box(-half + 18.0f, h, -half + 18.0f, half - 18.0f, h + 2.0f, half - 18.0f, panel); // a raised panel
+    for (float y = 14.0f; y < h - 16.0f; y += 28.0f) box(-half - 2.0f, y, -half - 2.0f, half + 2.0f, y + 7.0f, half + 2.0f, dark); // courses of stone
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -300,6 +319,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Golem: return mesh_detail::Golem(variant);
         case MeshKind::Glider: return mesh_detail::Glider(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
+        case MeshKind::Platform: return mesh_detail::Platform(variant);
         default: return {};
     }
 }

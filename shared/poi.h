@@ -19,6 +19,7 @@ struct PoiLayout {
     std::vector<Prop> props;     // walls, cave rocks and ruins
     std::vector<Vec2> lootSpots; // where the chests go
     std::vector<Vec2> bossSpots; // the caves: where a mini boss may stand guard
+    std::vector<ChestSite> sites; // climbs and hideaways (see AddClimb, GenerateWilds)
 };
 
 namespace poi_detail {
@@ -77,6 +78,60 @@ inline void AddRuins(PoiLayout& out, Rng& rng, Vec2 at, float angle, const Place
     out.lootSpots.push_back(poi_detail::Rotated({120, 60}, angle, at));
 }
 
+// A staircase of three platforms side by side along one of the map's axes (dir 0..3), each a step higher than the last, with a chest on the top
+// one. Needs jumping and clambering to reach: the point of it. Bots can't climb, so they leave these to the players.
+inline void AddClimb(PoiLayout& out, Vec2 at, int dir, const PlacementFn& valid) {
+    static const float dx[4] = {1, 0, -1, 0}, dz[4] = {0, 1, 0, -1};
+    const PropKind steps[3] = {PropKind::PlatformLow, PropKind::PlatformMid, PropKind::PlatformHigh};
+    Vec2 pieces[3];
+    for (int i = 0; i < 3; i++) {
+        pieces[i] = {at.x + dx[dir & 3] * kPlatformHalf * 2.0f * i, at.z + dz[dir & 3] * kPlatformHalf * 2.0f * i};
+        if (valid && !valid(pieces[i])) return;                                  // the whole thing has to stand on ground
+    }
+    for (int i = 0; i < 3; i++) out.props.push_back({pieces[i], steps[i], 0});
+    out.sites.push_back({pieces[2], 2});
+}
+
+// Climbs standing alone in the open and chests hidden behind big rocks, spread so no two are close together. `props` is the map's scenery so far
+// (the boulders to hide behind come from there); `taken` the chest spots already used, which new ones keep their distance from.
+inline void GenerateWilds(PoiLayout& out, uint64_t seed, Circle map, const std::vector<Prop>& props, const std::vector<Vec2>& taken, int climbs, int hideaways,
+                          const PlacementFn& valid = nullptr) {
+    Rng rng(seed ^ 0x77696C64ull); // "wild"
+    std::vector<Vec2> spots = taken;
+    for (const ChestSite& s : out.sites) spots.push_back(s.pos);
+    const float apart = (std::max)(380.0f, map.radius * 0.1f);
+    auto far = [&](Vec2 p) {
+        for (const Vec2& q : spots) if (Distance(p, q) < apart) return false;
+        for (const Poi& poi : out.pois) if (Distance(p, poi.center) < poi.radius * 0.8f) return false;
+        return true;
+    };
+    for (int n = 0, placed = 0; n < climbs * 12 && placed < climbs; n++) {
+        const Vec2 at = RandomPointIn(rng, map, valid, 0.85f);
+        if (!far(at) || Distance(at, map.center) > map.radius - 500.0f) continue;
+        const size_t before = out.props.size();
+        AddClimb(out, at, static_cast<int>(rng.Below(4)), valid);
+        if (out.props.size() == before) continue;
+        if (!far(out.sites.back().pos)) { out.props.resize(before); out.sites.pop_back(); continue; }   // the chest on top has to be well apart too
+        spots.push_back(out.sites.back().pos);
+        placed++;
+    }
+    // Hideaways: a chest tucked behind a boulder, on the side facing away from the middle of the map.
+    std::vector<size_t> boulders;
+    for (size_t i = 0; i < props.size(); i++) if (props[i].kind == PropKind::Boulder) boulders.push_back(i);
+    for (size_t i = boulders.size(); i > 1; i--) std::swap(boulders[i - 1], boulders[rng.Below(static_cast<uint32_t>(i))]);
+    int placed = 0;
+    for (size_t index : boulders) {
+        if (placed >= hideaways) break;
+        const Prop& b = props[index];
+        const float dx = b.pos.x - map.center.x, dz = b.pos.z - map.center.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+        const Vec2 at = {b.pos.x + dx / d * 130.0f, b.pos.z + dz / d * 130.0f};
+        if (Distance(at, map.center) > map.radius - 60.0f || (valid && !valid(at)) || !far(at)) continue;
+        out.sites.push_back({at, 1});
+        spots.push_back(at);
+        placed++;
+    }
+}
+
 inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
     PoiLayout out;
     Rng rng(seed ^ 0x706F69ull); // "poi"
@@ -124,6 +179,7 @@ inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const Placem
             AddCave(out, rng, {c.x + std::cos(a1) * 310.0f, c.z + std::sin(a1) * 310.0f}, a1 + 3.14159265f, valid);
             const float a2 = a1 + 3.14159265f + static_cast<float>(rng.Unit() - 0.5) * 1.0f;
             AddRuins(out, rng, {c.x + std::cos(a2) * 300.0f, c.z + std::sin(a2) * 300.0f}, a2, valid);
+            AddClimb(out, {c.x + std::cos(base + 3.3f) * 400.0f, c.z + std::sin(base + 3.3f) * 400.0f}, static_cast<int>(rng.Below(4)), valid);
             if (slot.ring == 0.0f) { // the landmark in the middle is bigger: a second building and more ruins
                 AddHouse(out, rng, {c.x + std::cos(base + 2.1f) * 330.0f, c.z + std::sin(base + 2.1f) * 330.0f}, base + 0.8f, valid);
                 AddRuins(out, rng, {c.x + std::cos(base + 4.2f) * 330.0f, c.z + std::sin(base + 4.2f) * 330.0f}, base + 2.3f, valid);

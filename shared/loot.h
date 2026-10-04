@@ -18,6 +18,12 @@ struct LootSpawn {
     uint16_t amount = 0;      // rupees and ammo: how many
 };
 
+// A chest spot with a quality bonus: 0 an ordinary spot, 1 hidden behind a rock (at least Rare), 2 on top of a climb (at least Epic).
+struct ChestSite {
+    Vec2 pos;
+    uint8_t bonus = 0;
+};
+
 inline Rarity RollRarity(Rng& rng, bool chest) {
     int roll = static_cast<int>(rng.Below(100));
     int acc = 0;
@@ -76,8 +82,10 @@ inline Vec2 RandomPointIn(Rng& rng, const Circle& map, const PlacementFn& valid,
     return p;
 }
 
+// `avoid` lists spots that already have chests; with `minSpacing` > 0 each new chest is placed at least that far from them and from each other
+// when it can be (after a few tries it takes what it has, so the count is always met).
 inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count, float chestFraction,
-                                           const PlacementFn& valid = nullptr) {
+                                           const PlacementFn& valid = nullptr, const std::vector<Vec2>* avoid = nullptr, float minSpacing = 0.0f) {
     Rng rng(seed ^ 0x6C6F6F74ull); // "loot"
     std::vector<LootSpawn> out;
     out.reserve(count);
@@ -89,7 +97,15 @@ inline std::vector<LootSpawn> GenerateLoot(uint64_t seed, Circle map, int count,
         // An item can only exist within its own tier range; clamp so a roll never produces an invalid (item, tier) pair.
         if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
         if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
-        out.push_back({RandomPointIn(rng, map, valid), item, tier, chest, true});
+        Vec2 at = RandomPointIn(rng, map, valid);
+        for (int attempt = 0; attempt < 80 && minSpacing > 0.0f; attempt++) {
+            bool clear = true;
+            if (avoid) for (const Vec2& q : *avoid) if (Distance(at, q) < minSpacing) { clear = false; break; }
+            for (size_t i = 0; clear && i < out.size(); i++) if (Distance(at, out[i].pos) < minSpacing) clear = false;
+            if (clear) break;
+            at = RandomPointIn(rng, map, valid);
+        }
+        out.push_back({at, item, tier, chest, true});
     }
     return out;
 }
@@ -107,6 +123,18 @@ inline std::vector<LootSpawn> GenerateSpotLoot(uint64_t seed, const std::vector<
         out.push_back({at, item, tier, true, true});
     }
     return out;
+}
+
+// Chests on climbs and in hideaways: always on the good tiers, better the harder they are to get to. `bonus` is ChestSite::bonus.
+inline LootSpawn SiteChest(Rng& rng, Vec2 at, int bonus) {
+    Rarity tier = RollRarity(rng, true);
+    const Rarity floor = bonus >= 2 ? Rarity::Epic : bonus == 1 ? Rarity::Rare : Rarity::Common;
+    if (tier < floor) tier = floor;
+    ItemId item;
+    if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kPoolItemCount));
+    if (tier < DefOf(item).minRarity) tier = DefOf(item).minRarity;
+    if (tier > DefOf(item).maxRarity) tier = DefOf(item).maxRarity;
+    return {at, item, tier, true, true};
 }
 
 } // namespace royale

@@ -82,13 +82,17 @@ class GameServer {
         sim.match.SetPlacementValidator(valid);
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
         sim.match.SetMapId(mapId);
-        const PoiLayout layout = GeneratePois(seed, map, poiCount, valid, mapId);
+        PoiLayout layout = GeneratePois(seed, map, poiCount, valid, mapId);
         pois = layout.pois;
-        props = GenerateProps(seed, map, propCount, valid);
-        props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings and caves are scenery too
+        const float areaShare = (std::min)(1.0f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, not the same crowd in less room
+        props = GenerateProps(seed, map, (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.0f, areaShare * 1.4f))), valid);
+        // Climbs out in the open and chests hidden behind boulders, spread out over the whole map.
+        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid);
+        props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
         broken.assign(props.size(), false);
         sim.match.SetLootSpots(layout.lootSpots);
+        sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetBossCount(bossCount);
         sim.match.SetMajorBoss(majorBoss);

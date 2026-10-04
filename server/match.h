@@ -173,10 +173,17 @@ class Match {
     void SetPlacementValidator(PlacementFn fn) { placement = std::move(fn); }
     // Chests for the buildings and caves (see shared/poi.h), on top of the scattered ones.
     void SetLootSpots(std::vector<Vec2> spots) { lootSpots = std::move(spots); }
+    // Chests on climbs and in hideaways (see shared/poi.h): better loot, further apart.
+    void SetChestSites(std::vector<ChestSite> sites) { chestSites = std::move(sites); }
     void RegenerateLoot(int count, float chestFraction = 0.15f) {
         loot.clear();
-        for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement)) loot.push_back({l, false});
+        // The scattered chests keep their distance from every building, climb and hideaway chest and from each other.
+        std::vector<Vec2> taken = lootSpots;
+        for (const ChestSite& s : chestSites) taken.push_back(s.pos);
+        for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
         for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
+        Rng siteRng(seed ^ 0x73697465ull); // "site"
+        for (const ChestSite& s : chestSites) loot.push_back({SiteChest(siteRng, s.pos, s.bonus), false});
     }
 
     // Add a human. Returns false if the lobby is full or the match already started.
@@ -1360,6 +1367,7 @@ class Match {
     std::vector<Strike> strikes;
     bool majorBoss = false;
     bool dragonSpawned = false;
+    std::vector<ChestSite> chestSites;
     int bossCount = 0;
     int mapId = 0;           // which place this is (shared/map.h): decides the bosses
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
