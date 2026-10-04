@@ -228,9 +228,9 @@ Layers, bottom to top:
 | Message | Direction | Delivery | Notes |
 |---|---|---|---|
 | Hello / Welcome / Reject | both | reliable | Welcome carries seed, map, the 6 storm circles, all loot and the roster (about 4.5 KB with 400 loot) |
-| Input | client to server | unreliable, ~20 Hz | 19 bytes: seq, teleport epoch, x, y, z, rotation, animation id |
+| Input | client to server | unreliable, ~20 Hz | 20 bytes: seq, teleport epoch, x, y, z, rotation, animation id, scene id |
 | AttackReport, PickupRequest, UsePotionRequest | client to server | reliable | The server decides whether they succeed |
-| Snapshot | server to client | unreliable, 20 Hz | You plus the nearest 12 living players, 22 bytes each |
+| Snapshot | server to client | unreliable, 20 Hz | You plus the nearest 12 living players, 23 bytes each |
 | Damaged | server to the two players involved | reliable | Everyone else sees health in snapshots |
 | Eliminated, LootTaken, LootAdded, MatchState, PlayerJoined/Left | server to all | reliable | Dropped kit arrives as LootAdded |
 
@@ -268,8 +268,11 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
 - **`RoyaleSession`** (pure C++, unit-tested): owns the ENet transports, the host's `GameServer`, and the local `GameClient`.
   Gives the game plain-data views: `Puppets()` (interpolated remote players) and `Hud()`.
 - **`RoyaleMod.cpp`** (game glue, copied into the fork):
-  - An "OOT Royale" window under Enhancements: name, port, Host, Join by address, Start (host only), roster, match state,
-    health and storm readouts, and a "show Link position" tool for measuring the real map size.
+  - A top-level **Battle Royale** menu (added through the fork's own menu hook, no patch needed): name and address
+    (remembered between runs), Host and Join, a lobby screen with the player list, host marker, ready toggles, the host's
+    addresses with Copy buttons, and Start; countdown, in-match and results screens; and a "show Link position" developer tool.
+  - A waiting room: after joining, players are taken to the Temple of Time (optional), can see each other there, and are
+    moved to Hyrule Field automatically when the countdown starts. Notifications announce joins, the countdown, the drop, eliminations and the winner.
   - `OnPlayerUpdate`: sends Link's position, rotation and a coarse animation state; on the match-start teleport it
     drops Link onto the ground at the server's spawn point; while a match is live it overwrites health with the server's
     (and restores the player's real hearts afterwards).
@@ -280,8 +283,8 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
 - **Not yet built:** weapon models on puppets, attack/hurt/death poses, drawing ground loot and sending pickup, attack and
   potion requests, a real HUD (alive count, kill feed, storm ring on the minimap), spectating, a lobby scene (for now the
   lobby is Hyrule Field itself), and disabling cheats and warps during a match.
-- Patches to the fork (`patches/`): 0001 `ShouldActorInit` hook, 0002 CMake hook, 0003 window and menu entry, and
-  `patches/0004` (MSVC rejects arithmetic on `void*` in the fork's `z_message_PAL.c`) and `patches/libultraship/0001`, a
+- Patches to the fork (`patches/`): 0001 `ShouldActorInit` hook, 0002 CMake hook, 0004 MSVC void* fix, 0005 Android network permission, and
+  `patches/0004` (MSVC rejects arithmetic on `void*` in the fork's `z_message_PAL.c`), `patches/libultraship/0001`, a
   one-character fix for a missing semicolon in the fork's libultraship that stops it compiling on every non-Android platform.
   The fork is Android-first and had not been built on Windows at this commit, so more such fixes may turn up.
 

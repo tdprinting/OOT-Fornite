@@ -155,6 +155,9 @@ class RoyaleSession {
         return out;
     }
 
+    // Things that happened since the last call (players joining, ready changes, state changes, eliminations...).
+    std::vector<ClientEvent> DrainEvents() { return client ? client->DrainEvents() : std::vector<ClientEvent>(); }
+
     HudState Hud() const {
         HudState h;
         h.mode = mode == Mode::Hosting ? HudState::Mode::Hosting : mode == Mode::Joined ? HudState::Mode::Joined : HudState::Mode::Idle;

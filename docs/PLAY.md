@@ -36,16 +36,23 @@ A red cross on a run means that build failed, and there's nothing to download fr
 
 ## Playing a match
 
-1. Start the game, load a save, and walk to **Hyrule Field** (leave the village or the castle town and go out into the open field).
-2. Open the menu, go to **Enhancements**, then **OOT Royale**, and open the window.
-3. **To host:** type a name and press **Host**. Tell your friends your IP address and the port number shown (7777).
-   - Same Wi-Fi: use the device's local IP (Settings, Wi-Fi, your network).
+**Important: the game plays exactly like normal Ocarina of Time until you Host or Join from the menu.** Walking around Hyrule Field
+does nothing by itself. Nothing is added to the world until a lobby is open.
+
+1. Start the game and load any save file (use a throwaway one).
+2. Open the menu (**Back / Select / -** on Android, **F1** on Windows) and choose **Battle Royale**.
+3. **To host:** type a name and press **Host a lobby**. The lobby screen shows your address (for example `192.168.1.23:7777`) with a **Copy** button. Tell your friends the numbers before the colon.
+   - Same Wi-Fi: that address works as shown.
    - Over the internet: use a free VPN like Tailscale on every device (easiest), or forward UDP port 7777 on your router.
-4. **To join:** type the host's IP address and press **Join**.
-5. The host presses **Start match**. Empty spots fill with bots up to 32 players.
+4. **To join:** type the host's address and press **Join lobby**.
+5. You land in the lobby: a player list with the host marked, a **ready** button for everyone but the host, and (if you left the option on) you are taken to the Temple of Time to wait together.
+6. The host presses **Start match**. Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
+
+You can play alone: press **Host a lobby**, then **Start match**, and you will face bots.
 
 ### If something goes wrong
-- Nothing happens on Join: check both devices are in Hyrule Field, on the same network or VPN, and the firewall allows the game.
+- Nothing happens on Join: check both devices are on the same network or VPN, the address is right, and the firewall allows the game.
+- The game looks completely normal: you have not hosted or joined yet. Open the **Battle Royale** menu.
 - The window says "Host runs a different version": everyone must install the same build.
 - Crashes or odd behavior: tell me what you were doing. This build has never been run, so those reports are exactly what I need.
 
