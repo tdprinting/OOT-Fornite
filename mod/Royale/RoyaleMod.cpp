@@ -8,6 +8,7 @@
 #include "RoyaleSession.h"
 #include "anim.h"
 #include "cloth.h"
+#include "logo_data.h"
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
@@ -70,6 +71,9 @@ int gRoyaleQuestLabel = 0;
 extern "C" void Royale_ShowQuestLabel(void) {
     gRoyaleQuestLabel = 8;
 }
+
+// (defined in libultraship's gfx_pc.cpp; declared here, at file scope, because the mod's own code sits in an anonymous namespace)
+struct GfxRenderingAPI* gfx_get_current_rendering_api();
 
 namespace {
 
@@ -2597,6 +2601,72 @@ void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, cons
 // kSplashSeconds of the countdown (fading in and out), which is also when everyone is being moved to Hyrule Field.
 constexpr float kSplashSeconds = 5.0f;
 
+// ---- the logo ---------------------------------------------------------------------------------------------------------------
+// The picture in mod/Royale/logo_data.h (made from assets/logo.png by scripts/make_logo_assets.py) is turned into a texture the first time it is
+// wanted, and drawn on the title screen, the file select screen, the match splash and the top of the menu.
+ImTextureID LogoTexture(ImVec2* size = nullptr) {
+    static ImTextureID tex = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        std::vector<uint8_t> rgba(static_cast<size_t>(royale::kLogoW) * royale::kLogoH * 4, 0);
+        size_t px = 0;
+        for (int r = 0; r < royale::kLogoRuns; r++) {
+            const int count = royale::kLogoRle[r * 3], idx = royale::kLogoRle[r * 3 + 1], alpha = royale::kLogoRle[r * 3 + 2];
+            for (int k = 0; k < count && px * 4 < rgba.size(); k++, px++) {
+                if (idx == 0) continue;
+                rgba[px * 4 + 0] = royale::kLogoPalette[(idx - 1) * 3 + 0];
+                rgba[px * 4 + 1] = royale::kLogoPalette[(idx - 1) * 3 + 1];
+                rgba[px * 4 + 2] = royale::kLogoPalette[(idx - 1) * 3 + 2];
+                rgba[px * 4 + 3] = static_cast<uint8_t>(alpha);
+            }
+        }
+        GfxRenderingAPI* api = gfx_get_current_rendering_api();
+        if (api != nullptr) {
+            const int id = api->new_texture();
+            api->select_texture(0, id);
+            api->set_sampler_parameters(0, true, 0, 0);
+            api->upload_texture(rgba.data(), royale::kLogoW, royale::kLogoH);
+            tex = reinterpret_cast<ImTextureID>(static_cast<intptr_t>(id));   // (OpenGL: the texture id is the ImGui texture id)
+        }
+    }
+    if (size) *size = ImVec2(static_cast<float>(royale::kLogoW), static_cast<float>(royale::kLogoH));
+    return tex;
+}
+
+// The logo `width` wide with its top edge at `top`, centred on `cx`. Returns the height drawn (0 if there is no logo).
+float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255) {
+    ImVec2 sz;
+    ImTextureID tex = LogoTexture(&sz);
+    if (tex == nullptr || sz.x <= 0) return 0.0f;
+    const float height = width * sz.y / sz.x;
+    dl->AddImage(tex, ImVec2(cx - width * 0.5f, top), ImVec2(cx + width * 0.5f, top + height), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
+    return height;
+}
+
+// The game's title screen and file select screen (nothing of the game is running yet): our logo takes the place of the 3D title on the first, and
+// sits at the top of the second.
+void DrawTitleLogo() {
+    if (InGame()) return;
+    const int mode = gSaveContext.gameMode;
+    if (mode != GAMEMODE_TITLE_SCREEN && mode != GAMEMODE_FILE_SELECT) return;
+    ImVec2 sz;
+    if (LogoTexture(&sz) == nullptr) return;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float aspect = sz.x / sz.y;
+    if (mode == GAMEMODE_TITLE_SCREEN) {
+        const double t = ImGui::GetTime();
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(8, 16, 30, 255), IM_COL32(8, 16, 30, 255), IM_COL32(26, 14, 18, 255), IM_COL32(26, 14, 18, 255));
+        const float width = std::min(ds.x * 0.78f, ds.y * 0.86f * aspect);
+        const float height = width / aspect;
+        DrawLogo(dl, ds.x * 0.5f, (ds.y - height) * 0.5f + static_cast<float>(std::sin(t * 1.4)) * ds.y * 0.006f, width);
+    } else {
+        const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
+        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.01f, width, 235);
+    }
+}
+
 void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float secondsIn) {
     const float fadeIn = std::clamp(secondsIn / 0.6f, 0.0f, 1.0f);
     const float fadeOut = std::clamp((kSplashSeconds - secondsIn) / 0.6f, 0.0f, 1.0f);
@@ -2635,24 +2705,34 @@ void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float seco
         return sz.y;
     };
 
-    // The Triforce, three gold triangles with a dark gap in the middle, floating gently.
-    const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
-    const ImVec2 c(ds.x * 0.5f, ds.y * 0.27f + bob);
-    const float t = 62 * scale; // half the width of the whole mark
-    auto tri = [&](ImVec2 top, ImVec2 left, ImVec2 right) {
-        dl->AddTriangleFilled(ImVec2(top.x + 3 * scale, top.y + 3 * scale), ImVec2(left.x + 3 * scale, left.y + 3 * scale), ImVec2(right.x + 3 * scale, right.y + 3 * scale), shadow);
-        dl->AddTriangleFilled(top, left, right, gold);
-        dl->AddTriangle(top, left, right, goldDark, 2.0f * scale);
-    };
-    const float h = t * 1.732f;                    // height of the whole mark
-    const float half = t * 0.5f, hh = h * 0.5f;
-    const ImVec2 apex(c.x, c.y - hh), bl(c.x - t, c.y + hh), br(c.x + t, c.y + hh), midL(c.x - half, c.y), midR(c.x + half, c.y), midB(c.x, c.y + hh);
-    tri(apex, midL, midR);
-    tri(midL, bl, midB);
-    tri(midR, midB, br);
+    float y;
+    ImVec2 logoSize;
+    if (LogoTexture(&logoSize) != nullptr) {   // the logo, floating gently
+        const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
+        const float width = std::min(ds.x * 0.5f, ds.y * 0.5f * logoSize.x / logoSize.y);
+        const float top = ds.y * 0.06f + bob;
+        y = top + DrawLogo(dl, ds.x * 0.5f, top, width, A(255)) + 14 * scale;
+    } else {
+        // The Triforce, three gold triangles with a dark gap in the middle, floating gently.
+        const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
+        const ImVec2 c(ds.x * 0.5f, ds.y * 0.27f + bob);
+        const float t = 62 * scale; // half the width of the whole mark
+        auto tri = [&](ImVec2 top, ImVec2 left, ImVec2 right) {
+            dl->AddTriangleFilled(ImVec2(top.x + 3 * scale, top.y + 3 * scale), ImVec2(left.x + 3 * scale, left.y + 3 * scale), ImVec2(right.x + 3 * scale, right.y + 3 * scale), shadow);
+            dl->AddTriangleFilled(top, left, right, gold);
+            dl->AddTriangle(top, left, right, goldDark, 2.0f * scale);
+        };
+        const float h = t * 1.732f;                    // height of the whole mark
+        const float half = t * 0.5f, hh = h * 0.5f;
+        const ImVec2 apex(c.x, c.y - hh), bl(c.x - t, c.y + hh), br(c.x + t, c.y + hh), midL(c.x - half, c.y), midR(c.x + half, c.y), midB(c.x, c.y + hh);
+        tri(apex, midL, midR);
+        tri(midL, bl, midB);
+        tri(midR, midB, br);
 
-    float y = ds.y * 0.27f + hh + 28 * scale;
-    y += lettered(y, 58 * scale, gold, "OOT ROYALE") + 10 * scale;
+        y = ds.y * 0.27f + hh + 28 * scale;
+        y += lettered(y, 58 * scale, gold, "OOT ROYALE") + 10 * scale;
+
+    }
     // A thin gold rule with a diamond in the middle under the title.
     dl->AddLine(ImVec2(ds.x * 0.34f, y), ImVec2(ds.x * 0.66f, y), goldDark, 2.0f * scale);
     dl->AddQuadFilled(ImVec2(ds.x * 0.5f, y - 6 * scale), ImVec2(ds.x * 0.5f + 6 * scale, y), ImVec2(ds.x * 0.5f, y + 6 * scale), ImVec2(ds.x * 0.5f - 6 * scale, y), gold);
@@ -2944,6 +3024,7 @@ void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 }
 
 void DrawOverlay() {
+    DrawTitleLogo();
     DrawQuestLabel();
     if (!gSession.Joined()) return;
     royale::HudState h = gSession.Hud();
@@ -4664,6 +4745,8 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
 
     // Turn the Player actor we spawn for a remote player into a puppet *before* its init runs. Requires patches/0001.
@@ -5252,6 +5335,16 @@ void DrawDebug(UiState& ui) {
 void DrawRoyaleUi() {
     UiState& ui = Ui();
     royale::HudState h = gSession.Hud();
+
+    {   // the logo at the top of the page
+        ImVec2 sz;
+        if (ImTextureID tex = LogoTexture(&sz)) {
+            const float width = std::min(ImGui::GetContentRegionAvail().x, 360.0f), height = width * sz.y / sz.x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - width) * 0.5f);
+            ImGui::Image(tex, ImVec2(width, height));
+            ImGui::Spacing();
+        }
+    }
 
     if (h.mode == royale::HudState::Mode::Idle) {
         DrawMainMenu(ui, h);

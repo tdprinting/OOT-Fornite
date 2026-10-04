@@ -13,6 +13,7 @@ on:
       - "server/**.h"
       - "client/**"
       - "scripts/**"
+      - "assets/**"
       - ".github/workflows/game-build.yml"
       - ".gitmodules"
   workflow_dispatch:
@@ -29,6 +30,8 @@ jobs:
         run: |
           ./scripts/apply_patches.sh
           ./scripts/link_mod.sh
+          pip install pillow
+          ./scripts/apply_logo.sh
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
