@@ -88,9 +88,12 @@ class GameServer {
         const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
         const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
         // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
-        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 260)), valid);
-        // Climbs out in the open and chests hidden behind boulders, spread out over the whole map.
-        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid);
+        // Loose scenery stays off the towns' streets.
+        const std::vector<Circle> clearings = PoiClearings(layout.pois);
+        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 320)), valid, &clearings);
+        // Boulder formations, climbs out in the open and chests hidden behind boulders, spread out over the whole map.
+        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid,
+                      2 + static_cast<int>(map.radius / 650.0f));
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
         broken.assign(props.size(), false);

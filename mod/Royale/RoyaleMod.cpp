@@ -1317,12 +1317,14 @@ struct PropActor {
     ActorFunc origDestroy = nullptr;
     int meshKind = -1;     // royale::MeshKind drawn in place of the game's model, or -1 to leave the game's own
     uint32_t variant = 0;
+    float scale = 1.0f;    // boulders come in sizes (royale::BoulderScale)
 };
 std::unordered_map<size_t, PropActor> gProps;        // prop index -> its actor
 std::unordered_map<const Actor*, size_t> gPropOf;
 std::unordered_set<size_t> gBrokenProps;              // rocks and bushes players smashed; they stay gone
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
+constexpr float kTownSpawnRadius = 3400.0f;   // the pieces of a town (and the climbing blocks) show from further off, so you see a place before you reach it
 constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
 
 void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
@@ -1338,6 +1340,7 @@ void Prop_DrawCustom(Actor* actor, PlayState* play) {
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
     Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    if (pa->second.scale != 1.0f) Matrix_Scale(pa->second.scale, pa->second.scale, pa->second.scale, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK); // colours are baked into the vertices; draw both sides of every face
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
@@ -1398,13 +1401,17 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     pa.origDestroy = actor->destroy;
     pa.meshKind = meshKind;
     pa.variant = royale::IsPlatform(p.kind) ? static_cast<uint32_t>(p.kind) - static_cast<uint32_t>(royale::PropKind::PlatformLow) : static_cast<uint32_t>(p.rot >> 4);
+    if (p.kind == royale::PropKind::Rock || p.kind == royale::PropKind::Boulder) {   // its shape, in this map's stone (meshes.h, StoneLook)
+        pa.variant = static_cast<uint32_t>(royale::BoulderShape(p.rot) + royale::kBoulderShapes * static_cast<int>(CurrentMap().theme));
+        if (p.kind == royale::PropKind::Boulder) pa.scale = royale::BoulderScale(p.rot);
+    }
     gProps[index] = pa;
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
     if (meshKind >= 0) actor->draw = Prop_DrawCustom; // the game's rock stays as the solid part, unseen; our model is what you see
     switch (p.kind) { // a blob shadow under each, sized to the model
         case royale::PropKind::Rock: actor->shape.shadowScale = 26.0f; break;
-        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f; break;
+        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f * pa.scale; break;
         case royale::PropKind::Pillar: actor->shape.shadowScale = 40.0f; break;
         case royale::PropKind::Roof: actor->shape.shadowScale = 0.0f; break;
         default: if (royale::IsPlatform(p.kind)) actor->shape.shadowScale = 0.0f; break;
@@ -2582,7 +2589,27 @@ void DrawBossBars(ImDrawList* dl, ImFont* font, float scale) {
     }
 }
 
-// Keep a ring of scenery alive around the player, the same for everyone because the list comes from the host.
+// Which props are part of a place (inside a town's radius): they are spawned ahead of loose scenery and from further away.
+std::vector<uint8_t> gPropInTown;
+const royale::Prop* gTownSrc = nullptr;
+size_t gTownSrcCount = 0, gTownPoiCount = 0;
+void RefreshPropTowns(const std::vector<royale::Prop>& props) {
+    const auto& pois = gSession.Client()->Pois();
+    if (props.data() == gTownSrc && props.size() == gTownSrcCount && pois.size() == gTownPoiCount && gPropInTown.size() == props.size()) return;
+    gTownSrc = props.data(); gTownSrcCount = props.size(); gTownPoiCount = pois.size();
+    gPropInTown.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (royale::IsPlatform(props[i].kind) || props[i].kind == royale::PropKind::Roof) { gPropInTown[i] = 1; continue; }
+        for (const royale::Poi& poi : pois)
+            if (std::hypot(props[i].pos.x - poi.center.x, props[i].pos.z - poi.center.z) < poi.radius + 160.0f) { gPropInTown[i] = 1; break; }
+    }
+}
+
+// Keep the nearest scenery alive around the player, the same for everyone because the list comes from the host. The game can only hold so
+// many of our actors (kMaxPropActors), so they go to the props that matter most: the pieces of a town count as much nearer than they are, so a
+// place is always whole (walls, roofs, climbs) before the loose rocks and bushes round it, and when the budget is full the farthest loose
+// prop is put away to make room for a nearer one. (Before, props were taken in list order, and on the smaller maps the loose scenery used up
+// the whole budget, so the towns never appeared at all.)
 void ReconcileProps(const royale::HudState& hud) {
     const bool show = gSession.Joined() && InField() && hud.state != royale::MatchState::Lobby;
     if (!show) { ClearProps(); return; }
@@ -2599,23 +2626,44 @@ void ReconcileProps(const royale::HudState& hud) {
         auto it = gProps.find(broken);
         if (it != gProps.end() && gCulledProps.insert(broken).second) Actor_Kill(it->second.actor);
     }
-    for (auto& [i, pa] : gProps) {
-        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
-        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    RefreshPropTowns(props);
+    // Rank everything in reach: distance squared, a town's pieces counted at about half their distance.
+    struct Want { float key; size_t i; };
+    static std::vector<Want> wants;
+    static std::vector<uint8_t> wanted;
+    wants.clear();
+    wanted.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (gBrokenProps.count(i)) continue;
+        const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz, d2 = dx * dx + dz * dz;
+        const bool town = gPropInTown[i] != 0;
+        const float reach = town ? kTownSpawnRadius : kPropSpawnRadius;
+        if (d2 > reach * reach) continue;
+        wants.push_back({town ? d2 * 0.25f : d2, i});
     }
-    if (gProps.size() >= kMaxPropActors) return;
+    const bool full = wants.size() > kMaxPropActors;
+    if (full) {
+        std::nth_element(wants.begin(), wants.begin() + kMaxPropActors, wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
+        wants.resize(kMaxPropActors);
+    }
+    for (const Want& w : wants) wanted[w.i] = 1;
+    // Put away what is out of reach, and, when there are more wanted than the budget holds, whatever didn't make the cut.
+    for (auto& [i, pa] : gProps) {
+        if (i < wanted.size() && wanted[i]) continue;
+        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
+        const float reach = (i < gPropInTown.size() && gPropInTown[i]) ? kTownSpawnRadius : kPropSpawnRadius;
+        if ((full || dx * dx + dz * dz > reach * reach * 1.4f) && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    }
+    // Spawn the missing ones, nearest (by rank) first, a few a frame.
+    std::sort(wants.begin(), wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
     int spawned = 0;
-    for (int pass = 0; pass < 2; pass++) {              // the climbing blocks first: without them the climbs are just chests in the air
-        for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
-            if (royale::IsPlatform(props[i].kind) != (pass == 0)) continue;
-            if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
-            const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
-            if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
-            float y;
-            if (!RawFloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
-            SpawnProp(i, props[i], y);
-            spawned++;
-        }
+    for (const Want& w : wants) {
+        if (spawned >= 6 || gProps.size() >= kMaxPropActors) break;
+        if (gProps.find(w.i) != gProps.end()) continue;
+        float y;
+        if (!RawFloorAt(props[w.i].pos.x, props[w.i].pos.z, &y)) continue;
+        SpawnProp(w.i, props[w.i], y);
+        spawned++;
     }
 }
 
@@ -4786,12 +4834,13 @@ void ApplyRocks(Player* player) {
         const royale::Prop& p = props[i];
         if (p.kind != royale::PropKind::Rock && p.kind != royale::PropKind::Boulder && p.kind != royale::PropKind::Pillar) continue;
         const float dx = px - p.pos.x, dz = pz - p.pos.z;
-        const float radius = royale::PropRadius(p.kind);
+        const bool boulder = p.kind == royale::PropKind::Boulder;
+        const float radius = royale::PropRadius(p.kind) * (boulder ? royale::BoulderScale(p.rot) : 1.0f);
         if (std::fabs(dx) > radius + 40.0f || std::fabs(dz) > radius + 40.0f) continue;
         const float d = std::hypot(dx, dz);
         const float base = PlatformBase(i);
         if (base < -1.0e8f) continue;
-        const float height = p.kind == royale::PropKind::Rock ? 24.0f : p.kind == royale::PropKind::Boulder ? 60.0f : 200.0f;
+        const float height = p.kind == royale::PropKind::Rock ? 24.0f : boulder ? royale::BoulderTop(royale::BoulderShape(p.rot)) * royale::BoulderScale(p.rot) : 200.0f;
         const float top = base + height;
         const float standR = radius * 0.62f;
         if (p.kind != royale::PropKind::Pillar && d <= standR && py >= top - reach && player->actor.velocity.y <= 0.5f) {   // on top
