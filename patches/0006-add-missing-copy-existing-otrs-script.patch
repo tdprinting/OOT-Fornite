@@ -1,0 +1,41 @@
+diff --git a/copy-existing-otrs.cmake b/copy-existing-otrs.cmake
+new file mode 100644
+index 0000000..34e4d48
+--- /dev/null
++++ b/copy-existing-otrs.cmake
+@@ -0,0 +1,35 @@
++# Reconstructed for OOT Royale (patches/0006): the fork's CMakeLists.txt runs this script after generating asset archives
++# but the file is missing from the fork's repository.
++#
++# It places the generated .otr archives where the install rules and the game expect them:
++#   - ${BINARY_DIR}/soh/        (soh.otr is installed from here; the game also looks next to its executable)
++#   - ${SOURCE_DIR}/            (the targets declare soh.otr, oot.otr and oot-mq.otr there as build outputs)
++# Inputs: SOURCE_DIR, BINARY_DIR, TARGET_DIR (the ZAPD output directory), SYSTEM_NAME, ONLYSOHOTR (generate soh.otr only).
++
++set(_search_dirs "${SOURCE_DIR}/OTRExporter" "${SOURCE_DIR}" "${TARGET_DIR}" "${BINARY_DIR}" "${BINARY_DIR}/soh")
++
++function(_place_otr name required)
++    foreach(dir IN LISTS _search_dirs)
++        if(EXISTS "${dir}/${name}")
++            file(MAKE_DIRECTORY "${BINARY_DIR}/soh")
++            if(NOT "${dir}" STREQUAL "${BINARY_DIR}/soh")
++                file(COPY "${dir}/${name}" DESTINATION "${BINARY_DIR}/soh")
++            endif()
++            if(NOT "${dir}" STREQUAL "${SOURCE_DIR}")
++                file(COPY "${dir}/${name}" DESTINATION "${SOURCE_DIR}")
++            endif()
++            message(STATUS "copy-existing-otrs: placed ${name} (found in ${dir})")
++            return()
++        endif()
++    endforeach()
++    if(required)
++        string(REPLACE ";" "\n  " _where "${_search_dirs}")
++        message(FATAL_ERROR "copy-existing-otrs: ${name} was not found in any of:\n  ${_where}")
++    endif()
++endfunction()
++
++_place_otr("soh.otr" TRUE)
++if(NOT ONLYSOHOTR)
++    _place_otr("oot.otr" FALSE)
++    _place_otr("oot-mq.otr" FALSE)
++endif()
