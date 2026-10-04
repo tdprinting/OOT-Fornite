@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -636,6 +636,140 @@ inline MeshData SnowPatch(uint32_t variant) {
     return b.mesh;
 }
 
+
+// ---- the cat, in parts (Lilo): smooth shaded ellipsoids in the markings of a grey tabby with a white chest, belly, muzzle and paws -----------------
+// The cat is drawn as a body, a head, four legs and a chain of tail segments so it can walk, sit, groom, stretch and pounce (see the game layer).
+// Every part's pivot sits at the origin and stands up from y = 0: legs from the paw (y 0) to the hip (y 24), tail segments from their base along +y,
+// the head from the base of the skull. Colours are per vertex with the light baked in, so the surfaces look rounded rather than faceted.
+inline Rgb Light(Rgb c, V3 n) {
+    static const V3 sun = Norm({-0.45f, 0.8f, 0.4f});
+    const float shade = 0.56f + 0.44f * (std::max)(0.0f, Dot(Norm(n), sun));
+    return {c.r * shade, c.g * shade, c.b * shade};
+}
+
+template <class F>
+inline void Ellipsoid(MeshData& m, V3 c, V3 r, int rings, int segs, F colour) {
+    const float pi = 3.14159265f;
+    std::vector<V3> pos, nrm;
+    for (int i = 0; i <= rings; i++) {
+        const float lat = -pi * 0.5f + pi * static_cast<float>(i) / rings;
+        for (int j = 0; j <= segs; j++) {
+            const float a = 2.0f * pi * static_cast<float>(j % segs) / segs;
+            const V3 d = {std::cos(lat) * std::cos(a), std::sin(lat), std::cos(lat) * std::sin(a)};
+            pos.push_back({c.x + d.x * r.x, c.y + d.y * r.y, c.z + d.z * r.z});
+            nrm.push_back(Norm({d.x / r.x, d.y / r.y, d.z / r.z}));
+        }
+    }
+    auto at = [&](int i, int j) { return i * (segs + 1) + j; };
+    auto vert = [&](int k) { Put(m, pos[k], Light(colour(nrm[k], pos[k]), nrm[k])); };
+    for (int i = 0; i < rings; i++)
+        for (int j = 0; j < segs; j++) {
+            const int a = at(i, j), b = at(i, j + 1), c2 = at(i + 1, j + 1), d = at(i + 1, j);
+            if (i > 0) { vert(a); vert(b); vert(c2); }               // (the first band's lower edge is a point at the pole)
+            if (i < rings - 1) { vert(a); vert(c2); vert(d); }
+        }
+}
+
+inline MeshData CatBody() {
+    const Rgb grey = {132, 126, 120}, dark = {74, 68, 66}, white = {240, 238, 232};
+    MeshData m;
+    auto fur = [&](V3 n, V3 p) {   // tabby stripes across the back and flanks, white underneath
+        if (n.y < -0.55f) return white;
+        if (p.z > 14.0f && n.y < 0.5f) return white;                              // the chest
+        const float band = std::sin(p.z * 0.42f);
+        const bool stripe = band > 0.45f && n.y > -0.2f;
+        const bool spine = n.y > 0.8f && std::fabs(p.x) < 4.0f;
+        return (stripe || spine) ? dark : grey;
+    };
+    Ellipsoid(m, {0, 34, -2}, {13.5f, 14, 22}, 7, 12, fur);                        // the barrel
+    Ellipsoid(m, {0, 33, 16}, {12, 13, 11}, 5, 10, fur);                            // the chest, white at the front
+    Ellipsoid(m, {-9, 32, -17}, {9.5f, 12, 12}, 5, 8, fur);                         // haunches
+    Ellipsoid(m, {9, 32, -17}, {9.5f, 12, 12}, 5, 8, fur);
+    return m;
+}
+
+inline MeshData CatHead(uint32_t variant) {   // 0 eyes open, 1 eyes shut, 2 eyes open and mouth open (a meow), 3 eyes half shut
+    const Rgb grey = {132, 126, 120}, dark = {74, 68, 66}, white = {240, 238, 232}, pink = {238, 150, 156}, eye = {26, 22, 18};
+    MeshData m;
+    auto skull = [&](V3 n, V3 p) {
+        if (n.z > 0.3f && n.y < 0.15f) return white;                              // the muzzle's white
+        if (std::fabs(p.x) < 2.2f && n.y > 0.1f && n.z > -0.2f) return white;     // the blaze down the forehead
+        const bool stripe = n.y > 0.4f && (std::fabs(p.x) > 3.0f && std::fabs(p.x) < 5.0f);
+        return stripe ? dark : grey;
+    };
+    Ellipsoid(m, {0, 11, 4}, {12, 10.5f, 11}, 6, 10, skull);                       // the skull
+    Ellipsoid(m, {0, 7.2f, 12.5f}, {6.4f, 4.4f, 5.6f}, 4, 8, [&](V3, V3) { return white; });   // the muzzle
+    Ellipsoid(m, {-8.5f, 7, 8}, {4.4f, 3.6f, 4.2f}, 3, 6, [&](V3, V3) { return white; });      // cheek fluff
+    Ellipsoid(m, {8.5f, 7, 8}, {4.4f, 3.6f, 4.2f}, 3, 6, [&](V3, V3) { return white; });
+    for (int side = -1; side <= 1; side += 2) {                                    // pointed ears, pink inside
+        const float x = side * 8.0f;
+        const V3 b0 = {x - side * 3.5f, 18, 1}, b1 = {x + side * 3.5f, 17.5f, 1}, b2 = {x, 17.5f, 6}, tip = {x + side * 0.8f, 28.5f, 2.5f};
+        const Rgb c = grey;
+        Put(m, b0, Light(c, {0, 0.2f, -1})); Put(m, b1, Light(c, {0, 0.2f, -1})); Put(m, tip, Light(c, {0, 0.6f, -1}));
+        Put(m, b0, Light(c, {-1, 0.3f, 0})); Put(m, b2, Light(c, {-1, 0.3f, 0})); Put(m, tip, Light(c, {-1, 0.6f, 0}));
+        Put(m, b1, Light(c, {1, 0.3f, 0})); Put(m, b2, Light(c, {1, 0.3f, 0})); Put(m, tip, Light(c, {1, 0.6f, 0}));
+        Put(m, {x - side * 2.0f, 18.6f, 5.2f}, pink); Put(m, {x + side * 2.0f, 18.4f, 5.2f}, pink); Put(m, {x, 26, 3.6f}, pink);   // the inside
+    }
+    const bool shut = variant == 1, half = variant == 3;
+    for (int side = -1; side <= 1; side += 2) {
+        const float x = side * 5.4f;
+        if (shut) {                                                                // a curved line: eyes shut
+            Put(m, {x - 3.0f, 12.0f, 14.4f}, eye); Put(m, {x + 3.0f, 12.0f, 14.4f}, eye); Put(m, {x, 11.0f, 14.8f}, eye);
+        } else {
+            Ellipsoid(m, {x, 12.4f, 13.2f}, {3.3f, half ? 1.9f : 3.6f, 1.6f}, 4, 8, [&](V3, V3) { return eye; });   // big dark eyes
+            Put(m, {x + 0.8f, 13.9f, 14.7f}, white); Put(m, {x + 2.0f, 13.9f, 14.7f}, white); Put(m, {x + 1.4f, 15.1f, 14.7f}, white);   // the glint
+        }
+    }
+    Put(m, {-2.0f, 9.0f, 17.6f}, pink); Put(m, {2.0f, 9.0f, 17.6f}, pink); Put(m, {0, 7.4f, 18.4f}, pink);   // the nose
+    if (variant == 2) { Put(m, {-2.2f, 5.6f, 17.4f}, {120, 40, 50}); Put(m, {2.2f, 5.6f, 17.4f}, {120, 40, 50}); Put(m, {0, 3.0f, 16.6f}, {200, 90, 100}); }   // mouth open
+    for (int side = -1; side <= 1; side += 2)                                      // whiskers
+        for (int k = 0; k < 3; k++) {
+            const float y = 6.6f + k * 1.2f, spread = (k - 1) * 3.0f;
+            Put(m, {side * 5.0f, y, 16.2f}, white); Put(m, {side * 5.0f, y + 0.5f, 16.0f}, white); Put(m, {side * 15.0f, y + spread * 0.7f, 17.0f}, white);
+        }
+    for (int k = -1; k <= 1; k++) {                                                // the tabby 'M' on the forehead
+        Put(m, {k * 3.2f - 0.7f, 17.0f, 8.5f}, dark); Put(m, {k * 3.2f + 0.7f, 17.0f, 8.5f}, dark); Put(m, {k * 3.2f, 21.0f, 7.0f}, dark);
+    }
+    return m;
+}
+
+inline MeshData CatTailSeg(uint32_t variant) {   // 0 grey, 1 dark, 2 the dark rounded tip
+    const Rgb grey = {132, 126, 120}, dark = {74, 68, 66};
+    MeshData m;
+    const Rgb col = variant == 0 ? grey : dark;
+    const float r0 = 3.6f, r1 = 3.2f, len = 12.0f;
+    for (int i = 0; i < 6; i++) {
+        const float a0 = 6.2831853f * i / 6, a1 = 6.2831853f * (i + 1) / 6;
+        const V3 p00 = {std::cos(a0) * r0, 0, std::sin(a0) * r0}, p01 = {std::cos(a1) * r0, 0, std::sin(a1) * r0};
+        const V3 p10 = {std::cos(a0) * r1, len, std::sin(a0) * r1}, p11 = {std::cos(a1) * r1, len, std::sin(a1) * r1};
+        const V3 n0 = {std::cos(a0), 0, std::sin(a0)}, n1 = {std::cos(a1), 0, std::sin(a1)};
+        Put(m, p00, Light(col, n0)); Put(m, p01, Light(col, n1)); Put(m, p11, Light(col, n1));
+        Put(m, p00, Light(col, n0)); Put(m, p11, Light(col, n1)); Put(m, p10, Light(col, n0));
+    }
+    if (variant == 2) Ellipsoid(m, {0, len, 0}, {3.2f, 3.4f, 3.2f}, 3, 6, [&](V3, V3) { return dark; });   // the rounded tip
+    else for (int i = 0; i < 6; i++) { Put(m, {0, len, 0}, Light(col, {0, 1, 0})); Put(m, {std::cos(6.2831853f * i / 6) * r1, len, std::sin(6.2831853f * i / 6) * r1}, Light(col, {0, 1, 0})); Put(m, {std::cos(6.2831853f * (i + 1) / 6) * r1, len, std::sin(6.2831853f * (i + 1) / 6) * r1}, Light(col, {0, 1, 0})); }
+    return m;
+}
+
+inline MeshData CatLeg(uint32_t variant) {   // 0 a front leg, 1 a hind leg (a fuller thigh); the paw is white, standing on y 0, hip at y 24
+    const Rgb grey = {132, 126, 120}, white = {240, 238, 232};
+    MeshData m;
+    const bool hind = variant == 1;
+    Ellipsoid(m, {0, hind ? 17.0f : 18.0f, 0}, {hind ? 6.0f : 4.4f, hind ? 8.5f : 7.5f, hind ? 7.0f : 4.8f}, 4, 6, [&](V3 n, V3) { return n.y < -0.4f && !hind ? white : grey; });
+    const float r0 = hind ? 3.0f : 3.4f, r1 = hind ? 2.6f : 3.0f;
+    for (int i = 0; i < 6; i++) {   // the lower leg, white in front ('mittens') and on the hind
+        const float a0 = 6.2831853f * i / 6, a1 = 6.2831853f * (i + 1) / 6;
+        const V3 p00 = {std::cos(a0) * r1, 3.0f, std::sin(a0) * r1}, p01 = {std::cos(a1) * r1, 3.0f, std::sin(a1) * r1};
+        const V3 p10 = {std::cos(a0) * r0, 14.0f, std::sin(a0) * r0}, p11 = {std::cos(a1) * r0, 14.0f, std::sin(a1) * r0};
+        const V3 n0 = {std::cos(a0), 0, std::sin(a0)}, n1 = {std::cos(a1), 0, std::sin(a1)};
+        const Rgb c = variant == 0 ? white : Rgb{200, 196, 190};
+        Put(m, p00, Light(c, n0)); Put(m, p01, Light(c, n1)); Put(m, p11, Light(c, n1));
+        Put(m, p00, Light(c, n0)); Put(m, p11, Light(c, n1)); Put(m, p10, Light(c, n0));
+    }
+    Ellipsoid(m, {0, 2.0f, 1.2f}, {3.6f, 2.0f, 4.6f}, 3, 6, [&](V3, V3) { return white; });   // the paw
+    return m;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -650,6 +784,10 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Sign: return mesh_detail::Sign();
         case MeshKind::Ally: return mesh_detail::Ally(variant);
         case MeshKind::Cat: return mesh_detail::Cat();
+        case MeshKind::CatBody: return mesh_detail::CatBody();
+        case MeshKind::CatHead: return mesh_detail::CatHead(variant);
+        case MeshKind::CatTailSeg: return mesh_detail::CatTailSeg(variant);
+        case MeshKind::CatLeg: return mesh_detail::CatLeg(variant);
         case MeshKind::Grass: return mesh_detail::Grass(variant);
         case MeshKind::Tree: return mesh_detail::Tree(variant);
         case MeshKind::SnowPatch: return mesh_detail::SnowPatch(variant);

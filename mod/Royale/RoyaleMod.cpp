@@ -13,6 +13,7 @@
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
+#include "objmodel.h"
 #include "skins.h"
 #include "tune.h"
 #include <algorithm>
@@ -1267,13 +1268,9 @@ struct GpuMesh {
 GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots];
 bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots] = {};
 
-const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
-    const int k = static_cast<int>(kind);
-    variant %= royale::kMeshVariantSlots;
-    GpuMesh& m = gGpuMeshes[k][variant];
-    if (gGpuBuilt[k][variant]) return &m;
-    const royale::MeshData data = royale::BuildMesh(kind, variant);
-    if (data.v.empty()) return nullptr;
+// Turns a triangle list into vertices and a display list. The vectors must not move afterwards: the display list points into them.
+bool BuildGpuMesh(const royale::MeshData& data, GpuMesh& m) {
+    if (data.v.empty()) return false;
     m.vtx.resize(data.v.size());
     for (size_t i = 0; i < data.v.size(); i++) {
         Vtx& v = m.vtx[i];
@@ -1298,6 +1295,15 @@ const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
     }
     gSPEndDisplayList(g++);
     m.dl.resize(static_cast<size_t>(g - m.dl.data())); // exactly what was written (the size only shrinks, so nothing moves)
+    return true;
+}
+
+const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
+    const int k = static_cast<int>(kind);
+    variant %= royale::kMeshVariantSlots;
+    GpuMesh& m = gGpuMeshes[k][variant];
+    if (gGpuBuilt[k][variant]) return &m;
+    if (!BuildGpuMesh(royale::BuildMesh(kind, variant), m)) return nullptr;
     gGpuBuilt[k][variant] = true;
     return &m;
 }
@@ -1786,7 +1792,141 @@ s32 Dragon_OverrideLimb(PlayState* play, s32 limb, Gfx**, Vec3f*, Vec3s* rot, vo
     return 0;
 }
 
+// ---- custom model files (the dragon) -----------------------------------------------------------------------------------------------------------
+// Put dragon.obj (and its dragon.mtl) in the "models" folder inside the game's data folder and it replaces the dragon. Parts are animated by their names
+// in the file: "wing" (flaps; left or right comes from which side of the body it is on), "jaw" (opens when it breathes fire), "tail" (sways) and "head"
+// (nods); everything else is the body. A model that is one piece still bobs, banks and tilts. An optional dragon.cfg changes how it is fitted:
+//   scale=1.0   size multiplier      yaw=0   degrees to turn it so its nose points along the flight direction (try 180 or 90)
+//   lift=0      raise it             flap=35 how far the wings beat, in degrees
+// The game draws these with vertex colours and its own lighting, so colours come from the .mtl (Kd) or from per-vertex colours; textures are not used.
+struct CustomPart {
+    std::unique_ptr<GpuMesh> gpu;
+    royale::ObjRole role = royale::ObjRole::Body;
+    float centre[3] = {0, 0, 0}, mn[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
+    float side = 1.0f;   // wings: +1 on the +x side, -1 on the other
+};
+struct CustomModel {
+    bool tried = false, ok = false;
+    std::string status = "No custom dragon: put dragon.obj in the models folder";
+    std::vector<CustomPart> parts;
+    float flapDegrees = 35.0f;
+    size_t triangles = 0;
+};
+CustomModel gDragonModel;
+
+std::filesystem::path ModelsFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("models")); }
+
+bool ReadWholeFile(const std::filesystem::path& file, std::string* out) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return false;
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    *out = ss.str();
+    return true;
+}
+
+void LoadCustomDragon() {
+    CustomModel& cm = gDragonModel;
+    cm = CustomModel{};
+    cm.tried = true;
+    std::error_code ec;
+    std::filesystem::create_directories(ModelsFolder(), ec);
+    std::string obj, mtl, cfg;
+    if (!ReadWholeFile(ModelsFolder() / "dragon.obj", &obj)) { cm.status = "No custom dragon: put dragon.obj in " + ModelsFolder().string(); return; }
+    ReadWholeFile(ModelsFolder() / "dragon.mtl", &mtl);
+    ReadWholeFile(ModelsFolder() / "dragon.cfg", &cfg);
+    float extra = 1.0f, yaw = 0.0f, lift = 0.0f;
+    {
+        std::istringstream in(cfg);
+        std::string line;
+        while (std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = line.substr(0, eq);
+            const float val = static_cast<float>(std::atof(line.c_str() + eq + 1));
+            if (key == "scale") extra = std::clamp(val, 0.1f, 10.0f);
+            else if (key == "yaw") yaw = val;
+            else if (key == "lift") lift = val;
+            else if (key == "flap") cm.flapDegrees = std::clamp(val, 0.0f, 80.0f);
+        }
+    }
+    royale::ObjModel model = royale::ParseObj(obj, mtl);
+    if (!model.ok) { cm.status = "dragon.obj could not be used: " + model.error; return; }
+    royale::FitObjModel(model, 1200.0f, extra, yaw, lift);
+    for (auto& part : model.parts) {
+        CustomPart cp;
+        cp.gpu = std::make_unique<GpuMesh>();
+        if (!BuildGpuMesh(part.mesh, *cp.gpu)) continue;
+        cp.role = royale::RoleOf(part.name);
+        for (int i = 0; i < 3; i++) { cp.centre[i] = part.centre[i]; cp.mn[i] = part.mn[i]; cp.mx[i] = part.mx[i]; }
+        cp.side = part.centre[0] >= 0 ? 1.0f : -1.0f;
+        cm.parts.push_back(std::move(cp));
+    }
+    cm.triangles = model.triangles;
+    cm.ok = !cm.parts.empty();
+    int wings = 0, jaws = 0, tails = 0, heads = 0;
+    for (const auto& p : cm.parts) { wings += p.role == royale::ObjRole::Wing; jaws += p.role == royale::ObjRole::Jaw; tails += p.role == royale::ObjRole::Tail; heads += p.role == royale::ObjRole::Head; }
+    cm.status = "Custom dragon loaded: " + std::to_string(cm.triangles) + " triangles, " + std::to_string(cm.parts.size()) + " parts (" + std::to_string(wings) + " wing, " +
+                std::to_string(jaws) + " jaw, " + std::to_string(tails) + " tail, " + std::to_string(heads) + " head)";
+}
+
+void DrawCustomDragon(Actor* actor, PlayState* play, const BossActor& b) {
+    const CustomModel& cm = gDragonModel;
+    const float t = static_cast<float>(ImGui::GetTime());
+    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
+    const bool breathing = b.mode == static_cast<int>(royale::DragonMode::Breath);
+    const bool swoop = b.mode == static_cast<int>(royale::DragonMode::Swoop);
+    const float rate = swoop ? 9.0f : 4.5f;
+    const float flap = landed ? -0.5f : std::sin(t * rate) * cm.flapDegrees * 0.0174533f;
+    float pitch = 0.0f;
+    if (swoop) pitch = 0.5f; else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f; else if (breathing) pitch = 0.18f;
+    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    CLOSE_DISPS(play->state.gfxCtx);
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateX(pitch, MTXMODE_APPLY);
+    Matrix_RotateZ(landed ? 0.0f : std::sin(t * 1.3f) * 0.06f, MTXMODE_APPLY);   // a slow bank
+    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
+    for (const CustomPart& p : cm.parts) {
+        Matrix_Push();
+        switch (p.role) {
+            case royale::ObjRole::Wing:   // flaps about the root, the edge nearest the body
+                Matrix_Translate(p.side > 0 ? p.mn[0] : p.mx[0], p.centre[1], p.centre[2], MTXMODE_APPLY);
+                Matrix_RotateZ(p.side * flap, MTXMODE_APPLY);
+                Matrix_Translate(-(p.side > 0 ? p.mn[0] : p.mx[0]), -p.centre[1], -p.centre[2], MTXMODE_APPLY);
+                break;
+            case royale::ObjRole::Jaw:    // opens about its back edge
+                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
+                Matrix_RotateX(breathing ? 0.55f + std::sin(t * 9.0f) * 0.08f : 0.05f + std::sin(t * 1.5f) * 0.04f, MTXMODE_APPLY);
+                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
+                break;
+            case royale::ObjRole::Tail:   // sways from where it joins the body
+                Matrix_Translate(p.centre[0], p.centre[1], p.mx[2], MTXMODE_APPLY);
+                Matrix_RotateY(std::sin(t * 2.0f) * 0.3f, MTXMODE_APPLY);
+                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mx[2], MTXMODE_APPLY);
+                break;
+            case royale::ObjRole::Head:   // nods
+                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
+                Matrix_RotateX((breathing ? 0.2f : 0.0f) + std::sin(t * 1.1f) * 0.06f, MTXMODE_APPLY);
+                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
+                break;
+            default: break;
+        }
+        OPEN_DISPS(play->state.gfxCtx);
+        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(p.gpu->dl.data()));
+        CLOSE_DISPS(play->state.gfxCtx);
+        Matrix_Pop();
+    }
+}
+
 void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
+    if (!gDragonModel.tried) LoadCustomDragon();
+    if (gDragonModel.ok) { DrawCustomDragon(actor, play, b); return; }
     if (!b.skReady) { Dragon_DrawBlocks(actor, play, b); return; }
     const uint32_t theme = static_cast<uint32_t>(b.kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
     static const u8 tint[5][3] = { {255, 255, 255}, {130, 190, 255}, {170, 255, 150}, {195, 150, 255}, {255, 228, 165} };
@@ -3320,6 +3460,14 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
+        {   // which button uses the slot
+            const int nres = royale::kMaxReserveWeapons;
+            const char* hint = i == 0 ? "B" : static_cast<int>(i) <= nres ? "D-pad L/R" : static_cast<int>(i) == nres + 1 ? "C-Left" : static_cast<int>(i) == nres + 2 ? "D-pad Dn" : "D-pad Up";
+            const float hs = 12.5f * scale;
+            const ImVec2 hsz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, hint);
+            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f + 1, b.y + 2 * scale + 1), IM_COL32(0, 0, 0, 220), hint);
+            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), IM_COL32(210, 220, 235, 235), hint);
+        }
         const float ts = 11.5f * scale;
         dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
         dl->AddText(font, ts * 0.9f, ImVec2(a.x + 5 * scale, a.y + 3 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
@@ -4018,7 +4166,7 @@ void DrawOverlay() {
                 centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: open");
             } else {
                 centered(ds.y * 0.66f, RarityU32(r), 26 * scale, ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
-                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "D-pad Right or A: take or swap");
+                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: take or swap");
             }
         }
         else if (const int ally = NearbyFreeAlly(); ally >= 0) {
@@ -4083,50 +4231,41 @@ void DrawOverlay() {
         if (need > 0.0f) dl->AddLine(ImVec2(bx + bw * need, by - 1), ImVec2(bx + bw * need, by + bh + 1), IM_COL32(255, 255, 255, 200), 1.5f);   // what your ability costs
     }
 
-    // Top left: the numbers (below the hearts and the shield bar).
-    float x = 16 * scale, y = ds.y * 0.27f, line = 24 * scale;
-    text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
-    y += line;
-    if (h.stormPhase >= royale::kStormPhaseCount) {
-        text(x, y, red, 20 * scale, "FINAL ZONE");
-    } else {
-        std::string phase = "Zone " + std::to_string(h.stormPhase + 1) + "/" + std::to_string(royale::kStormPhaseCount);
-        text(x, y, h.stormShrinking ? red : white, 20 * scale,
-             phase + (h.stormShrinking ? "  CLOSING " : "  holds ") + ClockText(h.stormSecondsLeft));
-    }
-    y += line;
-    if (h.stormDamagePerSecond > 0) { text(x, y, red, 22 * scale, "IN THE STORM!"); y += line; }
-    if (h.adultLeft > 0.0f && h.selfAlive) { text(x, y, gold, 22 * scale, "ADULT POWER  " + ClockText(h.adultLeft)); y += line; }
-    if (h.selfAlive) {
-        text(x, y, RarityU32(h.weaponRarity), 20 * scale, "B  " + ItemLabel(h.weapon, h.weaponRarity));
-        y += line;
-        if (h.hasShield) text(x, y, RarityU32(h.shieldRarity), 20 * scale, "Shield  " + ItemLabel(h.shield, h.shieldRarity));
-        else text(x, y, grey, 20 * scale, "Shield  none");
-        y += line;
-        text(x, y, h.potions > 0 ? white : grey, 20 * scale, "D-pad Down  Potion x" + std::to_string(h.potions));
-        y += line;
-        if (h.inv.hasAbility) {
-            const royale::Rarity ar = static_cast<royale::Rarity>(h.inv.ability.rarity);
-            const std::string name = ItemLabel(static_cast<royale::ItemId>(h.inv.ability.item), ar);
-            if (h.abilityReadyIn > 0.05f) text(x, y, grey, 20 * scale, "D-pad Up  " + name + "  " + ClockText(h.abilityReadyIn));
-            else text(x, y, RarityU32(ar), 20 * scale, "D-pad Up  " + name + "  READY");
+    // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
+    // under the safe-zone compass: how many are left, the zone, the weather and anything that is affecting you.
+    {
+        const float rx = ds.x - 16 * scale, line = 24 * scale;
+        float y = 150 * scale;
+        auto textR = [&](ImU32 col, float size, const std::string& t) {
+            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
+            text(rx - sz.x, y, col, size, t);
+            y += size + 4 * scale;
+        };
+        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
+        if (h.stormPhase >= royale::kStormPhaseCount) {
+            textR(red, 20 * scale, "FINAL ZONE");
         } else {
-            text(x, y, grey, 20 * scale, "D-pad Up  no ability");
+            textR(h.stormShrinking ? red : white, 20 * scale, "Zone " + std::to_string(h.stormPhase + 1) + "/" + std::to_string(royale::kStormPhaseCount) + (h.stormShrinking ? "  CLOSING " : "  holds ") + ClockText(h.stormSecondsLeft));
         }
-        y += line;
-        if (h.inv.hasMark) { text(x, y, green, 18 * scale, "Farore's Wind: spot marked, use again to return"); y += line; }
-        for (int slot = 0; slot < royale::kGearSlots; slot++) {
-            if (!(h.inv.gearMask & (1 << slot))) continue;
-            const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
-            text(x, y, RarityU32(gr), 17 * scale, ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr));
-            y += 20 * scale;
+        if (h.stormDamagePerSecond > 0) textR(red, 22 * scale, "IN THE STORM!");
+        static const char* kSeasonName[4] = { "Spring", "Summer", "Autumn", "Winter" };
+        static const char* kSkyName[7] = { "Clear", "Rain", "Thunder", "Fog", "Snow", "Ash", "Sandstorm" };
+        textR(grey, 17 * scale, std::string(CurrentMap().name) + "  -  " + kSeasonName[static_cast<int>(h.weather.season) & 3] + ", " + kSkyName[static_cast<int>(h.weather.sky) % 7]);
+        if (h.selfAlive) {
+            if (h.adultLeft > 0.0f) textR(gold, 20 * scale, "ADULT POWER  " + ClockText(h.adultLeft));
+            if (h.inv.hasMark) textR(green, 17 * scale, "Farore's Wind marked");
+            if (h.invulnLeft > 0) textR(gold, 18 * scale, "INVULNERABLE " + ClockText(h.invulnLeft));
+            if (h.speedLeft > 0) textR(green, 18 * scale, "SPEED UP " + ClockText(h.speedLeft));
+            if (h.revealLeft > 0) textR(green, 18 * scale, "REVEALING " + ClockText(h.revealLeft));
+            if (h.burnLeft > 0) textR(red, 18 * scale, "BURNING");
+            if (h.stunLeft > 0) textR(red, 18 * scale, "STUNNED");
+            if (h.shieldLeft > 0) textR(green, 18 * scale, "DAMAGE REDUCED " + ClockText(h.shieldLeft));
+            for (int slot = 0; slot < royale::kGearSlots; slot++) {   // what you are wearing
+                if (!(h.inv.gearMask & (1 << slot))) continue;
+                const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
+                textR(RarityU32(gr), 16 * scale, ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr));
+            }
         }
-        if (h.invulnLeft > 0) { text(x, y, gold, 18 * scale, "INVULNERABLE " + ClockText(h.invulnLeft)); y += line; }
-        if (h.speedLeft > 0) { text(x, y, green, 18 * scale, "SPEED UP " + ClockText(h.speedLeft)); y += line; }
-        if (h.revealLeft > 0) { text(x, y, green, 18 * scale, "REVEALING " + ClockText(h.revealLeft)); y += line; }
-        if (h.burnLeft > 0) { text(x, y, red, 18 * scale, "BURNING"); y += line; }
-        if (h.stunLeft > 0) { text(x, y, red, 18 * scale, "STUNNED"); y += line; }
-        if (h.shieldLeft > 0) { text(x, y, green, 18 * scale, "DAMAGE REDUCED " + ClockText(h.shieldLeft)); y += line; }
     }
 
     // Top right: which way is the safe zone, relative to the way Link is facing.
@@ -4433,6 +4572,7 @@ void NoticePoi(Player* player, const royale::HudState& hud) {
 }
 
 int gNextWeaponSlot = 1;
+int gLastWeaponSlot = 0;     // the reserve slot last swapped in (D-pad Left swaps it back)
 int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
 
 // A swing that finds no player cuts the bush or breaks the rock in front of Link (a boulder needs something heavy or explosive).
@@ -4605,11 +4745,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         else { gSession.UseShield(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 190, 255, 255 }, NA_SE_SY_HP_RECOVER); }
     }
 
-    // A (or D-pad Right): open the chest in front of you, or take/swap the item on the ground. Walking over an upgrade picks it up on its own.
-    if (in.press.button & (BTN_A | BTN_DRIGHT)) {
+    // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
+    if (in.press.button & BTN_A) {
         const size_t target = NearestLootIndex();
         if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
-        else if (in.press.button & BTN_A) {   // nothing to open or take: maybe somebody to hire
+        else {   // nothing to open or take: maybe somebody to hire
             const int ally = NearbyFreeAlly();
             if (ally >= 0) {
                 const royale::AllyDef& def = royale::kAllyDefs[ally];
@@ -4623,15 +4763,20 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    // D-pad Left: switch to your next weapon, like cycling the hotbar. With backups B and C, hand A goes to B, then C, then back to A.
-    if (in.press.button & BTN_DLEFT) {
+    // D-pad Right: your next weapon; D-pad Left: back to the one before (like the bumpers on a hotbar). With spares B and C, the hand goes A, B, C, A...
+    if (in.press.button & (BTN_DLEFT | BTN_DRIGHT)) {
         const int spares = static_cast<int>(hud.inv.reserve.size());
         if (spares == 0) {
             Say("No other weapon: open chests to find more");
-        } else {
+        } else if (in.press.button & BTN_DRIGHT) {
             gNextWeaponSlot = gNextWeaponSlot > spares ? 1 : gNextWeaponSlot;
             gSession.SelectWeapon(gNextWeaponSlot);
+            gLastWeaponSlot = gNextWeaponSlot;
             gNextWeaponSlot = gNextWeaponSlot >= spares ? 1 : gNextWeaponSlot + 1;
+        } else {   // back: swap again with the slot we last swapped, which puts the earlier weapon back in hand
+            const int back = gLastWeaponSlot >= 1 && gLastWeaponSlot <= spares ? gLastWeaponSlot : spares;
+            gSession.SelectWeapon(back);
+            gNextWeaponSlot = back;
         }
     }
 
@@ -5433,6 +5578,288 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     }
 }
 
+// ---- the cat, drawn in parts and animated (Lilo on the map, and Lilo as a pet that follows you) ----------------------------------------------------
+// A body, a head, four legs and a chain of tail segments (shared/meshes.h), posed from a CatPose. The pose is only ever eased towards a target, so every
+// change of mood (walking, sitting, grooming, curling up to sleep) blends instead of snapping.
+struct CatPose {
+    float bodyPitch = 0, bodyDrop = 0, bodyYaw = 0;       // nose up (radians), how far the body sinks, a wiggle of the hindquarters
+    float swing[4] = {0, 0, 0, 0};                        // front left, front right, hind left, hind right: forward is negative
+    float legScale[4] = {1, 1, 1, 1};                     // tucked-up legs are short
+    float headPitch = 0, headYaw = 0;                     // down (radians), turn
+    float tailUp = 1.0f, tailCurl = 0.1f, tailSway = 0;   // the tail's angle from straight up, how much each segment curls, side to side
+    int eyes = 0;                                         // CatHead variant: 0 open, 1 shut, 2 mewing, 3 half shut
+};
+void ApproachPose(CatPose& c, const CatPose& t, float k) {
+    auto a = [&](float& x, float y) { x += (y - x) * k; };
+    a(c.bodyPitch, t.bodyPitch); a(c.bodyDrop, t.bodyDrop); a(c.bodyYaw, t.bodyYaw);
+    for (int i = 0; i < 4; i++) { a(c.swing[i], t.swing[i]); a(c.legScale[i], t.legScale[i]); }
+    a(c.headPitch, t.headPitch); a(c.headYaw, t.headYaw); a(c.tailUp, t.tailUp); a(c.tailCurl, t.tailCurl); a(c.tailSway, t.tailSway);
+    c.eyes = t.eyes;
+}
+
+void DrawCatPart(PlayState* play, royale::MeshKind kind, uint32_t variant) {
+    const GpuMesh* m = GpuMeshFor(kind, variant);
+    if (m == nullptr || m->dl.empty()) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(m->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void DrawCat(PlayState* play, float x, float y, float z, float yaw, float scale, const CatPose& p) {
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    CLOSE_DISPS(play->state.gfxCtx);
+    constexpr float kLeg = 24.0f;
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    // legs: front left/right, hind left/right; each swings about its hip and is squashed if tucked
+    static const float kHip[4][3] = { {8, 24, 14}, {-8, 24, 14}, {10, 24, -16}, {-10, 24, -16} };
+    for (int i = 0; i < 4; i++) {
+        Matrix_Push();
+        Matrix_Translate(kHip[i][0], kHip[i][1] + p.bodyDrop, kHip[i][2], MTXMODE_APPLY);
+        Matrix_RotateX(p.swing[i], MTXMODE_APPLY);
+        Matrix_Scale(1.0f, p.legScale[i], 1.0f, MTXMODE_APPLY);
+        Matrix_Translate(0, -kLeg, 0, MTXMODE_APPLY);
+        DrawCatPart(play, royale::MeshKind::CatLeg, i < 2 ? 0u : 1u);
+        Matrix_Pop();
+    }
+    // body, pitched about the hips (so sitting up lifts the chest and keeps the rump down)
+    Matrix_Push();
+    Matrix_Translate(0, p.bodyDrop, 0, MTXMODE_APPLY);
+    Matrix_Translate(0, 24, -18, MTXMODE_APPLY);
+    Matrix_RotateY(p.bodyYaw, MTXMODE_APPLY);
+    Matrix_RotateX(-p.bodyPitch, MTXMODE_APPLY);
+    Matrix_Translate(0, -24, 18, MTXMODE_APPLY);
+    DrawCatPart(play, royale::MeshKind::CatBody, 0);
+    // head on its neck (a child of the body, so it is levelled by headPitch)
+    Matrix_Push();
+    Matrix_Translate(0, 36, 22, MTXMODE_APPLY);
+    Matrix_RotateX(p.headPitch - 0.0f, MTXMODE_APPLY);
+    Matrix_RotateY(p.headYaw, MTXMODE_APPLY);
+    DrawCatPart(play, royale::MeshKind::CatHead, static_cast<uint32_t>(p.eyes));
+    Matrix_Pop();
+    // the tail: five segments, each bent a little further than the one before, swaying
+    Matrix_Push();
+    Matrix_Translate(0, 30, -28, MTXMODE_APPLY);
+    Matrix_RotateX(-p.tailUp, MTXMODE_APPLY);   // 0 is straight up, about 1.5 is level, pointing back
+    Matrix_RotateZ(p.tailSway * 0.4f, MTXMODE_APPLY);
+    for (int seg = 0; seg < 5; seg++) {
+        DrawCatPart(play, royale::MeshKind::CatTailSeg, seg == 4 ? 2u : static_cast<uint32_t>(seg & 1));
+        Matrix_Translate(0, 11.5f, 0, MTXMODE_APPLY);
+        Matrix_RotateX(p.tailCurl, MTXMODE_APPLY);
+        Matrix_RotateZ(p.tailSway * 0.22f, MTXMODE_APPLY);
+    }
+    Matrix_Pop();
+    Matrix_Pop();
+}
+
+// -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
+enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy };
+struct CatBrain {
+    Actor* actor = nullptr;
+    CatMood mood = CatMood::Follow;
+    float moodT = 0, phase = 0, idle = 0, sitT = 0;
+    float x = 0, z = 0, y = 0, yaw = 0, speed = 0;
+    float nextAt = 6.0f, blink = 0;
+    float leapX = 0, leapZ = 0;
+    size_t pickups = 0;
+    bool placed = false;
+    CatPose pose;
+};
+CatBrain gCat;
+
+void CatPoof(PlayState* play, float x, float y, float z) {
+    for (int i = 0; i < 7; i++) {
+        Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 30.0f, y + 10.0f + Rand_ZeroOne() * 22.0f, z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 1.6f, 0.6f + Rand_ZeroOne(), (Rand_ZeroOne() - 0.5f) * 1.6f }, accel = { 0, 0, 0 };
+        Color_RGBA8 prim = { 255, 245, 210, 255 }, env = { 200, 190, 255, 255 };
+        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 120, 26);
+    }
+}
+
+void Cat_Update(Actor* actor, PlayState* play) {
+    CatBrain& c = gCat;
+    const float dt = 1.0f / royale::kTickHz;
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z, py = pl->actor.world.pos.y;
+    const float pyaw = pl->actor.shape.rot.y * (3.14159265f / 32768.0f);
+    const float pspeed = std::fabs(pl->linearVelocity);
+    const bool playerStill = pspeed < 0.6f;
+    // Her place beside you: behind and to the left.
+    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 95.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 95.0f;
+    float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
+    if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
+        if (c.placed) CatPoof(play, c.x, c.y, c.z);
+        c.x = wantX; c.z = wantZ; c.y = py; c.placed = true;
+        CatPoof(play, c.x, c.y, c.z);
+        dx = dz = 0; d = 0;
+        c.mood = CatMood::Stand; c.moodT = 0;
+    }
+    c.moodT += dt;
+    if (playerStill) c.idle += dt; else c.idle = 0;
+    if (gPickupLog.size() != c.pickups) { if (gPickupLog.size() > c.pickups && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; } c.pickups = gPickupLog.size(); }
+    if (gEmote.id >= 0 && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; }
+
+    CatPose t;   // the pose she is easing towards
+    t.tailUp = 0.9f; t.tailCurl = 0.07f;
+    float blinkNow = 0.0f;
+    c.blink -= dt;
+    if (c.blink < -3.5f) c.blink = 0.14f;
+    blinkNow = c.blink > 0.0f ? 1.0f : 0.0f;
+    const float tm = static_cast<float>(ImGui::GetTime());
+    bool moving = false;
+    float heading = c.yaw;
+
+    switch (c.mood) {
+        case CatMood::Follow: case CatMood::Stand: {
+            if (d > 58.0f) {   // go to her place: a walk when it is near, a trot when you have run on
+                c.speed += (std::clamp((d - 40.0f) * 2.8f, 45.0f, 290.0f) - c.speed) * 0.2f;
+                heading = std::atan2(dx, dz);
+                c.x += std::sin(heading) * c.speed * dt;
+                c.z += std::cos(heading) * c.speed * dt;
+                moving = true;
+                c.mood = CatMood::Follow;
+            } else {
+                c.speed *= 0.7f;
+                if (c.mood == CatMood::Follow) { c.mood = CatMood::Stand; c.moodT = 0; }
+                if (c.idle > 1.6f) { c.mood = CatMood::Sit; c.moodT = 0; c.sitT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f; }
+            }
+            if (c.mood == CatMood::Stand) {   // standing about: looks around, tail swishing slowly
+                t.tailSway = std::sin(tm * 1.7f) * 0.5f; t.headYaw = std::sin(tm * 0.6f) * 0.5f;
+            }
+            break;
+        }
+        case CatMood::Sit: case CatMood::Groom: {
+            c.sitT += dt;
+            t.bodyPitch = 0.95f; t.bodyDrop = -9.0f;
+            t.swing[0] = t.swing[1] = 0.12f; t.swing[2] = t.swing[3] = -1.5f; t.legScale[2] = t.legScale[3] = 0.7f;
+            t.headPitch = -0.7f; t.tailUp = 1.55f; t.tailCurl = 0.34f; t.tailSway = std::sin(tm * 1.2f) * 0.6f;
+            t.headYaw = std::sin(tm * 0.45f) * 0.35f;
+            if (c.mood == CatMood::Groom) {   // a front paw to the mouth and a lick
+                t.swing[0] = -2.1f + std::sin(tm * 11.0f) * 0.12f;
+                t.headPitch = -0.1f + std::sin(tm * 11.0f) * 0.06f; t.headYaw = 0.35f; t.eyes = 3;
+                if (c.moodT > 3.0f) { c.mood = CatMood::Sit; c.moodT = 0; }
+            } else if (c.moodT > c.nextAt) {
+                const float r = Rand_ZeroOne();
+                c.moodT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f;
+                if (r < 0.45f) c.mood = CatMood::Groom;
+                else if (r < 0.7f) c.mood = CatMood::Stretch;
+                else c.mood = CatMood::Pounce;
+            }
+            if (c.sitT > 16.0f && c.mood == CatMood::Sit) { c.mood = CatMood::Loaf; c.moodT = 0; }
+            if (!playerStill || d > 150.0f) { c.mood = CatMood::Follow; c.moodT = 0; }
+            break;
+        }
+        case CatMood::Loaf: {   // curled up asleep: the paws tucked under, head down, eyes shut, little 'z's
+            t.bodyDrop = -16.0f; t.bodyPitch = 0.0f;
+            for (int i = 0; i < 4; i++) { t.legScale[i] = 0.4f; t.swing[i] = i < 2 ? -0.5f : 0.5f; }
+            t.headPitch = 0.4f; t.eyes = 1; t.tailUp = 1.6f; t.tailCurl = 0.5f; t.tailSway = std::sin(tm * 0.8f) * 0.2f;
+            t.bodyPitch = std::sin(tm * 1.4f) * 0.015f;   // breathing
+            if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
+                Vec3f pos = { c.x + std::sin(c.yaw) * 20.0f, c.y + 40.0f, c.z + std::cos(c.yaw) * 20.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
+                Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
+                EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
+            }
+            if (!playerStill || d > 150.0f) { c.mood = CatMood::Stretch; c.moodT = 0; }
+            break;
+        }
+        case CatMood::Stretch: {   // front legs forward, chest down, rump up
+            t.bodyPitch = -0.42f; t.bodyDrop = -4.0f;
+            t.swing[0] = t.swing[1] = -1.0f; t.headPitch = 0.7f; t.tailUp = 0.15f; t.tailCurl = 0.05f; t.eyes = 3;
+            t.swing[2] = t.swing[3] = 0.15f;
+            if (c.moodT > 2.2f) { c.mood = playerStill ? CatMood::Sit : CatMood::Follow; c.moodT = 0; }
+            break;
+        }
+        case CatMood::Pounce: {   // crouch and wiggle, then a leap at nothing
+            if (c.moodT < 0.9f) {
+                t.bodyDrop = -12.0f; t.bodyPitch = -0.12f; t.headPitch = 0.3f;
+                t.bodyYaw = std::sin(c.moodT * 30.0f) * 0.14f; t.tailUp = 0.9f; t.tailSway = std::sin(c.moodT * 25.0f) * 1.2f;
+                for (int i = 0; i < 4; i++) t.swing[i] = i < 2 ? -0.3f : 0.4f;
+                heading = c.yaw;
+                c.leapX = std::sin(c.yaw) * 75.0f; c.leapZ = std::cos(c.yaw) * 75.0f;
+            } else if (c.moodT < 1.35f) {
+                const float u = (c.moodT - 0.9f) / 0.45f;
+                c.x += c.leapX * dt / 0.45f; c.z += c.leapZ * dt / 0.45f;
+                c.y = py;   // (the height is added below)
+                t.bodyPitch = 0.3f - u * 0.6f; t.swing[0] = t.swing[1] = -1.1f; t.swing[2] = t.swing[3] = 0.9f; t.tailUp = 0.2f;
+            } else { c.mood = CatMood::Stand; c.moodT = 0; }
+            break;
+        }
+        case CatMood::Happy: {   // hops and the tail goes straight up
+            t.tailUp = 0.05f; t.tailSway = std::sin(tm * 22.0f) * 0.25f; t.eyes = 1;
+            t.bodyDrop = std::fabs(std::sin(c.moodT * 9.0f)) * 9.0f;
+            for (int i = 0; i < 4; i++) t.swing[i] = std::sin(c.moodT * 9.0f + i) * 0.2f;
+            if (c.moodT > 1.5f) { c.mood = CatMood::Stand; c.moodT = 0; }
+            break;
+        }
+    }
+    if (moving) {   // the gait: diagonal pairs of legs, quicker and wider as she speeds up
+        c.phase += c.speed * dt * 0.052f;
+        const float amp = std::clamp(0.45f + c.speed * 0.0016f, 0.45f, 0.95f), s = std::sin(c.phase);
+        t.swing[0] = t.swing[3] = amp * s;
+        t.swing[1] = t.swing[2] = -amp * s;
+        t.bodyDrop = -std::fabs(std::sin(c.phase)) * 2.2f;
+        t.tailUp = c.speed > 160.0f ? 0.6f : 0.95f; t.tailSway = std::sin(c.phase * 0.5f) * 0.4f;
+        t.headYaw = 0; t.headPitch = c.speed > 160.0f ? 0.1f : 0.0f;
+    }
+    // turn to face the way she goes (or, when still, towards you if you are close)
+    if (!moving && c.mood != CatMood::Pounce) {
+        if (d < 400.0f) heading = std::atan2(px - c.x, pz - c.z);
+    }
+    {
+        float diff = heading - c.yaw;
+        while (diff > 3.14159265f) diff -= 6.2831853f;
+        while (diff < -3.14159265f) diff += 6.2831853f;
+        c.yaw += diff * (moving ? 0.25f : 0.08f);
+    }
+    if (blinkNow > 0.5f && t.eyes == 0) t.eyes = 1;
+    ApproachPose(c.pose, t, moving ? 0.35f : 0.18f);
+    c.pose.eyes = t.eyes;
+
+    float floorY = c.y;
+    floorY = GroundY(play, c.x, c.z, c.y);
+    float hop = 0.0f;
+    if (c.mood == CatMood::Pounce && c.moodT >= 0.9f && c.moodT < 1.35f) hop = std::sin((c.moodT - 0.9f) / 0.45f * 3.14159f) * 32.0f;
+    if (c.mood == CatMood::Happy) hop = std::fabs(std::sin(c.moodT * 9.0f)) * 10.0f;
+    c.y = floorY;
+    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y + hop;
+    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
+    actor->focus.pos = actor->world.pos;
+}
+
+void Cat_Draw(Actor* actor, PlayState* play) {
+    DrawCat(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gCat.yaw, 0.8f, gCat.pose);
+}
+void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
+
+void ReconcileCatPet(const royale::HudState& hud) {
+    const bool inMatch = IsLive(hud);
+    const bool want = MapOption("LiloPet", false) && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+                      !(inMatch && hud.haveSelf && !hud.selfAlive);
+    if (!want) {
+        if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }
+        return;
+    }
+    if (gCat.actor != nullptr) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
+    if (a == nullptr) return;
+    a->update = Cat_Update;
+    a->draw = Cat_Draw;
+    a->destroy = Cat_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
+    a->shape.shadowScale = 22.0f;
+    gCat.actor = a;
+    gCat.placed = false;
+    gCat.pickups = gPickupLog.size();
+    gCat.pose = CatPose{};
+}
+
 // ---- Lilo -------------------------------------------------------------------------------------------------------------------------
 // An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): a grey and white cat called Lilo sits at a random spot on the
 // map. Talk to her with A: she says her line, and a moment later there is a noise and a greenish cloud.
@@ -5454,23 +5881,18 @@ void Lilo_Update(Actor* actor, PlayState* play) {
     actor->focus.pos = actor->world.pos;
 }
 void Lilo_Draw(Actor* actor, PlayState* play) {
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Cat, 0);
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    const float t = static_cast<float>(ImGui::GetTime());
     const double since = ImGui::GetTime() - gLiloTalkStart;
     const bool talking = since >= 0.0 && since < kLiloTalkSeconds;
-    const float wiggle = talking ? std::sin(t * 12.0f) * 0.08f : std::sin(t * 1.3f) * 0.025f;   // the whole cat sways a little, more when she "speaks"
-    const float lift = talking && since < kLiloFartAt ? 6.0f * std::sin(t * 8.0f) : 0.0f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + std::fabs(lift), actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f) + wiggle, MTXMODE_APPLY);
-    Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
+    CatPose p;   // sitting up, watching, tail curled; when "speaking" she mews and sways
+    p.bodyPitch = 0.95f; p.bodyDrop = -9.0f;
+    p.swing[0] = p.swing[1] = 0.12f; p.swing[2] = p.swing[3] = -1.5f; p.legScale[2] = p.legScale[3] = 0.7f;
+    p.headPitch = -0.7f; p.tailUp = 1.55f; p.tailCurl = 0.34f;
+    p.tailSway = talking ? std::sin(t * 9.0f) * 1.0f : std::sin(t * 1.3f) * 0.6f;
+    p.headYaw = talking ? std::sin(t * 12.0f) * 0.12f : std::sin(t * 0.5f) * 0.3f;
+    p.eyes = talking ? ((static_cast<int>(t * 6.0f) & 1) ? 2 : 0) : (std::fmod(t, 4.3f) < 0.13f ? 1 : 0);
+    const float lift = talking && since < kLiloFartAt ? 6.0f * std::fabs(std::sin(t * 8.0f)) : 0.0f;
+    DrawCat(play, actor->world.pos.x, actor->world.pos.y + lift, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), 1.0f, p);
 }
 void Lilo_Destroy(Actor* actor, PlayState*) { if (gLiloActor == actor) gLiloActor = nullptr; }
 
@@ -6073,6 +6495,175 @@ bool DriveMatchMusic(const royale::HudState& hud, bool joined) {
     return random && haveSongs;
 }
 
+// ---- the pause menu shows what you carry -----------------------------------------------------------------------------------------
+// While a match is on, the game's own pause-menu inventory (items, equipment, quest items and ammo) is rebuilt from what the server says you carry, so
+// everything you pick up shows up there and everything you lose goes. Your own save is put back exactly as it was when the match ends or you leave.
+// The C-button items are cleared for the match too (the hotbar does their job, and nothing real should fire from them).
+struct SavedInventory {
+    bool have = false;
+    decltype(gSaveContext.inventory) inventory;
+    decltype(gSaveContext.equips) equips;
+};
+SavedInventory gSavedInv;
+uint64_t gKitHash = 0;
+
+void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
+    using royale::ItemId;
+    auto put = [&](int item) { gSaveContext.inventory.items[SLOT(item)] = static_cast<u8>(item); };
+    auto equip = [&](int type, int value) { gSaveContext.inventory.equipment |= OWNED_EQUIP_FLAG(type, value); };
+    auto quest = [&](int q) { gSaveContext.inventory.questItems |= gBitFlags[q]; };
+    auto bottle = [&](int item) { if (bottles < 4) gSaveContext.inventory.items[SLOT_BOTTLE_1 + bottles++] = static_cast<u8>(item); };
+    (void)tunics;
+    switch (id) {
+        case ItemId::DekuStick: put(ITEM_STICK); break;
+        case ItemId::KokiriSword: case ItemId::BasicSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_KOKIRI); break;
+        case ItemId::MasterSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_MASTER); break;
+        case ItemId::BiggoronSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_BIGGORON); break;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: put(ITEM_HAMMER); break;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: put(ITEM_SLINGSHOT); break;
+        case ItemId::FairyBow: put(ITEM_BOW); break;
+        case ItemId::Boomerang: put(ITEM_BOOMERANG); break;
+        case ItemId::Bombs: put(ITEM_BOMB); break;
+        case ItemId::Bombchus: case ItemId::HomingBombchus: put(ITEM_BOMBCHU); break;
+        case ItemId::DekuNuts: put(ITEM_NUT); break;
+        case ItemId::FireArrows: put(ITEM_BOW_ARROW_FIRE); break;
+        case ItemId::IceArrows: put(ITEM_BOW_ARROW_ICE); break;
+        case ItemId::LightArrows: put(ITEM_BOW_ARROW_LIGHT); break;
+        case ItemId::DekuShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_DEKU); break;
+        case ItemId::HylianShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_HYLIAN); break;
+        case ItemId::MirrorShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_MIRROR); break;
+        case ItemId::GreenPotion: bottle(ITEM_POTION_GREEN); break;
+        case ItemId::RedPotion: bottle(ITEM_POTION_RED); break;
+        case ItemId::BluePotion: bottle(ITEM_POTION_BLUE); break;
+        case ItemId::Fairy: bottle(ITEM_FAIRY); break;
+        case ItemId::Milk: bottle(ITEM_MILK_BOTTLE); break;
+        case ItemId::Fish: bottle(ITEM_FISH); break;
+        case ItemId::BlueFire: bottle(ITEM_BLUE_FIRE); break;
+        case ItemId::Bug: bottle(ITEM_BUG); break;
+        case ItemId::Poe: bottle(ITEM_POE); break;
+        case ItemId::SmallShieldPotion: case ItemId::LargeShieldPotion: bottle(ITEM_BOTTLE); break;
+        case ItemId::DinsFire: put(ITEM_DINS_FIRE); break;
+        case ItemId::FaroresWind: put(ITEM_FARORES_WIND); break;
+        case ItemId::NayrusLove: put(ITEM_NAYRUS_LOVE); break;
+        case ItemId::Hookshot: put(ITEM_HOOKSHOT); break;
+        case ItemId::Longshot: put(ITEM_LONGSHOT); break;
+        case ItemId::LensOfTruth: put(ITEM_LENS); break;
+        case ItemId::MagicBeans: put(ITEM_BEAN); break;
+        case ItemId::FairyOcarina: put(ITEM_OCARINA_FAIRY); break;
+        case ItemId::OcarinaOfTime: put(ITEM_OCARINA_TIME); break;
+        case ItemId::ZeldasLullaby: quest(QUEST_SONG_LULLABY); break;
+        case ItemId::EponasSong: quest(QUEST_SONG_EPONA); break;
+        case ItemId::SariasSong: quest(QUEST_SONG_SARIA); break;
+        case ItemId::SunsSong: quest(QUEST_SONG_SUN); break;
+        case ItemId::SongOfTime: quest(QUEST_SONG_TIME); break;
+        case ItemId::SongOfStorms: quest(QUEST_SONG_STORMS); break;
+        case ItemId::MinuetOfForest: quest(QUEST_SONG_MINUET); break;
+        case ItemId::BoleroOfFire: quest(QUEST_SONG_BOLERO); break;
+        case ItemId::SerenadeOfWater: quest(QUEST_SONG_SERENADE); break;
+        case ItemId::NocturneOfShadow: quest(QUEST_SONG_NOCTURNE); break;
+        case ItemId::RequiemOfSpirit: quest(QUEST_SONG_REQUIEM); break;
+        case ItemId::PreludeOfLight: quest(QUEST_SONG_PRELUDE); break;
+        case ItemId::KokiriTunic: equip(EQUIP_TYPE_TUNIC, EQUIP_VALUE_TUNIC_KOKIRI); break;
+        case ItemId::GoronTunic: equip(EQUIP_TYPE_TUNIC, EQUIP_VALUE_TUNIC_GORON); break;
+        case ItemId::ZoraTunic: equip(EQUIP_TYPE_TUNIC, EQUIP_VALUE_TUNIC_ZORA); break;
+        case ItemId::KokiriBoots: equip(EQUIP_TYPE_BOOTS, EQUIP_VALUE_BOOTS_KOKIRI); break;
+        case ItemId::IronBoots: equip(EQUIP_TYPE_BOOTS, EQUIP_VALUE_BOOTS_IRON); break;
+        case ItemId::HoverBoots: equip(EQUIP_TYPE_BOOTS, EQUIP_VALUE_BOOTS_HOVER); break;
+        case ItemId::GoronBracelet: Inventory_ChangeUpgrade(UPG_STRENGTH, 1); break;
+        case ItemId::SilverGauntlets: Inventory_ChangeUpgrade(UPG_STRENGTH, 2); break;
+        case ItemId::GoldenGauntlets: Inventory_ChangeUpgrade(UPG_STRENGTH, 3); break;
+        case ItemId::SilverScale: Inventory_ChangeUpgrade(UPG_SCALE, 1); break;
+        case ItemId::GoldenScale: Inventory_ChangeUpgrade(UPG_SCALE, 2); break;
+        case ItemId::BigQuiver: Inventory_ChangeUpgrade(UPG_QUIVER, 3); break;
+        case ItemId::BulletBag: Inventory_ChangeUpgrade(UPG_BULLET_BAG, 3); break;
+        case ItemId::BombBag: Inventory_ChangeUpgrade(UPG_BOMB_BAG, 3); break;
+        case ItemId::KeatonMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_KEATON; break;
+        case ItemId::SkullMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_SKULL; break;
+        case ItemId::SpookyMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_SPOOKY; break;
+        case ItemId::BunnyHood: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_BUNNY; break;
+        case ItemId::GoronMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_GORON; break;
+        case ItemId::ZoraMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_ZORA; break;
+        case ItemId::GerudoMask: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_GERUDO; break;
+        case ItemId::MaskOfTruth: gSaveContext.inventory.items[SLOT_TRADE_CHILD] = ITEM_MASK_TRUTH; break;
+        case ItemId::ForestMedallion: quest(QUEST_MEDALLION_FOREST); break;
+        case ItemId::FireMedallion: quest(QUEST_MEDALLION_FIRE); break;
+        case ItemId::WaterMedallion: quest(QUEST_MEDALLION_WATER); break;
+        case ItemId::SpiritMedallion: quest(QUEST_MEDALLION_SPIRIT); break;
+        case ItemId::ShadowMedallion: quest(QUEST_MEDALLION_SHADOW); break;
+        case ItemId::LightMedallion: quest(QUEST_MEDALLION_LIGHT); break;
+        case ItemId::KokiriEmerald: quest(QUEST_KOKIRI_EMERALD); break;
+        case ItemId::GoronRuby: quest(QUEST_GORON_RUBY); break;
+        case ItemId::ZoraSapphire: quest(QUEST_ZORA_SAPPHIRE); break;
+        default: break;   // hearts, magic, rupees, grenades and the like have no place in the pause menu
+    }
+}
+
+void SyncPauseInventory(const royale::HudState& hud) {
+    const bool active = gSession.Joined() && IsLive(hud) && hud.haveSelf;
+    if (!active) {
+        if (gSavedInv.have) {   // the match is over: your own inventory comes back untouched
+            gSaveContext.inventory = gSavedInv.inventory;
+            gSaveContext.equips = gSavedInv.equips;
+            gSavedInv.have = false;
+            gKitHash = 0;
+        }
+        return;
+    }
+    if (!gSavedInv.have) {
+        gSavedInv.inventory = gSaveContext.inventory;
+        gSavedInv.equips = gSaveContext.equips;
+        gSavedInv.have = true;
+        gKitHash = 0;
+    }
+    // Cheap change detection: the whole kit folded into one number.
+    uint64_t hsh = 1469598103934665603ull;
+    auto mix = [&](uint64_t v) { hsh = (hsh ^ v) * 1099511628211ull; };
+    mix(static_cast<uint64_t>(hud.weapon)); mix(hud.hasShield ? static_cast<uint64_t>(hud.shield) + 1 : 0);
+    for (const auto& r : hud.inv.reserve) mix(100 + r.item);
+    for (const auto& pt : hud.inv.potions) mix(200 + pt.item);
+    if (hud.inv.hasAbility) mix(300 + hud.inv.ability.item);
+    mix(hud.inv.gearMask);
+    for (int sl = 0; sl < royale::kGearSlots; sl++) if (hud.inv.gearMask & (1 << sl)) mix(400 + hud.inv.gear[sl].item);
+    for (int a = 0; a < 5; a++) mix(500 + static_cast<uint64_t>(std::min(127, std::max(0, static_cast<int>(hud.ammo[a])))));
+    if (hsh == gKitHash) { for (int i = 1; i <= 3; i++) gSaveContext.equips.buttonItems[i] = ITEM_NONE; return; }
+    gKitHash = hsh;
+
+    auto& inv = gSaveContext.inventory;
+    for (auto& it : inv.items) it = ITEM_NONE;
+    for (auto& am : inv.ammo) am = 0;
+    inv.equipment = 0;
+    inv.upgrades &= ~(gUpgradeMasks[UPG_QUIVER] | gUpgradeMasks[UPG_BOMB_BAG] | gUpgradeMasks[UPG_STRENGTH] | gUpgradeMasks[UPG_BULLET_BAG] | gUpgradeMasks[UPG_SCALE]);
+    inv.questItems &= ~(gBitFlags[QUEST_MEDALLION_FOREST] | gBitFlags[QUEST_MEDALLION_FIRE] | gBitFlags[QUEST_MEDALLION_WATER] | gBitFlags[QUEST_MEDALLION_SPIRIT] |
+                        gBitFlags[QUEST_MEDALLION_SHADOW] | gBitFlags[QUEST_MEDALLION_LIGHT] | gBitFlags[QUEST_KOKIRI_EMERALD] | gBitFlags[QUEST_GORON_RUBY] | gBitFlags[QUEST_ZORA_SAPPHIRE] |
+                        gBitFlags[QUEST_SONG_MINUET] | gBitFlags[QUEST_SONG_BOLERO] | gBitFlags[QUEST_SONG_SERENADE] | gBitFlags[QUEST_SONG_REQUIEM] | gBitFlags[QUEST_SONG_NOCTURNE] |
+                        gBitFlags[QUEST_SONG_PRELUDE] | gBitFlags[QUEST_SONG_LULLABY] | gBitFlags[QUEST_SONG_EPONA] | gBitFlags[QUEST_SONG_SARIA] | gBitFlags[QUEST_SONG_SUN] |
+                        gBitFlags[QUEST_SONG_TIME] | gBitFlags[QUEST_SONG_STORMS]);
+    int bottles = 0, tunics = 0;
+    GiveToSave(hud.weapon, bottles, tunics);
+    if (hud.hasShield) GiveToSave(hud.shield, bottles, tunics);
+    for (const auto& r : hud.inv.reserve) GiveToSave(static_cast<royale::ItemId>(r.item), bottles, tunics);
+    for (const auto& pt : hud.inv.potions) GiveToSave(static_cast<royale::ItemId>(pt.item), bottles, tunics);
+    if (hud.inv.hasAbility) GiveToSave(static_cast<royale::ItemId>(hud.inv.ability.item), bottles, tunics);
+    for (int sl = 0; sl < royale::kGearSlots; sl++) if (hud.inv.gearMask & (1 << sl)) GiveToSave(static_cast<royale::ItemId>(hud.inv.gear[sl].item), bottles, tunics);
+    // Ammo: the counts the server keeps, shown against the weapon that uses them (a bag big enough for them is given too).
+    auto ammo = [&](royale::AmmoKind k, int item, int upgrade) {
+        const int n = std::min(127, std::max(0, static_cast<int>(hud.ammo[static_cast<size_t>(k)])));
+        if (n > 0 && inv.items[SLOT(item)] == item) {
+            inv.ammo[SLOT(item)] = static_cast<s8>(n);
+            if (upgrade >= 0 && CUR_UPG_VALUE(upgrade) == 0) Inventory_ChangeUpgrade(upgrade, n > 30 ? 3 : n > 20 ? 2 : 1);
+        }
+    };
+    ammo(royale::AmmoKind::Arrows, ITEM_BOW, UPG_QUIVER);
+    ammo(royale::AmmoKind::Seeds, ITEM_SLINGSHOT, UPG_BULLET_BAG);
+    ammo(royale::AmmoKind::Bombs, ITEM_BOMB, UPG_BOMB_BAG);
+    ammo(royale::AmmoKind::Bombchus, ITEM_BOMBCHU, -1);
+    ammo(royale::AmmoKind::Nuts, ITEM_NUT, -1);
+    if (inv.items[SLOT(ITEM_BOW)] == ITEM_BOW && CUR_UPG_VALUE(UPG_QUIVER) == 0) Inventory_ChangeUpgrade(UPG_QUIVER, 1);
+    if (inv.items[SLOT(ITEM_SLINGSHOT)] == ITEM_SLINGSHOT && CUR_UPG_VALUE(UPG_BULLET_BAG) == 0) Inventory_ChangeUpgrade(UPG_BULLET_BAG, 1);
+    if (inv.items[SLOT(ITEM_BOMB)] == ITEM_BOMB && CUR_UPG_VALUE(UPG_BOMB_BAG) == 0) Inventory_ChangeUpgrade(UPG_BOMB_BAG, 1);
+    for (int i = 1; i <= 3; i++) gSaveContext.equips.buttonItems[i] = ITEM_NONE;
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -6088,6 +6679,7 @@ void OnGameFrameUpdate() {
     DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
+    SyncPauseInventory(hud);
     UpdateChickenMusic();
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     DriveLobbyTimer(hud);
@@ -6096,6 +6688,7 @@ void OnGameFrameUpdate() {
     ReconcileSign(hud);
     ReconcileMaya(hud);
     ReconcileLilo(hud);
+    ReconcileCatPet(hud);
     UpdateLiloFx();
     ReconcileAllies(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
@@ -6178,6 +6771,13 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
+    // The game's C-button icons (top right) and D-pad item icons are hidden during a match: the hotbar does their job.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnInterfaceUpdate>([]() {
+        if (gPlayState == nullptr || !gSession.Joined() || !IsLive(gSession.Hud())) return;
+        InterfaceContext& ic = gPlayState->interfaceCtx;
+        ic.cLeftAlpha = ic.cDownAlpha = ic.cRightAlpha = 0;
+        ic.dpadUpAlpha = ic.dpadDownAlpha = ic.dpadLeftAlpha = ic.dpadRightAlpha = 0;
+    });
 
     // Turn the Player actor we spawn for a remote player into a puppet *before* its init runs. Requires patches/0001.
     GameInteractor::Instance->RegisterGameHookForID<GameInteractor::ShouldActorInit>(
@@ -6345,6 +6945,7 @@ void DrawMinimapOptions() {
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
+        { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
     if (!ImGui::CollapsingHeader("Minimap and game options")) return;
     for (const Opt& o : opts) {
@@ -6361,6 +6962,11 @@ void DrawMinimapOptions() {
     if (gLobbyMusic.status.empty()) ScanMusicFolder();
     ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
+    ImGui::Spacing();
+    ImGui::TextColored(kGrey, "Custom dragon model: put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
+    if (!gDragonModel.tried) LoadCustomDragon();
+    ImGui::TextWrapped("%s", gDragonModel.status.c_str());
+    if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
 }
 
 // Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
@@ -6656,7 +7262,21 @@ void DrawInMatch(const royale::HudState& h) {
         ImGui::TextColored(kGold, "Recent pickups");
         for (const auto& n : gPickupLog) ImGui::TextColored(RarityIm(n.rarity), "%s", n.text.c_str());
     }
-    ImGui::TextColored(kGrey, "B: attack    D-pad Left: next weapon    A: open chests and take items    D-pad Down: drink a potion    D-pad Up: use your ability    Walk over items to pick them up");
+    if (ImGui::CollapsingHeader("Controls")) {
+        ImGui::TextColored(kGold, "Fighting");
+        ImGui::BulletText("B: attack with what is in your hand (it fires, throws or swings by itself)");
+        ImGui::BulletText("Z: lock on to a player (hold), and dive faster while skydiving");
+        ImGui::BulletText("D-pad Right / Left: next / previous weapon");
+        ImGui::TextColored(kGold, "Staying alive");
+        ImGui::BulletText("D-pad Down: drink a health potion      C-Left: drink a shield potion");
+        ImGui::BulletText("D-pad Up: use your ability (the song, spell or hookshot in the ability slot)");
+        ImGui::TextColored(kGold, "Moving and interacting");
+        ImGui::BulletText("Stick: move      C-Up: jump (jump at a ledge to climb it)      Z + move: sidestep");
+        ImGui::BulletText("A: open a chest, take or swap an item, hire an ally, talk");
+        ImGui::BulletText("C-Right: emote (or tap EMOTE)      Walk over a better item to pick it up");
+        ImGui::TextColored(kGold, "Spectating");
+        ImGui::BulletText("D-pad Left / Right: watch the previous / next player");
+    }
     ImGui::Spacing();
     if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
 }

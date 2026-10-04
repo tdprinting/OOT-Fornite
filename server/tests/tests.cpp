@@ -2,6 +2,7 @@
 #include "../sim.h"
 #include "../nav.h"
 #include "../../shared/meshes.h"
+#include "../../shared/objmodel.h"
 #include "../../shared/tune.h"
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
@@ -2115,6 +2116,32 @@ static void MapsHaveTheirOwnNamesAndBosses() {
     }
 }
 
+static void CustomObjModels() {
+    // A little winged thing: a body box, two wings and a tail, with a material colour and a quad that must be cut into two triangles.
+    const std::string obj =
+        "# test\nmtllib t.mtl\n"
+        "v -1 0 -1\nv 1 0 -1\nv 1 1 -1\nv -1 1 -1\nv -1 0 1\nv 1 0 1\nv 1 1 1\nv -1 1 1\n"
+        "o Body\nusemtl green\nf 1 2 3 4\nf 5 6 7 8\nf 1 2 6 5\nf 4 3 7 8\n"
+        "v 1 1 0\nv 5 1.5 0\nv 5 1.5 1\nv 1 1 1\n"
+        "o Wing_L\nusemtl red\nf 9 10 11 12\n"
+        "v -1 1 0\nv -5 1.5 0\nv -5 1.5 1\nv -1 1 1\n"
+        "o wing_R\nf 13 14 15 16\n"
+        "v 0 0.5 -1\nv 0 0.5 -4\nv 0 1 -4\n"
+        "o Tail_01\nf 17 18 19\n";
+    const std::string mtl = "newmtl green\nKd 0.1 0.8 0.2\nnewmtl red\nKd 0.9 0.1 0.1\n";
+    ObjModel m = ParseObj(obj, mtl);
+    CHECK(m.ok && m.parts.size() == 4 && m.triangles == 4 * 2 + 2 + 2 + 1);
+    CHECK(RoleOf(m.parts[0].name) == ObjRole::Body && RoleOf(m.parts[1].name) == ObjRole::Wing && RoleOf(m.parts[2].name) == ObjRole::Wing && RoleOf(m.parts[3].name) == ObjRole::Tail);
+    // colours: the body is green, the wings red (with the light on them)
+    CHECK(m.parts[0].mesh.v[0].g > m.parts[0].mesh.v[0].r && m.parts[1].mesh.v[0].r > m.parts[1].mesh.v[0].g);
+    FitObjModel(m, 1200.0f, 1.0f, 0.0f, 0.0f);
+    CHECK(std::fabs((m.mx[0] - m.mn[0]) - 1200.0f) < 1.0f && std::fabs(m.mn[1]) < 0.01f && std::fabs(m.mx[0] + m.mn[0]) < 1.0f);   // wide as asked, standing on the ground, centred
+    // bad input is refused, never crashes
+    CHECK(!ParseObj("v 1 2\n", "").ok && !ParseObj("v 0 0 0\nf 1 2 9\n", "").ok && !ParseObj("", "").ok && !ParseObj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\nf -1 -2 -3\n", "").error.size());
+    ObjModel neg = ParseObj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n", "");
+    CHECK(neg.ok && neg.triangles == 1);
+}
+
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
@@ -2622,7 +2649,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomMeshes(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomObjModels(); CustomMeshes(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");
