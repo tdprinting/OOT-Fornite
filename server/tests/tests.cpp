@@ -196,6 +196,47 @@ static void AttackRules() {
     AttackResult miss = m.Attack(1, 1000, false);
     CHECK(miss.ok && !miss.hit && m.Find(1000)->health == hp);
 }
+// Jump slashes hit harder, spin attacks catch everyone close, and a raised shield facing the blow takes most of it.
+static void StrikesAndGuard() {
+    Simulation sim = Duel(1, {0, 0}, {50, 0});
+    Match& m = sim.match;
+    m.Find(1)->weapon = {ItemId::KokiriSword, Rarity::Common};
+    auto rest = [&] { for (int i = 0; i < 2 * kTickHz; i++) m.Tick(kDt); m.Find(1000)->health = kMaxHealth; };
+    const AttackResult plain = m.Attack(1, 1000);
+    rest();
+    const AttackResult jump = m.Attack(1, 1000, true, AttackStyle::JumpSlash);
+    CHECK(jump.ok && jump.damage > plain.damage * 1.4f);
+    rest();
+    // A third player just behind the swordsman: a spin catches them, a plain swing doesn't.
+    PlayerState* third = nullptr;
+    for (auto& p : m.Players()) if (p.id != 1 && p.id != 1000) { third = &p; break; }
+    CHECK(third != nullptr);
+    third->alive = true; third->health = kMaxHealth; third->pos = {-40, 0};
+    CHECK(m.Attack(1, 1000).extraHits == 0 && third->health == kMaxHealth);
+    rest();
+    const AttackResult spin = m.Attack(1, 1000, true, AttackStyle::Spin);
+    CHECK(spin.ok && spin.extraHits == 1 && third->health < kMaxHealth);
+    third->alive = false;
+    rest();
+    // Shield up and facing the attacker (who stands towards -x): blocked.
+    PlayerState* t = m.Find(1000);
+    t->hasShield = true; t->shield = {ItemId::HylianShield, Rarity::Common};
+    const AttackResult shielded = m.Attack(1, 1000);
+    rest();
+    t->anim = static_cast<uint8_t>(Anim::Guard);
+    t->rot = -16384;   // facing -x
+    const AttackResult guarded = m.Attack(1, 1000);
+    CHECK(guarded.blocked && guarded.damage < shielded.damage * 0.3f);
+    rest();
+    t->rot = 16384;    // facing away: the shield is on the wrong side
+    const AttackResult behind = m.Attack(1, 1000);
+    CHECK(!behind.blocked && behind.damage == shielded.damage);
+    rest();
+    t->rot = -16384;   // light arrows go through any shield
+    m.Find(1)->weapon = {ItemId::LightArrows, Rarity::Common};
+    for (auto& p : m.Players()) p.ammo.fill(60);
+    CHECK(!m.Attack(1, 1000).blocked);
+}
 static void NoAttacksDuringDrop() {
     Match m(1, MapCircle(), 0);
     m.AddHuman(1);

@@ -2787,9 +2787,33 @@ int GidFor(royale::ItemId id);
 float GidScale(int gid);
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
+// What each other player last picked up, so it can be held up over their head while they show it off, as Link does.
+struct HeldFind { int gid; double at; };
+std::unordered_map<uint16_t, HeldFind> gLastFind;
+constexpr double kHeldFindSeconds = 4.0;   // a find is only shown if the pose comes this soon after taking it
+
+void DrawHeldFinds(PlayState* play) {
+    const double now = ImGui::GetTime();
+    for (const auto& [id, actor] : gActorOf) {
+        auto f = gLastFind.find(id);
+        auto st = gState.find(id);
+        if (f == gLastFind.end() || st == gState.end() || actor == nullptr || f->second.gid < 0) continue;
+        if (st->second.anim != static_cast<uint8_t>(royale::Anim::ItemGet) || now - f->second.at > kHeldFindSeconds) continue;
+        const float size = actor->scale.y / 0.01f;   // grown players hold it higher
+        const float k = GidScale(f->second.gid) * 0.032f * size;   // the size the chest reveal settles at
+        OPEN_DISPS(play->state.gfxCtx);
+        Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
+        Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
+        Matrix_Scale(k, k, k, MTXMODE_APPLY);
+        GetItem_Draw(play, static_cast<s16>(f->second.gid));
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+}
+
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     DrawFlora(play);
+    DrawHeldFinds(play);
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -5310,6 +5334,57 @@ void ApplyRocks(Player* player) {
     }
 }
 
+// What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
+// Returns 0 with *outDist left at 1e9 when there is none.
+static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
+    uint16_t best = 0;
+    float bestDist = 1e9f;
+    for (const auto& [id, actor] : gActorOf) {
+        auto st = gState.find(id);
+        if (st == gState.end() || !st->second.alive) continue;
+        float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
+        float d = std::sqrt(dx * dx + dz * dz);
+        if (d > range * 1.05f) continue;
+        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
+        if (d < bestDist) { bestDist = d; best = id; }
+    }
+    // The mini bosses are big: they count from their edge, not their middle.
+    if (gSession.Client()) {
+        for (const auto& bn : gSession.Client()->Bosses()) {
+            const float dx = bn.x - player->actor.world.pos.x, dz = bn.z - player->actor.world.pos.z;
+            const float d = std::sqrt(dx * dx + dz * dz) - royale::kBossBodyRadius;
+            if (d > range * 1.05f) continue;
+            s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+            s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+            if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
+            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
+        }
+    }
+    *outDist = bestDist;
+    return best;
+}
+
+// The game's own big sword moves (a jump slash: A while Z-targeting; a spin attack: hold and release B) count for their
+// real worth: a jump slash hits harder and a spin catches everyone around you. Reported once, as each one starts.
+static uint8_t gLastStrikeAnim = 0;
+static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8_t anim) {
+    const uint8_t last = gLastStrikeAnim;
+    gLastStrikeAnim = anim;
+    if (anim == last) return;
+    const bool jump = anim == static_cast<uint8_t>(royale::Anim::JumpSlash), spin = anim == static_cast<uint8_t>(royale::Anim::SpinAttack);
+    if (!jump && !spin) return;
+    const royale::WeaponStats w = royale::WeaponOf(hud.weapon);
+    if (w.damage <= 0 || w.ranged) return;
+    float dist = 1e9f;
+    const uint16_t target = PickStrikeTarget(player, w.range, &dist);
+    if (dist < 1e8f) gSession.ReportAttack(target, true, static_cast<uint8_t>(jump ? royale::AttackStyle::JumpSlash : royale::AttackStyle::Spin));
+    else SmashPropInFront(player, w);
+    gAttackCooldown = std::max(gAttackCooldown, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
+}
+
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
@@ -5419,32 +5494,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
-    uint16_t best = 0;
     float bestDist = 1e9f;
-    for (const auto& [id, actor] : gActorOf) {
-        auto st = gState.find(id);
-        if (st == gState.end() || !st->second.alive) continue;
-        float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
-        float d = std::sqrt(dx * dx + dz * dz);
-        if (d > w.range * 1.05f) continue;
-        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
-        s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-        s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
-        if (d < bestDist) { bestDist = d; best = id; }
-    }
-    // The mini bosses are big: they count from their edge, not their middle.
-    if (gSession.Client()) {
-        for (const auto& bn : gSession.Client()->Bosses()) {
-            const float dx = bn.x - player->actor.world.pos.x, dz = bn.z - player->actor.world.pos.z;
-            const float d = std::sqrt(dx * dx + dz * dz) - royale::kBossBodyRadius;
-            if (d > w.range * 1.05f) continue;
-            s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-            s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-            if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
-            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
-        }
-    }
+    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist);
     // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
     s16 aim = player->actor.shape.rot.y;
     if (bestDist < 1e8f) {
@@ -5574,8 +5625,10 @@ void OnPlayerUpdate() {
     // would drag their spawn point toward their old coordinates.
     bool allowed = hud.state == royale::MatchState::Lobby ? InPlayableScene(hud.state) : InField();
     if (allowed) {
+        const uint8_t anim = ClassifyAnim(player);
+        if (hud.state == royale::MatchState::InMatch) ReportStrikeMoves(player, hud, anim);
         gSession.SendLocalPose(player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z,
-                               player->actor.shape.rot.y, ClassifyAnim(player), static_cast<uint8_t>(gPlayState->sceneNum));
+                               player->actor.shape.rot.y, anim, static_cast<uint8_t>(gPlayState->sceneNum));
     }
 
     {   // Adult Power: you grow, and shrink back when it runs out
@@ -5692,7 +5745,29 @@ void ReportEvents(const royale::HudState& hud) {
                         }
                     }
                 }
-                if (e.id == hud.selfId) {
+                // Whether the blow landed on a raised shield facing it: the server took most of it, and it rings off the shield.
+                auto onShield = [&](bool shieldUp, int16_t rot, float tx, float tz) {
+                    if (!shieldUp || e.other == royale::net::kNoPlayer16) return false;
+                    float ax = 0, az = 0;
+                    if (e.other == hud.selfId) { ax = me->actor.world.pos.x; az = me->actor.world.pos.z; }
+                    else if (!KnownPosition(e.other, &ax, &az)) return false;
+                    const s16 off = static_cast<s16>(static_cast<s16>(std::atan2(ax - tx, az - tz) * (32768.0f / 3.14159265f)) - rot);
+                    return std::abs(static_cast<int>(off)) * (3.14159265f / 32768.0f) <= royale::kGuardHalfAngle;
+                };
+                if (e.id == hud.selfId && onShield((me->stateFlags1 & PLAYER_STATE1_SHIELDING) != 0, me->actor.shape.rot.y, me->actor.world.pos.x, me->actor.world.pos.z)) {
+                    Audio_PlaySoundGeneral(NA_SE_IT_SHIELD_REFLECT_SW, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    SparkBurst(gPlayState, me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f,
+                               me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
+                    if (e.other != royale::net::kNoPlayer16) { gIncomingHits.push_back({ e.other, now }); swing(e.other); }
+                } else if (e.id != hud.selfId && gState.count(e.id) && gActorOf.count(e.id) &&
+                           onShield(gState[e.id].anim == static_cast<uint8_t>(royale::Anim::Guard), gState[e.id].rot, gActorOf[e.id]->world.pos.x, gActorOf[e.id]->world.pos.z)) {
+                    Actor* t = gActorOf[e.id];
+                    if (e.other == hud.selfId) { gHitMarkerAt = now; gHitMarkerKill = e.health <= 0.001f; gFloatingNumbers.push_back({ t->world.pos.x, t->world.pos.y, t->world.pos.z, e.amount, now, false }); }
+                    else swing(e.other);
+                    if (std::hypot(t->world.pos.x - me->actor.world.pos.x, t->world.pos.z - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SHIELD_REFLECT_SW);
+                    SparkBurst(gPlayState, t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                } else if (e.id == hud.selfId) {
                     // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
                     Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
                     Player_PlaySfx(&me->actor, NA_SE_VO_LI_DAMAGE_S);
@@ -5731,6 +5806,8 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
+                    gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
@@ -5742,6 +5819,7 @@ void ReportEvents(const royale::HudState& hud) {
                     gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
+                        StartAction(royale::Anim::ItemGet, 0.9f);   // everyone else sees you hold it up
                         Vec3f at = { l.x, py + 30.0f, l.z };
                         Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     }
@@ -7356,6 +7434,7 @@ void OnSceneInit(int16_t) {
     gActorOf.clear();
     gPlaying.clear();
     gMotion.clear();
+    gLastFind.clear();
     gPlate.clear();
     gCorpses.clear();
     gCorpseOf.clear();

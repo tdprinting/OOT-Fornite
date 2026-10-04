@@ -275,18 +275,23 @@ class BotController {
     AttackResult BotAttack(Match& m, PlayerState& p, Memory& mem, uint32_t target, bool hit, float dist = 0.0f) {
         const WeaponStats w = Match::StatsOf(p);
         const ItemId item = p.weapon.item;
-        const AttackResult r = m.Attack(p.id, target, hit);
-        if (!r.ok) return r;
+        if (m.Clock() < p.attackReadyAt) return {};
+        // Pick the move first: a spin attack really catches everyone close, and a jump slash really hits harder.
         Anim pose = PoseForWeapon(w, item);
         float seconds = 0.45f;
+        AttackStyle style = AttackStyle::Normal;
+        const int combo = m.Clock() - mem.lastSwingAt > 1.4f ? 0 : mem.combo + 1;   // 0: the first swing of an exchange
         if (pose == Anim::Attack) {
-            const bool fresh = m.Clock() - mem.lastSwingAt > 1.4f;   // the first swing of an exchange
-            mem.combo = fresh ? 0 : mem.combo + 1;
             int crowd = 0;
             for (const auto& o : m.Players()) if (o.alive && o.id != p.id && Distance(o.pos, p.pos) <= w.range * 1.1f) crowd++;
-            if (crowd >= 2 && rng.Unit() < 0.55f * mem.skill + 0.2f) { pose = Anim::SpinAttack; seconds = 0.75f; }
-            else if (fresh && dist > w.range * 0.5f && rng.Unit() < 0.25f + 0.4f * mem.aggression) { pose = Anim::JumpSlash; seconds = 0.7f; }
-            else if (mem.combo >= 3 && rng.Unit() < 0.3f * mem.skill) { pose = Anim::SpinAttack; seconds = 0.75f; mem.combo = 0; }
+            if (crowd >= 2 && rng.Unit() < 0.55f * mem.skill + 0.2f) { pose = Anim::SpinAttack; style = AttackStyle::Spin; seconds = 0.75f; }
+            else if (combo == 0 && dist > w.range * 0.5f && rng.Unit() < 0.25f + 0.4f * mem.aggression) { pose = Anim::JumpSlash; style = AttackStyle::JumpSlash; seconds = 0.7f; }
+            else if (combo >= 3 && rng.Unit() < 0.3f * mem.skill) { pose = Anim::SpinAttack; style = AttackStyle::Spin; seconds = 0.75f; }
+        }
+        const AttackResult r = m.Attack(p.id, target, hit, style);
+        if (!r.ok) return r;
+        if (pose == Anim::Attack || pose == Anim::JumpSlash || pose == Anim::SpinAttack) {
+            mem.combo = style == AttackStyle::Spin ? 0 : combo;
             mem.lastSwingAt = m.Clock();
         }
         ShowPose(m, mem, pose, seconds);
@@ -1072,7 +1077,7 @@ class BotController {
             }
             mem.strafeDir = -mem.strafeDir;
             mem.strafeFlipAt = m.Clock() + 0.5f;
-        } else if (foeWillAttack && p.hasShield && !mine.ranged && !TwoHanded(p.weapon.item) && m.Clock() >= mem.actUntil && rng.Unit() < 0.25f + 0.5f * mem.caution) {
+        } else if (foeWillAttack && p.hasShield && !mine.ranged && !IsTwoHanded(p.weapon.item) && m.Clock() >= mem.actUntil && rng.Unit() < 0.25f + 0.5f * mem.caution) {
             ShowPose(m, mem, Anim::Guard, 0.4f);   // no dodge this time: shield up, as a player holds R
         }
         Fight(m, p, mem, foe, dist, want, dt, 1.0f);
@@ -1081,7 +1086,6 @@ class BotController {
         TryAttack(m, p, mem, foe, dist);
     }
 
-    static bool TwoHanded(ItemId item) { return item == ItemId::BiggoronSword || item == ItemId::MegatonHammer || item == ItemId::GiantsHammer; }
 
     // A jump (C-Up). Bots move on flat ground, so it is only seen: every client lifts the bot in an arc while it shows the jump.
     void Hop(Match& m, Memory& mem) {

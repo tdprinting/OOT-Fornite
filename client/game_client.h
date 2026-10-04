@@ -106,7 +106,8 @@ class GameClient {
         in.x = x; in.y = y; in.z = z; in.rot = rot; in.anim = anim; in.scene = scene;
         Send(in, false);
     }
-    void ReportAttack(uint16_t target, bool hit) { net::AttackReport m; m.target = target; m.hit = hit; SendIfJoined(m); }
+    // style: 0 an ordinary swing, 1 a jump slash, 2 a spin attack (AttackStyle)
+    void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { net::AttackReport m; m.target = target; m.hit = hit; m.style = style; SendIfJoined(m); }
     // `force` false = auto-pickup while walking (upgrades only); true = the player pressed the swap button.
     void RequestPickup(uint32_t index, bool force = false) { net::PickupRequest m; m.index = index; m.force = force; SendIfJoined(m); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }

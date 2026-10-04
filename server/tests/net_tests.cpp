@@ -180,8 +180,13 @@ static void DecodeRejectsBadValues() {
     CHECK(!Decode(Encode(in), out));
     AttackReport ar, arOut;
     std::vector<uint8_t> bytes = Encode(ar);
-    bytes.back() = 2; // hit must be 0 or 1
+    bytes[bytes.size() - 2] = 2; // hit must be 0 or 1
     CHECK(!Decode(bytes, arOut));
+    bytes = Encode(ar);
+    bytes.back() = 3; // style must be a known AttackStyle
+    CHECK(!Decode(bytes, arOut));
+    ar.style = 2;
+    CHECK(Decode(Encode(ar), arOut) && arOut.style == 2);
     Reject rj, rjOut;
     bytes = Encode(rj);
     bytes.back() = 0;

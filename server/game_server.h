@@ -312,7 +312,7 @@ class GameServer {
             case net::MsgType::AttackReport: {
                 net::AttackReport m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.Attack(c->playerId, m.target, m.hit).ok) stats.rejectedActions++;
+                if (!sim.match.Attack(c->playerId, m.target, m.hit, static_cast<AttackStyle>(m.style)).ok) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PickupRequest: {

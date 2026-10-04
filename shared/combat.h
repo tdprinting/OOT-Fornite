@@ -78,4 +78,11 @@ inline float Scaled(float multiplier, Rarity r) {
     return multiplier < 1.0f ? (std::max)(0.2f, v) : v;
 }
 
+// How a melee weapon was swung. A jump slash hits harder; a spin attack catches everyone within reach. Both take longer to recover from.
+enum class AttackStyle : uint8_t { Normal = 0, JumpSlash = 1, Spin = 2 };
+constexpr float kJumpSlashDamage = 1.5f, kJumpSlashRecovery = 1.3f, kSpinRecovery = 1.4f, kSpinReachBonus = 20.0f;
+// A raised shield (the Guard pose) takes most of a blow that comes from in front; light arrows and explosions go through it.
+constexpr float kGuardBlock = 0.8f, kGuardHalfAngle = 1.2f;   // radians either side of where the player faces
+constexpr bool IsTwoHanded(ItemId item) { return item == ItemId::BiggoronSword || item == ItemId::MegatonHammer || item == ItemId::GiantsHammer; }
+
 } // namespace royale
