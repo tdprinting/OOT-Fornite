@@ -2168,6 +2168,8 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
+            if (static_cast<MeshKind>(k) == MeshKind::Puddle) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 140 && mx[0] - mn[0] < 240);   // lies flat on the ground
+            if (static_cast<MeshKind>(k) == MeshKind::Ripple) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 35 && mx[0] - mn[0] < 45);
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }
@@ -2205,6 +2207,12 @@ static void CustomMeshes() {
         BuildMesh(MeshKind::Dragon, 0).Bounds(upMn, upMx);
         BuildMesh(MeshKind::Dragon, 2).Bounds(dnMn, dnMx);
         CHECK(upMx[1] > dnMx[1] + 200.0f);
+    }
+    for (uint32_t variant = 4; variant < 8; variant++) {   // snow blankets: broad, low sheets for deep snow
+        const MeshData m = BuildMesh(MeshKind::SnowPatch, variant);
+        float mn[3], mx[3];
+        m.Bounds(mn, mx);
+        CHECK(m.Triangles() >= 12 && mn[1] >= -0.01f && mx[1] < 10.0f && mx[0] - mn[0] > 220);
     }
     const MeshData r0 = BuildMesh(MeshKind::Rock, 0), r1 = BuildMesh(MeshKind::Rock, 1);
     bool differ = false;

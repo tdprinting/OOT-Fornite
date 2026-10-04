@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, Ripple, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -611,8 +611,11 @@ inline MeshData Tree(uint32_t variant) {
     return b.mesh;
 }
 
-// A low mound of snow, 200 across and a little over a hand tall: scattered close together they read as a snowy ground.
+// A low mound of snow, 200 across and a little over a hand tall: scattered close together they read as a snowy ground. Variants 4-7 are a
+// blanket instead: a broad, nearly flat sheet about 300 across with a soft hump, laid between the mounds once the snow lies deep.
+inline MeshData SnowBlanket(uint32_t variant);
 inline MeshData SnowPatch(uint32_t variant) {
+    if (variant >= 4) return SnowBlanket(variant);
     Builder b;
     b.inside = {0, -20, 0};
     Lcg rng(800 + variant);
@@ -636,6 +639,80 @@ inline MeshData SnowPatch(uint32_t variant) {
     return b.mesh;
 }
 
+
+inline MeshData SnowBlanket(uint32_t variant) {
+    Builder b;
+    b.inside = {0, -40, 0};
+    Lcg rng(900 + variant);
+    const int n = 12;
+    const float rad[3] = {150.0f, 105.0f, 50.0f}, hgt[3] = {0.0f, 3.5f, 6.0f};
+    std::vector<V3> ring[3];
+    for (int r = 0; r < 3; r++)
+        for (int i = 0; i < n; i++) {
+            const float a = (static_cast<float>(i) + (r == 1 ? 0.5f : 0.0f)) / n * 6.2831853f;
+            const float j = r == 0 ? 0.75f + rng.Next() * 0.5f : 0.85f + rng.Next() * 0.3f;
+            ring[r].push_back({std::cos(a) * rad[r] * j, hgt[r] + (r == 0 ? 0.0f : rng.Next() * 1.5f), std::sin(a) * rad[r] * j});
+        }
+    // The faces are almost level, so the sun shades them all alike; a cool blue edge and a warm top keep the low-poly facets readable.
+    const Rgb edge = {214, 226, 244}, mid = {236, 242, 250}, top = {250, 251, 253};
+    for (int r = 0; r < 2; r++)
+        for (int i = 0; i < n; i++) {
+            const int k = (i + 1) % n;
+            const Rgb c = Mix(r == 0 ? edge : mid, r == 0 ? mid : top, rng.Next() * 0.5f);
+            b.Quad(ring[r][i], ring[r][k], ring[r + 1][k], ring[r + 1][i], c);
+        }
+    for (int i = 0; i < n; i++) b.Tri(ring[2][i], ring[2][(i + 1) % n], {0, 7.0f, 0}, top);
+    return b.mesh;
+}
+
+// A rain puddle, about 200 across and flat on the ground: a rim of wet, dark earth, then water that is deep blue-grey at the edge and pales
+// towards a patch of reflected sky set off to one side (the side the sun comes from). Colours are per vertex and blend smoothly, the way the
+// game's own water is painted; the game layer draws it see-through so the ground shows under the shallow edge.
+inline MeshData Puddle(uint32_t variant) {
+    MeshData m;
+    Lcg rng(1000 + variant);
+    const int n = 14;
+    float jag[n];
+    for (int i = 0; i < n; i++) jag[i] = 0.72f + rng.Next() * 0.45f;
+    // Rings from the rim inwards: radius (share of the outline), how far the centre slides towards the sky patch, and colour.
+    struct RingDef { float r, shift; Rgb c; };
+    const RingDef rings[4] = { {1.00f, 0.00f, {78, 64, 48}}, {0.86f, 0.05f, {46, 58, 72}}, {0.58f, 0.18f, {72, 92, 116}}, {0.26f, 0.34f, {146, 170, 196}} };
+    const V3 sky = {-38.0f, 0, 26.0f};   // where the bright reflection sits (towards the sun, upper left front)
+    auto at = [&](int ring, int i) {
+        const float a = static_cast<float>(i) / n * 6.2831853f;
+        const float r = 100.0f * rings[ring].r * jag[i];
+        return V3{std::cos(a) * r + sky.x * rings[ring].shift, 0.0f, std::sin(a) * r + sky.z * rings[ring].shift};
+    };
+    for (int r = 0; r < 3; r++)
+        for (int i = 0; i < n; i++) {
+            const int k = (i + 1) % n;
+            const V3 a = at(r, i), b = at(r, k), c = at(r + 1, k), d = at(r + 1, i);
+            Put(m, a, rings[r].c); Put(m, b, rings[r].c); Put(m, c, rings[r + 1].c);
+            Put(m, a, rings[r].c); Put(m, c, rings[r + 1].c); Put(m, d, rings[r + 1].c);
+        }
+    const V3 centre = {sky.x * 0.42f, 0.0f, sky.z * 0.42f};
+    const Rgb glint = {178, 198, 220};
+    for (int i = 0; i < n; i++) { Put(m, at(3, i), rings[3].c); Put(m, at(3, (i + 1) % n), rings[3].c); Put(m, centre, glint); }
+    return m;
+}
+
+// One ring of a raindrop's ripple: a thin flat band 40 across, bright at its crest and fading to the water's colour on both sides. The game
+// layer grows and fades it out over a moment, a few at a time on every puddle while it rains.
+inline MeshData Ripple(uint32_t) {
+    MeshData m;
+    const int n = 12;
+    const float rad[3] = {15.0f, 18.0f, 20.0f};
+    const Rgb col[3] = {{120, 140, 162}, {222, 232, 244}, {120, 140, 162}};
+    for (int r = 0; r < 2; r++)
+        for (int i = 0; i < n; i++) {
+            const float a0 = static_cast<float>(i) / n * 6.2831853f, a1 = static_cast<float>(i + 1) / n * 6.2831853f;
+            const V3 p = {std::cos(a0) * rad[r], 0, std::sin(a0) * rad[r]}, q = {std::cos(a1) * rad[r], 0, std::sin(a1) * rad[r]};
+            const V3 s = {std::cos(a1) * rad[r + 1], 0, std::sin(a1) * rad[r + 1]}, t = {std::cos(a0) * rad[r + 1], 0, std::sin(a0) * rad[r + 1]};
+            Put(m, p, col[r]); Put(m, q, col[r]); Put(m, s, col[r + 1]);
+            Put(m, p, col[r]); Put(m, s, col[r + 1]); Put(m, t, col[r + 1]);
+        }
+    return m;
+}
 
 // ---- the cat, in parts (Lilo): smooth shaded ellipsoids in the markings of a grey tabby with a white chest, belly, muzzle and paws -----------------
 // The cat is drawn as a body, a head, four legs and a chain of tail segments so it can walk, sit, groom, stretch and pounce (see the game layer).
@@ -791,6 +868,8 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Grass: return mesh_detail::Grass(variant);
         case MeshKind::Tree: return mesh_detail::Tree(variant);
         case MeshKind::SnowPatch: return mesh_detail::SnowPatch(variant);
+        case MeshKind::Puddle: return mesh_detail::Puddle(variant);
+        case MeshKind::Ripple: return mesh_detail::Ripple(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
