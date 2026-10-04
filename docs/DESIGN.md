@@ -66,19 +66,114 @@ Farore's Wind), and Hyrule Field's large open map.
 
 ### 4.2 Combat and items
 
-| Slot | Items |
-|---|---|
-| Melee | Kokiri Sword, Master Sword, Biggoron's Sword, Megaton Hammer, Deku Stick (each with a rarity tier, see 4.3) |
-| Ranged | Fairy Bow (ammo), Slingshot, Hookshot / Longshot (pull to player), Boomerang |
-| Explosive | Bombs, Bombchus |
-| Magic | Din's Fire, Farore's Wind (self-revive/warp beacon), Nayru's Love (shield) |
-| Defence | Deku Shield, Hylian Shield, Mirror Shield (reflects light arrows) |
-| Heal | Red/Green Potions, Fairy in bottle (auto-revive once), Hearts |
+The loot pool holds 82 Ocarina of Time items in six kinds (the full list is in section 4.2.1). Each kind works differently:
+
+| Kind | How you use it | Slots |
+|---|---|---|
+| Weapon | B attacks with it. Damage, range and speed come from the item and its tier. Some add an effect: Deku Nuts stun, Fire Arrows burn, Ice Arrows freeze, Light Arrows ignore shields, Bombs and Bombchus hurt everyone near the target | 1 (a new one swaps the old, which drops) |
+| Shield | Absorbs a share of damage | 1 |
+| Consumable | Potions and bottled things in the bag. D-pad Down drinks the best-fitting one. The Fairy is never drunk: it revives you once if you would die | 3 |
+| Instant | Used on pickup: Recovery Hearts, Pieces of Heart (four make a container), Heart Containers (+1 max hearts, up to 10), Magic Jar (shortens your ability's recharge) | none |
+| Ability | D-pad Up uses it, then it recharges. Din's Fire, Nayru's Love, Hookshot, Farore's Wind (mark a spot, then jump back), the 12 songs, the Lens of Truth and more | 1 |
+| Gear | Passive. Tunics, boots, gauntlets, masks, scales, bags and charms; one per slot, stacking across slots (resistances, speed, damage dealt) | 7 |
+
+Rarity scales every number: weapon damage, healing, ability strength and duration, gear bonuses.
 
 - PvP damage is applied through the server. The attacker's client reports a hit with the weapon, target and tick;
   the server checks range and line of sight and applies damage. Z-target dodge rolls give i-frames server-side.
 - Health: 3 hearts base, up to 10. Shield value as an overlay, as in Fortnite.
 - No building. Combat is decided by aim, movement, dodge timing and positioning, as in Fortnite Zero Build.
+
+### 4.2.1 Item catalog
+
+Generated from `shared/items.h`; the unit tests check that the table is complete and consistent.
+
+| Item | Kind | Tiers | What it does |
+|---|---|---|---|
+| Deku Stick | Weapon | Common to Uncommon | Weak melee |
+| Kokiri Sword | Weapon | Common to Rare | Fast melee |
+| Master Sword | Weapon | Epic to Legendary | Strong melee |
+| Biggoron's Sword | Weapon | Rare to Epic | Heavy melee, long reach |
+| Megaton Hammer | Weapon | Epic to Legendary | Slow, huge melee hit |
+| Slingshot | Weapon | Common to Rare | Weak, long-range |
+| Fairy Bow | Weapon | Rare to Legendary | Strong, long-range |
+| Boomerang | Weapon | Uncommon to Rare | Mid-range, quick |
+| Bombs | Weapon | Uncommon to Epic | Thrown, explodes on everyone near the target |
+| Bombchus | Weapon | Rare to Epic | Long-range explosive |
+| Deku Nuts | Weapon | Common to Rare | Flash: stuns the target for 2 seconds |
+| Fire Arrows | Weapon | Rare to Epic | Sets the target on fire |
+| Ice Arrows | Weapon | Rare to Epic | Freezes the target: it can't act and takes extra damage |
+| Light Arrows | Weapon | Legendary to Legendary | Huge damage that ignores shields |
+| Deku Shield | Shield | Common to Rare | Absorbs a little damage |
+| Hylian Shield | Shield | Uncommon to Epic | Absorbs a fair amount of damage |
+| Mirror Shield | Shield | Epic to Legendary | Absorbs a lot of damage |
+| Green Potion | Consumable | Common to Rare | Heals 1 heart |
+| Red Potion | Consumable | Uncommon to Epic | Heals 2 hearts |
+| Blue Potion | Consumable | Rare to Legendary | Heals 3 hearts |
+| Fairy | Consumable | Uncommon to Legendary | Revives you once if you would die |
+| Lon Lon Milk | Consumable | Common to Uncommon | Heals 1.5 hearts |
+| Fish | Consumable | Common to Common | Heals half a heart |
+| Blue Fire | Consumable | Uncommon to Rare | Heals half a heart and puts out fire |
+| Bugs | Consumable | Common to Uncommon | Heals a little and cures fire and stun |
+| Poe | Consumable | Rare to Epic | Take half damage for 6 seconds |
+| Recovery Heart | Instant | Common to Uncommon | Heals 1 heart on the spot |
+| Piece of Heart | Instant | Uncommon to Rare | Four make a Heart Container |
+| Heart Container | Instant | Epic to Legendary | +1 maximum heart and heals it |
+| Magic Jar | Instant | Common to Rare | Recharges your ability most of the way |
+| Din's Fire | Ability | Rare to Legendary | Fire burst around you |
+| Farore's Wind | Ability | Epic to Legendary | Mark a spot, then jump back to it |
+| Nayru's Love | Ability | Epic to Legendary | Invulnerable for 4 seconds |
+| Hookshot | Ability | Rare to Epic | Pull the player in front of you to you |
+| Longshot | Ability | Epic to Legendary | Pull from much farther away |
+| Lens of Truth | Ability | Uncommon to Epic | See every player for 10 seconds |
+| Magic Beans | Ability | Common to Rare | Heal over time for 10 seconds |
+| Fairy Ocarina | Ability | Common to Uncommon | Plays a random simple song |
+| Ocarina of Time | Ability | Legendary to Legendary | Plays a random song from the whole list |
+| Zelda's Lullaby | Ability | Uncommon to Epic | Heals 1 heart |
+| Epona's Song | Ability | Uncommon to Rare | Run faster for 6 seconds |
+| Saria's Song | Ability | Uncommon to Rare | See every player for 6 seconds |
+| Sun's Song | Ability | Rare to Epic | Stuns everyone close to you |
+| Song of Time | Ability | Legendary to Legendary | Freezes everyone nearby while you can't be hurt |
+| Song of Storms | Ability | Rare to Epic | Lightning strikes everyone near you |
+| Minuet of Forest | Ability | Uncommon to Rare | Run faster and heal half a heart |
+| Bolero of Fire | Ability | Rare to Epic | Sets everyone near you on fire |
+| Serenade of Water | Ability | Rare to Epic | Heals 1.5 hearts and puts out fire |
+| Nocturne of Shadow | Ability | Rare to Epic | Vanish and reappear somewhere else |
+| Requiem of Spirit | Ability | Rare to Epic | Stuns and hurts everyone near you |
+| Prelude of Light | Ability | Rare to Epic | Heals 1 heart and protects you briefly |
+| Kokiri Tunic | Gear | Common to Uncommon | Plain: slightly less damage taken |
+| Goron Tunic | Gear | Uncommon to Epic | Half damage from fire and explosions |
+| Zora Tunic | Gear | Uncommon to Epic | Less storm damage |
+| Kokiri Boots | Gear | Common to Uncommon | Plain: a little faster |
+| Iron Boots | Gear | Uncommon to Epic | Can't be stunned or frozen, slower |
+| Hover Boots | Gear | Rare to Legendary | Run noticeably faster |
+| Goron's Bracelet | Gear | Common to Rare | +10% melee damage |
+| Silver Gauntlets | Gear | Uncommon to Epic | +20% melee damage |
+| Golden Gauntlets | Gear | Rare to Legendary | +35% melee damage |
+| Keaton Mask | Gear | Common to Uncommon | A little less storm damage |
+| Skull Mask | Gear | Common to Rare | +10% ranged damage |
+| Spooky Mask | Gear | Common to Rare | 8% less damage taken |
+| Bunny Hood | Gear | Uncommon to Epic | Run 20% faster |
+| Goron Mask | Gear | Common to Rare | Less fire and explosion damage |
+| Zora Mask | Gear | Common to Rare | Less storm damage |
+| Gerudo Mask | Gear | Common to Rare | +10% melee damage |
+| Mask of Truth | Gear | Uncommon to Epic | +5% ranged damage and 5% less damage taken |
+| Silver Scale | Gear | Common to Uncommon | A little less storm damage |
+| Golden Scale | Gear | Uncommon to Rare | Less storm damage |
+| Big Quiver | Gear | Uncommon to Epic | +15% ranged damage |
+| Bullet Bag | Gear | Common to Rare | +10% ranged damage |
+| Bomb Bag | Gear | Common to Rare | +10% ranged damage |
+| Forest Medallion | Gear | Rare to Legendary | Run 12% faster |
+| Fire Medallion | Gear | Rare to Legendary | 60% less fire damage |
+| Water Medallion | Gear | Rare to Legendary | 40% less storm damage |
+| Spirit Medallion | Gear | Rare to Legendary | +20% melee damage |
+| Shadow Medallion | Gear | Rare to Legendary | +20% ranged damage |
+| Light Medallion | Gear | Rare to Legendary | 12% less damage taken |
+| Kokiri's Emerald | Gear | Epic to Legendary | 5% less damage taken, a little faster |
+| Goron's Ruby | Gear | Epic to Legendary | Half the explosion damage, 40% less fire damage |
+| Zora's Sapphire | Gear | Epic to Legendary | 25% less storm damage |
+
+Not included (they have no sensible meaning in a battle royale): quest items, trading-sequence items, keys, maps and compasses, Gold Skulltula tokens, the Fishing Rod, Epona herself, and warp songs beyond Nocturne of Shadow's random teleport.
 
 ### 4.3 Loot and rarity tiers
 
@@ -163,27 +258,55 @@ Zero Build replaces building with movement and cover that is already in the map.
 Rupees picked up in the field can buy tiered items from Great Fairy and Happy Mask shop stalls, a stand-in for
 Fortnite's gold bars and vending machines. Not in v1.
 
-### 4.8 Bot AI (implemented in `server/bot.h`)
+### 4.8 Bot AI (implemented in `server/bot.h` and `server/nav.h`)
 Bots are server-side entities driven through the same `Match` calls a human's messages produce (`PickUp`, `Attack`,
-`UsePotion`), so they obey the same range, cooldown and pickup rules. Each tick, per bot, first match wins:
+`UsePotion`, `UseAbility`), so they obey the same range, cooldown and pickup rules.
 
-1. **Heal:** drink a potion when at 1 heart or less, or at 2 or less with no enemy within 250 units.
-2. **Storm:** if the safe zone 15 s from now (shrunk to 90%) won't contain the bot, run to its centre. It still
-   shoots at enemies in range while running, but never chases.
-3. **Fight or flee:** engage the nearest enemy within 900 units if it is within 300, or if the bot's weapon does at
-   least 1.0 damage per second. Melee closes in; ranged weapons hold about 60% of max range and back off when
-   closer than 30%. At 0.8 hearts or less with no potion and a weaker weapon, the bot backs away instead.
-4. **Loot:** walk to the best upgrade within 700 units and pick it up. Value is the improvement over the current
-   weapon or shield, or a potion if carrying fewer than 3, divided by distance. Downgrades and unsupported
-   items (Hookshot, Longshot, Farore's Wind, Nayru's Love) are ignored.
-5. **Wander:** drift to random spots inside the safe zone.
+**Personality.** Each bot rolls its own aggression, caution, greed, aim and reaction time, so they don't all behave alike.
+The host picks a difficulty (Easy, Normal, Hard) in the lobby: it sets aim, reaction time, sight range, how often bots use
+abilities, whether they dodge and kite, and whether they hunt.
 
-Each bot gets a fixed accuracy between 55% and 90%, dropping with distance for ranged weapons. Picking up a weapon
-or shield swaps it, and the old one drops on the ground. Eliminated players drop their kit.
+**Perception and memory.** A bot sees enemies within its sight range (everyone while a Lens of Truth or Saria's Song
+reveal is on) and is alerted, with wider senses, for a few seconds after taking damage. It remembers where it last saw its
+target and goes looking for it. A newly seen enemy isn't engaged until the bot's reaction time has passed.
 
-Known gaps: bots don't use cover, mobility items (Hookshot, Hover Boots, Epona), explosives' area damage, or the
-utility spells. They move in straight lines on a flat plane, so the client side will need a real navigation or
-collision layer for Hyrule Field's terrain. Difficulty levels are not implemented. All numbers are placeholders.
+**Assessment.** `BotController::Advantage` compares how long each side needs to kill the other, from weapon damage per
+second (with bonuses for burn, freeze, stun, pierce and splash), health plus healing in the bag, shields, gear and
+stun/invulnerability. Targets are scored by that advantage, how hurt they are and how far away they are, with a bonus for
+sticking to the current target.
+
+**Decisions, first match wins, each tick:**
+1. Stunned or frozen: nothing.
+2. Heal: drink a potion when critical, or when hurt and nobody is close, or when burning and low.
+3. Ability: use it when it fits (see below), otherwise keep it.
+4. Storm: if the safe zone 15 s from now (shrunk to 90%) won't contain the bot, run for it, shooting but not chasing.
+5. Flee: when the advantage drops below the bot's threshold (more cautious bots leave sooner), run away, leaning toward the
+   zone, for a few seconds without flip-flopping. Use escape abilities, shoot back if possible.
+6. Fight: strafe around the target, step in to melee range or hold distance with ranged weapons, kite melee enemies with a
+   bow while it recharges, sidestep just before the enemy's attack lands (Normal and Hard), never swing at an invulnerable
+   target, and finish stunned ones.
+7. Loot: score every pile by how much it improves the bot's kit (weapons by effective damage, shields, bag space, Fairies,
+   Heart Pieces and Containers while below the heart cap, Recovery Hearts when hurt, abilities by worth, gear slots and
+   tiers), weighted by greed and distance, ignoring loot outside the coming safe zone. A choice is kept unless something
+   is clearly better, and re-evaluated twice a second. Dropped kits from eliminated players are ordinary loot.
+8. Hunt: healthy, aggressive bots close in on a visible weaker enemy or the last place they saw one. In the last six
+   players bots stop waiting and go find each other.
+9. Wander: drift to open spots inside the zone.
+
+**Abilities.** Each ability has its own trigger: Din's Fire and the damage songs when an enemy is in their radius;
+Nayru's Love and Song of Time when about to die; Hookshot or Longshot to reel in a foe out of sword range; Farore's Wind
+marks a spot when safe and jumps back when fleeing, or when far outside the zone; healing songs when hurt; Epona's Song when
+outside the zone or fleeing; Lens of Truth and Saria's Song when nobody is known and the match is late; Nocturne of Shadow to
+escape; the Ocarinas as a gamble when a foe is near or the bot is hurt.
+
+**Navigation.** The host's game probes the floor of Hyrule Field when the match is prepared and builds a `NavGrid` (60 unit
+cells). Bots path with A* over eight neighbours, with no corner cutting, a capped search, string-pulling to a few waypoints
+and repaths when the goal moves. They slide along walls and, if they stop making progress, pick a new heading. Without a
+grid (unit tests, the headless server) they walk straight lines.
+
+Known gaps: the grid is only floor presence, so bots can't tell a low ledge from a cliff or avoid water that has floor
+under it; no use of cover; no line-of-sight (bots see through walls); bots don't use Hover Boots or Epona; all numbers are
+placeholders until the game has been played.
 
 ## 5. Architecture
 

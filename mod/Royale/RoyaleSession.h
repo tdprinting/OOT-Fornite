@@ -90,6 +90,7 @@ class RoyaleSession {
         std::random_device rd;
         uint64_t seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         server = std::make_unique<GameServer>(*hostTransport, seed, kHyruleFieldMap);
+        server->SetBotDifficulty(botDifficulty);
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;
@@ -124,6 +125,8 @@ class RoyaleSession {
 
     // Host only, lobby only: rebuild the world on the measured map (see GameServer::Reconfigure).
     bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid)); }
+
+    void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
     bool StartMatch() { return mode == Mode::Hosting && server && server->StartMatch(); }
@@ -266,6 +269,7 @@ class RoyaleSession {
         }
     }
 
+    BotDifficulty botDifficulty = BotDifficulty::Normal;
     Mode mode = Mode::Idle;
     // Order matters: clients are destroyed before the transports they use.
     std::unique_ptr<net::ENetTransport> hostTransport;

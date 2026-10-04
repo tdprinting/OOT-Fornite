@@ -51,6 +51,8 @@ class GameServer {
         std::vector<uint32_t> humans;
         for (const auto& p : sim.match.Players()) humans.push_back(p.id);
         sim = Simulation(seed, map, 0);
+        sim.bots.SetDifficulty(botDifficulty);
+        if (valid) sim.bots.SetNav(std::make_shared<NavGrid>(map, valid)); // bots path around whatever the validator rejects
         sim.match.SetPlacementValidator(valid);
         sim.match.RegenerateLoot(lootCount);
         for (uint32_t id : humans) sim.match.AddHuman(id);
@@ -89,6 +91,9 @@ class GameServer {
     }
 
     Simulation& Sim() { return sim; }
+    // How well bots play. Survives Reconfigure (which rebuilds the simulation).
+    void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; sim.bots.SetDifficulty(d); }
+    BotDifficulty GetBotDifficulty() const { return botDifficulty; }
     const Stats& GetStats() const { return stats; }
     uint32_t Tick() const { return tick; }
     int HumanCount() const { int n = 0; for (auto& c : clients) n += c.joined; return n; }
@@ -482,6 +487,7 @@ class GameServer {
 
     net::Transport& link;
     Simulation sim;
+    BotDifficulty botDifficulty = BotDifficulty::Normal;
     Circle mapCircle;
     std::vector<Client> clients;
     Stats stats;

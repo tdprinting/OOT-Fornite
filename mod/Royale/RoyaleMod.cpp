@@ -548,6 +548,29 @@ void DrawOverlay() {
         else text(x, y, grey, 20 * scale, "Shield  none");
         y += line;
         text(x, y, h.potions > 0 ? white : grey, 20 * scale, "D-pad Down  Potion x" + std::to_string(h.potions));
+        y += line;
+        if (h.inv.hasAbility) {
+            const royale::Rarity ar = static_cast<royale::Rarity>(h.inv.ability.rarity);
+            const std::string name = ItemLabel(static_cast<royale::ItemId>(h.inv.ability.item), ar);
+            if (h.abilityReadyIn > 0.05f) text(x, y, grey, 20 * scale, "D-pad Up  " + name + "  " + ClockText(h.abilityReadyIn));
+            else text(x, y, RarityU32(ar), 20 * scale, "D-pad Up  " + name + "  READY");
+        } else {
+            text(x, y, grey, 20 * scale, "D-pad Up  no ability");
+        }
+        y += line;
+        if (h.inv.hasMark) { text(x, y, green, 18 * scale, "Farore's Wind: spot marked, use again to return"); y += line; }
+        for (int slot = 0; slot < royale::kGearSlots; slot++) {
+            if (!(h.inv.gearMask & (1 << slot))) continue;
+            const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
+            text(x, y, RarityU32(gr), 17 * scale, ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr));
+            y += 20 * scale;
+        }
+        if (h.invulnLeft > 0) { text(x, y, gold, 18 * scale, "INVULNERABLE " + ClockText(h.invulnLeft)); y += line; }
+        if (h.speedLeft > 0) { text(x, y, green, 18 * scale, "SPEED UP " + ClockText(h.speedLeft)); y += line; }
+        if (h.revealLeft > 0) { text(x, y, green, 18 * scale, "REVEALING " + ClockText(h.revealLeft)); y += line; }
+        if (h.burnLeft > 0) { text(x, y, red, 18 * scale, "BURNING"); y += line; }
+        if (h.stunLeft > 0) { text(x, y, red, 18 * scale, "STUNNED"); y += line; }
+        if (h.shieldLeft > 0) { text(x, y, green, 18 * scale, "DAMAGE REDUCED " + ClockText(h.shieldLeft)); y += line; }
     }
 
     // Top right: which way is the safe zone, relative to the way Link is facing.
@@ -637,6 +660,12 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         else Say("No potions");
     }
 
+    if (in.press.button & BTN_DUP) {
+        if (!hud.inv.hasAbility) Say("No ability");
+        else if (hud.abilityReadyIn > 0.05f) Say("Ability recharging: " + ClockText(hud.abilityReadyIn));
+        else gSession.UseAbility();
+    }
+
     if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
     royale::WeaponStats w = royale::WeaponOf(hud.weapon);
     if (w.damage <= 0) return;
@@ -657,6 +686,23 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         if (d < bestDist) { bestDist = d; best = id; }
     }
     if (bestDist < 1e8f) gSession.ReportAttack(best, true);
+}
+
+// Boots, Epona's Song and friends: the server allows a faster run and the game applies it by stretching the step Link just took.
+// (Teleports and the drop to spawn move far more than a step, so those are left alone.)
+royale::Vec2 gLastPos = {};
+bool gHaveLastPos = false;
+void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
+    const bool active = LiveAndAlive(hud) && InField();
+    if (active && gHaveLastPos && std::fabs(hud.speedMult - 1.0f) > 0.01f) {
+        const float dx = player->actor.world.pos.x - gLastPos.x, dz = player->actor.world.pos.z - gLastPos.z;
+        if (dx * dx + dz * dz < 40.0f * 40.0f) {
+            player->actor.world.pos.x += dx * (hud.speedMult - 1.0f);
+            player->actor.world.pos.z += dz * (hud.speedMult - 1.0f);
+        }
+    }
+    gLastPos = { player->actor.world.pos.x, player->actor.world.pos.z };
+    gHaveLastPos = active;
 }
 
 void OnPlayerUpdate() {
@@ -687,6 +733,7 @@ void OnPlayerUpdate() {
     }
 
     HandleCombatInput(player, hud);
+    ApplySpeedBuffs(player, hud);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
@@ -698,7 +745,7 @@ void OnPlayerUpdate() {
             gSavedHealth = gSaveContext.health;
             gHealthOverridden = true;
         }
-        gSaveContext.healthCapacity = static_cast<s16>(royale::kMaxHealth * 16);
+        gSaveContext.healthCapacity = static_cast<s16>(std::lround(hud.maxHealth * 16.0f));
         // An eliminated player does not die in the game (that would end in the game-over screen). They become an invisible,
         // invulnerable spectator who can still walk around and watch the rest of the match.
         gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : gSaveContext.healthCapacity;
@@ -744,6 +791,15 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     Say("Picked up " + ItemLabel(static_cast<royale::ItemId>(l.item), static_cast<royale::Rarity>(l.rarity)));
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                }
+                break;
+            case royale::ClientEvent::Type::AbilityUsed:
+                if (e.item == royale::net::kRevivedItem) {
+                    Say(e.id == hud.selfId ? "A Fairy saved you!" : nameOf(e.id) + " was revived by a Fairy");
+                } else if (e.item < royale::kItemCount) {
+                    const std::string what = ItemName(static_cast<royale::ItemId>(e.item));
+                    if (e.id == hud.selfId) Say("You used " + what);
+                    else if (hud.haveSelf && std::hypot(e.x - hud.selfX, e.z - hud.selfZ) < 700.0f) Say(nameOf(e.id) + " used " + what);
                 }
                 break;
             case royale::ClientEvent::Type::Eliminated:
@@ -890,6 +946,7 @@ struct UiState {
     char address[64] = "";
     int port = royale::net::kDefaultPort;
     bool waitingRoom = true;
+    int botDifficulty = 1; // 0 easy, 1 normal, 2 hard
     bool loaded = false;
     bool showPosition = false;
     std::string error;
@@ -905,6 +962,8 @@ UiState& Ui() {
         std::snprintf(ui.address, sizeof(ui.address), "%s", CVarGetString(ROYALE_CVAR("Address"), ""));
         ui.port = CVarGetInteger(ROYALE_CVAR("Port"), royale::net::kDefaultPort);
         ui.waitingRoom = CVarGetInteger(ROYALE_CVAR("WaitingRoom"), 1) != 0;
+        ui.botDifficulty = std::clamp(CVarGetInteger(ROYALE_CVAR("BotDifficulty"), 1), 0, 2);
+        gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
     }
     return ui;
 }
@@ -914,6 +973,7 @@ void SaveUi(const UiState& ui) {
     CVarSetString(ROYALE_CVAR("Address"), ui.address);
     CVarSetInteger(ROYALE_CVAR("Port"), ui.port);
     CVarSetInteger(ROYALE_CVAR("WaitingRoom"), ui.waitingRoom ? 1 : 0);
+    CVarSetInteger(ROYALE_CVAR("BotDifficulty"), ui.botDifficulty);
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
 }
 
@@ -1044,6 +1104,16 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (h.isHost) {
         if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
         else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
+        {
+            UiState& ui = Ui();
+            static const char* kLevels[] = { "Easy", "Normal", "Hard" };
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
+                gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
+                SaveUi(ui);
+            }
+            ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
+        }
         ImGui::BeginDisabled(!InGame() || gPendingStart);
         if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
         ImGui::EndDisabled();
@@ -1082,18 +1152,27 @@ void DrawInMatch(const royale::HudState& h) {
     ImGui::Text("Players alive: %d / %d", h.alive, royale::kMaxPlayers);
     if (h.haveSelf) {
         char label[32];
-        std::snprintf(label, sizeof(label), "%.1f hearts", h.selfHealth);
-        ImGui::ProgressBar(h.selfHealth / royale::kMaxHealth, ImVec2(-1, 0), label);
+        std::snprintf(label, sizeof(label), "%.1f / %.1f hearts", h.selfHealth, h.maxHealth);
+        ImGui::ProgressBar(h.selfHealth / std::max(1.0f, h.maxHealth), ImVec2(-1, 0), label);
         if (!h.selfAlive) ImGui::TextColored(kRed, "You have been eliminated.");
         ImGui::Text("Safe zone radius: %.0f", h.safeZone.radius);
         if (h.stormDamagePerSecond > 0) ImGui::TextColored(kRed, "You are in the storm! %.1f hearts per second", h.stormDamagePerSecond);
         else ImGui::TextColored(kGreen, "You are inside the safe zone.");
-        ImGui::Text("Potions: %d", h.potions);
+        ImGui::Text("Potions: %d    Heart pieces: %d / %d", h.potions, h.inv.heartPieces, royale::kHeartPiecesPerContainer);
+        if (h.inv.hasAbility) ImGui::TextColored(RarityIm(static_cast<royale::Rarity>(h.inv.ability.rarity)), "Ability: %s (%s)",
+                                                 ItemLabel(static_cast<royale::ItemId>(h.inv.ability.item), static_cast<royale::Rarity>(h.inv.ability.rarity)).c_str(),
+                                                 h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn).c_str() : "ready");
+        else ImGui::TextColored(kGrey, "Ability: none");
+        for (int slot = 0; slot < royale::kGearSlots; slot++) {
+            if (!(h.inv.gearMask & (1 << slot))) continue;
+            const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
+            ImGui::TextColored(RarityIm(gr), "Gear: %s", ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr).c_str());
+        }
         ImGui::TextColored(RarityIm(h.weaponRarity), "Weapon: %s", ItemLabel(h.weapon, h.weaponRarity).c_str());
         if (h.hasShield) ImGui::TextColored(RarityIm(h.shieldRarity), "Shield: %s", ItemLabel(h.shield, h.shieldRarity).c_str());
         else ImGui::TextColored(kGrey, "Shield: none");
     }
-    ImGui::TextColored(kGrey, "B: attack with your weapon    D-pad Down: drink a potion    Walk over items to pick them up");
+    ImGui::TextColored(kGrey, "B: attack    D-pad Down: drink a potion    D-pad Up: use your ability    Walk over items to pick them up");
     ImGui::Spacing();
     if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
 }

@@ -46,7 +46,7 @@ does nothing by itself. Nothing is added to the world until a lobby is open.
    - Over the internet: use a free VPN like Tailscale on every device (easiest), or forward UDP port 7777 on your router.
 4. **To join:** type the host's address and press **Join lobby**.
 5. You land in the lobby: a player list with the host marked, a **ready** button for everyone but the host, and (if you left the option on) you are taken to the Temple of Time to wait together.
-6. The host presses **Start match**. Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
+6. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match**. Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
 
 You can play alone: press **Host a lobby**, then **Start match**, and you will face bots.
 
@@ -58,12 +58,15 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 
 ## Controls in a match
 - **Walk over items** to pick them up. Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
-- **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.
-- **D-pad Down** drinks a potion.
-- The top-left of the screen shows how many are alive, the storm timer, and what you are holding. An arrow points to the safe zone.
+- **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target. It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.
+- **D-pad Down** drinks a potion (the best one for how hurt you are). A Fairy in your bag is never drunk: it revives you once if you would die.
+- **D-pad Up** uses your ability (Din's Fire, Nayru's Love, Hookshot, Farore's Wind, a song, and more), then it recharges. The HUD shows the countdown.
+- Gear (tunics, boots, masks and so on) works on its own once you pick it up. Heart Pieces and Heart Containers raise your maximum hearts.
+- The top-left of the screen shows how many are alive, the storm timer, what you are holding, your ability, your gear and any effects on you. An arrow points to the safe zone.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
 
 ## What works in this build, and what doesn't yet
 - Everything above is written and compiled, and the server side is unit-tested, but **none of it has been played**. Expect rough edges.
 - The map size is measured automatically when the host presses Start (the host is taken to Hyrule Field first), and loot, spawn points and the storm are kept on ground that exists. Bots walk in straight lines, so they can walk through walls and water.
-- Not in yet: bombs, bombchus and Din's Fire do nothing special (they act like ranged attacks), shields are not drawn on other players, there is no minimap, and Farore's Wind, Nayru's Love, Hookshot and Longshot items are not in the loot.
+- Not in yet: shields and gear are not drawn on other players, there is no minimap, and the item list is long (82 items), so expect balance problems. Bombs and arrows act as instant hits at range; there is no flying projectile yet.
+- Bots now find their way around obstacles in Hyrule Field if the map probe found them, strafe and dodge in fights, flee losing fights, use abilities and hunt in the endgame. They still can't see the difference between a ledge and a cliff, and they see through walls.
