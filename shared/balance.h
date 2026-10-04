@@ -26,6 +26,10 @@ constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one 
 // Share of a player's items that is left on the ground when they are eliminated (money and ammo drop 60%).
 constexpr float kDeathDropShare = 0.5f;
 
+// Magic: abilities spend it, it comes back slowly by itself (about one use per cooldown), and Magic Jars refill it.
+constexpr float kMaxMagic = 100.0f;
+constexpr float kMagicRegenPerSec = 1.2f;
+
 constexpr int kMaxProps = 1200;
 
 // Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.

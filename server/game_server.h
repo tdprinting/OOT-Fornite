@@ -638,6 +638,7 @@ class GameServer {
             inv.burnLeft = (std::max)(0.0f, p->burnUntil - now);
             inv.regenLeft = (std::max)(0.0f, p->regenUntil - now);
             inv.shield = p->armor;
+            inv.magic = sim.match.MagicNow(*p);
             inv.shieldLeft = (std::max)(0.0f, p->dmgTakenUntil - now);
             SendTo(c, inv);
         }

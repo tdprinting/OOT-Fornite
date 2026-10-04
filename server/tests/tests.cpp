@@ -740,7 +740,7 @@ static void AbilityBasics() {
     Match& m = sim.match;
     PlayerState* me = m.Find(1);
     PlayerState* foe = m.Find(1000);
-    auto give = [&](ItemId item, Rarity r = Rarity::Common) { me->ability = {item, r}; me->hasAbility = true; me->abilityReadyAt = 0; };
+    auto give = [&](ItemId item, Rarity r = Rarity::Common) { me->ability = {item, r}; me->hasAbility = true; me->abilityReadyAt = 0; me->magic = kMaxMagic; me->magicStamp = m.Clock(); };
     auto wait = [&](float s) { for (int i = 0; i < static_cast<int>(s * kTickHz); i++) m.Tick(kDt); };
     CHECK(!m.UseAbility(1));                                                          // nothing equipped
 
@@ -842,7 +842,7 @@ static void AbilitiesThatMovePlayers() {
     Match& m = sim.match;
     PlayerState* me = m.Find(1);
     PlayerState* foe = m.Find(1000);
-    auto give = [&](ItemId item, Rarity r = Rarity::Common) { me->ability = {item, r}; me->hasAbility = true; me->abilityReadyAt = 0; };
+    auto give = [&](ItemId item, Rarity r = Rarity::Common) { me->ability = {item, r}; me->hasAbility = true; me->abilityReadyAt = 0; me->magic = kMaxMagic; me->magicStamp = m.Clock(); };
     me->rot = 0x4000;                                                                  // facing +x
     m.DrainEvents();
 
@@ -1118,6 +1118,48 @@ static void BotsPickUpFairiesAndHearts() {
 
 static Simulation DragonArena(int mapId, bool enabled);
 
+
+static void MagicMeter() {
+    Simulation sim = Duel(1, {0, 0}, {3000, 0});
+    Match& m = sim.match;
+    PlayerState* me = m.Find(1);
+    me->ability = {ItemId::DinsFire, Rarity::Common}; me->hasAbility = true; me->abilityReadyAt = 0;
+    CHECK(std::abs(m.MagicNow(*me) - kMaxMagic) < 0.01f);                 // everybody starts full
+    CHECK(m.UseAbility(1));
+    CHECK(std::abs(m.MagicNow(*me) - (kMaxMagic - AbilityMagic(ItemId::DinsFire))) < 0.5f);   // it cost magic
+    // It refills by itself, at about one use per cooldown.
+    me->abilityReadyAt = 0;
+    const float before = m.MagicNow(*me);
+    for (int i = 0; i < 10 * kTickHz; i++) sim.Tick(1.0f / kTickHz);
+    CHECK(m.MagicNow(*me) > before + 9.0f && m.MagicNow(*me) <= kMaxMagic);
+    // Without enough magic nothing fires and nothing is spent (and no cooldown starts).
+    me->magic = 5.0f; me->magicStamp = m.Clock();
+    me->ability = {ItemId::NayrusLove, Rarity::Common}; me->abilityReadyAt = 0;
+    CHECK(!m.UseAbility(1) && !m.Invulnerable(*me) && me->abilityReadyAt == 0);
+    // A Magic Jar tops it up, and is refused when there is nothing to refill.
+    me->magic = 10.0f; me->magicStamp = m.Clock();
+    me->pos = {100, 0};
+    const size_t jar = m.AddLoot({{100, 0}, ItemId::MagicJar, Rarity::Common, false});
+    CHECK(m.PickUp(1, jar, false) && m.MagicNow(*me) >= 45.0f);
+    me->magic = kMaxMagic; me->magicStamp = m.Clock(); me->abilityReadyAt = 0;
+    const size_t jar2 = m.AddLoot({{100, 0}, ItemId::MagicJar, Rarity::Common, false});
+    CHECK(!m.PickUp(1, jar2, false));
+    // Every ability has a cost, and none is free or more than the meter holds.
+    for (int i = 0; i < kItemCount; i++) {
+        const ItemId id = static_cast<ItemId>(i);
+        if (DefOf(id).kind != ItemKind::Ability) continue;
+        CHECK(AbilityMagic(id) >= 10.0f && AbilityMagic(id) <= kMaxMagic * 0.5f);
+        CHECK(AbilityMagic(id) <= AbilityOf(id).cooldown * kMagicRegenPerSec * 1.8f);   // the meter refills about as fast as the cooldown runs
+    }
+    // Bots do not try abilities they cannot pay for.
+    Simulation botSim = Duel(5, {1900, 0}, {0, 0});
+    PlayerState* bot = botSim.match.Find(1000);
+    bot->ability = {ItemId::SongOfTime, Rarity::Common}; bot->hasAbility = true; bot->abilityReadyAt = 0;
+    bot->magic = 0.0f; bot->magicStamp = botSim.match.Clock();
+    botSim.match.Find(1)->health = botSim.match.Find(1)->maxHealth;
+    for (int i = 0; i < 3 * kTickHz; i++) botSim.Tick(1.0f / kTickHz);
+    CHECK(botSim.match.Clock() < bot->abilityReadyAt || bot->abilityReadyAt == 0);
+}
 
 static void SeasonsAndWeather() {
     // Pure and deterministic: same seed, map and spell give the same sky; the first spell is fair; no intensity means no weather at all.
@@ -2312,7 +2354,7 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

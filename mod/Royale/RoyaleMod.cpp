@@ -2352,7 +2352,8 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     if (h.inv.hasAbility) {
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
         const float cd = royale::AbilityOf(id).cooldown;
-        slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
+        const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
+        slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
                           cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id });
     } else {
         slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11, none });
@@ -2383,7 +2384,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
             if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
             else if (sl.action == 10 && !h.inv.potions.empty()) gSession.RequestUsePotion();
-            else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f) gSession.UseAbility();
+            else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f && h.magic + 0.001f >= royale::AbilityMagic(static_cast<royale::ItemId>(h.inv.ability.item))) gSession.UseAbility();
         }
         x += w + gap;
     }
@@ -2935,9 +2936,23 @@ void DrawOverlay() {
         std::snprintf(label, sizeof(label), "%d", static_cast<int>(std::lround(fill * 100.0f)));
         text(bx + bw + 8.0f * unit, by - 4.0f * unit, IM_COL32(150, 200, 255, 255), 14.0f * unit, label);
     }
+    // The magic meter, a green bar under the shield bar: abilities spend it, it refills on its own, Magic Jars top it up.
+    {
+        const float unit = ds.y / 240.0f;
+        const float bx = 30.0f * unit, by = 57.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 6.0f * unit;
+        const float fill = std::clamp(h.magic / royale::kMaxMagic, 0.0f, 1.0f);
+        const float need = h.inv.hasAbility ? royale::AbilityMagic(static_cast<royale::ItemId>(h.inv.ability.item)) / royale::kMaxMagic : 0.0f;
+        dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, 170), 3.0f);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(15, 40, 20, 200), 2.0f);
+        if (fill > 0.0f) {
+            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), fill >= need ? IM_COL32(60, 200, 90, 255) : IM_COL32(150, 170, 70, 255), 2.0f);
+            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(170, 255, 190, 170), 2.0f);
+        }
+        if (need > 0.0f) dl->AddLine(ImVec2(bx + bw * need, by - 1), ImVec2(bx + bw * need, by + bh + 1), IM_COL32(255, 255, 255, 200), 1.5f);   // what your ability costs
+    }
 
     // Top left: the numbers (below the hearts and the shield bar).
-    float x = 16 * scale, y = ds.y * 0.24f, line = 24 * scale;
+    float x = 16 * scale, y = ds.y * 0.27f, line = 24 * scale;
     text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
     y += line;
     if (h.stormPhase >= royale::kStormPhaseCount) {
@@ -3431,6 +3446,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (in.press.button & BTN_DUP) {
         if (!hud.inv.hasAbility) Say("No ability");
         else if (hud.abilityReadyIn > 0.05f) Say("Ability recharging: " + ClockText(hud.abilityReadyIn));
+        else if (hud.magic + 0.001f < royale::AbilityMagic(static_cast<royale::ItemId>(hud.inv.ability.item))) Say("Not enough magic (" + std::to_string(static_cast<int>(hud.magic)) + " of " + std::to_string(static_cast<int>(royale::AbilityMagic(static_cast<royale::ItemId>(hud.inv.ability.item)))) + ")");
         else {
             gSession.UseAbility();
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);

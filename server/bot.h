@@ -516,6 +516,7 @@ class BotController {
     // Use the ability if now is a good moment for this particular one. Returns true if it fired.
     bool TryAbility(Match& m, PlayerState& p, Memory& mem, const Situation& s) {
         if (!p.hasAbility || m.Clock() < p.abilityReadyAt || m.Clock() < mem.abilityTryAt) return false;
+        if (m.MagicNow(p) + 0.001f < AbilityMagic(p.ability.item)) return false;   // out of magic
         mem.abilityTryAt = m.Clock() + 0.35f;
         const Tuning t = TuningFor(difficulty);
         const float d = s.dist;

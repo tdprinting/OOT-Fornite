@@ -114,7 +114,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::RecoveryHeart, "Recovery Heart", kInstant, rC, rU, "Heals 1 heart on the spot"},
     {ItemId::HeartPiece, "Piece of Heart", kInstant, rU, rR, "Four make a Heart Container"},
     {ItemId::HeartContainer, "Heart Container", kInstant, rE, rL, "+1 maximum heart and heals it"},
-    {ItemId::MagicJar, "Magic Jar", kInstant, rC, rR, "Recharges your ability most of the way"},
+    {ItemId::MagicJar, "Magic Jar", kInstant, rC, rR, "Refills your magic and recharges your ability"},
     // abilities
     {ItemId::DinsFire, "Din's Fire", kAbility, rR, rL, "Fire burst around you"},
     {ItemId::FaroresWind, "Farore's Wind", kAbility, rE, rL, "Mark a spot, then jump back to it"},
@@ -416,6 +416,21 @@ constexpr AbilityDef AbilityOf(ItemId id) {
         case ItemId::PreludeOfLight:   return {26, {{{T::Heal, 0, 1.0f, 0}, {T::Invulnerable, 0, 0, 1.5f}}}};
         case ItemId::ShockwaveGrenade: return {16, {{{T::Shockwave, 450, 380, 0.8f}}}};
         default:                       return {};
+    }
+}
+
+// What using an ability costs from the magic meter (kMaxMagic is 100): the strong ones cost the most.
+constexpr float AbilityMagic(ItemId id) {
+    switch (id) {
+        case ItemId::DinsFire: return 30;        case ItemId::FaroresWind: return 20;     case ItemId::NayrusLove: return 40;
+        case ItemId::Hookshot: return 10;        case ItemId::Longshot: return 12;        case ItemId::LensOfTruth: return 25;
+        case ItemId::MagicBeans: return 20;      case ItemId::FairyOcarina: return 15;    case ItemId::OcarinaOfTime: return 15;
+        case ItemId::ZeldasLullaby: return 20;   case ItemId::EponasSong: return 15;      case ItemId::SariasSong: return 20;
+        case ItemId::SunsSong: return 25;        case ItemId::SongOfTime: return 45;      case ItemId::SongOfStorms: return 30;
+        case ItemId::MinuetOfForest: return 20;  case ItemId::BoleroOfFire: return 25;    case ItemId::SerenadeOfWater: return 25;
+        case ItemId::NocturneOfShadow: return 20; case ItemId::RequiemOfSpirit: return 35; case ItemId::PreludeOfLight: return 30;
+        case ItemId::ShockwaveGrenade: return 25;
+        default: return 0;
     }
 }
 

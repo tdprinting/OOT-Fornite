@@ -47,6 +47,8 @@ struct PlayerState {
     Equipped ability = {ItemId::DinsFire, Rarity::Common};
     bool hasAbility = false;
     float abilityReadyAt = 0;
+    float magic = kMaxMagic;                               // the magic meter as of magicStamp (it refills by itself; see Match::MagicNow)
+    float magicStamp = 0;
     bool hasMark = false;                                  // Farore's Wind
     Vec2 mark = {};
     float markExpires = 0;
@@ -216,6 +218,7 @@ class Match {
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
         nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
+        for (auto& pl : players) { pl.magic = kMaxMagic; pl.magicStamp = clock; }
         spell = -1; boltCount = 0; weather = Weather{PickSeason(wopt, seed), Sky::Clear, 0};
         Enter(MatchState::Countdown);
         return true;
@@ -649,14 +652,20 @@ class Match {
     // Use the ability slot. Fails (and costs nothing) if there is no ability, it is still recharging, the player is stunned, or the
     // ability needs a target that isn't there (Hookshot with nobody in front). Farore's Wind marks a spot the first time and jumps back
     // to it the second time.
+    // Magic: the stored value plus what has refilled since it was stored.
+    float MagicNow(const PlayerState& p) const { return (std::min)(kMaxMagic, p.magic + (std::max)(0.0f, clock - p.magicStamp) * kMagicRegenPerSec); }
+    void AddMagic(PlayerState& p, float amount) { p.magic = (std::max)(0.0f, (std::min)(kMaxMagic, MagicNow(p) + amount)); p.magicStamp = clock; p.dirty = true; }
+
     bool UseAbility(uint32_t id) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || state != MatchState::InMatch || !p->hasAbility) return false;
         if (clock < p->abilityReadyAt || clock < p->stunUntil || clock < p->frozenUntil) return false;
         const ItemId item = p->ability.item;
+        const float cost = AbilityMagic(item);
+        if (MagicNow(*p) + 0.001f < cost) return false;   // not enough magic
         bool startsCooldown = true;
         if (!RunAbility(*p, item, p->ability.rarity, &startsCooldown)) return false;
-        if (startsCooldown) p->abilityReadyAt = clock + AbilityOf(item).cooldown;
+        if (startsCooldown) { p->abilityReadyAt = clock + AbilityOf(item).cooldown; AddMagic(*p, -cost); }
         p->dirty = true;
         MatchEvent e{MatchEvent::Type::AbilityUsed};
         e.a = id; e.item = static_cast<uint8_t>(item); e.x = p->pos.x; e.z = p->pos.z;
@@ -1268,10 +1277,13 @@ class Match {
                 p.maxHealth = (std::min)(kMaxHealthCap, p.maxHealth + 1.0f);
                 p.health = (std::min)(p.maxHealth, p.health + 1.0f);
                 return true;
-            case InstantEffect::MagicJar:
-                if (!p.hasAbility || clock >= p.abilityReadyAt) return false;
-                p.abilityReadyAt = clock + (p.abilityReadyAt - clock) * 0.4f;
+            case InstantEffect::MagicJar: {
+                const bool needsMagic = MagicNow(p) < kMaxMagic - 0.5f, recharging = p.hasAbility && clock < p.abilityReadyAt;
+                if (!needsMagic && !recharging) return false;
+                AddMagic(p, 35.0f + 15.0f * RarityScale(rarity));
+                if (recharging) p.abilityReadyAt = clock + (p.abilityReadyAt - clock) * 0.4f;
                 return true;
+            }
             default:
                 return false;
         }

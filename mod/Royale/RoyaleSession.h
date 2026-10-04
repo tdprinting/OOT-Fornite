@@ -75,6 +75,7 @@ struct HudState {
     float maxHealth = kMaxHealth;        // grows with Heart Containers
     InventoryInfo inv;                   // bag, ability, gear and timed effects (raw; use the *Left fields below)
     float abilityReadyIn = 0;            // seconds until the ability can be used again (0 = ready)
+    float magic = kMaxMagic;             // the magic meter now (0 to kMaxMagic); abilities spend it
     float invulnLeft = 0, speedLeft = 0, revealLeft = 0, stunLeft = 0, burnLeft = 0, shieldLeft = 0;
     float speedMult = 1;                 // movement speed multiplier from gear and songs (1 = normal)
     std::vector<RosterRow> roster;
@@ -274,6 +275,7 @@ class RoyaleSession {
         h.inv = client->Inventory();
         h.maxHealth = h.inv.maxHealth;
         h.abilityReadyIn = client->AbilityReadyIn();
+        h.magic = client->MagicNow();
         h.invulnLeft = client->Left(h.inv.invulnLeft);
         h.speedLeft = client->Left(h.inv.speedLeft);
         h.revealLeft = client->Left(h.inv.revealLeft);

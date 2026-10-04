@@ -33,6 +33,7 @@ struct ClientEvent {
 struct InventoryInfo {
     float maxHealth = kMaxHealth;
     float shield = 0; // the shield bar, 0 to kMaxShield
+    float magic = kMaxMagic; // the magic meter as of receivedAt
     int heartPieces = 0;
     int rupees = 0;
     std::array<uint8_t, kAmmoKinds> ammo = {};
@@ -127,6 +128,8 @@ class GameClient {
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
     void ReportSmash(size_t index) { net::PropSmashRequest m; m.index = static_cast<uint16_t>(index); SendIfJoined(m); } // I broke a rock or cut a bush
     const std::set<size_t>& BrokenProps() const { return brokenProps; }
+    // The magic meter now: what the server said, plus the refill since then.
+    float MagicNow() const { return (std::min)(kMaxMagic, inventory.magic + (std::max)(0.0f, localClock - inventory.receivedAt) * kMagicRegenPerSec); }
     const Weather& CurrentWeather() const { return weather; }
     float WeatherSecondsLeft() const { return (std::max)(0.0f, weatherSeconds - (localClock - weatherAt)); }
     void SelectMap(int id) { net::SelectMapRequest m; m.map = static_cast<uint8_t>(id); SendIfJoined(m); } // host only, lobby only
@@ -321,7 +324,7 @@ class GameClient {
                 net::EvInventory m;
                 if (!net::Decode(data, m)) break;
                 inventory.rupees = m.rupees; inventory.ammo = m.ammo;
-                inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
+                inventory.maxHealth = m.maxHealth; inventory.shield = m.shield; inventory.magic = m.magic; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions; inventory.reserve = m.reserve;
                 inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
                 inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
                 inventory.invulnLeft = m.invulnLeft; inventory.speedLeft = m.speedLeft; inventory.speedMult = m.speedMult;
