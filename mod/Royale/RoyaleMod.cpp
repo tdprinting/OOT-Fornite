@@ -53,6 +53,11 @@ extern "C" {
 #include "objects/object_os_anime/object_os_anime.h" // the Kokiri animations
 #include "objects/object_oF1d_map/object_oF1d_map.h" // the Goron NPC
 #include "objects/object_ge1/object_ge1.h"         // the Gerudo NPC
+#include "objects/object_dodongo/object_dodongo.h" // the Dodongo (a mini boss)
+#include "objects/object_ik/object_ik.h"           // the Iron Knuckle (a mini boss)
+#include "objects/object_wf/object_wf.h"           // the Wolfos (a mini boss)
+#include "objects/object_sk2/object_sk2.h"         // the Stalfos (a mini boss)
+#include "objects/object_fd2/object_fd2.h"         // Volvagia (the dragons)
 #include "regs.h"                                // WREG, for the game's own minimap switch
 extern PlayState* gPlayState;
 
@@ -1422,10 +1427,155 @@ struct BossActor {
     float alt = 0, talt = 0;     // height above the ground, smoothed / latest (the dragon flies)
     int mode = 0;                // royale::DragonMode
     bool initialised = false;
+    // the game's own enemy model for the mini bosses (see BossModelOf)
+    SkelAnime sk;
+    Vec3s joint[64] = {};
+    Vec3s morph[64] = {};
+    bool skReady = false;
+    const void* playing = nullptr;
+    float hurtAge = 10.0f;       // seconds since it was last hurt
+    float lastHp = 1.0f;
+    int swings = 0;              // which of its two attacks comes next
+    float walkBlend = 0.0f;
 };
 std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
 std::unordered_map<const Actor*, uint32_t> gBossOf;
 std::unordered_map<uint32_t, int> gBossKindSeen;      // remembered after it is gone, for the messages
+
+// The seven mini bosses are the game's own enemies, each with its real skeleton and animations: a Dodongo, two Iron Knuckles, a Wolfos and a white
+// Wolfos, and a Stalfos. They are drawn just as the game draws them (same skeleton, same colour tricks); the server decides where they go and what they
+// hit, and tells us when a blow starts so the right swing plays (the blow lands about half a second in).
+struct BossModel {
+    const char* skeleton;
+    int limbs;
+    bool flex;
+    const char* idle; const char* walk; const char* attack[2]; const char* hurt;
+    float scale;            // the game's own actor scale
+    float idleSpeed;        // 0 holds the first frame (the Iron Knuckle's stance)
+    int look;               // 0 plain, 1 Iron Knuckle gold, 2 Iron Knuckle green, 3 Wolfos, 4 white Wolfos, 5 Stalfos
+};
+BossModel BossModelOf(int kind) {
+    switch (kind) {
+        case 0: case 6: return { gDodongoSkel, 31, false, gDodongoWaitAnim, gDodongoWalkAnim, { gDodongoSweepTailRightAnim, gDodongoSweepTailLeftAnim }, gDodongoDamageAnim, 0.01875f, 1.0f, 0 };
+        case 1: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleVerticalAttackAnim, gIronKnuckleHorizontalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 1 };
+        case 5: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleHorizontalAttackAnim, gIronKnuckleVerticalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 2 };
+        case 2: return { gWolfosWhiteSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.01f, 1.0f, 4 };
+        case 3: return { gWolfosNormalSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.0075f, 1.0f, 3 };
+        default: return { gStalfosSkel, 61, false, gStalfosMiddleGuardAnim, gStalfosSlowAdvanceAnim, { gStalfosDownSlashAnim, gStalfosUpSlashAnim }, gStalfosFlinchFromHitFrontAnim, 0.015f, 1.0f, 5 };
+    }
+}
+
+Gfx* BossEnvDl(PlayState* play, u8 pr, u8 pg, u8 pb, u8 er, u8 eg, u8 eb) {
+    Gfx* dl = static_cast<Gfx*>(Graph_Alloc(play->state.gfxCtx, 4 * sizeof(Gfx)));
+    Gfx* h = dl;
+    gDPPipeSync(h++);
+    gDPSetPrimColor(h++, 0, 0, pr, pg, pb, 255);
+    gDPSetEnvColor(h++, er, eg, eb, 255);
+    gSPEndDisplayList(h++);
+    return dl;
+}
+
+int gBossLook = 0;
+s32 Boss_OverrideLimb(PlayState* play, s32 limb, Gfx** dList, Vec3f*, Vec3s*, void*) {
+    if (gBossLook == 1 || gBossLook == 2) {   // Iron Knuckle: only the whole-armour pieces are drawn (the broken-armour limbs are not)
+        if (limb == 28 || limb == 29) *dList = nullptr;
+    } else if (gBossLook == 5 && limb == 11) {   // the Stalfos' eyes glow, pulsing
+        OPEN_DISPS(play->state.gfxCtx);
+        gDPPipeSync(POLY_OPA_DISP++);
+        gDPSetEnvColor(POLY_OPA_DISP++, 80 + std::abs(static_cast<int>(std::sin(play->gameplayFrames * 0.1f) * 175.0f)), 0, 0, 255);
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    return 0;
+}
+
+void Boss_PostLimb(PlayState* play, s32 limb, Gfx**, Vec3s*, void*) {
+    if (gBossLook != 1 && gBossLook != 2) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    auto xlu = [&](const char* dl) {
+        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPDisplayList(POLY_XLU_DISP++, (Gfx*)dl);
+    };
+    switch (limb) {   // the armour's see-through decals, as the game's Iron Knuckle draws them
+        case 12: xlu(object_ik_DL_016D88); break;
+        case 22: xlu(object_ik_DL_016F88); break;
+        case 24: xlu(object_ik_DL_016EE8); break;
+        case 26: xlu(gIronKnuckleArmorRivetAndSymbolDL); break;
+        case 27: xlu(object_ik_DL_016CD8); break;
+        default: break;
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void MiniBoss_Update(Actor* actor, PlayState* play, BossActor& b) {
+    const BossModel m = BossModelOf(b.kind);
+    if (!b.skReady) {
+        if (m.flex) SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
+        else SkelAnime_Init(play, &b.sk, (SkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
+        b.skReady = true;
+        b.lastHp = b.hp;
+    }
+    const float dt = 1.0f / royale::kTickHz;
+    b.hurtAge += dt;
+    if (b.hp < b.lastHp - 0.02f) b.hurtAge = 0.0f;
+    b.lastHp = b.hp;
+    static std::unordered_map<const Actor*, float> lastSmash;
+    float& before = lastSmash[actor];
+    const bool newSwing = b.smashAge < 0.05f && before >= 0.05f;
+    before = b.smashAge;
+    const bool swinging = b.smashAge < 1.1f;
+    const char* want;
+    float speed = 1.0f;
+    bool loop = true;
+    if (newSwing) b.swings++;
+    if (swinging) { want = m.attack[(b.swings & 1)]; loop = false; }
+    else if (b.hurtAge < 0.45f) { want = m.hurt; loop = false; }
+    else if (b.moved > 0.5f) want = m.walk;
+    else { want = m.idle; speed = m.idleSpeed; }
+    if (b.playing != (const void*)want || newSwing) {
+        Animation_Change(&b.sk, (AnimationHeader*)want, speed, 0.0f, Animation_GetLastFrame((void*)want), loop ? ANIMMODE_LOOP : ANIMMODE_ONCE, -4.0f);
+        b.playing = want;
+    }
+    SkelAnime_Update(&b.sk);
+}
+
+void MiniBoss_Draw(Actor* actor, PlayState* play, const BossActor& b) {
+    if (!b.skReady) return;
+    const BossModel m = BossModelOf(b.kind);
+    const float scale = m.scale * 1.55f * royale::kBossDefs[b.kind].scale;   // mini bosses are bigger than the game's own
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    switch (m.look) {
+        case 1:
+            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 245, 225, 155, 30, 30, 0));
+            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 255, 40, 0, 40, 0, 0));
+            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 255, 255, 255, 20, 40, 30));
+            break;
+        case 2:
+            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 55, 65, 55, 0, 0, 0));
+            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
+            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
+            break;
+        case 3: case 4: {
+            static const char* normal[4] = { gWolfosNormalEyeOpenTex, gWolfosNormalEyeHalfTex, gWolfosNormalEyeNarrowTex, gWolfosNormalEyeHalfTex };
+            static const char* white[4] = { gWolfosWhiteEyeOpenTex, gWolfosWhiteEyeHalfTex, gWolfosWhiteEyeNarrowTex, gWolfosWhiteEyeHalfTex };
+            const int eye = (play->gameplayFrames / 6) % 40 == 0 ? 2 : 0;
+            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)(m.look == 3 ? normal : white)[eye]);
+            break;
+        }
+        default: break;
+    }
+    // Damage flash: white for a moment after a hit
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    gBossLook = m.look;
+    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Boss_OverrideLimb, Boss_PostLimb, actor);
+    gBossLook = 0;
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b);
 
 void Boss_Update(Actor* actor, PlayState* play) {
     auto of = gBossOf.find(actor);
@@ -1450,6 +1600,8 @@ void Boss_Update(Actor* actor, PlayState* play) {
     }
     actor->shape.rot.y = b.rot;
     actor->world.rot.y = b.rot;
+    if (!royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) MiniBoss_Update(actor, play, b);
+    else Dragon_UpdateModel(actor, play, b);
 }
 
 // ---- the glider ---------------------------------------------------------------------------------------------------------------
@@ -1557,7 +1709,7 @@ void ReconcileLocalGlider(bool want) {
 
 constexpr float kDragonDrawScale = 0.55f; // the mesh is 1200 across with its wings out
 
-void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
+void Dragon_DrawBlocks(Actor* actor, PlayState* play, const BossActor& b) {
     const royale::BossKind kind = static_cast<royale::BossKind>(b.kind);
     const uint32_t theme = static_cast<uint32_t>(kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
@@ -1583,6 +1735,82 @@ void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
     gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+
+// The major bosses are Volvagia, the game's own dragon boss (the Fire Temple's), with its real skeleton, eyes, scrolling-lava skin and animations: its
+// idle sway, its fire-breathing, its claw swipe, and the vulnerable pose when it comes down. Each map's dragon is tinted for its place.
+const char* DragonAnim(int mode) {
+    switch (static_cast<royale::DragonMode>(mode)) {
+        case royale::DragonMode::Breath: return gHoleVolvagiaBreatheFireAnim;
+        case royale::DragonMode::Cast: return gHoleVolvagiaClawSwipeAnim;
+        case royale::DragonMode::Swoop: return gHoleVolvagiaHitAnim;
+        case royale::DragonMode::Landed: return gHoleVolvagiaVulnerableAnim;
+        case royale::DragonMode::Climb: return gHoleVolvagiaTurnAnim;
+        default: return gHoleVolvagiaIdleAnim;
+    }
+}
+
+void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b) {
+    if (!b.skReady) {
+        SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)gHoleVolvagiaSkel, nullptr, b.joint, b.morph, 37);
+        b.skReady = true;
+        b.lastHp = b.hp;
+    }
+    b.hurtAge += 1.0f / royale::kTickHz;
+    if (b.hp < b.lastHp - 0.01f) b.hurtAge = 0.0f;
+    b.lastHp = b.hp;
+    const char* want = b.hurtAge < 0.5f && b.mode != static_cast<int>(royale::DragonMode::Breath) ? gHoleVolvagiaDamagedAnim : DragonAnim(b.mode);
+    if (b.playing != (const void*)want) {
+        const bool loopIt = want == gHoleVolvagiaIdleAnim || want == gHoleVolvagiaVulnerableAnim;
+        Animation_Change(&b.sk, (AnimationHeader*)want, 1.0f, 0.0f, Animation_GetLastFrame((void*)want), loopIt ? ANIMMODE_LOOP : ANIMMODE_ONCE, -6.0f);
+        b.playing = want;
+    }
+    SkelAnime_Update(&b.sk);
+}
+
+float gDragonJaw = 0.0f;
+s32 Dragon_OverrideLimb(PlayState* play, s32 limb, Gfx**, Vec3f*, Vec3s* rot, void*) {
+    switch (limb) {
+        case 35: case 36: rot->z = static_cast<s16>(rot->z - gDragonJaw * 0.1f); break;
+        case 32: rot->z = static_cast<s16>(rot->z + gDragonJaw); break;
+        default: break;
+    }
+    if (limb == 32 || limb == 35 || limb == 36) {
+        OPEN_DISPS(play->state.gfxCtx);
+        gDPPipeSync(POLY_OPA_DISP++);
+        gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 0);
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    return 0;
+}
+
+void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
+    if (!b.skReady) { Dragon_DrawBlocks(actor, play, b); return; }
+    const uint32_t theme = static_cast<uint32_t>(b.kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
+    static const u8 tint[5][3] = { {255, 255, 255}, {130, 190, 255}, {170, 255, 150}, {195, 150, 255}, {255, 228, 165} };
+    static const char* eyes[3] = { gHoleVolvagiaEyeOpenTex, gHoleVolvagiaEyeHalfTex, gHoleVolvagiaEyeClosedTex };
+    const float t = static_cast<float>(play->gameplayFrames);
+    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
+    const float bob = landed ? 0.0f : std::sin(t * 0.11f) * 14.0f;
+    float pitch = 0.0f;
+    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
+    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f;
+    gDragonJaw = b.mode == static_cast<int>(royale::DragonMode::Breath) ? 2600.0f + std::sin(t * 0.7f) * 500.0f : (std::sin(t * 0.05f) + 1.0f) * 150.0f;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)eyes[(play->gameplayFrames / 7) % 60 == 0 ? 2 : 0]);
+    gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)Gfx_TwoTexScroll(play->state.gfxCtx, 0, static_cast<u32>(play->gameplayFrames * 1) % 0x80, static_cast<u32>(play->gameplayFrames * 2) % 0x80, 0x20, 0x20, 1,
+                                                                    static_cast<u32>(play->gameplayFrames * 3) % 0x80, static_cast<u32>(play->gameplayFrames * -2) % 0x80, 0x20, 0x20));
+    gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, tint[theme % 5][0], tint[theme % 5][1], tint[theme % 5][2], 255);
+    gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 128);
+    const float scale = 0.014f;
+    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
+    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f) + 3.14159265f, MTXMODE_APPLY);   // it faces the way the dragon goes
+    Matrix_RotateX(pitch, MTXMODE_APPLY);
+    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Dragon_OverrideLimb, nullptr, actor);
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
@@ -2022,6 +2250,7 @@ void Boss_Draw(Actor* actor, PlayState* play) {
     if (of == gBossOf.end()) return;
     const BossActor& b = gBosses[of->second];
     if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) { Dragon_Draw(actor, play, b); return; }
+    if (b.skReady) { MiniBoss_Draw(actor, play, b); return; }
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Golem, static_cast<uint32_t>(b.kind));
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
@@ -2714,7 +2943,45 @@ const char* RealIconName(royale::ItemId id) {
         case ItemId::BigQuiver: return "gItemIconQuiver50Tex";
         case ItemId::BulletBag: return "gItemIconBulletBag50Tex";
         case ItemId::BombBag: return "gItemIconBombBag40Tex";
+        case ItemId::RecoveryHeart: return "gHeartFullTex";
+        case ItemId::HeartPiece: return "gQuestIconHeartPieceTex";
+        case ItemId::HeartContainer: return "gQuestIconHeartContainerTex";
+        case ItemId::MagicJar: return "gQuestIconMagicJarSmallTex";
+        case ItemId::Rupees: return "gRupeeGreenTex";
+        case ItemId::ForestMedallion: return "gQuestIconMedallionForestTex";
+        case ItemId::FireMedallion: return "gQuestIconMedallionFireTex";
+        case ItemId::WaterMedallion: return "gQuestIconMedallionWaterTex";
+        case ItemId::SpiritMedallion: return "gQuestIconMedallionSpiritTex";
+        case ItemId::ShadowMedallion: return "gQuestIconMedallionShadowTex";
+        case ItemId::LightMedallion: return "gQuestIconMedallionLightTex";
+        case ItemId::KokiriEmerald: return "gQuestIconKokiriEmeraldTex";
+        case ItemId::GoronRuby: return "gQuestIconGoronRubyTex";
+        case ItemId::ZoraSapphire: return "gQuestIconZoraSapphireTex";
+        case ItemId::ShockwaveGrenade: return "gItemIconBombTex";
+        case ItemId::ZeldasLullaby: case ItemId::EponasSong: case ItemId::SariasSong: case ItemId::SunsSong: case ItemId::SongOfTime: case ItemId::SongOfStorms:
+        case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::NocturneOfShadow: case ItemId::RequiemOfSpirit: case ItemId::PreludeOfLight:
+            return "gSongNoteTex";   // the game's music note, tinted in each song's colour (see RealIconTint)
         default: return nullptr;
+    }
+}
+
+// Songs share the game's note icon; each is tinted in the colour of its song.
+ImU32 RealIconTint(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::ZeldasLullaby: return IM_COL32(220, 150, 255, 255);
+        case ItemId::EponasSong: return IM_COL32(230, 130, 90, 255);
+        case ItemId::SariasSong: return IM_COL32(110, 240, 130, 255);
+        case ItemId::SunsSong: return IM_COL32(255, 235, 110, 255);
+        case ItemId::SongOfTime: return IM_COL32(120, 170, 255, 255);
+        case ItemId::SongOfStorms: return IM_COL32(190, 200, 215, 255);
+        case ItemId::MinuetOfForest: return IM_COL32(90, 220, 90, 255);
+        case ItemId::BoleroOfFire: return IM_COL32(255, 90, 60, 255);
+        case ItemId::SerenadeOfWater: return IM_COL32(80, 150, 255, 255);
+        case ItemId::NocturneOfShadow: return IM_COL32(180, 90, 230, 255);
+        case ItemId::RequiemOfSpirit: return IM_COL32(255, 160, 60, 255);
+        case ItemId::PreludeOfLight: return IM_COL32(255, 245, 160, 255);
+        default: return IM_COL32(255, 255, 255, 255);
     }
 }
 
@@ -2728,9 +2995,12 @@ void* RealIcon(royale::ItemId id) {
     if (it == loaded.end()) {
         bool ok = false;
         try {
-            auto res = Ship::Context::GetInstance()->GetResourceManager()->LoadResource(std::string("__OTR__textures/icon_item_static/") + name, true);
+            const std::string n = name;
+            const std::string dir = n.rfind("gQuestIcon", 0) == 0 ? "icon_item_24_static" : (n.rfind("gHeart", 0) == 0 || n.rfind("gRupee", 0) == 0) ? "parameter_static" : "icon_item_static";
+            const std::string path = "__OTR__textures/" + dir + "/" + n;
+            auto res = Ship::Context::GetInstance()->GetResourceManager()->LoadResource(path, true);
             if (res != nullptr) {
-                gui->LoadGuiTexture(std::string("royale:") + name, std::string("__OTR__textures/icon_item_static/") + name, ImVec4(1, 1, 1, 1));
+                gui->LoadGuiTexture(std::string("royale:") + name, path, ImVec4(1, 1, 1, 1));
                 ok = true;
             }
         } catch (...) {}
@@ -2746,7 +3016,7 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
     using royale::ItemId;
     if (void* real = RealIcon(id)) {
         const float h = s * 0.5f;
-        dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h));
+        dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), ImVec2(0, 0), ImVec2(1, 1), RealIconTint(id));
         return;
     }
     const float u = s * 0.5f; // half the icon box

@@ -107,6 +107,7 @@ struct MiniBoss {
     bool alive = true;
     float attackReadyAt = 0;
     float lastSmashAt = -10;   // for the animation
+    float windupUntil = -1;    // a blow is being wound up (it lands then, on whoever is still in front of it)
     // The dragon only:
     float y = 0;               // height above the ground
     DragonMode mode = DragonMode::Patrol;
@@ -1208,6 +1209,22 @@ class Match {
             if (target) { b.target = target->id; b.lostTargetAt = clock; }
             else if (clock - b.lostTargetAt > 4.0f) b.target = kNoPlayer;
 
+            if (b.windupUntil >= 0.0f) {   // winding up a blow: feet planted, then it strikes everyone still in front of it
+                if (clock >= b.windupUntil) {
+                    b.windupUntil = -1.0f;
+                    for (auto& p : players) {
+                        if (!p.alive || clock < p.invulnUntil) continue;
+                        const float ex = p.pos.x - b.pos.x, ez = p.pos.z - b.pos.z;
+                        if (std::hypot(ex, ez) > kBossReach + 40.0f) continue;
+                        float off = std::atan2(ex, ez) - static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
+                        while (off > 3.14159265f) off -= 6.2831853f;
+                        while (off < -3.14159265f) off += 6.2831853f;
+                        if (std::fabs(off) > 1.25f) continue;
+                        Damage(p.id, def.damage, b.id);
+                    }
+                }
+                continue;
+            }
             if (target && Distance(b.pos, b.home) <= kBossLeash + 200.0f) {
                 const float dx = target->pos.x - b.pos.x, dz = target->pos.z - b.pos.z;
                 const float d = std::hypot(dx, dz);
@@ -1220,7 +1237,7 @@ class Match {
                 if (d <= kBossReach + 20.0f && clock >= b.attackReadyAt) {
                     b.attackReadyAt = clock + def.cooldown;
                     b.lastSmashAt = clock;
-                    Damage(target->id, def.damage, b.id);
+                    b.windupUntil = clock + kBossWindupSeconds;   // it rears back first: that half second is the player's chance to roll away
                 }
             } else {
                 // Lost them (or they ran too far): walk home and recover.

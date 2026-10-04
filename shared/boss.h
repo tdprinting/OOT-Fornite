@@ -44,6 +44,7 @@ constexpr int kMaxBosses = 8;
 constexpr float kBossAggroRange = 450.0f;    // how close a player has to be to be noticed
 constexpr float kBossLeash = 1100.0f;        // how far from its home it will chase before giving up
 constexpr float kBossReach = 105.0f;         // how far it reaches with a smash
+constexpr float kBossWindupSeconds = 0.55f;  // it rears back this long before a blow lands (the animation shows it)
 constexpr float kBossBodyRadius = 70.0f;     // players hit it from this much further than a plain range check
 constexpr int kPointsPerBossKill = 400;      // for landing the last hit
 
