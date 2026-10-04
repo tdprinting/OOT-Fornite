@@ -387,6 +387,8 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     gSaveContext.equips.buttonItems[0] = original;
 }
 
+void ForgetCorpse(const Actor* actor); // defined with the other corpse code below
+
 void Puppet_Destroy(Actor* actor, PlayState* play) {
     // The actor was spawned as ACTOR_PLAYER and re-labelled ACTOR_EN_OE2; restore the id so the actor database's
     // per-actor load counter is decremented for the right entry.
@@ -400,8 +402,7 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
     }
     gPlaying.erase(actor);
     gPlate.erase(actor);
-    auto corpse = gCorpseOf.find(actor);
-    if (corpse != gCorpseOf.end()) { gCorpses.erase(corpse->second); gCorpseOf.erase(corpse); }
+    ForgetCorpse(actor);
 }
 
 void SpawnPuppet(const royale::PuppetState& s) {
@@ -431,6 +432,11 @@ std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
 uint16_t gNextCorpse = kCorpseIdBase;
 std::unordered_map<uint16_t, royale::PuppetState> gLastSeen; // the last state of each living puppet, to see who just died
+
+void ForgetCorpse(const Actor* actor) {
+    auto corpse = gCorpseOf.find(actor);
+    if (corpse != gCorpseOf.end()) { gCorpses.erase(corpse->second); gCorpseOf.erase(corpse); }
+}
 
 void Corpse_Update(Actor* actor, PlayState* play) {
     auto of = gCorpseOf.find(actor);
@@ -581,6 +587,8 @@ bool LiveAndAlive(const royale::HudState& h) {
     return gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch) && h.haveSelf && h.selfAlive;
 }
 
+void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
+
 void Loot_Update(Actor* actor, PlayState* play) {
     auto idx = gLootOf.find(actor);
     if (idx == gLootOf.end()) {
@@ -592,6 +600,7 @@ void Loot_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.y += 0x300;
     actor->world.pos.y = la.baseY + 22.0f + 5.0f * std::sin(static_cast<float>(play->gameplayFrames) * 0.1f);
     if (la.pickupCooldown > 0) la.pickupCooldown--;
+    Sparkle(play, actor->world.pos, la.rarity);
 
     Player* player = GET_PLAYER(play);
     royale::HudState h = gSession.Hud();
@@ -624,6 +633,22 @@ void ClearChestFlag() {
     gPlayState->actorCtx.flags.chest &= ~(1u << kChestFlag);
 }
 
+// The game's own glint effect: a spark of the item's rarity colour drifting up, more often the rarer it is. Makes chests and dropped items
+// catch the eye (this is the nearest thing to shiny materials the mod can do; there are no custom shaders).
+void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity) {
+    static const int kEvery[] = { 30, 20, 12, 8, 4 }; // frames between glints, Common to Legendary
+    if (play->gameplayFrames % kEvery[static_cast<int>(rarity)] != 0) return;
+    Vec3f pos = at;
+    pos.x += (Rand_ZeroOne() - 0.5f) * 40.0f;
+    pos.z += (Rand_ZeroOne() - 0.5f) * 40.0f;
+    pos.y += 12.0f + Rand_ZeroOne() * 48.0f;
+    Vec3f vel = { 0.0f, 0.6f + Rand_ZeroOne() * 0.6f, 0.0f };
+    Vec3f accel = { 0.0f, 0.0f, 0.0f };
+    Color_RGBA8 prim = RarityColor(rarity);
+    Color_RGBA8 env = { 255, 255, 255, 255 };
+    EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 90, 26);
+}
+
 void Chest_Update(Actor* actor, PlayState* play) {
     auto idx = gLootOf.find(actor);
     if (idx == gLootOf.end()) { Actor_Kill(actor); return; }
@@ -631,6 +656,7 @@ void Chest_Update(Actor* actor, PlayState* play) {
     EnBox* box = reinterpret_cast<EnBox*>(actor);
     if (!la.opened) {
         box->alpha = 255; // the game's own update normally fades it in
+        Sparkle(play, actor->world.pos, la.rarity);
         return;
     }
     la.origUpdate(actor, play);
@@ -720,7 +746,7 @@ const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
     Gfx* g = m.dl.data();
     for (size_t first = 0; first < data.v.size(); first += 30) {
         const size_t count = std::min<size_t>(30, data.v.size() - first);
-        gSPVertex(g++, &m.vtx[first], static_cast<int>(count), 0);
+        gSPVertex(g++, reinterpret_cast<uintptr_t>(&m.vtx[first]), static_cast<int>(count), 0);
         for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
     }
     gSPEndDisplayList(g++);
@@ -758,7 +784,7 @@ void Prop_DrawCustom(Actor* actor, PlayState* play) {
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK); // colours are baked into the vertices; draw both sides of every face
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, mesh->dl.data());
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
@@ -890,7 +916,7 @@ void Boss_Draw(Actor* actor, PlayState* play) {
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, mesh->dl.data());
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
@@ -1004,6 +1030,7 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     actor->update = Loot_Update;
     actor->destroy = Loot_Destroy;
     gLoot[index] = { actor, groundY, 0 };
+    gLoot[index].rarity = rarity;
     gLootOf[actor] = index;
     std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), rarity);
     NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", 26, RarityColor(rarity) });
@@ -1171,6 +1198,12 @@ void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
     }
 }
 
+bool MapOption(const char* name, bool fallback = true) {
+    char key[64];
+    std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), name);
+    return CVarGetInteger(key, fallback ? 1 : 0) != 0;
+}
+
 // Bottom-left map of the whole field: the storm in purple, the safe zone, chests by rarity, other players and you.
 void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.map.radius <= 0 || !InField()) return;
@@ -1188,7 +1221,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     dl->AddCircle(zc, h.safeZone.radius * k, IM_COL32(255, 255, 255, 235), 72, 2.0f * scale);
     dl->AddCircle(c, R, IM_COL32(255, 210, 70, 255), 72, 2.0f * scale);
 
-    if (gSession.Client()) {
+    if (gSession.Client() && MapOption("MapChests")) {
         for (const auto& l : gSession.Client()->Loot()) {
             if (l.taken || !l.chest) continue;
             const float dx = l.x - pl->actor.world.pos.x, dz = l.z - pl->actor.world.pos.z;
@@ -1207,7 +1240,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
             dl->AddText(ImGui::GetFont(), 10.5f * scale, ImVec2(p.x + u + 2.0f, p.y - 6.0f * scale), IM_COL32(255, 240, 190, 235), royale::kPoiNames[poi.name]);
         }
     }
-    if (gSession.Client()) {
+    if (gSession.Client() && MapOption("MapEnemies")) {
         for (const auto& bn : gSession.Client()->Bosses()) { // mini bosses: a big purple diamond
             const ImVec2 p = toMap(bn.x, bn.z);
             if (!inside(p)) continue;
@@ -1217,7 +1250,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
         }
     }
     for (const auto& st : gSession.Puppets()) {
-        if (!st.alive) continue;
+        if (!st.alive || !MapOption(st.isBot ? "MapBots" : "MapPlayers")) continue;
         const ImVec2 p = toMap(st.x, st.z);
         if (inside(p)) dl->AddCircleFilled(p, 3.2f * scale, st.isBot ? IM_COL32(255, 100, 100, 255) : IM_COL32(255, 170, 60, 255));
     }
@@ -2206,6 +2239,29 @@ const char* CleanName(const char* name) {
     return name[0] != '\0' ? name : "Link";
 }
 
+// What the minimap shows. Players and bots are only the ones near you (the server sends the closest dozen), plus everyone while a Lens of
+// Truth or Saria's Song is active.
+void DrawMinimapOptions() {
+    struct Opt { const char* key; const char* label; bool fallback; };
+    static const Opt opts[] = {
+        { "MapPlayers", "Show other players on the minimap", true },
+        { "MapBots", "Show bots on the minimap", true },
+        { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
+        { "MapChests", "Show chests on the minimap", true },
+    };
+    if (!ImGui::CollapsingHeader("Minimap options")) return;
+    for (const Opt& o : opts) {
+        bool on = MapOption(o.key, o.fallback);
+        if (ImGui::Checkbox(o.label, &on)) {
+            char key[64];
+            std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), o.key);
+            CVarSetInteger(key, on ? 1 : 0);
+            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+        }
+    }
+    ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
+}
+
 // Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
 void DrawCustomize(UiState& ui) {
     ImGui::Spacing();
@@ -2246,6 +2302,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
 
     if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
     if (ui.showCustomize) DrawCustomize(ui);
+    DrawMinimapOptions();
     ImGui::Spacing();
     ImGui::Text("Your name");
     ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
