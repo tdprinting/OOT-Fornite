@@ -18,6 +18,8 @@
 #include <cstring>
 #include <functional>
 #include <deque>
+#include <filesystem>
+#include <random>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -342,6 +344,25 @@ void Puppet_Init(Actor* actor, PlayState* play) {
 
 }
 
+// A small glow in the weapon's rarity colour around the hand that holds it: glints at the hand plus a faint halo, more of them the rarer it is,
+// so you can size up what another player carries at a glance. Switch it off (or on for your own weapon) in the Royale menu.
+bool HeldGlowOn(bool self);
+void HeldGlow(PlayState* play, Player* player, royale::Rarity rarity, bool self) {
+    if (!HeldGlowOn(self)) return;
+    static const int kEvery[] = { 6, 5, 4, 3, 2 };
+    if (play->gameplayFrames % kEvery[static_cast<int>(rarity)] != 0) return;
+    const Vec3f& hand = player->bodyPartsPos[PLAYER_BODYPART_R_HAND];
+    Vec3f pos = hand;
+    pos.x += (Rand_ZeroOne() - 0.5f) * 14.0f;
+    pos.y += (Rand_ZeroOne() - 0.5f) * 14.0f + 6.0f;
+    pos.z += (Rand_ZeroOne() - 0.5f) * 14.0f;
+    Vec3f vel = { 0.0f, 0.3f, 0.0f };
+    Vec3f accel = { 0.0f, 0.0f, 0.0f };
+    Color_RGBA8 prim = RarityColor(rarity);
+    Color_RGBA8 env = prim;
+    EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 40, 10);
+}
+
 void Puppet_Update(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
     auto idIt = gPuppetOf.find(actor);
@@ -373,6 +394,8 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         Player_SetModelGroup(player, look.modelGroup);
         gSaveContext.equips.buttonItems[0] = original;
     }
+
+    if (s.alive) HeldGlow(play, player, s.weaponRarity, false);
 
     // The nameplate shows the player's name, hearts left and weapon (colour coded by rarity), so you can size up everyone you see.
     {
@@ -1827,6 +1850,103 @@ void UpdateChickenMusic() {
     gMusic.playing = true;
 }
 
+// ---- lobby music from a folder ----------------------------------------------------------------------------------------------
+// Put .wav files in the "music" folder inside the game's data folder and they play in a shuffled loop while you wait in the lobby, then fade out when
+// the countdown starts. (Only WAV is read: the game has no MP3/OGG decoder to hook into.) The folder is created on first use.
+void Say(const std::string& text);
+bool HeldGlowOn(bool self) {
+    return self ? MapOption("HeldGlowSelf", false) : MapOption("HeldGlow", true);
+}
+
+struct LobbyMusic {
+    SDL_AudioDeviceID device = 0;
+    std::vector<std::filesystem::path> tracks;
+    std::vector<int16_t> pcm;   // the current track, converted to the device format (stereo, 44.1 kHz)
+    size_t pos = 0;
+    size_t next = 0;
+    bool scanned = false;
+    bool failed = false;
+    bool playing = false;
+    std::string nowPlaying;
+};
+LobbyMusic gLobbyMusic;
+
+std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
+
+void ScanMusicFolder() {
+    gLobbyMusic.tracks.clear();
+    std::error_code ec;
+    std::filesystem::create_directories(MusicFolder(), ec);
+    for (const auto& e : std::filesystem::directory_iterator(MusicFolder(), ec)) {
+        std::string ext = e.path().extension().string();
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (e.is_regular_file(ec) && ext == ".wav") gLobbyMusic.tracks.push_back(e.path());
+    }
+    std::sort(gLobbyMusic.tracks.begin(), gLobbyMusic.tracks.end());
+    std::mt19937 rng(std::random_device{}());
+    std::shuffle(gLobbyMusic.tracks.begin(), gLobbyMusic.tracks.end(), rng);
+    gLobbyMusic.next = 0;
+    gLobbyMusic.scanned = true;
+}
+
+bool LoadNextTrack() {
+    LobbyMusic& m = gLobbyMusic;
+    for (size_t tries = 0; tries < m.tracks.size(); tries++) {
+        const std::filesystem::path& file = m.tracks[m.next++ % m.tracks.size()];
+        SDL_AudioSpec spec = {};
+        Uint8* buf = nullptr;
+        Uint32 len = 0;
+        if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) continue;
+        SDL_AudioCVT cvt;
+        if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_S16SYS, 2, 44100) < 0) { SDL_FreeWAV(buf); continue; }
+        cvt.len = static_cast<int>(len);
+        std::vector<Uint8> work(static_cast<size_t>(len) * (cvt.len_mult > 0 ? cvt.len_mult : 1));
+        std::memcpy(work.data(), buf, len);
+        SDL_FreeWAV(buf);
+        cvt.buf = work.data();
+        if (cvt.needed && SDL_ConvertAudio(&cvt) < 0) continue;
+        const size_t bytes = cvt.needed ? static_cast<size_t>(cvt.len_cvt) : len;
+        m.pcm.assign(bytes / 2, 0);
+        std::memcpy(m.pcm.data(), work.data(), m.pcm.size() * 2);
+        m.pos = 0;
+        m.nowPlaying = file.stem().string();
+        return !m.pcm.empty();
+    }
+    return false;
+}
+
+void UpdateLobbyMusic(bool inLobby) {
+    LobbyMusic& m = gLobbyMusic;
+    const bool want = inLobby && MapOption("LobbyMusic", true) && !m.failed;
+    if (!want) {
+        if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
+        m.playing = false;
+        if (!inLobby) m.scanned = false; // pick up newly added songs next time
+        return;
+    }
+    if (!m.scanned) ScanMusicFolder();
+    if (m.tracks.empty()) return;
+    if (m.device == 0) {
+        SDL_AudioSpec want2 = {}, have = {};
+        want2.freq = 44100; want2.format = AUDIO_S16SYS; want2.channels = 2; want2.samples = 2048; want2.callback = nullptr;
+        m.device = SDL_OpenAudioDevice(nullptr, 0, &want2, &have, 0);
+        if (m.device == 0) { m.failed = true; return; }
+        SDL_PauseAudioDevice(m.device, 0);
+    }
+    if (SDL_GetQueuedAudioSize(m.device) > 44100 * 4 / 3) return; // about a third of a second queued is enough
+    if (m.pcm.empty() || m.pos >= m.pcm.size()) {
+        if (!LoadNextTrack()) { m.failed = true; return; }
+        Say("Lobby music: " + m.nowPlaying);
+    }
+    const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.8f;
+    const size_t chunk = std::min<size_t>(44100 / 2, m.pcm.size() - m.pos);
+    std::vector<int16_t> out(chunk);
+    for (size_t i = 0; i < chunk; i++) out[i] = static_cast<int16_t>(m.pcm[m.pos + i] * volume);
+    m.pos += chunk;
+    SDL_QueueAudio(m.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
+    m.playing = true;
+}
+
 uint8_t ClassifyAnim(Player* player) {
     if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
@@ -2074,6 +2194,7 @@ void OnPlayerUpdate() {
 
     UpdateSkydive(player, hud);
     UpdateEmote(player, hud);
+    if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
@@ -2287,6 +2408,7 @@ void OnGameFrameUpdate() {
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     UpdateChickenMusic();
+    UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby);
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
 
@@ -2485,8 +2607,11 @@ void DrawMinimapOptions() {
         { "MapBots", "Show bots on the minimap", true },
         { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
         { "MapChests", "Show chests on the minimap", true },
+        { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
+        { "HeldGlowSelf", "Glow on your own weapon too", false },
+        { "LobbyMusic", "Play songs from the music folder in the lobby", true },
     };
-    if (!ImGui::CollapsingHeader("Minimap options")) return;
+    if (!ImGui::CollapsingHeader("Minimap and game options")) return;
     for (const Opt& o : opts) {
         bool on = MapOption(o.key, o.fallback);
         if (ImGui::Checkbox(o.label, &on)) {
@@ -2497,6 +2622,7 @@ void DrawMinimapOptions() {
         }
     }
     ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
+    ImGui::TextColored(kGrey, "Lobby songs: put .wav files in the 'music' folder inside the game's data folder (made for you on first use).");
 }
 
 // Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).

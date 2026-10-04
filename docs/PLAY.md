@@ -100,3 +100,9 @@ Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It li
 - The map size is measured automatically when the host presses Start (the host is taken to Hyrule Field first), and loot, spawn points and the storm are kept on ground that exists. Bots walk in straight lines, so they can walk through walls and water.
 - Not in yet: shields and gear are not drawn on other players, there is no minimap, and the item list is long (83 items), so expect balance problems. Bombs and arrows act as instant hits at range; there is no flying projectile yet.
 - Bots now find their way around obstacles in Hyrule Field if the map probe found them, strafe and dodge in fights, flee losing fights, use abilities and hunt in the endgame. They still can't see the difference between a ledge and a cliff, and they see through walls.
+
+
+## Weapon glow and lobby music
+
+- **Weapon glow:** whatever weapon a player holds gives off glints in its rarity colour (grey, green, blue, purple, gold), more of them the rarer it is. It is on for other players by default; "Glow on your own weapon too" is off by default. Both are checkboxes under "Minimap and game options" in the Royale menu.
+- **Lobby music:** put `.wav` files in the `music` folder inside the game's data folder (it is created the first time you reach a lobby). They play shuffled while you wait in the lobby and stop when the countdown starts. Only WAV files work (the game has no MP3/OGG decoder). Turn it off with "Play songs from the music folder in the lobby".
