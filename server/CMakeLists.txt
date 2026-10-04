@@ -30,3 +30,7 @@ foreach(t tests net_tests enet_tests session_tests)
     endif()
     add_test(NAME royale_${t} COMMAND royale_${t})
 endforeach()
+
+# Headless balance simulator (not a test): plays bot-only matches and prints how they went. Run: royale_balance 12 normal 0 32
+add_executable(royale_balance tools/balance_sim.cpp)
+target_link_libraries(royale_balance royale_net)

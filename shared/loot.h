@@ -16,6 +16,7 @@ struct LootSpawn {
     bool container = false;   // shown as a treasure chest that has to be opened; false for items dropped by players
     bool special = false;     // a heart container chest: extra rare, drawn differently
     uint16_t amount = 0;      // rupees and ammo: how many
+    bool supply = false;      // from a supply drop: drawn with a beam of light, marked on the map
 };
 
 // A chest spot with a quality bonus: 0 an ordinary spot, 1 hidden behind a rock (at least Rare), 2 on top of a climb (at least Epic).
@@ -128,7 +129,7 @@ inline std::vector<LootSpawn> GenerateSpotLoot(uint64_t seed, const std::vector<
 // Chests on climbs and in hideaways: always on the good tiers, better the harder they are to get to. `bonus` is ChestSite::bonus.
 inline LootSpawn SiteChest(Rng& rng, Vec2 at, int bonus) {
     Rarity tier = RollRarity(rng, true);
-    const Rarity floor = bonus >= 2 ? Rarity::Epic : bonus == 1 ? Rarity::Rare : Rarity::Common;
+    const Rarity floor = bonus >= 3 ? Rarity::Legendary : bonus == 2 ? Rarity::Epic : bonus == 1 ? Rarity::Rare : Rarity::Common;
     if (tier < floor) tier = floor;
     ItemId item;
     if (!PickItem(rng, tier, &item)) item = static_cast<ItemId>(rng.Below(kPoolItemCount));

@@ -6,6 +6,7 @@
 #include "game_client.h"
 #include "game_server.h"
 #include "map.h"
+#include "names.h"
 #include <algorithm>
 #include <memory>
 #include <random>
@@ -89,7 +90,7 @@ struct HudState {
     std::array<int, kAmmoKinds> ammo = {};
     float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
     uint16_t winnerId = 0xFFFF;   // once the match has ended
-    std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
+    std::string winnerName;       // "You" is left to the UI; bots have names from shared/names.h
     std::vector<ResultsRow> results; // standings, best score first, once the match has ended
 };
 
@@ -201,7 +202,7 @@ class RoyaleSession {
             PuppetState s;
             s.id = id;
             auto it = client->Roster().find(id);
-            s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? "Bot " + std::to_string(id) : "Player " + std::to_string(id));
+            s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
             s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
@@ -259,7 +260,7 @@ class RoyaleSession {
             row.isBot = r.id >= 1000;
             row.self = r.id == client->PlayerId();
             auto who = client->Roster().find(r.id);
-            row.name = who != client->Roster().end() ? who->second.name : "Bot " + std::to_string(r.id >= 1000 ? r.id - 999 : r.id);
+            row.name = who != client->Roster().end() ? who->second.name : BotName(r.id);
             row.placement = r.placement; row.kills = r.kills; row.chests = r.chests; row.score = static_cast<int>(r.score);
             row.damage = r.damageTenths / 10.0f;
             h.results.push_back(std::move(row));
@@ -283,7 +284,7 @@ class RoyaleSession {
         h.winnerId = client->Winner();
         if (h.winnerId != net::kNoPlayer16) {
             auto w = client->Roster().find(h.winnerId);
-            h.winnerName = w != client->Roster().end() ? w->second.name : "Bot " + std::to_string(h.winnerId - 999);
+            h.winnerName = w != client->Roster().end() ? w->second.name : BotName(h.winnerId);
         }
         if (const net::PlayerNet* self = client->Self()) {
             h.haveSelf = true;

@@ -9,6 +9,7 @@
 #include "anim.h"
 #include "map.h"
 #include "meshes.h"
+#include "names.h"
 #include "skins.h"
 #include "tune.h"
 #include <algorithm>
@@ -419,8 +420,22 @@ void ApplyChickenDance(Player* p, float t) {
 
 std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
 
-LinkAnimationHeader* AnimFor(uint8_t anim) {
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
+
+LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword) {
+    const bool hammer = weapon == royale::ItemId::MegatonHammer || weapon == royale::ItemId::GiantsHammer;
     switch (static_cast<royale::Anim>(anim)) {
+        case royale::Anim::Attack: return hammer ? (LinkAnimationHeader*)&gPlayerAnim_link_hammer_hit : (LinkAnimationHeader*)&gPlayerAnim_link_fighter_normal_kiru;   // a swing
+        case royale::Anim::Shoot: return (LinkAnimationHeader*)&gPlayerAnim_link_bow_bow_shoot;                // loosing an arrow or a seed
+        case royale::Anim::Throw: return (LinkAnimationHeader*)&gPlayerAnim_link_boom_throwR;                  // throwing a bomb, a boomerang, a grenade
+        case royale::Anim::Drink: return (LinkAnimationHeader*)&gPlayerAnim_link_bottle_drink_demo;            // a potion
+        case royale::Anim::Play: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_okarina_swing;          // an ocarina song
+        case royale::Anim::Cast: return (LinkAnimationHeader*)&gPlayerAnim_link_magic_tame;                    // a spell
+        case royale::Anim::Roll: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_landing_roll;           // a dodge roll
+        case royale::Anim::SideL: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkL;            // the lock-on footwork
+        case royale::Anim::SideR: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkR;
+        case royale::Anim::Back: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_back_walk;
+        case royale::Anim::Stance: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_waitR;
         case royale::Anim::Emote1: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_bikkuri;     // startled: "Wow!"
         case royale::Anim::Emote2: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_jibunmiru;   // looks at his own hands
         case royale::Anim::Emote3: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kaoage;      // looks up
@@ -520,7 +535,14 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         }
     }
 
-    LinkAnimationHeader* want = AnimFor(s.anim);
+    {   // somebody has just loosed an arrow or thrown something: show it in flight
+        static std::unordered_map<uint16_t, uint8_t> previous;
+        uint8_t& before = previous[s.id];
+        if (s.anim != before && s.alive && (s.anim == static_cast<uint8_t>(royale::Anim::Shoot) || s.anim == static_cast<uint8_t>(royale::Anim::Throw)))
+            SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot);
+        before = s.anim;
+    }
+    LinkAnimationHeader* want = AnimFor(s.anim, s.weapon);
     {
         auto sw = gSwingFrames.find(s.id);
         if (sw != gSwingFrames.end() && sw->second > 0) {
@@ -816,6 +838,7 @@ struct LootActor {
     bool opened = false;
     bool killing = false;     // asked the game to remove it; it goes when the game next updates actors
     bool big = false;         // Epic and Legendary chests are the big kind
+    bool supply = false;      // from a supply drop
     royale::Rarity rarity = royale::Rarity::Common;
     ActorFunc origUpdate = nullptr, origDestroy = nullptr;
 };
@@ -915,6 +938,14 @@ void Chest_Update(Actor* actor, PlayState* play) {
     if (!la.opened) {
         box->alpha = 255; // the game's own update normally fades it in
         Sparkle(play, actor->world.pos, la.rarity);
+        if (la.supply) {   // a supply crate: a column of red and gold light
+            for (int i = 0; i < 3; i++) {
+                Vec3f pos = { actor->world.pos.x + (Rand_ZeroOne() - 0.5f) * 30.0f, actor->world.pos.y + Rand_ZeroOne() * 420.0f, actor->world.pos.z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+                Vec3f vel = { 0.0f, 1.0f, 0.0f }, accel = { 0.0f, 0.0f, 0.0f };
+                Color_RGBA8 prim = { 255, static_cast<u8>(120 + Rand_ZeroOne() * 110), 40, 255 }, env = { 255, 40, 20, 255 };
+                EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 40, 38);
+            }
+        }
         return;
     }
     la.origUpdate(actor, play);
@@ -952,7 +983,7 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
     ClearChestFlag();
     if (actor == nullptr) return;
     LootActor la;
-    la.actor = actor; la.baseY = groundY; la.chest = true; la.opened = l.taken; la.big = big; la.rarity = rarity;
+    la.actor = actor; la.baseY = groundY; la.chest = true; la.opened = l.taken; la.big = big; la.rarity = rarity; la.supply = l.supply;
     la.origUpdate = actor->update;
     la.origDestroy = actor->destroy;
     gLoot[index] = la;
@@ -1253,6 +1284,113 @@ void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// ---- things in flight --------------------------------------------------------------------------------------------------------
+// Every arrow, seed, bomb, bombchu and boomerang anybody looses is drawn in flight: when a puppet starts its shooting or throwing pose (or when
+// you press B with something to shoot) a projectile leaves from there, along the way they face. One stand-in actor near the player draws them
+// all with our own models. The damage itself is the server's business, so this is only for the eyes (and ears).
+struct Projectile {
+    float x, y, z, vx, vy, vz, life, gravity, spin;
+    uint32_t variant;
+    bool explodes;
+};
+std::vector<Projectile> gProjectiles;
+Actor* gProjectileActor = nullptr;
+
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw) {
+    using royale::ItemId;
+    if (!InField() || gPlayState == nullptr) return;
+    const royale::WeaponStats w = royale::WeaponOf(weapon);
+    if (!w.ranged) return;
+    uint32_t variant = 0;
+    float speed = 1700.0f, gravity = 0.0f, spin = 0.0f;
+    bool explodes = false;
+    u16 sfx = NA_SE_IT_ARROW_SHOT;
+    switch (weapon) {
+        case ItemId::FireArrows: variant = 1; break;
+        case ItemId::IceArrows: variant = 2; break;
+        case ItemId::LightArrows: variant = 3; break;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: variant = 4; speed = 1500.0f; sfx = NA_SE_IT_SLING_SHOT; break;
+        case ItemId::Bombs: variant = 5; speed = 650.0f; gravity = 760.0f; explodes = true; spin = 6.0f; sfx = NA_SE_IT_BOMB_IGNIT; break;
+        case ItemId::Bombchus: variant = 6; speed = 600.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
+        case ItemId::HomingBombchus: variant = 7; speed = 700.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
+        case ItemId::DekuNuts: variant = 8; speed = 1000.0f; spin = 9.0f; sfx = NA_SE_IT_SLING_SHOT; break;
+        case ItemId::Boomerang: variant = 9; speed = 900.0f; spin = 20.0f; sfx = NA_SE_IT_BOOMERANG_THROW; break;
+        default: break;
+    }
+    const float base = yaw * (3.14159265f / 32768.0f);
+    const int count = weapon == ItemId::TripleSlingshot ? 3 : 1;
+    for (int i = 0; i < count; i++) {
+        const float a = base + (count == 1 ? 0.0f : (i - 1) * 0.11f);
+        Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes };
+        if (gProjectiles.size() < 160) gProjectiles.push_back(p);
+    }
+    Vec3f at = { x, y, z };
+    Audio_PlaySoundGeneral(sfx, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+
+void Projectile_Draw(Actor*, PlayState* play) {
+    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    for (size_t i = 0; i < gProjectiles.size();) {
+        Projectile& p = gProjectiles[i];
+        p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+        p.vy -= p.gravity * dt;
+        p.life -= dt;
+        p.spin += dt * 14.0f;
+        float floorY = p.y - 1.0f;
+        const bool landed = RawFloorAt(p.x, p.z, &floorY) && p.y <= floorY + 4.0f;
+        if (p.life <= 0.0f || landed) {
+            if (p.explodes && gPlayState != nullptr) {
+                Vec3f pos = { p.x, std::max(p.y, floorY) + 10.0f, p.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
+                EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
+                Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+            }
+            gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i));
+            continue;
+        }
+        const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Projectile, p.variant);
+        if (mesh != nullptr && !mesh->dl.empty()) {
+            const float horiz = std::hypot(p.vx, p.vz);
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_RotateY(std::atan2(p.vx, p.vz), MTXMODE_APPLY);
+            Matrix_RotateX(-std::atan2(p.vy, horiz), MTXMODE_APPLY);
+            if (p.variant == 4 || p.variant == 5 || p.variant == 8 || p.variant == 9) Matrix_RotateZ(p.spin, MTXMODE_APPLY);
+            Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+            gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+            gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+        i++;
+    }
+}
+void Projectile_Update(Actor* actor, PlayState* play) {
+    Player* p = GET_PLAYER(play);
+    actor->world.pos = p->actor.world.pos;   // stay near the player so the actor is never skipped
+    actor->focus.pos = actor->world.pos;
+}
+void Projectile_Destroy(Actor* actor, PlayState*) { if (gProjectileActor == actor) gProjectileActor = nullptr; }
+
+void ReconcileProjectileActor() {
+    if (InField() && gProjectileActor == nullptr && gPlayState != nullptr) {
+        Player* p = GET_PLAYER(gPlayState);
+        Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, p->actor.world.pos.x, p->actor.world.pos.y, p->actor.world.pos.z, 0, 0, 0, 0, false);
+        if (a == nullptr) return;
+        a->update = Projectile_Update;
+        a->draw = Projectile_Draw;
+        a->destroy = Projectile_Destroy;
+        a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+        a->uncullZoneForward = 9000.0f; a->uncullZoneScale = 9000.0f; a->uncullZoneDownward = 9000.0f;
+        a->shape.shadowScale = 0.0f;
+        gProjectileActor = a;
+    } else if (!InField() && gProjectileActor != nullptr) {
+        gProjectileActor = nullptr;   // the scene is changing: the actor goes with it
+        gProjectiles.clear();
+    }
+}
+
 void Boss_Draw(Actor* actor, PlayState* play) {
     auto of = gBossOf.find(actor);
     if (of == gBossOf.end()) return;
@@ -1514,6 +1652,10 @@ std::string ClockText(float seconds) {
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
 
+struct SupplyMark { float x, z; double until; };
+std::vector<SupplyMark> gSupplyMarks;   // announced crates, shown on the minimap until they have landed and been taken
+
+
 // Spectating after you are eliminated: you can watch yourself (where you fell) or any other player who is still alive, and nobody else.
 // D-pad Left/Right (or the < > buttons) switch between them; if the one you watch is eliminated the view moves on to the next living player.
 constexpr uint16_t kSpectateSelf = 0xFFFF;
@@ -1610,6 +1752,21 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     dl->AddCircle(c, R + 5.0f * scale, IM_COL32(150, 108, 30, 255), 72, 1.5f * scale);
     dl->AddText(ImGui::GetFont(), 12.0f * scale, ImVec2(c.x - 4.0f * scale, c.y - R - 17.0f * scale), IM_COL32(255, 222, 110, 255), "N");
 
+    {   // supply drops: a pulsing star on the announced spot, and on the crate once it has landed
+        const double now = ImGui::GetTime();
+        const float pulse = 0.75f + 0.25f * static_cast<float>(std::sin(now * 5.0));
+        auto star = [&](float wx, float wz, ImU32 col) {
+            ImVec2 p = toMap(wx, wz);
+            const float dx = p.x - c.x, dy = p.y - c.y, d = std::sqrt(dx * dx + dy * dy);
+            if (d > R - 4.0f * scale) { p = ImVec2(c.x + dx / d * (R - 4.0f * scale), c.y + dy / d * (R - 4.0f * scale)); }   // off the map's edge: pinned to the rim
+            const float u = 7.0f * scale * pulse;
+            dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u * 0.4f, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u * 0.4f, p.y), col);
+            dl->AddQuadFilled(ImVec2(p.x - u, p.y), ImVec2(p.x, p.y - u * 0.4f), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u * 0.4f), col);
+        };
+        gSupplyMarks.erase(std::remove_if(gSupplyMarks.begin(), gSupplyMarks.end(), [&](const SupplyMark& m) { return now > m.until; }), gSupplyMarks.end());
+        for (const SupplyMark& m : gSupplyMarks) star(m.x, m.z, IM_COL32(255, 160, 60, 255));
+        if (gSession.Client()) for (const auto& l : gSession.Client()->Loot()) if (l.supply && l.chest && !l.taken) star(l.x, l.z, IM_COL32(255, 220, 90, 255));
+    }
     if (gSession.Client() && MapOption("MapChests")) {
         for (const auto& l : gSession.Client()->Loot()) {
             if (l.taken || !l.chest) continue;
@@ -2163,6 +2320,30 @@ void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
 }
 
 // Small "+5 Rupees" lines that float up on the right when something drops out of a rock or bush.
+// The kill feed, top right: who got whom.
+struct FeedLine { std::string text; ImU32 colour; double at; };
+std::vector<FeedLine> gFeed;
+void AddFeed(const std::string& text, ImU32 colour) {
+    gFeed.push_back({ text, colour, ImGui::GetTime() });
+    if (gFeed.size() > 6) gFeed.erase(gFeed.begin());
+}
+void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime();
+    float y = 14.0f * scale;
+    for (const FeedLine& f : gFeed) {
+        const double age = now - f.at;
+        if (age > 7.0) continue;
+        const float a = static_cast<float>(std::min(1.0, (7.0 - age) / 1.0));
+        const float size = 17.0f * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, f.text.c_str());
+        const ImVec2 pos(ds.x - sz.x - 18.0f * scale, y);
+        dl->AddRectFilled(ImVec2(pos.x - 8 * scale, pos.y - 2 * scale), ImVec2(pos.x + sz.x + 8 * scale, pos.y + sz.y + 2 * scale), IM_COL32(6, 12, 18, static_cast<int>(150 * a)), 5.0f * scale);
+        dl->AddText(font, size, pos, (f.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), f.text.c_str());
+        y += sz.y + 7.0f * scale;
+    }
+    gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 7.0; }), gFeed.end());
+}
+
 struct Gain { std::string text; ImU32 colour; double at; };
 std::vector<Gain> gGains;
 void ShowGain(const std::string& text, ImU32 colour) {
@@ -2434,6 +2615,7 @@ void DrawOverlay() {
     if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
 
     DrawPickupFx(dl, ds, scale);
+    DrawFeed(dl, font, ds, scale);
     DrawGains(dl, font, ds, scale);
     DrawHitEffects(dl, font, ds, scale);
     DrawBanners(dl, font, ds, scale);
@@ -2468,8 +2650,24 @@ void DrawOverlay() {
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
 
-    // Top left: the numbers.
-    float x = 16 * scale, y = 14 * scale, line = 24 * scale;
+    // The shield bar, under the hearts: the game draws a row of hearts at the top left, and the bar runs as wide as that row and is filled by shield potions.
+    {
+        const float unit = ds.y / 240.0f;                                  // the game's own HUD is laid out on a 240 high screen
+        const float bx = 30.0f * unit, by = 46.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 7.0f * unit;
+        const float fill = std::clamp(h.inv.shield / royale::kMaxShield, 0.0f, 1.0f);
+        dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, 170), 3.0f);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(20, 30, 60, 200), 2.0f);
+        if (fill > 0.0f) {
+            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), IM_COL32(70, 150, 255, 255), 2.0f);
+            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(170, 215, 255, 180), 2.0f);
+        }
+        char label[24];
+        std::snprintf(label, sizeof(label), "%d", static_cast<int>(std::lround(fill * 100.0f)));
+        text(bx + bw + 8.0f * unit, by - 4.0f * unit, IM_COL32(150, 200, 255, 255), 14.0f * unit, label);
+    }
+
+    // Top left: the numbers (below the hearts and the shield bar).
+    float x = 16 * scale, y = ds.y * 0.24f, line = 24 * scale;
     text(x, y, gold, 24 * scale, "ALIVE " + std::to_string(h.alive) + " / " + std::to_string(h.playerLimit));
     y += line;
     if (h.stormPhase >= royale::kStormPhaseCount) {
@@ -2742,10 +2940,23 @@ void UpdateLobbyMusic(bool inLobby) {
     m.playing = true;
 }
 
+// What the local player has just done with an item, held for a moment so that everyone sees the pose (potion, ocarina, bow, swing...).
+int gActionFrames = 0;
+royale::Anim gActionAnim = royale::Anim::Idle;
+void StartAction(royale::Anim pose, float seconds) { gActionAnim = pose; gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz)); }
+royale::Anim PoseForWeapon(royale::ItemId weapon) {
+    const royale::WeaponStats w = royale::WeaponOf(weapon);
+    if (!w.ranged) return royale::Anim::Attack;
+    const royale::AmmoKind a = royale::AmmoUsedBy(weapon);
+    return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
+}
+
 uint8_t ClassifyAnim(Player* player) {
     if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
+    if (gActionFrames > 0) return static_cast<uint8_t>(gActionAnim);
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
     float v = std::fabs(player->linearVelocity);
+    if (v > 7.5f && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
     if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
     return static_cast<uint8_t>(v < 4.0f ? royale::Anim::Walk : royale::Anim::Run);
 }
@@ -2831,6 +3042,24 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
 
 // Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
 // the game has settled Link on the scene's own floor.
+// A burst of sparks round the player and a sound for an item just used.
+void UseBurst(Player* player, Color_RGBA8 colour, u16 sfx) {
+    SparkBurst(gPlayState, player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z, colour, 14, 3.2f);
+    Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+Color_RGBA8 AbilityColour(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return { 255, 110, 40, 255 };
+        case ItemId::NayrusLove: case ItemId::SerenadeOfWater: return { 100, 160, 255, 255 };
+        case ItemId::FaroresWind: case ItemId::MinuetOfForest: case ItemId::SariasSong: return { 110, 240, 130, 255 };
+        case ItemId::LensOfTruth: case ItemId::NocturneOfShadow: return { 190, 110, 255, 255 };
+        case ItemId::SunsSong: case ItemId::PreludeOfLight: return { 255, 240, 140, 255 };
+        case ItemId::ShockwaveGrenade: case ItemId::SongOfTime: return { 120, 225, 245, 255 };
+        default: return { 255, 220, 150, 255 };
+    }
+}
+
 void ApplyPlatforms(Player* player) {
     if (!InField()) return;
     RefreshPlatforms();
@@ -2898,8 +3127,17 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (in.press.button & BTN_DDOWN) {
-        if (hud.potions > 0) gSession.RequestUsePotion();
+        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 255, 150, 255 }, NA_SE_SY_HP_RECOVER); }
         else Say("No potions");
+    }
+
+    // C-Left: drink a shield potion (the bar under your hearts).
+    if (in.press.button & BTN_CLEFT) {
+        bool has = false;
+        for (const auto& pot : hud.inv.potions) has |= royale::PotionOf(static_cast<royale::ItemId>(pot.item)).shield > 0;
+        if (!has) Say("No shield potion");
+        else if (hud.inv.shield >= royale::kMaxShield - 0.05f) Say("Your shield is full");
+        else { gSession.UseShield(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 190, 255, 255 }, NA_SE_SY_HP_RECOVER); }
     }
 
     // A (or D-pad Right): open the chest in front of you, or take/swap the item on the ground. Walking over an upgrade picks it up on its own.
@@ -2923,7 +3161,13 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (in.press.button & BTN_DUP) {
         if (!hud.inv.hasAbility) Say("No ability");
         else if (hud.abilityReadyIn > 0.05f) Say("Ability recharging: " + ClockText(hud.abilityReadyIn));
-        else gSession.UseAbility();
+        else {
+            gSession.UseAbility();
+            const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
+            StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
+                        : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
+            UseBurst(player, AbilityColour(ab), NA_SE_PL_MAGIC_SOUL_NORMAL);
+        }
     }
 
     if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
@@ -2960,6 +3204,16 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
         }
     }
+    // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
+    s16 aim = player->actor.shape.rot.y;
+    if (bestDist < 1e8f) {
+        float tx = 0, tz = 0;
+        if (KnownPosition(best, &tx, &tz)) aim = static_cast<s16>(std::atan2(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) * (32768.0f / 3.14159265f));
+        player->actor.shape.rot.y = player->actor.world.rot.y = aim;
+    }
+    StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
+    if (hasAmmo && w.ranged) SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f, player->actor.world.pos.z, aim);
+    else Audio_PlaySoundGeneral(NA_SE_IT_SWORD_SWING_HARD, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     SmashPropInFront(player, w);
 }
@@ -3026,6 +3280,31 @@ void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     gHaveLastPos = active;
 }
 
+// Link holds what the server says he holds (a sword in the hand, the bow across the back...), the way the puppets do. The save's own B item is left
+// pointing at the sword so the game's own swing and sound play when you hit B, and put back when the match is over.
+royale::ItemId gLocalWeaponShown = static_cast<royale::ItemId>(255);
+bool gLocalLookApplied = false;
+u8 gSavedButtonItem0 = ITEM_NONE;
+void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
+    const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
+    if (!on) {
+        if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
+        return;
+    }
+    const Look look = LookFor(hud.weapon);
+    if (!gLocalLookApplied) { gSavedButtonItem0 = gSaveContext.equips.buttonItems[0]; gLocalLookApplied = true; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
+    if (hud.weapon != gLocalWeaponShown || player->heldItemAction != look.itemAction) {
+        gLocalWeaponShown = hud.weapon;
+        const bool sword = look.modelGroup == PLAYER_MODELGROUP_SWORD_AND_SHIELD || look.modelGroup == PLAYER_MODELGROUP_BGS;
+        gSaveContext.equips.buttonItems[0] = sword ? look.buttonItem : static_cast<u8>(ITEM_NONE);
+        u8 original = gSaveContext.equips.buttonItems[0];
+        gSaveContext.equips.buttonItems[0] = look.buttonItem;
+        player->itemAction = player->heldItemAction = look.itemAction;
+        Player_SetModelGroup(player, look.modelGroup);
+        gSaveContext.equips.buttonItems[0] = original;
+    }
+}
+
 void OnPlayerUpdate() {
     if (!gSession.Joined() || !InGame()) return;
     Player* player = GET_PLAYER(gPlayState);
@@ -3061,6 +3340,8 @@ void OnPlayerUpdate() {
     UpdateEmote(player, hud);
     if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
+    if (gActionFrames > 0) gActionFrames--;
+    SyncLocalWeapon(player, hud);
     ApplyPlatforms(player);
     HandleCombatInput(player, hud);
     if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
@@ -3119,7 +3400,7 @@ void ReportEvents(const royale::HudState& hud) {
         auto nameOf = [&](uint16_t id) -> std::string {
             for (const auto& r : hud.roster) if (r.id == id) return r.name;
             if (royale::IsBossId(id)) return std::string("a mini boss");
-            return "Bot " + std::to_string(id >= 1000 ? id - 999 : id);
+            return royale::BotName(id);
         };
         switch (e.type) {
             case royale::ClientEvent::Type::PlayerJoined:
@@ -3220,6 +3501,13 @@ void ReportEvents(const royale::HudState& hud) {
                 Say(std::string(royale::kBossDefs[kind].name) + " was defeated by " + killer + "! Its chests are on the ground");
                 break;
             }
+            case royale::ClientEvent::Type::SupplyDrop: {
+                ShowBanner("SUPPLY DROP INCOMING!  Marked on your map", IM_COL32(255, 150, 60, 255), 3.6f);
+                Say("A supply drop is coming down: a crate of Legendary loot. It is marked on the map");
+                gSupplyMarks.push_back({ e.x, e.z, ImGui::GetTime() + 60.0 });
+                Audio_PlaySoundGeneral(NA_SE_EV_FIRE_PILLAR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                break;
+            }
             case royale::ClientEvent::Type::PropBroken: {
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
                 const auto& props = gSession.Client()->Props();
@@ -3257,10 +3545,24 @@ void ReportEvents(const royale::HudState& hud) {
                     else if (hud.haveSelf && std::hypot(e.x - hud.selfX, e.z - hud.selfZ) < 700.0f) Say(nameOf(e.id) + " used " + what);
                 }
                 break;
-            case royale::ClientEvent::Type::Eliminated:
-                if (e.id == hud.selfId) Say("You were eliminated. Spectating until the match ends");
-                else if (e.other == hud.selfId) Say("You eliminated " + nameOf(e.id));
+            case royale::ClientEvent::Type::Eliminated: {
+                const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
+                const std::string victim = me ? std::string("You") : nameOf(e.id);
+                std::string line;
+                if (e.other == royale::net::kNoPlayer16) line = victim + (me ? " were" : " was") + " caught by the storm";
+                else if (royale::IsBossId(e.other)) line = victim + (me ? " were" : " was") + " defeated by the " + royale::kBossDefs[gBossKindSeen.count(e.other) ? gBossKindSeen[e.other] : 0].name;
+                else line = (mine ? std::string("You") : nameOf(e.other)) + " eliminated " + victim;
+                AddFeed(line, me ? IM_COL32(255, 110, 110, 255) : mine ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 235, 255));
+                if (me) {
+                    Say("You were eliminated. Spectating until the match ends");
+                    ShowBanner("ELIMINATED  -  #" + std::to_string(std::max(1, hud.alive)), IM_COL32(255, 110, 110, 255), 4.0f);
+                    gSpectateTarget = kSpectateSelf;
+                    for (const auto& st : gSession.Puppets()) if (st.alive && st.id == e.other) gSpectateTarget = st.id;   // watch whoever got you
+                } else if (mine) {
+                    Say("You eliminated " + victim);
+                }
                 break;
+            }
             case royale::ClientEvent::Type::StateChanged:
                 if (e.state == royale::MatchState::Drop) Say("Drop! Skydive to the ground. Z dives faster");
                 else if (e.state == royale::MatchState::InMatch) Say("Match started. Stay inside the safe zone! Mini bosses guard the caves and drop Legendary loot");
@@ -3522,6 +3824,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     if (joined && IsLive(hud) && InGame()) StormEdgeFx(hud);
     UpdateBossWorldFx();
+    ReconcileProjectileActor();
     DriveStormAlerts(hud);
     gStateNow = hud.state;
     SealExits(hud);

@@ -31,7 +31,7 @@ enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvSupplyDrop = 86,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -158,12 +158,13 @@ struct LootNet {
     uint8_t item = 0, rarity = 0;
     bool chest = false, taken = false;
     bool special = false;     // a heart container chest
+    bool supply = false;      // from a supply drop
     uint16_t amount = 0;      // rupees and ammo: how many
-    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); w.U8(item); w.U8(rarity); w.U8(static_cast<uint8_t>((chest ? 1 : 0) | (taken ? 2 : 0) | (special ? 4 : 0))); w.U16(amount); }
+    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); w.U8(item); w.U8(rarity); w.U8(static_cast<uint8_t>((chest ? 1 : 0) | (taken ? 2 : 0) | (special ? 4 : 0) | (supply ? 8 : 0))); w.U16(amount); }
     bool Read(ByteReader& r) {
         x = r.F32(); z = r.F32(); item = r.U8(); rarity = r.U8(); uint8_t f = r.U8(); amount = r.U16();
-        chest = f & 1; taken = f & 2; special = f & 4;
-        return r.ok && Finite(x) && Finite(z) && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount && f <= 7 && amount <= 5000;
+        chest = f & 1; taken = f & 2; special = f & 4; supply = f & 8;
+        return r.ok && Finite(x) && Finite(z) && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount && f <= 15 && amount <= 5000;
     }
 };
 
@@ -355,6 +356,14 @@ struct EvBossDown {
     float x = 0, z = 0;
     void Write(ByteWriter& w) const { w.U16(boss); w.U16(killer); w.F32(x); w.F32(z); }
     bool Read(ByteReader& r) { boss = r.U16(); killer = r.U16(); x = r.F32(); z = r.F32(); return r.ok && IsBossId(boss) && Finite(x) && Finite(z); }
+};
+
+// A supply drop has been announced: a crate lands at (x, z) in `delay` seconds.
+struct EvSupplyDrop {
+    static constexpr MsgType kType = MsgType::EvSupplyDrop;
+    float x = 0, z = 0, delay = 0;
+    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); w.F32(delay); }
+    bool Read(ByteReader& r) { x = r.F32(); z = r.F32(); delay = r.F32(); return r.ok && Finite(x) && Finite(z) && Finite(delay) && delay >= 0; }
 };
 
 // A rock or bush is gone for everybody. If somebody's hit broke it, `by` is who and `item`/`amount` what was inside (item 255 for nothing).

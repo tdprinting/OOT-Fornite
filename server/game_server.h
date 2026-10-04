@@ -461,6 +461,7 @@ class GameServer {
         n.chest = l.spawn.container; // the client draws these as treasure chests
         n.taken = l.taken;
         n.special = l.spawn.special;
+        n.supply = l.spawn.supply;
         n.amount = l.spawn.amount;
         return n;
     }
@@ -553,6 +554,12 @@ class GameServer {
                     st.by = static_cast<uint16_t>(e.a);
                     st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health;
                     Broadcast(st);
+                    break;
+                }
+                case MatchEvent::Type::SupplyDrop: {
+                    net::EvSupplyDrop sd;
+                    sd.x = e.x; sd.z = e.z; sd.delay = e.health;
+                    Broadcast(sd);
                     break;
                 }
                 case MatchEvent::Type::BossSpawned: {

@@ -15,7 +15,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -334,6 +334,14 @@ class GameClient {
                 net::EvResults m;
                 if (!net::Decode(data, m)) break;
                 results = m.rows;
+                break;
+            }
+            case net::MsgType::EvSupplyDrop: {
+                net::EvSupplyDrop m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::SupplyDrop};
+                e.x = m.x; e.z = m.z; e.health = m.delay;
+                events.push_back(e);
                 break;
             }
             case net::MsgType::EvPropBroken: {

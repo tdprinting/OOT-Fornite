@@ -32,6 +32,11 @@ class BotController {
     static constexpr float kSearchRadius = 800.0f;
     static constexpr float kMinFightDps = 1.0f;     // bots with a weaker weapon avoid fights they could skip
     static constexpr float kSight = 900.0f;         // Normal difficulty
+    // After the drop bots look for loot first: for this long they don't start a fight unless they are hurt. And a bot with only the starting
+    // sword looks for a real weapon instead of picking fights (unless cornered). Both are on in the game; most unit tests switch them off so
+    // that they can put bots in a fight at once.
+    static float& CalmSeconds() { static float v = 15.0f; return v; }
+    static bool& GearFirst() { static bool v = true; return v; }
 
     explicit BotController(uint64_t seed) : rng(seed ^ 0x626F74ull) {} // "bot"
 
@@ -47,7 +52,11 @@ class BotController {
         // Bots are "in the air" for most of the drop, so they land and start looting when the humans do, not before.
         if (m.State() == MatchState::Drop && m.StateTime() < kDropSec * 0.65f) return;
         for (auto& p : m.Players()) {
-            if (p.isBot && p.alive) Act(m, p, soon, dt);
+            if (p.isBot && p.alive) {
+                Act(m, p, soon, dt);
+                const Memory& mem = Mem(p.id);
+                if (m.Clock() < mem.actUntil && !m.Stunned(p)) p.anim = static_cast<uint8_t>(mem.actAnim);   // it just used something: show it
+            }
         }
     }
 
@@ -120,6 +129,8 @@ class BotController {
         float dodgeCycle = -1;         // the foe's attackReadyAt we last decided about, so each swing gets one decision
         bool dodgeThisSwing = false;
         float hazardNoticeAt = -1;     // when the bot will have noticed the blast ring or fire cone it is standing in
+        Anim actAnim = Anim::Idle;      // the pose of the item it just used, held for a moment over whatever it is doing
+        float actUntil = 0;
     };
 
     Rng rng;
@@ -142,6 +153,22 @@ class BotController {
             it = memory.emplace(id, mem).first;
         }
         return it->second;
+    }
+
+    // The pose a bot shows for a moment after using something, like a player would: swing, loose an arrow, throw, drink, play a song, cast.
+    static Anim PoseForWeapon(const WeaponStats& w, ItemId item) {
+        if (!w.ranged) return Anim::Attack;
+        const AmmoKind a = AmmoUsedBy(item);
+        return (a == AmmoKind::Arrows || a == AmmoKind::Seeds) ? Anim::Shoot : Anim::Throw;
+    }
+    void ShowPose(Match& m, Memory& mem, Anim pose, float seconds = 0.45f) { mem.actAnim = pose; mem.actUntil = m.Clock() + seconds; }
+    // Attack, and show the right pose if the attack was allowed.
+    AttackResult BotAttack(Match& m, PlayerState& p, Memory& mem, uint32_t target, bool hit) {
+        const WeaponStats w = Match::StatsOf(p);
+        const ItemId item = p.weapon.item;
+        const AttackResult r = m.Attack(p.id, target, hit);
+        if (r.ok) ShowPose(m, mem, PoseForWeapon(w, item));
+        return r;
     }
 
     // ---- small helpers -----------------------------------------------------------------------------------------------
@@ -458,8 +485,8 @@ class BotController {
             if (loot[i].taken) continue;
             const LootSpawn& s = loot[i].spawn;
             const float d = Distance(p.pos, s.pos);
-            if (d > radius || !safe.Contains(s.pos)) continue;
-            const float value = LootValue(p, s);
+            if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) continue;
+            const float value = LootValue(p, s) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
             if (value <= 0) continue;
             const float score = value * (0.6f + mem.greed) / (d + 150.0f);
             if (static_cast<int>(i) == mem.lootIdx) currentScore = score;
@@ -537,7 +564,11 @@ class BotController {
             if (!emergency && rng.Unit() > t.abilityUse) return false;
         }
         if (s.foe) p.rot = FaceAngle(p.pos, s.foe->pos); // the Hookshot and friends go where the bot is facing
-        return m.UseAbility(p.id);
+        const ItemId ability = p.ability.item;
+        const bool ok = m.UseAbility(p.id);
+        if (ok) ShowPose(m, mem, IsSong(ability) || ability == ItemId::FairyOcarina || ability == ItemId::OcarinaOfTime ? Anim::Play
+                                 : ability == ItemId::ShockwaveGrenade || ability == ItemId::Hookshot || ability == ItemId::Longshot ? Anim::Throw : Anim::Cast, 0.9f);
+        return ok;
     }
 
     // Drink potions: at once when badly hurt, or when hurt a bit and nobody is close.
@@ -548,7 +579,7 @@ class BotController {
         if (!useful) return false;
         const bool critical = p.health <= 1.2f;
         const bool safe = !s.foe || s.dist > 260.0f;
-        if (critical || (safe && s.deficit >= 1.0f) || (s.burning && p.health < p.maxHealth * 0.7f)) return m.UsePotion(p.id);
+        if (critical || (safe && s.deficit >= 1.0f) || (s.burning && p.health < p.maxHealth * 0.7f)) { const bool ok = m.UsePotion(p.id); if (ok) ShowPose(m, Mem(p.id), Anim::Drink, 0.9f); return ok; }
         return false;
     }
 
@@ -558,7 +589,7 @@ class BotController {
         for (const Equipped& e : p.potions) has |= PotionOf(e.item).shield > 0;
         if (!has) return false;
         const bool safe = !s.foe || s.dist > 260.0f;
-        if (safe && p.armor < kMaxShield * 0.55f) return m.UseShield(p.id);
+        if (safe && p.armor < kMaxShield * 0.55f) { const bool ok = m.UseShield(p.id); if (ok) ShowPose(m, Mem(p.id), Anim::Drink, 0.9f); return ok; }
         return false;
     }
 
@@ -584,6 +615,7 @@ class BotController {
         if (m.Revealing(p)) sight = 1e9f;
 
         PlayerState* foe = ChooseTarget(m, p, mem, sight);
+        if (foe && m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds() && now >= mem.alertUntil) foe = nullptr;   // nobody wants a fight yet
         if (foe) {
             if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
             if (mem.prevFoeAt >= 0 && now > mem.prevFoeAt) { // how it is moving, smoothed (for leading shots and judging its dodges)
@@ -617,8 +649,10 @@ class BotController {
         // Flee a fight that is going badly. Once started, keep fleeing for a few seconds so bots don't flip-flop.
         const float fleeBelow = 0.15f + 0.45f * mem.caution;
         if (foe && s.advantage < fleeBelow && dist < 700.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 3.0f + 2.0f * mem.caution;
+        // With only the starting sword a bot runs from anybody who comes close rather than trade blows (they only fight when cornered).
+        if (foe && GearFirst() && EffectiveDpsNow(p) < kMinFightDps && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
         s.fleeing = now < mem.fleeUntil && foe != nullptr;
-        if (s.fleeing && s.advantage > 1.6f) mem.fleeUntil = 0; // the tables turned
+        if (s.fleeing && s.advantage > 1.6f && !(GearFirst() && EffectiveDpsNow(p) < kMinFightDps)) mem.fleeUntil = 0; // the tables turned
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
         if (AvoidHazards(m, p, mem, dt, tune)) return;
@@ -656,7 +690,7 @@ class BotController {
                 const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
                 if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
                 else { p.rot = FaceAngle(p.pos, boss->pos); }
-                if (bd <= w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius) && m.Clock() >= p.attackReadyAt) m.Attack(p.id, boss->id, rng.Unit() < mem.skill);
+                if (bd <= w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius) && m.Clock() >= p.attackReadyAt) BotAttack(m, p, mem, boss->id, rng.Unit() < mem.skill);
                 // Back away just before it smashes, then return.
                 if (bd < kBossReach + 30.0f && boss->attackReadyAt - m.Clock() < 0.35f) {
                     Advance(m, p, p.pos.x - boss->pos.x, p.pos.z - boss->pos.z, kRunSpeed * dt * 1.2f);
@@ -699,7 +733,8 @@ class BotController {
         }
 
         // 5. Hunt: go where the last target was seen (aggressive, healthy bots), or close in on a visible but distant enemy.
-        if (tune.hunt && s.deficit < p.maxHealth * 0.4f) {
+        const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !GearFirst();   // with just the starting sword, nobody goes hunting
+        if (tune.hunt && armed && s.deficit < p.maxHealth * 0.4f) {
             if (foe && mem.aggression > 0.45f && s.advantage > 1.0f) {
                 Steer(m, p, mem, foe->pos, dt);
                 return;
@@ -744,7 +779,7 @@ class BotController {
         const float range = (std::max)(kAlwaysFightRange * (0.5f + mem.aggression), Match::StatsOf(p).range * 1.5f);
         if (dist > range) return false;
         if (dist <= 180.0f) return true; // cornered: fight
-        if (EffectiveDps(p.weapon) < kMinFightDps && advantage < 1.0f) return false;
+        if (EffectiveDpsNow(p) < kMinFightDps && (advantage < 1.0f || (GearFirst() && dist > 220.0f))) return false;   // with only the starting sword, go and find a real weapon first
         return advantage >= 0.4f + 0.5f * (1.0f - mem.aggression);
     }
 
@@ -794,7 +829,7 @@ class BotController {
             if (m.CanRoll(p) && RollToward(m, p, mem, -toZ * mem.strafeDir, toX * mem.strafeDir)) {
                 p.anim = static_cast<uint8_t>(Anim::Roll);
                 p.rot = FaceAngle(p.pos, foe.pos);
-                if (m.Clock() >= p.attackReadyAt && dist <= mine.range) m.Attack(p.id, foe.id, rng.Unit() < mem.skill * 0.8f); // and swing back before rolling off
+                if (m.Clock() >= p.attackReadyAt && dist <= mine.range) BotAttack(m, p, mem, foe.id, rng.Unit() < mem.skill * 0.8f); // and swing back before rolling off
                 return;
             }
             mem.strafeDir = -mem.strafeDir;
@@ -805,7 +840,7 @@ class BotController {
     }
 
     // Swing or shoot if the foe is in range and the weapon is ready. Accuracy falls off with distance for ranged weapons.
-    void TryAttack(Match& m, PlayerState& p, const Memory& mem, const PlayerState& foe, float dist) {
+    void TryAttack(Match& m, PlayerState& p, Memory& mem, const PlayerState& foe, float dist) {
         const WeaponStats w = Match::StatsOf(p);
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
         if (m.Invulnerable(foe)) return; // don't waste a swing
@@ -818,7 +853,7 @@ class BotController {
         }
         if (m.Stunned(foe)) chance = (std::min)(1.0f, chance + 0.25f);
         if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
-        m.Attack(p.id, foe.id, rng.Unit() < (std::max)(0.05f, chance));
+        BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance));
     }
 };
 

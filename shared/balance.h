@@ -25,6 +25,11 @@ constexpr int kMinPlayers = 2;        // the host's player-count slider runs fro
 constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
 constexpr int kMaxProps = 1200;
 
+// Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.
+constexpr float kSupplyFirstSec = 55.0f;   // match time of the first drop
+constexpr float kSupplyEverySec = 70.0f;
+constexpr float kSupplyWarningSec = 7.0f;  // from the announcement to the crate landing
+
 // Match points: damage is the main thing, kills and surviving longer add to it, a win is a big bonus.
 constexpr int kPointsPerHeartOfDamage = 100;
 constexpr int kPointsPerKill = 500;

@@ -75,7 +75,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -213,6 +213,7 @@ class Match {
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
+        nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
         Enter(MatchState::Countdown);
         return true;
     }
@@ -229,6 +230,7 @@ class Match {
                 break;
             case MatchState::InMatch:
                 stormTime += dt;
+                TickSupplyDrops();
                 for (auto& p : players) {
                     if (!p.alive) continue;
                     float dps = storm.DamagePerSecond(p.pos, stormTime);
@@ -809,6 +811,41 @@ class Match {
         events.push_back(e);
     }
 
+    // Supply drops: announced a few seconds ahead somewhere in the zone that will still be safe, then a crate of guaranteed Legendary loot (and a
+    // second chest and a pile of rupees) lands there. Not in the last phases, where there is no room left to race for it.
+    void SetSupplyDrops(bool on) { supplyDrops = on; }
+    void TickSupplyDrops() {
+        if (!supplyDrops) return;
+        float total = 0;
+        for (const auto& ph : kStormPhases) total += ph.waitSec + ph.closeSec;
+        if (stormTime >= nextSupplyAt && stormTime < total * 0.75f) {
+            nextSupplyAt += kSupplyEverySec;
+            Rng rng(seed ^ (static_cast<uint64_t>(supplyCount++) * 0x9E3779B97F4A7C15ull) ^ 0x737570ull); // "sup"
+            const Circle zone = storm.SafeZoneAt(stormTime + kSupplyWarningSec + 10.0f);
+            Vec2 at = RandomPointIn(rng, zone, placement, 0.8f);
+            pendingSupply.push_back({at, clock + kSupplyWarningSec});
+            MatchEvent e{MatchEvent::Type::SupplyDrop};
+            e.x = at.x; e.z = at.z; e.health = kSupplyWarningSec;
+            events.push_back(e);
+        }
+        for (size_t i = 0; i < pendingSupply.size();) {
+            if (clock < pendingSupply[i].landAt) { i++; continue; }
+            const Vec2 at = pendingSupply[i].pos;
+            Rng rng(seed ^ (static_cast<uint64_t>(i + supplyCount) * 0xD1B54A32D192ED03ull) ^ 0x6372617465ull); // "crate"
+            LootSpawn crate = SiteChest(rng, at, 3);
+            crate.supply = true;
+            AddLoot(crate);
+            LootSpawn second = SiteChest(rng, {at.x + 70.0f, at.z + 40.0f}, 2);
+            second.supply = true;
+            AddLoot(second);
+            LootSpawn money = {{at.x - 70.0f, at.z + 40.0f}, ItemId::Rupees, Rarity::Common, false, false};
+            money.amount = 60;
+            money.supply = true;
+            AddLoot(money);
+            pendingSupply.erase(pendingSupply.begin() + static_cast<long>(i));
+        }
+    }
+
     void SetMajorBoss(bool on) { majorBoss = on; }
     bool MajorBossEnabled() const { return majorBoss; }
     const std::vector<Strike>& Strikes() const { return strikes; }
@@ -1368,6 +1405,11 @@ class Match {
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;
+    bool supplyDrops = true;
+    float nextSupplyAt = kSupplyFirstSec;
+    int supplyCount = 0;
+    struct PendingSupply { Vec2 pos; float landAt; };
+    std::vector<PendingSupply> pendingSupply;
     int bossCount = 0;
     int mapId = 0;           // which place this is (shared/map.h): decides the bosses
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none

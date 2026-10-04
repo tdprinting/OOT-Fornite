@@ -1102,6 +1102,49 @@ static void BotsPickUpFairiesAndHearts() {
     CHECK(b->maxHealth > kMaxHealth);
 }
 
+static Simulation DragonArena(int mapId, bool enabled);
+
+static void SupplyDrops() {
+    float total = 0;
+    for (const auto& ph : kStormPhases) total += ph.waitSec + ph.closeSec;
+    Simulation sim = DragonArena(0, false);          // (no dragon: just the arena with an invulnerable test player)
+    Match& m = sim.match;
+    CHECK(m.StormTime() < 1.0f);
+    const size_t before = m.Loot().size();
+    int announced = 0;
+    float firstAnnounce = -1, landed = -1;
+    std::vector<Vec2> where;
+    for (int i = 0; i < static_cast<int>((total * 0.9f) * kTickHz); i++) {
+        sim.Tick(kDt);
+        for (const auto& e : m.DrainEvents()) {
+            if (e.type == MatchEvent::Type::SupplyDrop) {
+                announced++;
+                if (firstAnnounce < 0) firstAnnounce = m.StormTime();
+                CHECK(std::abs(e.health - kSupplyWarningSec) < 0.01f);
+                where.push_back({e.x, e.z});
+                CHECK(m.GetStorm().SafeZoneAt(m.StormTime() + kSupplyWarningSec + 10.0f).Contains({e.x, e.z}));   // lands where the zone will still be
+            }
+            if (e.type == MatchEvent::Type::LootAdded && landed < 0 && m.Loot()[e.index].spawn.supply) landed = m.StormTime();
+        }
+    }
+    CHECK(announced >= 2 && announced <= 5);
+    CHECK(firstAnnounce >= kSupplyFirstSec - 0.1f && firstAnnounce < kSupplyFirstSec + 1.0f);
+    CHECK(landed >= firstAnnounce + kSupplyWarningSec - 0.2f && landed < firstAnnounce + kSupplyWarningSec + 1.0f);          // a few seconds after the warning
+    int legendary = 0, supply = 0, rupees = 0;
+    for (size_t i = before; i < m.Loot().size(); i++) {
+        const LootSpawn& l = m.Loot()[i].spawn;
+        if (!l.supply) continue;
+        supply++;
+        if (l.container && l.rarity == Rarity::Legendary) legendary++;
+        if (l.item == ItemId::Rupees && l.amount == 60) rupees++;
+    }
+    CHECK(supply == 3 * announced && legendary >= announced && rupees == announced);                                             // crate, second chest, money
+    // Off means off, and none come in the last quarter of the storm.
+    Simulation off = DragonArena(0, false);
+    off.match.SetSupplyDrops(false);
+    for (int i = 0; i < static_cast<int>(total * kTickHz); i++) { off.Tick(kDt); for (const auto& e : off.match.DrainEvents()) CHECK(e.type != MatchEvent::Type::SupplyDrop); }
+}
+
 static void ClimbsAndSpreadOutChests() {
     // A climb is three platforms side by side, each a step higher, with the best chest on the top one.
     {
@@ -1289,6 +1332,81 @@ static void StormJingleAndWarning() {
     }
     CHECK(BuildStormJingle() == jingle && BuildStormWarning() == warning);              // deterministic
     CHECK(jingle != warning);
+}
+
+static void BotsLootBeforeTheyFight() {
+    const float calm = BotController::CalmSeconds();
+    const bool gear = BotController::GearFirst();
+    BotController::CalmSeconds() = 15.0f;
+    BotController::GearFirst() = true;
+    auto setup = [&](Vec2 a, Vec2 b, ItemId weapon) {
+        Simulation sim(88, MapCircle(), 0);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        sim.match.Find(1000)->pos = a; sim.match.Find(1001)->pos = b;
+        for (uint32_t id : {1000u, 1001u}) { sim.match.Find(id)->weapon = {weapon, Rarity::Rare}; sim.match.Find(id)->maxHealth = sim.match.Find(id)->health = 50.0f; }
+        return sim;
+    };
+    {   // Geared bots right next to each other still leave each other alone for the first ten seconds...
+        Simulation sim = setup({0, 0}, {120, 0}, ItemId::MasterSword);
+        for (int i = 0; i < 12 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->alive = false; }
+        CHECK(sim.match.Find(1000)->health == 50.0f && sim.match.Find(1001)->health == 50.0f);
+        // ...and then fight.
+        for (int i = 0; i < 12 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->alive = false; }
+        CHECK(sim.match.Find(1000)->health < 50.0f || sim.match.Find(1001)->health < 50.0f);
+    }
+    {   // With only the starting sword a bot doesn't go looking for a fight: it keeps its distance and loots, unless cornered.
+        Simulation sim = setup({0, 0}, {420, 0}, ItemId::BasicSword);
+        BotController::CalmSeconds() = 0.0f;
+        float distanceAtFirstBlow = -1;
+        for (int i = 0; i < 8 * kTickHz && distanceAtFirstBlow < 0; i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->alive = false;
+            if (sim.match.Find(1000)->health < 50.0f || sim.match.Find(1001)->health < 50.0f) distanceAtFirstBlow = Distance(sim.match.Find(1000)->pos, sim.match.Find(1001)->pos);
+        }
+        CHECK(distanceAtFirstBlow < 0 || distanceAtFirstBlow <= 230.0f);          // they only trade blows when they bump into each other
+        Simulation close = setup({0, 0}, {100, 0}, ItemId::BasicSword);
+        BotController::CalmSeconds() = 0.0f;
+        for (int i = 0; i < 6 * kTickHz; i++) { close.Tick(kDt); close.match.Find(1)->alive = false; }
+        CHECK(close.match.Find(1000)->health < 50.0f || close.match.Find(1001)->health < 50.0f);
+    }
+    BotController::CalmSeconds() = calm;
+    BotController::GearFirst() = gear;
+}
+
+static void BotsShowTheirItemUse() {
+    // A bot's pose says what it just did: swing, loose an arrow, throw, drink, cast or play.
+    auto seenIn = [&](ItemId weapon, bool hurtWithPotion, ItemId ability, float foeDistance) {
+        Simulation sim(90, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* a = sim.match.Find(1000);
+        PlayerState* b = sim.match.Find(1001);
+        a->pos = {0, 0}; b->pos = {foeDistance, 0};
+        a->weapon = {weapon, Rarity::Rare};
+        a->ammo.fill(50);
+        a->maxHealth = 400.0f; a->health = hurtWithPotion ? 100.0f : 400.0f;
+        b->maxHealth = b->health = 400.0f;
+        b->weapon = {ItemId::BasicSword, Rarity::Common};
+        b->stunUntil = 1.0e9f;                                   // the target stands still
+        if (hurtWithPotion) a->potions = {{ItemId::RedPotion, Rarity::Rare}};
+        if (ability != ItemId::BasicSword) { a->ability = {ability, Rarity::Rare}; a->hasAbility = true; a->abilityReadyAt = 0; }
+        std::set<int> anims;
+        for (int i = 0; i < 12 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->alive = false; anims.insert(a->anim); b->stunUntil = 1.0e9f; }
+        return anims;
+    };
+    CHECK(seenIn(ItemId::MasterSword, false, ItemId::BasicSword, 90).count(static_cast<int>(Anim::Attack)));
+    CHECK(seenIn(ItemId::FairyBow, false, ItemId::BasicSword, 500).count(static_cast<int>(Anim::Shoot)));
+    CHECK(seenIn(ItemId::Slingshot, false, ItemId::BasicSword, 500).count(static_cast<int>(Anim::Shoot)));
+    CHECK(seenIn(ItemId::Bombs, false, ItemId::BasicSword, 400).count(static_cast<int>(Anim::Throw)));
+    CHECK(seenIn(ItemId::MasterSword, true, ItemId::BasicSword, 900).count(static_cast<int>(Anim::Drink)));
+    CHECK(seenIn(ItemId::MasterSword, false, ItemId::DinsFire, 200).count(static_cast<int>(Anim::Cast)));
+    CHECK(seenIn(ItemId::MasterSword, false, ItemId::ZeldasLullaby, 200).count(static_cast<int>(Anim::Play)) || seenIn(ItemId::MasterSword, true, ItemId::ZeldasLullaby, 300).count(static_cast<int>(Anim::Play)));
 }
 
 static void RollingDodgesHits() {
@@ -1609,11 +1727,19 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
+            if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }
     // Variants of a rock really differ.
+    // Every projectile variant builds, stays near the origin and is a few dozen triangles.
+    for (uint32_t variant = 0; variant < 10; variant++) {
+        const MeshData m = BuildMesh(MeshKind::Projectile, variant);
+        float mn[3], mx[3];
+        m.Bounds(mn, mx);
+        CHECK(m.Triangles() >= 12 && m.Triangles() <= 60 && mn[1] >= -0.01f && mx[1] < 50 && std::fabs(mn[0]) < 60 && std::fabs(mx[0]) < 60);
+    }
     // One golem per kind of mini boss, one dragon per theme and pose, and each is its own colour.
     {
         std::set<int> reds;
@@ -2075,7 +2201,9 @@ static void ShieldBar() {
 }
 
 int main() {
-    ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
+    BotController::GearFirst() = false;
+    SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -308,6 +308,54 @@ inline MeshData Platform(uint32_t variant) {
     return b.mesh;
 }
 
+// Things in flight, nose towards +z, standing on y = 0: variants 0-3 arrows (plain, fire, ice, light), 4 a seed, 5 a bomb, 6 a bombchu, 7 a purple homing
+// bombchu, 8 a deku nut, 9 a boomerang. Drawn by the game layer for every arrow, seed and bomb anybody looses.
+inline MeshData Projectile(uint32_t variant) {
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    auto ball = [&](float cx, float cy, float cz, float r, Rgb col) {   // an octahedron
+        b.inside = {cx, cy, cz};
+        const V3 t = {cx, cy + r, cz}, d = {cx, cy - r, cz}, px = {cx + r, cy, cz}, nx = {cx - r, cy, cz}, pz = {cx, cy, cz + r}, nz = {cx, cy, cz - r};
+        b.Tri(t, px, pz, col); b.Tri(t, pz, nx, col); b.Tri(t, nx, nz, col); b.Tri(t, nz, px, col);
+        b.Tri(d, pz, px, col); b.Tri(d, nx, pz, col); b.Tri(d, nz, nx, col); b.Tri(d, px, nz, col);
+    };
+    const Rgb wood = {150, 98, 52}, white = {240, 240, 235};
+    switch (variant % 10) {
+        case 0: case 1: case 2: case 3: {
+            static const Rgb heads[4] = {{205, 210, 220}, {255, 140, 40}, {120, 225, 245}, {255, 240, 130}};
+            const Rgb head = heads[variant % 4];
+            box(0, 8, 45, 1.8f, 1.8f, 45.0f, wood);                                     // shaft
+            b.inside = {0, 8, 98};                                                       // the head: a four-sided point
+            const V3 base[4] = {{-5, 3, 90}, {5, 3, 90}, {5, 13, 90}, {-5, 13, 90}};
+            const V3 tip = {0, 8, 112};
+            for (int i = 0; i < 4; i++) b.Tri(base[i], base[(i + 1) % 4], tip, head);
+            box(0, 8, 6, 0.8f, 7.0f, 7.0f, variant == 0 ? white : head);                // fletching, one vane up and down...
+            box(0, 8, 6, 7.0f, 0.8f, 7.0f, variant == 0 ? white : head);                // ...and one side to side
+            break;
+        }
+        case 4: ball(0, 8, 0, 8.0f, {150, 100, 50}); box(0, 8, 0, 8.5f, 1.2f, 8.5f, {110, 70, 30}); break;
+        case 5: ball(0, 16, 0, 16.0f, {40, 44, 60}); box(0, 34, 0, 2.0f, 4.0f, 2.0f, wood); box(0, 40, 0, 3.0f, 3.0f, 3.0f, {255, 150, 40}); break;
+        case 6: case 7: {
+            const Rgb body = variant == 6 ? Rgb{225, 60, 60} : Rgb{150, 60, 220};
+            box(0, 10, 0, 7.0f, 7.0f, 15.0f, body);
+            box(-6, 18, 12, 3.0f, 4.0f, 3.0f, white); box(6, 18, 12, 3.0f, 4.0f, 3.0f, white);   // the ears
+            box(0, 10, -17, 2.0f, 2.0f, 3.0f, {255, 170, 60});                                     // the lit fuse
+            break;
+        }
+        case 8: ball(0, 9, 0, 9.0f, {140, 90, 40}); box(0, 18, 0, 1.5f, 3.0f, 1.5f, {70, 160, 70}); break;
+        default:                                                                                     // a boomerang: two arms, bent
+            box(-10, 6, 6, 12.0f, 2.5f, 4.0f, {240, 140, 50}); box(10, 6, 6, 12.0f, 2.5f, 4.0f, {240, 140, 50}); box(0, 6, 0, 5.0f, 2.5f, 7.0f, {200, 100, 30});
+            break;
+    }
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -320,6 +368,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Glider: return mesh_detail::Glider(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
+        case MeshKind::Projectile: return mesh_detail::Projectile(variant);
         default: return {};
     }
 }
