@@ -1,0 +1,68 @@
+name: Game build
+
+# Builds the whole game (Shipwright-Android fork + our patches + the Royale mod). Slow (the fork is large), so it only
+# runs when game-facing files change, or on demand. It compiles and links but does not run the game: that needs your ROM.
+on:
+  push:
+    branches: ["claude/**", "main"]
+    paths:
+      - "mod/**"
+      - "patches/**"
+      - "cmake/**"
+      - "shared/**"
+      - "server/**.h"
+      - "client/**"
+      - "scripts/**"
+      - ".github/workflows/game-build.yml"
+      - ".gitmodules"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch submodules (fork, its submodules, ENet)
+        run: git submodule update --init --recursive --depth 1
+      - name: Apply patches and copy the mod into the fork
+        shell: pwsh
+        run: |
+          ./scripts/apply_patches.ps1
+          ./scripts/link_mod.ps1
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -prerelease -format json | Select-String "displayName|installationVersion"
+          cmake --version
+      - name: Configure (the fork bootstraps vcpkg itself)
+        run: cmake -S third_party/Shipwright-Android -B build/x64 -A x64
+      - name: Build the game
+        run: cmake --build build/x64 --target soh --config Release --parallel
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch submodules (fork, its submodules, ENet)
+        run: git submodule update --init --recursive --depth 1
+      - name: Apply patches and copy the mod into the fork
+        run: |
+          ./scripts/apply_patches.sh
+          ./scripts/link_mod.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the Android SDK/NDK pieces the fork asks for
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.0.10792818" "cmake;3.31.5" "platforms;android-33" "platforms;android-31"
+      - name: Build the release APK (arm64-v8a)
+        working-directory: third_party/Shipwright-Android/Android
+        run: ./gradlew assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: royale-android-apk
+          path: third_party/Shipwright-Android/Android/app/build/outputs/apk/release/*.apk

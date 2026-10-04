@@ -24,6 +24,7 @@ extern "C" {
 #include "macros.h"
 #include "variables.h"
 #include "functions.h"
+#include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
 extern PlayState* gPlayState;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
@@ -144,7 +145,7 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
 
 void SpawnPuppet(const royale::PuppetState& s) {
     gSpawningPuppet = s.id;
-    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0);
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
     if (actor != nullptr) gActorOf[s.id] = actor;
 }
