@@ -193,6 +193,23 @@ uint8_t ClassifyAnim(Player* player) {
 uint8_t gLastEpoch = 0;
 royale::MatchState gLastState = royale::MatchState::Lobby;
 
+// While a match is live the server's health replaces the save's. Keep the real values so leaving a match, or the match
+// ending, doesn't leave the player's save file with 3 hearts.
+bool gHealthOverridden = false;
+s16 gSavedCapacity = 0, gSavedHealth = 0;
+
+bool IsLive(const royale::HudState& h) {
+    return h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
+}
+
+void RestoreHealth() {
+    if (!gHealthOverridden) return;
+    gHealthOverridden = false;
+    gSaveContext.healthCapacity = gSavedCapacity;
+    // Come back alive: an eliminated player left health at 0.
+    gSaveContext.health = gSavedHealth > 0 ? gSavedHealth : gSavedCapacity;
+}
+
 void OnPlayerUpdate() {
     if (!gSession.Joined() || !InHyruleField()) return;
     Player* player = GET_PLAYER(gPlayState);
@@ -216,8 +233,13 @@ void OnPlayerUpdate() {
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
     royale::HudState hud = gSession.Hud();
-    bool live = hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
-    if (live && hud.haveSelf) {
+    if (IsLive(hud) && hud.haveSelf) {
+        if (!gHealthOverridden) {
+            // Remember the player's real values so they can be put back afterwards (see RestoreHealth).
+            gSavedCapacity = gSaveContext.healthCapacity;
+            gSavedHealth = gSaveContext.health;
+            gHealthOverridden = true;
+        }
         gSaveContext.healthCapacity = static_cast<s16>(royale::kMaxHealth * 16);
         gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : 0;
     }
@@ -227,7 +249,10 @@ void OnGameFrameUpdate() {
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     gSession.Update(1.0f / royale::kTickHz);
 
-    royale::MatchState state = gSession.Hud().state;
+    royale::HudState hud = gSession.Hud();
+    if (gHealthOverridden && !(gSession.Joined() && IsLive(hud))) RestoreHealth();
+
+    royale::MatchState state = hud.state;
     if (state != gLastState) {
         if (state == royale::MatchState::Countdown && gSession.Joined()) KillAllEnemies();
         gLastState = state;
