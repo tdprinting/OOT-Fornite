@@ -44,6 +44,7 @@ extern "C" {
 #include "functions.h"
 #include "src/overlays/actors/ovl_En_Box/z_en_box.h" // the treasure chest actor
 #include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
+#include "regs.h"                                // WREG, for the game's own minimap switch
 extern PlayState* gPlayState;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
@@ -203,7 +204,7 @@ bool MeasureField(royale::Circle* out) {
     for (const auto& p : kept) dist.push_back(royale::Distance(p, centre));
     std::sort(dist.begin(), dist.end());
     float radius = dist[static_cast<size_t>(dist.size() * 0.95f)] * 0.95f; // ignore stragglers, keep a margin
-    radius = std::clamp(radius, 1500.0f, 8000.0f);
+    radius = std::clamp(radius, 1500.0f, 5000.0f); // a smaller arena keeps the fights close and the storm in sight
     *out = { centre, radius };
     gMapMeasured = true;
     gMeasuredRadius = radius;
@@ -308,6 +309,8 @@ void ApplyChickenDance(Player* p, float t) {
     }
 }
 
+std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
+
 LinkAnimationHeader* AnimFor(uint8_t anim) {
     switch (static_cast<royale::Anim>(anim)) {
         case royale::Anim::Emote1: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_bikkuri;     // startled: "Wow!"
@@ -410,6 +413,13 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     }
 
     LinkAnimationHeader* want = AnimFor(s.anim);
+    {
+        auto sw = gSwingFrames.find(s.id);
+        if (sw != gSwingFrames.end() && sw->second > 0) {
+            sw->second--;
+            want = (LinkAnimationHeader*)&gPlayerAnim_link_fighter_normal_kiru; // a sword slash while they are hitting someone
+        }
+    }
     auto playing = gPlaying.find(actor);
     if (playing == gPlaying.end() || playing->second != (const void*)want) {
         LinkAnimation_PlayLoop(play, &player->skelAnime, want);
@@ -465,6 +475,9 @@ void ApplyLocalTunic(bool on) {
     }
 }
 
+royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme); // with the other custom models, below
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
@@ -474,6 +487,11 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     Player_Draw(actor, play);
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
+    // Everyone who is still in the sky during the drop hangs from a glider.
+    if (st && st->alive && (gStateNow == royale::MatchState::Countdown || gStateNow == royale::MatchState::Drop) &&
+        actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f) {
+        DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id);
+    }
 }
 
 void ForgetCorpse(const Actor* actor); // defined with the other corpse code below
@@ -1029,6 +1047,60 @@ void Boss_Update(Actor* actor, PlayState* play) {
     actor->world.rot.y = b.rot;
 }
 
+// ---- the glider ---------------------------------------------------------------------------------------------------------------
+// Everyone skydives under a striped glider. Other players' gliders are drawn along with them (Puppet_Draw); yours is a stand-in actor that
+// follows you for the length of the fall, tilting as you steer and folding back when you dive.
+float gGliderRoll = 0.0f;       // how far the local glider is banked
+bool gGliderDiving = false;
+Actor* gLocalGlider = nullptr;
+
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme) {
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Glider, scheme);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    Matrix_RotateZ(roll + std::sin(t * 3.1f + scheme) * 0.045f, MTXMODE_APPLY);               // gentle sway in the wind
+    Matrix_RotateX((diving ? 0.62f : 0.12f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.03f, MTXMODE_APPLY); // nose down for a dive
+    Matrix_Scale(1.0f, diving ? 0.65f : 1.0f, diving ? 0.75f : 1.0f, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void LocalGlider_Update(Actor* actor, PlayState* play) {
+    Player* p = GET_PLAYER(play);
+    actor->world.pos = p->actor.world.pos;
+    actor->shape.rot.y = p->actor.shape.rot.y;
+    actor->focus.pos = actor->world.pos;
+}
+void LocalGlider_Draw(Actor* actor, PlayState* play) {
+    DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, gGliderRoll, gGliderDiving, 0);
+}
+void LocalGlider_Destroy(Actor* actor, PlayState*) { if (gLocalGlider == actor) gLocalGlider = nullptr; }
+
+void ReconcileLocalGlider(bool want) {
+    if (want && gLocalGlider == nullptr && InField() && gPlayState != nullptr) {
+        Player* p = GET_PLAYER(gPlayState);
+        Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, p->actor.world.pos.x, p->actor.world.pos.y, p->actor.world.pos.z, 0, p->actor.shape.rot.y, 0, 0, false);
+        if (a == nullptr) return;
+        a->update = LocalGlider_Update;
+        a->draw = LocalGlider_Draw;
+        a->destroy = LocalGlider_Destroy;
+        a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+        a->uncullZoneForward = 6000.0f; a->uncullZoneScale = 3000.0f; a->uncullZoneDownward = 3000.0f;
+        a->shape.shadowScale = 0.0f;
+        gLocalGlider = a;
+    } else if (!want && gLocalGlider != nullptr) {
+        Actor_Kill(gLocalGlider);
+        gLocalGlider = nullptr;
+    }
+}
+
 void Boss_Draw(Actor* actor, PlayState* play) {
     auto of = gBossOf.find(actor);
     if (of == gBossOf.end()) return;
@@ -1271,29 +1343,41 @@ std::string ClockText(float seconds) {
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
 
-// The storm: a wall of purple rain standing on the edge of the safe zone, a dark rainy tint with lightning when you are in it.
+// Spectating after you are eliminated: you can watch yourself (where you fell) or any other player who is still alive, and nobody else.
+// D-pad Left/Right (or the < > buttons) switch between them; if the one you watch is eliminated the view moves on to the next living player.
+constexpr uint16_t kSpectateSelf = 0xFFFF;
+uint16_t gSpectateTarget = kSpectateSelf;
+
+std::vector<uint16_t> SpectatableIds() {
+    std::vector<uint16_t> ids = { kSpectateSelf };
+    for (const auto& st : gSession.Puppets()) if (st.alive) ids.push_back(st.id);
+    std::sort(ids.begin() + 1, ids.end());
+    return ids;
+}
+
+void CycleSpectate(int dir) {
+    const std::vector<uint16_t> ids = SpectatableIds();
+    size_t at = 0;
+    for (size_t i = 0; i < ids.size(); i++) if (ids[i] == gSpectateTarget) at = i;
+    gSpectateTarget = ids[(at + ids.size() + (dir < 0 ? ids.size() - 1 : 1)) % ids.size()];
+}
+
+const royale::PuppetState* SpectateTarget() {
+    if (gSpectateTarget == kSpectateSelf) return nullptr;
+    for (const auto& st : gSession.Puppets()) if (st.id == gSpectateTarget && st.alive) { static royale::PuppetState keep; keep = st; return &keep; }
+    return nullptr;
+}
+
+std::string SpectateName() {
+    if (const royale::PuppetState* t = SpectateTarget()) return t->name.empty() ? "Link" : t->name;
+    return "yourself";
+}
+
+// The storm: its edge is drawn in the world (StormEdgeFx, below, so hills and buildings hide it like anything else); this part is the
+// dark rainy tint with lightning on the screen while you are standing in it.
 void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     if (!InField() || h.safeZone.radius <= 0) return;
-    Player* pl = GET_PLAYER(gPlayState);
     const double t = ImGui::GetTime();
-    const royale::Circle z = h.safeZone;
-    const float baseY = pl->actor.world.pos.y;
-    const int kSegments = 120;
-    for (int i = 0; i < kSegments; i++) {
-        const float a0 = 6.2831853f * i / kSegments, a1 = 6.2831853f * (i + 1) / kSegments;
-        const float x0 = z.center.x + std::cos(a0) * z.radius, z0 = z.center.z + std::sin(a0) * z.radius;
-        const float x1 = z.center.x + std::cos(a1) * z.radius, z1 = z.center.z + std::sin(a1) * z.radius;
-        const float dx = x0 - pl->actor.world.pos.x, dz = z0 - pl->actor.world.pos.z;
-        if (dx * dx + dz * dz > 9000.0f * 9000.0f) continue;
-        ImVec2 b0, t0, b1, t1;
-        if (!WorldToScreen(x0, baseY - 250.0f, z0, &b0) || !WorldToScreen(x0, baseY + 2600.0f, z0, &t0) ||
-            !WorldToScreen(x1, baseY - 250.0f, z1, &b1) || !WorldToScreen(x1, baseY + 2600.0f, z1, &t1)) continue;
-        const int alpha = static_cast<int>(70 + 28 * std::sin(t * 2.4 + i * 0.55));
-        const ImVec2 quad[4] = { b0, b1, t1, t0 };
-        dl->AddConvexPolyFilled(quad, 4, IM_COL32(96, 44, 170, alpha));
-        if (i % 2 == 0) dl->AddLine(t0, b0, IM_COL32(205, 185, 255, 90), 1.6f * scale); // rain falling in the wall
-    }
-
     if (h.stormDamagePerSecond > 0) {
         dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(34, 10, 64, 105));
         for (int i = 0; i < 110; i++) { // slanting rain
@@ -1352,6 +1436,8 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     dl->AddCircleFilled(zc, h.safeZone.radius * k, IM_COL32(28, 62, 42, 255), 72);      // ...except the safe zone
     dl->AddCircle(zc, h.safeZone.radius * k, IM_COL32(255, 255, 255, 235), 72, 2.0f * scale);
     dl->AddCircle(c, R, IM_COL32(255, 210, 70, 255), 72, 2.0f * scale);
+    dl->AddCircle(c, R + 5.0f * scale, IM_COL32(150, 108, 30, 255), 72, 1.5f * scale);
+    dl->AddText(ImGui::GetFont(), 12.0f * scale, ImVec2(c.x - 4.0f * scale, c.y - R - 17.0f * scale), IM_COL32(255, 222, 110, 255), "N");
 
     if (gSession.Client() && MapOption("MapChests")) {
         for (const auto& l : gSession.Client()->Loot()) {
@@ -1395,39 +1481,264 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
                           ImVec2(me.x - fwd.x * u - side.x * u * 0.8f, me.y - fwd.y * u - side.y * u * 0.8f), IM_COL32(120, 255, 140, 255));
 }
 
+// ---- item icons ------------------------------------------------------------------------------------------------------------
+// The game's own item icons live in its resource archive and aren't reachable from here, so every item gets a small hand-drawn
+// icon built from lines and shapes, tinted by what the item is. `tier` is the rarity colour, used as the accent.
+void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 tier) {
+    using royale::ItemId;
+    const float u = s * 0.5f; // half the icon box
+    auto P = [&](float x, float y) { return ImVec2(c.x + x * u, c.y + y * u); };
+    const ImU32 steel = IM_COL32(205, 215, 225, 255), dark = IM_COL32(40, 46, 58, 255), wood = IM_COL32(150, 98, 52, 255), gold = IM_COL32(240, 200, 70, 255),
+                red = IM_COL32(225, 60, 60, 255), green = IM_COL32(70, 205, 100, 255), blue = IM_COL32(70, 130, 240, 255), white = IM_COL32(245, 245, 250, 255),
+                purple = IM_COL32(170, 90, 230, 255), orange = IM_COL32(240, 140, 50, 255), cyan = IM_COL32(120, 225, 245, 255);
+    const float th = std::max(1.5f, s * 0.07f);
+    auto sword = [&](ImU32 blade, ImU32 hilt, float len, float width) {
+        dl->AddLine(P(-0.62f, 0.62f), P(0.62f - (1.0f - len) * 0.6f, -0.62f + (1.0f - len) * 0.6f), blade, th * width);
+        dl->AddLine(P(-0.55f, 0.15f), P(-0.15f, 0.55f), hilt, th * 1.2f);   // crossguard
+        dl->AddLine(P(-0.45f, 0.45f), P(-0.78f, 0.78f), hilt, th * 1.5f);   // grip
+    };
+    auto bottle = [&](ImU32 fill, bool big) {
+        const float r = big ? 0.62f : 0.5f;
+        dl->AddCircleFilled(P(0, 0.22f), u * r, fill, 20);
+        dl->AddCircle(P(0, 0.22f), u * r, white, 20, th * 0.7f);
+        dl->AddRectFilled(P(-0.17f, -0.62f), P(0.17f, -0.2f), steel);
+        dl->AddRectFilled(P(-0.22f, -0.74f), P(0.22f, -0.58f), wood);
+    };
+    auto shieldShape = [&](ImU32 body, ImU32 trim) {
+        const ImVec2 pts[5] = { P(-0.62f, -0.62f), P(0.62f, -0.62f), P(0.62f, 0.1f), P(0.0f, 0.82f), P(-0.62f, 0.1f) };
+        dl->AddConvexPolyFilled(pts, 5, body);
+        dl->AddPolyline(pts, 5, trim, ImDrawFlags_Closed, th);
+    };
+    auto heart = [&](ImU32 col, float k) {
+        dl->AddCircleFilled(P(-0.3f * k, -0.2f * k), u * 0.42f * k, col, 16);
+        dl->AddCircleFilled(P(0.3f * k, -0.2f * k), u * 0.42f * k, col, 16);
+        dl->AddTriangleFilled(P(-0.68f * k, -0.02f * k), P(0.68f * k, -0.02f * k), P(0, 0.75f * k), col);
+    };
+    auto note = [&](ImU32 col) {
+        dl->AddCircleFilled(P(-0.25f, 0.5f), u * 0.3f, col, 14);
+        dl->AddLine(P(0.02f, 0.45f), P(0.02f, -0.6f), col, th * 1.2f);
+        dl->AddLine(P(0.02f, -0.6f), P(0.5f, -0.35f), col, th * 1.6f);
+    };
+    auto orb = [&](ImU32 col) {
+        dl->AddCircleFilled(c, u * 0.62f, col, 22);
+        dl->AddCircle(c, u * 0.62f, white, 22, th * 0.8f);
+        dl->AddCircleFilled(P(-0.2f, -0.2f), u * 0.18f, IM_COL32(255, 255, 255, 190), 12);
+    };
+    auto medal = [&](ImU32 col) {
+        dl->AddCircleFilled(c, u * 0.62f, col, 22);
+        dl->AddCircle(c, u * 0.62f, gold, 22, th * 1.4f);
+        dl->AddCircleFilled(c, u * 0.2f, white, 12);
+    };
+    auto gem = [&](ImU32 col) {
+        const ImVec2 pts[4] = { P(0, -0.75f), P(0.55f, 0), P(0, 0.75f), P(-0.55f, 0) };
+        dl->AddConvexPolyFilled(pts, 4, col);
+        dl->AddPolyline(pts, 4, white, ImDrawFlags_Closed, th * 0.8f);
+    };
+    auto mask = [&](ImU32 col) {
+        dl->AddCircleFilled(c, u * 0.62f, col, 20);
+        dl->AddCircleFilled(P(-0.24f, -0.12f), u * 0.13f, dark, 10);
+        dl->AddCircleFilled(P(0.24f, -0.12f), u * 0.13f, dark, 10);
+        dl->AddLine(P(-0.2f, 0.28f), P(0.2f, 0.28f), dark, th);
+    };
+    auto boot = [&](ImU32 col) {
+        dl->AddRectFilled(P(-0.3f, -0.7f), P(0.2f, 0.3f), col);
+        dl->AddRectFilled(P(-0.3f, 0.2f), P(0.7f, 0.7f), col, 4.0f);
+        dl->AddRectFilled(P(-0.3f, 0.6f), P(0.7f, 0.75f), dark);
+    };
+    auto tunic = [&](ImU32 col) {
+        const ImVec2 pts[8] = { P(-0.35f, -0.7f), P(0.35f, -0.7f), P(0.8f, -0.35f), P(0.55f, 0.0f), P(0.38f, -0.15f), P(0.38f, 0.7f), P(-0.38f, 0.7f), P(-0.38f, -0.15f) };
+        dl->AddConvexPolyFilled(pts, 8, col);
+        dl->AddTriangleFilled(P(-0.38f, -0.15f), P(-0.55f, 0.0f), P(-0.8f, -0.35f), col);
+        dl->AddTriangleFilled(P(-0.35f, -0.7f), P(-0.8f, -0.35f), P(-0.38f, -0.15f), col);
+        dl->AddLine(P(-0.38f, 0.3f), P(0.38f, 0.3f), gold, th);
+    };
+    auto arrow = [&](ImU32 tip) {
+        dl->AddLine(P(-0.7f, 0.7f), P(0.6f, -0.6f), wood, th);
+        dl->AddTriangleFilled(P(0.8f, -0.8f), P(0.28f, -0.5f), P(0.5f, -0.28f), tip);
+        dl->AddLine(P(-0.7f, 0.7f), P(-0.4f, 0.7f), white, th);
+        dl->AddLine(P(-0.7f, 0.7f), P(-0.7f, 0.4f), white, th);
+    };
+
+    switch (id) {
+        case ItemId::DekuStick: dl->AddLine(P(-0.5f, 0.7f), P(0.5f, -0.7f), wood, th * 2.2f); dl->AddCircleFilled(P(0.55f, -0.75f), u * 0.18f, orange, 8); break;
+        case ItemId::KokiriSword: sword(steel, green, 0.8f, 1.5f); break;
+        case ItemId::MasterSword: sword(cyan, blue, 1.0f, 1.8f); dl->AddCircleFilled(P(-0.35f, 0.35f), u * 0.12f, gold, 8); break;
+        case ItemId::BiggoronSword: sword(white, red, 1.0f, 2.8f); break;
+        case ItemId::MegatonHammer:
+            dl->AddLine(P(-0.6f, 0.7f), P(0.35f, -0.35f), wood, th * 1.8f);
+            dl->AddRectFilled(P(0.0f, -0.8f), P(0.78f, -0.15f), IM_COL32(120, 125, 140, 255), 3.0f);
+            dl->AddRect(P(0.0f, -0.8f), P(0.78f, -0.15f), steel, 3.0f, 0, th * 0.7f);
+            break;
+        case ItemId::Slingshot:
+            dl->AddLine(P(0, 0.75f), P(0, 0.1f), wood, th * 1.8f);
+            dl->AddLine(P(0, 0.1f), P(-0.55f, -0.65f), wood, th * 1.8f);
+            dl->AddLine(P(0, 0.1f), P(0.55f, -0.65f), wood, th * 1.8f);
+            dl->AddLine(P(-0.55f, -0.65f), P(0.55f, -0.65f), red, th * 0.8f);
+            break;
+        case ItemId::FairyBow:
+            dl->AddBezierQuadratic(P(-0.2f, -0.8f), P(0.95f, 0.0f), P(-0.2f, 0.8f), wood, th * 1.8f);
+            dl->AddLine(P(-0.2f, -0.8f), P(-0.2f, 0.8f), white, th * 0.6f);
+            dl->AddLine(P(-0.5f, 0.0f), P(0.7f, 0.0f), steel, th * 0.9f);
+            break;
+        case ItemId::FireArrows: arrow(IM_COL32(255, 120, 40, 255)); break;
+        case ItemId::IceArrows: arrow(cyan); break;
+        case ItemId::LightArrows: arrow(IM_COL32(255, 245, 150, 255)); break;
+        case ItemId::Boomerang:
+            dl->AddLine(P(-0.65f, -0.5f), P(0.0f, 0.6f), orange, th * 2.2f);
+            dl->AddLine(P(0.0f, 0.6f), P(0.65f, -0.5f), orange, th * 2.2f);
+            break;
+        case ItemId::Bombs:
+            dl->AddCircleFilled(P(0, 0.2f), u * 0.58f, IM_COL32(35, 40, 55, 255), 20);
+            dl->AddCircle(P(0, 0.2f), u * 0.58f, steel, 20, th * 0.7f);
+            dl->AddLine(P(0.3f, -0.25f), P(0.55f, -0.55f), wood, th * 1.2f);
+            dl->AddCircleFilled(P(0.6f, -0.62f), u * 0.14f, orange, 8);
+            break;
+        case ItemId::Bombchus:
+            dl->AddRectFilled(P(-0.3f, -0.55f), P(0.3f, 0.5f), red, u * 0.3f);
+            dl->AddCircleFilled(P(-0.35f, -0.55f), u * 0.22f, white, 10);
+            dl->AddCircleFilled(P(0.35f, -0.55f), u * 0.22f, white, 10);
+            dl->AddLine(P(0, 0.5f), P(0.3f, 0.8f), orange, th);
+            break;
+        case ItemId::DekuNuts: dl->AddCircleFilled(c, u * 0.55f, wood, 18); dl->AddCircle(c, u * 0.55f, IM_COL32(95, 60, 30, 255), 18, th); dl->AddLine(P(0, -0.55f), P(0, -0.8f), green, th * 1.4f); break;
+        case ItemId::DekuShield: shieldShape(wood, IM_COL32(95, 60, 30, 255)); break;
+        case ItemId::HylianShield: shieldShape(blue, steel); dl->AddTriangleFilled(P(0, -0.3f), P(-0.25f, 0.2f), P(0.25f, 0.2f), gold); break;
+        case ItemId::MirrorShield: shieldShape(steel, gold); dl->AddCircleFilled(P(0, -0.05f), u * 0.25f, red, 12); break;
+        case ItemId::GreenPotion: bottle(green, false); break;
+        case ItemId::RedPotion: bottle(red, false); break;
+        case ItemId::BluePotion: bottle(blue, false); break;
+        case ItemId::SmallShieldPotion: bottle(cyan, false); break;
+        case ItemId::LargeShieldPotion: bottle(blue, true); dl->AddCircle(P(0, 0.22f), u * 0.34f, white, 16, th * 0.8f); break;
+        case ItemId::Milk: bottle(white, false); break;
+        case ItemId::Fish: bottle(orange, false); break;
+        case ItemId::BlueFire: bottle(IM_COL32(90, 170, 255, 255), false); break;
+        case ItemId::Bug: bottle(IM_COL32(140, 190, 60, 255), false); break;
+        case ItemId::Poe: bottle(purple, false); break;
+        case ItemId::Fairy:
+            dl->AddCircleFilled(c, u * 0.22f, white, 12);
+            dl->AddCircle(c, u * 0.34f, IM_COL32(255, 200, 255, 255), 14, th * 0.8f);
+            dl->AddTriangleFilled(P(-0.1f, -0.1f), P(-0.8f, -0.55f), P(-0.45f, 0.2f), IM_COL32(190, 230, 255, 230));
+            dl->AddTriangleFilled(P(0.1f, -0.1f), P(0.8f, -0.55f), P(0.45f, 0.2f), IM_COL32(190, 230, 255, 230));
+            break;
+        case ItemId::RecoveryHeart: heart(red, 1.0f); break;
+        case ItemId::HeartPiece: heart(IM_COL32(240, 120, 150, 255), 0.85f); dl->AddLine(P(0, -0.5f), P(0, 0.7f), white, th * 0.7f); break;
+        case ItemId::HeartContainer: heart(IM_COL32(255, 70, 110, 255), 1.1f); dl->AddCircle(c, u * 0.9f, gold, 22, th); break;
+        case ItemId::MagicJar:
+            dl->AddRectFilled(P(-0.42f, -0.35f), P(0.42f, 0.7f), green, 6.0f);
+            dl->AddRectFilled(P(-0.5f, -0.6f), P(0.5f, -0.3f), IM_COL32(120, 120, 130, 255), 3.0f);
+            break;
+        case ItemId::DinsFire: orb(red); break;
+        case ItemId::FaroresWind: orb(green); break;
+        case ItemId::NayrusLove: orb(blue); break;
+        case ItemId::Hookshot: case ItemId::Longshot:
+            dl->AddLine(P(-0.7f, 0.7f), P(0.2f, -0.2f), id == ItemId::Longshot ? gold : steel, th * 1.6f);
+            dl->AddTriangleFilled(P(0.8f, -0.8f), P(0.25f, -0.45f), P(0.45f, -0.25f), steel);
+            dl->AddLine(P(-0.5f, 0.9f), P(-0.9f, 0.5f), wood, th * 1.6f);
+            break;
+        case ItemId::LensOfTruth:
+            dl->AddCircleFilled(c, u * 0.7f, IM_COL32(60, 40, 120, 255), 22);
+            dl->AddCircleFilled(c, u * 0.4f, white, 18);
+            dl->AddCircleFilled(c, u * 0.2f, dark, 12);
+            dl->AddCircle(c, u * 0.7f, gold, 22, th);
+            break;
+        case ItemId::MagicBeans: dl->AddCircleFilled(P(-0.2f, 0.1f), u * 0.34f, IM_COL32(190, 150, 90, 255), 14); dl->AddCircleFilled(P(0.25f, -0.15f), u * 0.3f, IM_COL32(150, 190, 90, 255), 14); break;
+        case ItemId::FairyOcarina: case ItemId::OcarinaOfTime:
+            dl->AddCircleFilled(c, u * 0.55f, id == ItemId::OcarinaOfTime ? blue : IM_COL32(110, 160, 220, 255), 20);
+            dl->AddRectFilled(P(0.2f, -0.65f), P(0.75f, -0.1f), id == ItemId::OcarinaOfTime ? blue : IM_COL32(110, 160, 220, 255), 3.0f);
+            for (int i = 0; i < 3; i++) dl->AddCircleFilled(P(-0.25f + i * 0.25f, 0.05f + (i == 1 ? -0.15f : 0.0f)), u * 0.09f, dark, 8);
+            if (id == ItemId::OcarinaOfTime) dl->AddCircle(c, u * 0.55f, gold, 20, th * 0.8f);
+            break;
+        case ItemId::ZeldasLullaby: note(IM_COL32(240, 150, 200, 255)); break;
+        case ItemId::EponasSong: note(orange); break;
+        case ItemId::SariasSong: note(green); break;
+        case ItemId::SunsSong: note(gold); break;
+        case ItemId::SongOfTime: note(cyan); break;
+        case ItemId::SongOfStorms: note(IM_COL32(150, 160, 190, 255)); break;
+        case ItemId::MinuetOfForest: note(green); break;
+        case ItemId::BoleroOfFire: note(red); break;
+        case ItemId::SerenadeOfWater: note(blue); break;
+        case ItemId::NocturneOfShadow: note(purple); break;
+        case ItemId::RequiemOfSpirit: note(orange); break;
+        case ItemId::PreludeOfLight: note(IM_COL32(255, 245, 150, 255)); break;
+        case ItemId::ShockwaveGrenade:
+            dl->AddCircleFilled(c, u * 0.38f, IM_COL32(60, 70, 90, 255), 16);
+            for (int i = 0; i < 8; i++) {
+                const float a = i * 0.7853982f;
+                dl->AddLine(ImVec2(c.x + std::cos(a) * u * 0.5f, c.y + std::sin(a) * u * 0.5f), ImVec2(c.x + std::cos(a) * u * 0.9f, c.y + std::sin(a) * u * 0.9f), cyan, th * 1.2f);
+            }
+            break;
+        case ItemId::KokiriTunic: tunic(green); break;
+        case ItemId::GoronTunic: tunic(red); break;
+        case ItemId::ZoraTunic: tunic(blue); break;
+        case ItemId::KokiriBoots: boot(wood); break;
+        case ItemId::IronBoots: boot(IM_COL32(110, 115, 130, 255)); break;
+        case ItemId::HoverBoots: boot(IM_COL32(150, 110, 70, 255)); dl->AddLine(P(-0.3f, 0.85f), P(0.7f, 0.85f), cyan, th * 1.4f); break;
+        case ItemId::GoronBracelet: dl->AddCircle(c, u * 0.55f, IM_COL32(180, 130, 70, 255), 20, th * 2.4f); break;
+        case ItemId::SilverGauntlets: dl->AddRectFilled(P(-0.55f, -0.45f), P(0.55f, 0.65f), steel, 6.0f); dl->AddRectFilled(P(-0.55f, -0.65f), P(0.55f, -0.35f), IM_COL32(150, 160, 175, 255), 3.0f); break;
+        case ItemId::GoldenGauntlets: dl->AddRectFilled(P(-0.55f, -0.45f), P(0.55f, 0.65f), gold, 6.0f); dl->AddRectFilled(P(-0.55f, -0.65f), P(0.55f, -0.35f), IM_COL32(200, 150, 40, 255), 3.0f); break;
+        case ItemId::KeatonMask: mask(IM_COL32(230, 170, 70, 255)); break;
+        case ItemId::SkullMask: mask(white); break;
+        case ItemId::SpookyMask: mask(IM_COL32(210, 90, 60, 255)); break;
+        case ItemId::BunnyHood: mask(IM_COL32(245, 235, 240, 255)); dl->AddRectFilled(P(-0.4f, -0.95f), P(-0.2f, -0.4f), white, 4.0f); dl->AddRectFilled(P(0.2f, -0.95f), P(0.4f, -0.4f), white, 4.0f); break;
+        case ItemId::GoronMask: mask(IM_COL32(190, 110, 60, 255)); break;
+        case ItemId::ZoraMask: mask(IM_COL32(90, 150, 230, 255)); break;
+        case ItemId::GerudoMask: mask(IM_COL32(230, 200, 90, 255)); break;
+        case ItemId::MaskOfTruth: mask(IM_COL32(120, 90, 190, 255)); dl->AddCircle(P(0, -0.12f), u * 0.18f, gold, 10, th); break;
+        case ItemId::SilverScale: dl->AddCircleFilled(c, u * 0.58f, steel, 20); dl->AddCircle(c, u * 0.58f, white, 20, th); break;
+        case ItemId::GoldenScale: dl->AddCircleFilled(c, u * 0.58f, gold, 20); dl->AddCircle(c, u * 0.58f, white, 20, th); break;
+        case ItemId::BigQuiver: dl->AddRectFilled(P(-0.3f, -0.1f), P(0.3f, 0.8f), wood, 4.0f); dl->AddLine(P(-0.12f, -0.1f), P(-0.12f, -0.8f), steel, th); dl->AddLine(P(0.12f, -0.1f), P(0.12f, -0.8f), steel, th); break;
+        case ItemId::BulletBag: case ItemId::BombBag:
+            dl->AddCircleFilled(P(0, 0.2f), u * 0.58f, id == ItemId::BombBag ? IM_COL32(60, 80, 140, 255) : IM_COL32(150, 110, 60, 255), 18);
+            dl->AddRectFilled(P(-0.25f, -0.55f), P(0.25f, -0.2f), IM_COL32(190, 150, 90, 255), 3.0f);
+            break;
+        case ItemId::ForestMedallion: medal(green); break;
+        case ItemId::FireMedallion: medal(red); break;
+        case ItemId::WaterMedallion: medal(blue); break;
+        case ItemId::SpiritMedallion: medal(orange); break;
+        case ItemId::ShadowMedallion: medal(purple); break;
+        case ItemId::LightMedallion: medal(IM_COL32(255, 240, 140, 255)); break;
+        case ItemId::KokiriEmerald: gem(green); break;
+        case ItemId::GoronRuby: gem(red); break;
+        case ItemId::ZoraSapphire: gem(blue); break;
+        default: dl->AddCircleFilled(c, u * 0.5f, tier, 16); break;
+    }
+}
+
 // The item bar, like Fortnite's: weapons (the one in hand highlighted), shield, potions and your ability. D-pad Left cycles weapons;
 // on a touch screen you can tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; };
+    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; };
     const ImU32 grey = IM_COL32(120, 120, 130, 255);
+    const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
-    slots.push_back({ ShortName(h.weapon), RarityName(h.weaponRarity), RarityU32(h.weaponRarity), true, true, 0.0f, 0 });
+    slots.push_back({ ShortName(h.weapon), RarityName(h.weaponRarity), RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon });
     for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
         if (i < static_cast<int>(h.inv.reserve.size())) {
             const auto& r = h.inv.reserve[i];
-            slots.push_back({ ShortName(static_cast<royale::ItemId>(r.item)), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1 });
+            const royale::ItemId id = static_cast<royale::ItemId>(r.item);
+            slots.push_back({ ShortName(id), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id });
         } else {
-            slots.push_back({ "", "", grey, false, false, 0.0f, 0 });
+            slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
         }
     }
-    if (h.hasShield) slots.push_back({ ShortName(h.shield), RarityName(h.shieldRarity), RarityU32(h.shieldRarity), true, false, 0.0f, 0 });
-    else slots.push_back({ "", "Shield", grey, false, false, 0.0f, 0 });
+    if (h.hasShield) slots.push_back({ ShortName(h.shield), RarityName(h.shieldRarity), RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
+    else slots.push_back({ "", "Shield", grey, false, false, 0.0f, 0, none });
     if (!h.inv.potions.empty()) {
         const auto& p = h.inv.potions.front();
-        slots.push_back({ ShortName(static_cast<royale::ItemId>(p.item)), "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10 });
+        const royale::ItemId id = static_cast<royale::ItemId>(p.item);
+        slots.push_back({ ShortName(id), "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
     } else {
-        slots.push_back({ "", "Potions", grey, false, false, 0.0f, 10 });
+        slots.push_back({ "", "Potions", grey, false, false, 0.0f, 10, none });
     }
     if (h.inv.hasAbility) {
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
         const float cd = royale::AbilityOf(id).cooldown;
         slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
-                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11 });
+                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id });
     } else {
-        slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11 });
+        slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11, none });
     }
 
-    const float w = 84.0f * scale, hgt = 60.0f * scale, gap = 8.0f * scale;
+    const float w = 84.0f * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
     const float total = slots.size() * w + (slots.size() - 1) * gap;
     float x = (ds.x - total) * 0.5f;
     const float y = ds.y - hgt - 20.0f * scale;
@@ -1437,17 +1748,32 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         const Slot& sl = slots[i];
         const ImVec2 a(x, y), b(x + w, y + hgt);
         dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 195), 6.0f * scale);
+        if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
-        const float ts = 13.0f * scale;
-        dl->AddText(font, ts, ImVec2(a.x + 6 * scale, a.y + 6 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
-        dl->AddText(font, ts * 0.92f, ImVec2(a.x + 6 * scale, b.y - 21 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
+        const float ts = 11.5f * scale;
+        dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
+        dl->AddText(font, ts * 0.9f, ImVec2(a.x + 5 * scale, a.y + 3 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
         if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
             if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
             else if (sl.action == 10 && !h.inv.potions.empty()) gSession.RequestUsePotion();
             else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f) gSession.UseAbility();
         }
         x += w + gap;
+    }
+
+    // What you wear: one small icon per gear slot, just above the bar (tunic, boots, gauntlets, mask, scale, pack, charm).
+    float gx = (ds.x - total) * 0.5f;
+    const float gs = 30.0f * scale, gy = y - gs - 10.0f * scale;
+    for (int i = 0; i < royale::kGearSlots; i++) {
+        if (!(h.inv.gearMask & (1 << i))) continue;
+        const royale::ItemId id = static_cast<royale::ItemId>(h.inv.gear[i].item);
+        const ImU32 col = RarityU32(static_cast<royale::Rarity>(h.inv.gear[i].rarity));
+        const ImVec2 a(gx, gy), b(gx + gs, gy + gs);
+        dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 195), 5.0f * scale);
+        DrawItemIcon(dl, id, ImVec2(gx + gs * 0.5f, gy + gs * 0.5f), gs * 0.72f, col);
+        dl->AddRect(a, b, col, 5.0f * scale, 0, 2.0f * scale);
+        gx += gs + 5.0f * scale;
     }
 }
 
@@ -1602,6 +1928,85 @@ void DrawQuestLabel() {
     dl->AddText(font, size, pos, IM_COL32(255, 214, 90, 255), text);
 }
 
+// ---- hit effects -------------------------------------------------------------------------------------------------------------
+// When you hurt someone: a white X hit marker at the crosshair (red when it is a kill) and the damage floating up from them.
+// When you are hurt: the screen edges flash red, a red arrow on a ring around the middle points at who hit you, and the damage shows.
+struct FloatingNumber { float x, y, z, amount; double at; bool mine; };
+std::vector<FloatingNumber> gFloatingNumbers;
+struct IncomingHit { uint16_t from; double at; };
+std::vector<IncomingHit> gIncomingHits;
+double gHurtAt = -100.0, gHitMarkerAt = -100.0;
+bool gHitMarkerKill = false;
+float gHurtAmount = 0.0f;
+
+bool KnownPosition(uint16_t id, float* x, float* z) {
+    for (const auto& st : gSession.Puppets()) if (st.id == id) { *x = st.x; *z = st.z; return true; }
+    if (gSession.Client() && royale::IsBossId(id)) for (const auto& bn : gSession.Client()->Bosses()) if (royale::kBossIdBase + bn.index == id) { *x = bn.x; *z = bn.z; return true; }
+    return false;
+}
+
+void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime();
+    if (gPlayState == nullptr || !InField()) { gFloatingNumbers.clear(); gIncomingHits.clear(); return; }
+    Player* pl = GET_PLAYER(gPlayState);
+    // red edges
+    const double hurtAge = now - gHurtAt;
+    if (hurtAge < 0.7) {
+        const int a = static_cast<int>((1.0 - hurtAge / 0.7) * (150 + std::min(90.0f, gHurtAmount * 80.0f)));
+        const ImU32 solid = IM_COL32(220, 20, 20, a), clear = IM_COL32(220, 20, 20, 0);
+        const float e = std::min(ds.x, ds.y) * 0.22f;
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(ds.x, e), solid, solid, clear, clear);
+        dl->AddRectFilledMultiColor(ImVec2(0, ds.y - e), ImVec2(ds.x, ds.y), clear, clear, solid, solid);
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(e, ds.y), solid, clear, clear, solid);
+        dl->AddRectFilledMultiColor(ImVec2(ds.x - e, 0), ImVec2(ds.x, ds.y), clear, solid, solid, clear);
+    }
+    // arrows towards whoever hit you
+    const ImVec2 centre(ds.x * 0.5f, ds.y * 0.5f);
+    const float yaw = static_cast<float>(Camera_GetInputDirYaw(GET_ACTIVE_CAM(gPlayState))) * (3.14159265f / 32768.0f);
+    for (const IncomingHit& hit : gIncomingHits) {
+        const double age = now - hit.at;
+        if (age > 1.6) continue;
+        float ax, az;
+        if (!KnownPosition(hit.from, &ax, &az)) continue;
+        const float rel = std::atan2(ax - pl->actor.world.pos.x, az - pl->actor.world.pos.z) - yaw;
+        const ImVec2 dir(std::sin(rel), -std::cos(rel)), side(-dir.y, dir.x);
+        const float R = 150.0f * scale, w = 20.0f * scale, len = 34.0f * scale;
+        const ImVec2 base(centre.x + dir.x * R, centre.y + dir.y * R);
+        const int a = static_cast<int>(255.0 * (1.0 - age / 1.6));
+        dl->AddTriangleFilled(ImVec2(base.x + dir.x * len, base.y + dir.y * len), ImVec2(base.x + side.x * w, base.y + side.y * w), ImVec2(base.x - side.x * w, base.y - side.y * w), IM_COL32(235, 30, 30, a));
+    }
+    gIncomingHits.erase(std::remove_if(gIncomingHits.begin(), gIncomingHits.end(), [&](const IncomingHit& h) { return now - h.at > 1.6; }), gIncomingHits.end());
+    // hit marker
+    const double markAge = now - gHitMarkerAt;
+    if (markAge < 0.3) {
+        const float k = static_cast<float>(1.0 - markAge / 0.3);
+        const float in = (6.0f + (1.0f - k) * 5.0f) * scale, out = in + 11.0f * scale;
+        const ImU32 col = gHitMarkerKill ? IM_COL32(255, 60, 60, static_cast<int>(255 * k)) : IM_COL32(255, 255, 255, static_cast<int>(255 * k));
+        for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
+            dl->AddLine(ImVec2(centre.x + sx * in, centre.y + sy * in), ImVec2(centre.x + sx * out, centre.y + sy * out), IM_COL32(0, 0, 0, static_cast<int>(200 * k)), 5.0f * scale);
+            dl->AddLine(ImVec2(centre.x + sx * in, centre.y + sy * in), ImVec2(centre.x + sx * out, centre.y + sy * out), col, 2.6f * scale);
+        }
+    }
+    // floating numbers
+    for (const FloatingNumber& f : gFloatingNumbers) {
+        const double age = now - f.at;
+        if (age > 1.0) continue;
+        ImVec2 at;
+        if (f.mine) { // taken from you: rises beside the crosshair
+            at = ImVec2(centre.x + 60.0f * scale, centre.y + 20.0f * scale - static_cast<float>(age) * 50.0f * scale);
+        } else if (!WorldToScreen(f.x, f.y + 70.0f + static_cast<float>(age) * 60.0f, f.z, &at)) {
+            continue;
+        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%.1f", f.amount);
+        const int a = static_cast<int>(255.0 * (1.0 - age));
+        const float size = (f.mine ? 26.0f : 24.0f + std::min(14.0f, f.amount * 8.0f)) * scale;
+        dl->AddText(font, size, ImVec2(at.x + 1.5f, at.y + 1.5f), IM_COL32(0, 0, 0, a), buf);
+        dl->AddText(font, size, at, f.mine ? IM_COL32(255, 80, 80, a) : IM_COL32(255, 230, 90, a), buf);
+    }
+    gFloatingNumbers.erase(std::remove_if(gFloatingNumbers.begin(), gFloatingNumbers.end(), [&](const FloatingNumber& f) { return now - f.at > 1.0; }), gFloatingNumbers.end());
+}
+
 void DrawOverlay() {
     DrawQuestLabel();
     if (!gSession.Joined()) return;
@@ -1635,13 +2040,28 @@ void DrawOverlay() {
         if (!h.winnerName.empty() && h.winnerId != h.selfId) centered(ds.y * 0.16f + 56 * scale, white, 26 * scale, "Winner: " + h.winnerName);
         centered(ds.y * 0.16f + 92 * scale, grey, 20 * scale, "Open the menu and choose Leave to go back");
     }
-    if (live && h.haveSelf && !h.selfAlive) centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED - spectating");
+    if (live && h.haveSelf && !h.selfAlive) {
+        centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED");
+        centered(ds.y * 0.12f + 42 * scale, white, 22 * scale, "Watching " + SpectateName());
+        ImGuiIO& io = ImGui::GetIO();
+        const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
+        for (int side = 0; side < 2; side++) {
+            const float bw = 54.0f * scale, bh = 40.0f * scale;
+            const ImVec2 a(side == 0 ? ds.x * 0.5f - 190.0f * scale : ds.x * 0.5f + 136.0f * scale, ds.y * 0.12f + 36.0f * scale), b(a.x + bw, a.y + bh);
+            dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 205), 6.0f * scale);
+            dl->AddRect(a, b, IM_COL32(255, 236, 120, 255), 6.0f * scale, 0, 2.0f * scale);
+            dl->AddText(font, 24.0f * scale, ImVec2(a.x + 19 * scale, a.y + 7 * scale), IM_COL32(255, 255, 255, 255), side == 0 ? "<" : ">");
+            if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
+        }
+    }
     if (live && h.state == royale::MatchState::Drop) {
         centered(ds.y * 0.2f, green, 30 * scale, gSkydiving ? "SKYDIVE - stick steers, hold Z to dive faster" : "DROP - you are protected for a moment");
     }
     if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
 
     if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
+
+    DrawHitEffects(dl, font, ds, scale);
 
     if (!live || !h.haveSelf) return;
 
@@ -2129,6 +2549,9 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
         player->actor.world.rot.y = player->actor.shape.rot.y;
     }
 
+    gGliderRoll += ((mag > 0.1f ? -sx / 80.0f * 0.5f : 0.0f) - gGliderRoll) * 0.12f;                  // bank into the turn
+    gGliderDiving = hud.state == royale::MatchState::Drop && (in.cur.button & BTN_Z);
+
     float fall = 0.0f;                                                          // hold in the sky during the countdown
     if (hud.state == royale::MatchState::Drop) fall = (in.cur.button & BTN_Z) ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
@@ -2193,6 +2616,7 @@ void OnPlayerUpdate() {
     }
 
     UpdateSkydive(player, hud);
+    ReconcileLocalGlider(gSkydiving);
     UpdateEmote(player, hud);
     if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
@@ -2223,11 +2647,25 @@ void OnPlayerUpdate() {
         const float a = me.rot * (3.14159265f / 32768.0f);
         SpawnCorpse(me, -std::sin(a), -std::cos(a));
     }
+    if (dead && !wasDead) gSpectateTarget = kSpectateSelf;
     wasDead = dead;
     if (dead && gHealthOverridden) {
         player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
         player->invincibilityTimer = 20;
         gSpectating = true;
+        // The camera follows the invisible player, so watching someone means standing (unseen) on top of them.
+        const u16 pressed = gPlayState->state.input[0].press.button;
+        if (pressed & BTN_DLEFT) CycleSpectate(-1);
+        if (pressed & BTN_DRIGHT) CycleSpectate(1);
+        if (gSpectateTarget != kSpectateSelf && SpectateTarget() == nullptr) CycleSpectate(1); // who you watched is out
+        if (const royale::PuppetState* t = SpectateTarget()) {
+            player->actor.world.pos.x = t->x;
+            player->actor.world.pos.z = t->z;
+            player->actor.world.pos.y = t->isBot ? GroundY(gPlayState, t->x, t->z, t->y) : t->y;
+            player->actor.prevPos = player->actor.world.pos;
+            player->actor.velocity.y = 0.0f;
+            player->actor.shape.rot.y = t->rot;
+        }
     } else if (gSpectating) {
         gSpectating = false; // the flag is per-frame, so it clears itself
     }
@@ -2251,16 +2689,51 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::PlayerLeft:
                 Say("A player left the lobby");
                 break;
-            case royale::ClientEvent::Type::Damaged:
-                if (e.id == hud.selfId && InGame()) {
-                    Player* p = GET_PLAYER(gPlayState);
-                    Actor_SetColorFilter(&p->actor, 0x4000, 0xFF, 0, 8); // red flash
-                    Player_PlaySfx(&p->actor, NA_SE_VO_LI_DAMAGE_S);
-                } else if (e.other == hud.selfId) {
+            case royale::ClientEvent::Type::Damaged: {
+                if (!InGame()) break;
+                Player* me = GET_PLAYER(gPlayState);
+                const double now = ImGui::GetTime();
+                auto swing = [&](uint16_t who) { if (who != hud.selfId && !royale::IsBossId(who)) gSwingFrames[who] = 10; };
+                auto soundAt = [&](uint16_t who, u16 sfx) {
+                    auto a = gActorOf.find(who);
+                    if (a != gActorOf.end()) Audio_PlaySoundGeneral(sfx, &a->second->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                };
+                if (e.id == hud.selfId) {
+                    // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
+                    Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
+                    Player_PlaySfx(&me->actor, NA_SE_VO_LI_DAMAGE_S);
+                    Audio_PlaySoundGeneral(NA_SE_PL_BODY_HIT, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    gHurtAt = now; gHurtAmount = e.amount;
+                    gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
+                    if (e.other != royale::net::kNoPlayer16) {
+                        gIncomingHits.push_back({ e.other, now });
+                        swing(e.other);
+                        soundAt(e.other, NA_SE_IT_SWORD_SWING_HARD);
+                    }
+                } else {
+                    float tx = 0, tz = 0;
+                    const bool known = KnownPosition(e.id, &tx, &tz);
+                    float ty = me->actor.world.pos.y;
                     auto target = gActorOf.find(e.id);
-                    if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 12); // hit marker
+                    if (target != gActorOf.end()) { ty = target->second->world.pos.y; tx = target->second->world.pos.x; tz = target->second->world.pos.z; }
+                    if (e.other == hud.selfId) {
+                        // you hit someone: hit marker, their flash, the damage over their head, a clang
+                        gHitMarkerAt = now;
+                        gHitMarkerKill = e.health <= 0.001f;
+                        if (known || target != gActorOf.end()) gFloatingNumbers.push_back({ tx, ty, tz, e.amount, now, false });
+                        if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    } else {
+                        // two others fighting nearby: you can see the slash and hear the blow
+                        swing(e.other);
+                        if (target != gActorOf.end()) {
+                            Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
+                            if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
+                        }
+                    }
                 }
                 break;
+            }
             case royale::ClientEvent::Type::LootTaken:
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
                     const auto& l = gSession.Client()->Loot()[e.index];
@@ -2395,6 +2868,46 @@ void DriveTimeOfDay(const royale::HudState& hud) {
     }
 }
 
+// One minimap, not two: while a match is live the game's own field map is switched off (its switch is the same one the L button flips) and the
+// Royale map takes its place.
+bool gMinimapSwitched = false;
+s16 gSavedMinimapDisabled = 0;
+void DriveMinimapSwitch(bool on) {
+    if (on) {
+        if (!gMinimapSwitched) { gSavedMinimapDisabled = R_MINIMAP_DISABLED; gMinimapSwitched = true; }
+        R_MINIMAP_DISABLED = 1;
+    } else if (gMinimapSwitched) {
+        R_MINIMAP_DISABLED = gSavedMinimapDisabled;
+        gMinimapSwitched = false;
+    }
+}
+
+// The edge of the storm as a curtain of purple sparks falling along the safe zone's border near you. They are real game particles, so
+// geometry hides them properly (the old screen-space wall showed through everything).
+void StormEdgeFx(const royale::HudState& hud) {
+    if (!InField() || gPlayState == nullptr || hud.safeZone.radius <= 40.0f) return;
+    Player* player = GET_PLAYER(gPlayState);
+    const royale::Circle z = hud.safeZone;
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    const float toPlayer = std::atan2(pz - z.center.z, px - z.center.x);
+    const float span = std::min(3.0f, 2600.0f / z.radius); // how much of the circle is near enough to bother with
+    const float dEdge = std::fabs(std::hypot(px - z.center.x, pz - z.center.z) - z.radius);
+    if (dEdge > 2600.0f) return;
+    for (int i = 0; i < 14; i++) {
+        const float a = toPlayer + (Rand_ZeroOne() * 2.0f - 1.0f) * span;
+        const float x = z.center.x + std::cos(a) * z.radius, zz = z.center.z + std::sin(a) * z.radius;
+        if (std::hypot(x - px, zz - pz) > 2700.0f) continue;
+        float ground = player->actor.world.pos.y;
+        FloorAt(x, zz, &ground);
+        Vec3f pos = { x, ground + Rand_ZeroOne() * 650.0f, zz };
+        Vec3f vel = { 0.0f, -4.0f - Rand_ZeroOne() * 3.0f, 0.0f };
+        Vec3f accel = { 0.0f, 0.0f, 0.0f };
+        Color_RGBA8 prim = { static_cast<u8>(150 + Rand_ZeroOne() * 60), 90, 230, 255 };
+        Color_RGBA8 env = { 90, 30, 170, 255 };
+        EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 70, 44);
+    }
+}
+
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
@@ -2411,6 +2924,9 @@ void OnGameFrameUpdate() {
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby);
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
+    if (joined && IsLive(hud) && InGame()) StormEdgeFx(hud);
+    gStateNow = hud.state;
+    DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {

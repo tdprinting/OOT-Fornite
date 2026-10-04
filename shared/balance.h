@@ -62,11 +62,11 @@ struct StormPhaseDef {
 
 constexpr int kStormPhaseCount = 6;
 constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
-    {120, 90, 0.70f, 0.5f},
-    {90, 60, 0.45f, 1.0f},
-    {60, 60, 0.25f, 1.0f},
-    {45, 45, 0.12f, 2.0f},
-    {30, 30, 0.05f, 3.0f},
+    {40, 50, 0.60f, 0.5f},
+    {30, 40, 0.38f, 1.0f},
+    {25, 35, 0.22f, 1.5f},
+    {20, 30, 0.12f, 2.0f},
+    {15, 25, 0.05f, 3.0f},
     {0, 20, 0.00f, 5.0f},
 }};
 

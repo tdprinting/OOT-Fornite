@@ -18,6 +18,7 @@ struct ClientEvent {
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
+    float health = 0;    // Damaged: what the target has left
     size_t index = 0;    // LootTaken / LootAdded
     MatchState state = MatchState::Lobby;
     bool ready = false;  // ReadyChanged
@@ -254,7 +255,7 @@ class GameClient {
                 net::EvDamaged m;
                 if (!net::Decode(data, m)) break;
                 ClientEvent e{ClientEvent::Type::Damaged};
-                e.id = m.target; e.other = m.attacker; e.amount = m.amount;
+                e.id = m.target; e.other = m.attacker; e.amount = m.amount; e.health = m.health;
                 events.push_back(e);
                 break;
             }

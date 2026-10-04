@@ -15,7 +15,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Count }; // Golem: the mini boss; the variant is its BossKind
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 
 struct MeshData {
@@ -172,6 +172,108 @@ inline MeshData Golem(uint32_t kind) {
     return b.mesh;
 }
 
+// The skydiving glider: a striped delta wing 150 above a player's feet, hung from two struts. Variants are colour schemes.
+inline MeshData Glider(uint32_t variant) {
+    static const Rgb schemes[4][2] = {
+        {{230, 70, 60}, {245, 235, 220}}, {{70, 130, 235}, {245, 220, 90}}, {{70, 190, 100}, {245, 245, 235}}, {{170, 90, 230}, {250, 210, 120}}};
+    const Rgb* sc = schemes[variant % 4];
+    const Rgb strut = {120, 90, 56};
+    Builder b;
+    const V3 nose = {0, 156, 78}, tail = {0, 150, -64};
+    const V3 tipL = {-118, 140, -58}, tipR = {118, 140, -58};
+    auto lerp = [](V3 a, V3 c, float t) { return V3{a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t, a.z + (c.z - a.z) * t}; };
+    for (int side = 0; side < 2; side++) {
+        const V3 tip = side == 0 ? tipL : tipR;
+        for (int i = 0; i < 3; i++) {
+            const float t0 = i / 3.0f, t1 = (i + 1) / 3.0f;
+            const Rgb col = sc[i % 2];
+            const V3 a = lerp(nose, tip, t0), c = lerp(nose, tip, t1), d = lerp(tail, tip, t1), e = lerp(tail, tip, t0);
+            b.inside = {0, 80, 0};
+            b.Quad(a, c, d, e, col);                                                  // top
+            b.inside = {0, 240, 0};
+            const V3 dn = {0, -7, 0};
+            b.Quad({a.x, a.y + dn.y, a.z}, {c.x, c.y + dn.y, c.z}, {d.x, d.y + dn.y, d.z}, {e.x, e.y + dn.y, e.z}, {col.r * 0.7f, col.g * 0.7f, col.b * 0.7f}); // underside
+        }
+    }
+    auto bar = [&](V3 from, V3 to, float w) {
+        b.inside = {(from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f, (from.z + to.z) * 0.5f};
+        const V3 off[4] = {{-w, 0, -w}, {w, 0, -w}, {w, 0, w}, {-w, 0, w}};
+        for (int i = 0; i < 4; i++) {
+            const int j = (i + 1) % 4;
+            b.Quad({from.x + off[i].x, from.y, from.z + off[i].z}, {from.x + off[j].x, from.y, from.z + off[j].z},
+                   {to.x + off[j].x, to.y, to.z + off[j].z}, {to.x + off[i].x, to.y, to.z + off[i].z}, strut);
+        }
+    };
+    bar({-14, 62, 0}, {-46, 143, 12}, 3.5f);   // the struts down to the shoulders
+    bar({14, 62, 0}, {46, 143, 12}, 3.5f);
+    bar({0, 138, -50}, {0, 138, 70}, 3.5f);    // the keel
+    return b.mesh;
+}
+
+// The fire dragon: a big winged reptile, nose towards +z, about 1200 across with its wings out. The variant is the wing pose
+// (0 up, 1 level, 2 down, 3 level), so cycling the variants flaps its wings.
+inline MeshData Dragon(uint32_t pose) {
+    const Rgb body = {168, 44, 32}, dark = {104, 28, 24}, belly = {236, 176, 84}, glow = {255, 210, 70}, bone = {70, 40, 36}, skin = {204, 66, 44};
+    Builder b;
+    auto box = [&](float cx, float cy, float cz, float hx, float hy, float hz, Rgb col) {
+        b.inside = {cx, cy, cz};
+        const V3 p[8] = {{cx - hx, cy - hy, cz - hz}, {cx + hx, cy - hy, cz - hz}, {cx + hx, cy + hy, cz - hz}, {cx - hx, cy + hy, cz - hz},
+                         {cx - hx, cy - hy, cz + hz}, {cx + hx, cy - hy, cz + hz}, {cx + hx, cy + hy, cz + hz}, {cx - hx, cy + hy, cz + hz}};
+        b.Quad(p[0], p[1], p[2], p[3], col); b.Quad(p[4], p[5], p[6], p[7], col); b.Quad(p[0], p[1], p[5], p[4], col);
+        b.Quad(p[3], p[2], p[6], p[7], col); b.Quad(p[0], p[3], p[7], p[4], col); b.Quad(p[1], p[2], p[6], p[5], col);
+    };
+    box(0, 150, 0, 72, 62, 170, body);          // body
+    box(0, 108, 20, 56, 14, 140, belly);        // pale belly plates
+    box(0, 192, 196, 36, 36, 62, body);         // neck, in two bends
+    box(0, 238, 252, 30, 30, 50, body);
+    box(0, 266, 330, 40, 30, 62, body);         // head
+    box(0, 254, 398, 26, 17, 38, body);         // snout
+    box(0, 232, 392, 21, 7, 40, dark);          // lower jaw
+    box(-24, 304, 300, 7, 30, 8, bone);         // horns
+    box(24, 304, 300, 7, 30, 8, bone);
+    box(-26, 276, 372, 7, 6, 3, glow);          // eyes
+    box(26, 276, 372, 7, 6, 3, glow);
+    box(0, 142, -232, 52, 46, 72, body);        // tail, tapering
+    box(0, 122, -338, 38, 32, 46, body);
+    box(0, 104, -420, 26, 22, 40, dark);
+    box(0, 92, -488, 15, 14, 36, dark);
+    box(0, 90, -540, 11, 22, 18, glow);         // a flame on the tail tip
+    for (int i = 0; i < 5; i++) box(0, 224 - i * 6.0f, 130 - i * 70.0f, 9, 18, 14, bone); // spikes down the back
+    for (int sx = -1; sx <= 1; sx += 2) {
+        box(sx * 58, 46, 96, 20, 46, 24, dark);   // legs
+        box(sx * 58, 10, 112, 24, 10, 34, bone);  // claws
+        box(sx * 58, 46, -92, 20, 46, 26, dark);
+        box(sx * 58, 10, -76, 24, 10, 34, bone);
+    }
+    // Wings: an arm to the wrist and a leathery sail from the body out to the finger tips.
+    const float wristY[4] = {470.0f, 290.0f, 120.0f, 290.0f};
+    const float tipY[4] = {640.0f, 270.0f, 20.0f, 270.0f};
+    const float wy = wristY[pose % 4], ty = tipY[pose % 4];
+    for (int sx = -1; sx <= 1; sx += 2) {
+        const V3 shoulder = {sx * 62.0f, 200, 70}, wrist = {sx * 360.0f, wy, 40};
+        const V3 tip1 = {sx * 640.0f, ty, -60}, tip2 = {sx * 520.0f, ty * 0.8f + 20.0f, -230};
+        const V3 rear = {sx * 62.0f, 170, -110};
+        b.inside = {sx * 300.0f, wy * 0.6f + 60.0f, 0};
+        b.Tri(shoulder, wrist, tip2, skin); b.Tri(shoulder, tip2, rear, skin); b.Tri(wrist, tip1, tip2, skin);
+        b.inside = {sx * 300.0f, wy * 0.6f + 300.0f, 0};
+        const V3 d = {0, -8, 0};
+        auto dn = [&](V3 p) { return V3{p.x + d.x, p.y + d.y, p.z + d.z}; };
+        b.Tri(dn(shoulder), dn(wrist), dn(tip2), {skin.r * 0.75f, skin.g * 0.75f, skin.b * 0.75f});
+        b.Tri(dn(shoulder), dn(tip2), dn(rear), {skin.r * 0.75f, skin.g * 0.75f, skin.b * 0.75f});
+        b.Tri(dn(wrist), dn(tip1), dn(tip2), {skin.r * 0.75f, skin.g * 0.75f, skin.b * 0.75f});
+        // the arm bones: a bar from the shoulder to the wrist and on to the long finger
+        auto bar = [&](V3 from, V3 to) {
+            b.inside = {(from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f + 40.0f, (from.z + to.z) * 0.5f};
+            b.Quad({from.x, from.y + 9, from.z}, {to.x, to.y + 9, to.z}, {to.x, to.y - 9, to.z}, {from.x, from.y - 9, from.z}, bone);
+            b.Quad({from.x, from.y, from.z + 9}, {to.x, to.y, to.z + 9}, {to.x, to.y, to.z - 9}, {from.x, from.y, from.z - 9}, bone);
+        };
+        bar(shoulder, wrist);
+        bar(wrist, tip1);
+        bar(wrist, tip2);
+    }
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -181,6 +283,8 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Pillar: return mesh_detail::Post();
         case MeshKind::Roof: return mesh_detail::Roof();
         case MeshKind::Golem: return mesh_detail::Golem(variant);
+        case MeshKind::Glider: return mesh_detail::Glider(variant);
+        case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         default: return {};
     }
 }

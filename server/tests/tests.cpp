@@ -42,8 +42,8 @@ static void StormDeterministic() {
 static void StormTimeline() {
     Storm s(7, MapCircle());
     CHECK(s.SafeZoneAt(0).radius == 2000.0f);
-    CHECK(s.SafeZoneAt(119).radius == 2000.0f);   // still waiting in phase 1
-    CHECK(s.SafeZoneAt(120 + 90).radius < 1400.5f && s.SafeZoneAt(120 + 90).radius > 1399.5f); // 70%
+    CHECK(s.SafeZoneAt(39).radius == 2000.0f);   // still waiting in phase 1
+    CHECK(s.SafeZoneAt(40 + 50).radius < 1200.5f && s.SafeZoneAt(40 + 50).radius > 1199.5f); // 60%
     CHECK(s.SafeZoneAt(s.TotalDuration() + 100).radius == 0.0f);
     CHECK(s.PhaseAt(0) == 0 && s.PhaseAt(s.TotalDuration() + 1) == kStormPhaseCount);
     // Safe zone never grows.
@@ -397,12 +397,12 @@ static void ValidatorThatRejectsEverythingStillTerminates() {
 static void StormPhaseInfo() {
     Storm s(7, MapCircle());
     auto a = s.InfoAt(0);
-    CHECK(a.phase == 0 && !a.shrinking && std::abs(a.secondsLeft - 120.0f) < 0.01f);   // holding for 120 s
-    auto b = s.InfoAt(119);
+    CHECK(a.phase == 0 && !a.shrinking && std::abs(a.secondsLeft - 40.0f) < 0.01f);   // holding for 40 s
+    auto b = s.InfoAt(39);
     CHECK(b.phase == 0 && !b.shrinking && std::abs(b.secondsLeft - 1.0f) < 0.01f);
-    auto c = s.InfoAt(125);
-    CHECK(c.phase == 0 && c.shrinking && std::abs(c.secondsLeft - 85.0f) < 0.01f);     // 90 s shrink, 5 s in
-    auto d = s.InfoAt(120 + 90 + 1);
+    auto c = s.InfoAt(45);
+    CHECK(c.phase == 0 && c.shrinking && std::abs(c.secondsLeft - 45.0f) < 0.01f);     // 50 s shrink, 5 s in
+    auto d = s.InfoAt(40 + 50 + 1);
     CHECK(d.phase == 1 && !d.shrinking);                                              // phase 2 holds
     auto e = s.InfoAt(s.TotalDuration() + 5);
     CHECK(e.phase == kStormPhaseCount && !e.shrinking && e.secondsLeft == 0);
@@ -1277,7 +1277,7 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= 200);   // a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= 420);   // a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
@@ -1295,6 +1295,8 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && mx[1] < 150);
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
+            if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
+            if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }

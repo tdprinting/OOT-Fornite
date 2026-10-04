@@ -142,7 +142,7 @@ class RoyaleSession {
     }
 
     // Host only, lobby only: rebuild the world on the measured map (see GameServer::Reconfigure).
-    bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid)); }
+    bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid), 150, GameServer::FreshSeedOffset()); }
 
     // The tunic colour (0xRRGGBB) the other players see you in. Set before hosting or joining.
     void SetTunic(uint32_t rgb) { tunic = rgb; }

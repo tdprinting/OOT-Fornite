@@ -1,4 +1,5 @@
 #pragma once
+#include <random>
 #include "../shared/protocol.h"
 #include "../shared/transport.h"
 #include "sim.h"
@@ -108,9 +109,15 @@ class GameServer {
 
     // Results screen: everyone still connected plays again on the same map with fresh loot, scenery and storm, with no trip back to
     // the lobby. Only meaningful once the match has ended.
+    // A different storm, loot layout and spawn spread every match.
+    static uint64_t FreshSeedOffset() {
+        std::random_device rd;
+        return (static_cast<uint64_t>(rd()) << 32) ^ rd() ^ 0x9E3779B97F4A7C15ull;
+    }
+
     bool PlayAgain() {
         if (sim.match.State() != MatchState::Ending) return false;
-        if (!Reconfigure(mapCircle, lastValid, lastLootCount, 0x9E3779B97F4A7C15ull)) return false;
+        if (!Reconfigure(mapCircle, lastValid, lastLootCount, FreshSeedOffset())) return false;
         return StartMatch();
     }
 
@@ -522,6 +529,7 @@ class GameServer {
             inv.maxHealth = p->maxHealth;
             inv.heartPieces = static_cast<uint8_t>(p->heartPieces);
             for (const Equipped& e : p->potions) inv.potions.push_back({static_cast<uint8_t>(e.item), static_cast<uint8_t>(e.rarity)});
+            for (const Equipped& e : p->reserve) inv.reserve.push_back({static_cast<uint8_t>(e.item), static_cast<uint8_t>(e.rarity)});
             inv.hasAbility = p->hasAbility;
             inv.ability = {static_cast<uint8_t>(p->ability.item), static_cast<uint8_t>(p->ability.rarity)};
             inv.abilityReadyIn = (std::max)(0.0f, p->abilityReadyAt - now);

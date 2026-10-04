@@ -714,6 +714,19 @@ static void ShieldOverTheWire() {
     CHECK(rig.server.GetStats().rejectedActions == rejected + 1);
 }
 
+static void BackupWeaponsReachTheOwner() {
+    Rig rig(62, 20);
+    GameClient& a = rig.Add("A");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    rig.StartAndGoLive();
+    for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;
+    PlayerState* me = rig.M().Find(1);
+    me->reserve = {{ItemId::BiggoronSword, Rarity::Epic}};
+    me->dirty = true;
+    rig.Run(0.4f);
+    CHECK(a.Inventory().reserve.size() == 1 && a.Inventory().reserve[0].item == static_cast<uint8_t>(ItemId::BiggoronSword) && a.Inventory().reserve[0].rarity == static_cast<uint8_t>(Rarity::Epic));
+}
+
 static void DisconnectHandling() {
     {   // In the lobby the player just disappears.
         Rig rig;
@@ -1190,7 +1203,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    ShieldOverTheWire(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    ShieldOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
