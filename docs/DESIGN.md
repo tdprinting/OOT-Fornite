@@ -175,6 +175,13 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 
 Not included (they have no sensible meaning in a battle royale): quest items, trading-sequence items, keys, maps and compasses, Gold Skulltula tokens, the Fishing Rod, Epona herself, and warp songs beyond Nocturne of Shadow's random teleport.
 
+### 4.2.2 Chests, hotbar, scenery, scoring and rematch
+
+- **Chests.** Generated loot is placed in the game's own chest actor (`EN_BOX`), kept shut and inert until the server confirms the open, then given back to the game's normal opening animation. Walking over a chest never opens it; the server only accepts an open when the client asks on purpose (`PickupRequest.force`). Only dropped items lie on the ground. The glow and beam are drawn in screen space from the chest's projected position.
+- **Hotbar.** Three weapon slots (one in hand, `kMaxReserveWeapons` spares), switched with `SelectWeaponRequest`. A pickup that is not an upgrade fills a free slot; with the bar full it replaces the weapon in hand. Bots switch for range.
+- **Scenery.** `shared/props.h` generates rocks, boulders, bushes and standing stones from the match seed; the host sends the list so every client agrees. Solid ones block the bots' navigation grid.
+- **Scoring.** `ScorePoints` in `shared/balance.h`. The server sends `EvResults` when the match ends; the host's `RematchRequest` rebuilds the world with a new seed and starts the countdown at once (`GameServer::PlayAgain`).
+
 ### 4.3 Loot and rarity tiers
 
 Every weapon, shield and consumable has a rarity tier, as in Fortnite. Tier sets damage or effect strength, spawn

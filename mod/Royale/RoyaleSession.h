@@ -38,6 +38,15 @@ struct RosterRow {
     bool self = false;
 };
 
+// One line of the end-of-match standings.
+struct ResultsRow {
+    uint16_t id = 0;
+    std::string name;
+    bool self = false, isBot = false;
+    int placement = 0, kills = 0, chests = 0, score = 0;
+    float damage = 0;
+};
+
 struct HudState {
     enum class Mode : uint8_t { Idle, Hosting, Joined } mode = Mode::Idle;
     bool connected = false;      // joined the host's lobby/match
@@ -75,6 +84,7 @@ struct HudState {
     float countdownLeft = 0;      // seconds until the drop, while the state is Countdown
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots are named "Bot N"
+    std::vector<ResultsRow> results; // standings, best score first, once the match has ended
 };
 
 class RoyaleSession {
@@ -154,6 +164,8 @@ class RoyaleSession {
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
+    // Host only: another match right away with everyone who is connected.
+    void RequestPlayAgain() { if (Joined()) client->RequestRematch(); }
 
     // Server to game.
     std::vector<PuppetState> Puppets() const {
@@ -211,6 +223,17 @@ class RoyaleSession {
         h.humanCount = static_cast<int>(h.roster.size());
         h.botSlots = kMaxPlayers - h.humanCount;
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        for (const net::ResultRow& r : client->Results()) {
+            ResultsRow row;
+            row.id = r.id;
+            row.isBot = r.id >= 1000;
+            row.self = r.id == client->PlayerId();
+            auto who = client->Roster().find(r.id);
+            row.name = who != client->Roster().end() ? who->second.name : "Bot " + std::to_string(r.id >= 1000 ? r.id - 999 : r.id);
+            row.placement = r.placement; row.kills = r.kills; row.chests = r.chests; row.score = static_cast<int>(r.score);
+            row.damage = r.damageTenths / 10.0f;
+            h.results.push_back(std::move(row));
+        }
         h.inv = client->Inventory();
         h.maxHealth = h.inv.maxHealth;
         h.abilityReadyIn = client->AbilityReadyIn();

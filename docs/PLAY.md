@@ -54,14 +54,23 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 3. **Skydive:** when the drop starts you fall from the sky. The stick steers, hold **Z** to dive faster. You are protected from damage until the drop ends (18 seconds), and anyone still in the air then plummets to the ground. Bots land at the same time you do.
 
 ## Controls in a match
-- **Walk over items** to pick up upgrades automatically (a better weapon, shield or gear, a potion if your bag has room, an ability if you have none). Anything else stays on the ground: stand next to it and press **D-pad Right** to take it, which swaps it for what you hold. A swapped-out item lands a step in front of you.
-- Each item Each one shows its name above it in its rarity color (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary) and is drawn as a rupee of that color.
-- **B** attacks with the weapon you picked up (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target. It hits the nearest player in front of you. Z-target another player like an enemy to line up a duel.
+- **Treasure chests.** All the loot is in glowing chests, coloured by rarity (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary). Walk up and press **A** to open one. You see how rare a chest is, not what is inside. Epic and Legendary chests are the big kind with golden light. A beam and glow mark chests on your screen, and the map shows them.
+- **Items dropped by players** (when someone is eliminated or swaps a weapon) lie on the ground as coloured rupees with their name. Walking over one picks it up only if it is an upgrade (a better weapon, a spare weapon for an empty slot, a shield or gear that beats yours, a potion if your bag has room, an ability if you have none). For anything else stand next to it and press **A** or **D-pad Right**, which swaps it for what you hold.
+- **The item bar** at the bottom works like Fortnite's hotbar: three weapon slots (the one in your hand is highlighted), then shield, potions and ability. **D-pad Left** switches to the next weapon. On a touch screen you can tap a slot. A big coloured banner shows each pickup, and the menu keeps a colour-coded list of recent pickups.
+- **B** attacks with the weapon in hand (its damage and range come from the item and its rarity, not from your sword). Some weapons add effects: Fire Arrows burn, Ice Arrows freeze, Deku Nuts stun, Light Arrows ignore shields, Bombs hurt everyone near the target.
 - **D-pad Down** drinks a potion (the best one for how hurt you are). A Fairy in your bag is never drunk: it revives you once if you would die.
-- **D-pad Up** uses your ability (Din's Fire, Nayru's Love, Hookshot, Farore's Wind, a song, and more), then it recharges. The HUD shows the countdown.
-- Gear (tunics, boots, masks and so on) works on its own once you pick it up. Heart Pieces and Heart Containers raise your maximum hearts.
-- The top-left of the screen shows how many are alive, the storm timer, what you are holding, your ability, your gear and any effects on you. An arrow points to the safe zone.
+- **D-pad Up** uses your ability, then it recharges. The slot shows the countdown.
+- Gear works on its own once you pick it up. Heart Pieces and Heart Containers raise your maximum hearts.
+- **Other players** wear a nameplate with their name, hearts left and weapon, colour coded by rarity, so you can size them up. The map (bottom left) shows the field, the safe zone, chests, other players and you.
+- **The storm** is a wall of purple rain standing on the edge of the safe zone. Outside it the screen goes dark and rainy with lightning, and it hurts. The map shows it in purple. An arrow top right points to the safe zone.
+- The field has rocks, boulders, bushes and standing stones to hide behind. The same ones appear for everyone, and bots path around the solid ones.
 - If you are eliminated you become an invisible spectator and can keep walking around while the match finishes.
+
+## Points and playing again
+You score points for damage dealt (100 per heart), kills (500), chests opened (25), how long you last, and 1000 for winning. When the match ends the standings show everyone's kills, damage and points. The host presses **A** (or **Play again** in the menu) to start a new match straight away with everyone who is still connected, with fresh chests, scenery and storm.
+
+## The map viewer
+Open `tools/map-viewer.html` in a browser (it is in the repo, no install). It lists every item, the rarity tiers and the scenery, and shows a sample map. To see a real map: in a lobby, open **Battle Royale, Developer tools, Export map data**. That writes `royale-map.json` into the game's data folder; load it in the viewer to see the field, the storm circles, every chest (hover to see what is inside), the scenery and the players.
 
 ## What works in this build, and what doesn't yet
 - Everything above is written and compiled, and the server side is unit-tested, but **none of it has been played**. Expect rough edges.

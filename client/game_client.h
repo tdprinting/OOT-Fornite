@@ -139,6 +139,7 @@ class GameClient {
     float StormTime() const { return haveSnapshot ? stormTimeAtSnapshot + (localClock - snapshotArrival) : 0.0f; }
     Circle SafeZone() const { return storm ? storm->SafeZoneAt(StormTime()) : map; }
     // Phase, whether the zone is shrinking, and seconds until that changes. Valid once joined.
+    const Storm* GetStorm() const { return storm.get(); }
     Storm::PhaseInfo StormInfo() const { return storm ? storm->InfoAt(StormTime()) : Storm::PhaseInfo{0, false, 0.0f}; }
     float StormDamagePerSecond(Vec2 p) const { return storm ? storm->DamagePerSecond(p, StormTime()) : 0.0f; }
 

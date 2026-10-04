@@ -341,7 +341,7 @@ class Match {
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (index >= loot.size() || loot[index].taken) return false;
         const LootSpawn s = loot[index].spawn;
-        if (Distance(p->pos, s.pos) > kPickupRange * 1.5f) return false;
+        if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
         if (s.container && !force) return false; // chests have to be opened on purpose
         if (!force && !WorthTaking(*p, s)) return false;
         switch (KindOf(s.item)) {

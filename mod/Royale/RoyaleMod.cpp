@@ -14,8 +14,11 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <deque>
+#include <fstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "soh/ShipInit.hpp"
@@ -33,6 +36,7 @@ extern "C" {
 #include "macros.h"
 #include "variables.h"
 #include "functions.h"
+#include "src/overlays/actors/ovl_En_Box/z_en_box.h" // the treasure chest actor
 #include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
 extern PlayState* gPlayState;
 
@@ -201,6 +205,7 @@ std::unordered_map<const Actor*, uint16_t> gPuppetOf;      // actor -> player id
 std::unordered_map<uint16_t, Actor*> gActorOf;             // player id -> actor
 std::unordered_map<uint16_t, royale::PuppetState> gState;  // latest interpolated state per player id
 std::unordered_map<const Actor*, const void*> gPlaying;    // animation each puppet is currently playing
+std::unordered_map<const Actor*, std::string> gPlate;      // the nameplate text each puppet currently shows
 
 // Floor height under (x, z), or `fallback` if the ray finds nothing.
 float GroundY(PlayState* play, float x, float z, float fallback) {
@@ -266,13 +271,6 @@ void Puppet_Init(Actor* actor, PlayState* play) {
     // Other players can be Z-targeted like an enemy, which is how duels work.
     actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE;
 
-    auto it = gPuppetOf.find(actor);
-    if (it != gPuppetOf.end()) {
-        auto st = gState.find(it->second);
-        if (st != gState.end()) {
-            NameTag_RegisterForActor(actor, st->second.name.c_str());
-        }
-    }
 }
 
 void Puppet_Update(Actor* actor, PlayState* play) {
@@ -303,6 +301,18 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         player->itemAction = player->heldItemAction = look.itemAction;
         Player_SetModelGroup(player, look.modelGroup);
         gSaveContext.equips.buttonItems[0] = original;
+    }
+
+    // The nameplate shows the player's name, hearts left and weapon (colour coded by rarity), so you can size up everyone you see.
+    {
+        const int hearts = static_cast<int>(std::ceil(std::max(0.0f, s.health)));
+        const std::string plate = s.name + "  " + std::to_string(hearts) + " hearts  " + ItemLabel(s.weapon, s.weaponRarity);
+        std::string& shown = gPlate[actor];
+        if (shown != plate) {
+            NameTag_RemoveAllForActor(actor);
+            NameTag_RegisterForActorWithOptions(actor, plate.c_str(), NameTagOptions{ "royale-puppet", 0, RarityColor(s.weaponRarity) });
+            shown = plate;
+        }
     }
 
     LinkAnimationHeader* want = AnimFor(s.anim);
@@ -338,6 +348,7 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
         gPuppetOf.erase(it);
     }
     gPlaying.erase(actor);
+    gPlate.erase(actor);
 }
 
 void SpawnPuppet(const royale::PuppetState& s) {
@@ -384,12 +395,34 @@ struct LootActor {
     Actor* actor = nullptr;
     float baseY = 0;
     int pickupCooldown = 0;
+    bool chest = false;       // a treasure chest (opened with A) rather than an item on the ground
+    bool opened = false;
+    bool killing = false;     // asked the game to remove it; it goes when the game next updates actors
+    bool big = false;         // Epic and Legendary chests are the big kind
+    royale::Rarity rarity = royale::Rarity::Common;
+    ActorFunc origUpdate = nullptr, origDestroy = nullptr;
 };
 std::unordered_map<size_t, LootActor> gLoot;        // loot index -> its actor
 std::unordered_map<const Actor*, size_t> gLootOf;   // actor -> loot index
 constexpr float kLootSpawnRadius = 1500.0f;          // only draw what is near you
-constexpr size_t kMaxLootActors = 48;
-constexpr float kLootPickupRange = 55.0f;            // the server allows 75
+constexpr size_t kMaxLootActors = 56;
+constexpr float kLootPickupRange = 55.0f;            // the server allows 75 for items on the ground
+constexpr float kChestOpenRange = 90.0f;             // and 100 for chests (they are solid, so you stop a little way off)
+bool gSpawningLoot = false;                          // true while we spawn an item actor, so the "no stray item drops" rule lets it through
+
+// ---- turning a world position into a spot on the screen ---------------------------------------------------------------------
+
+bool WorldToScreen(float x, float y, float z, ImVec2* out) {
+    if (gPlayState == nullptr) return false;
+    Vec3f p = { x, y, z }, clip;
+    f32 w = 0.0f;
+    SkinMatrix_Vec3fMtxFMultXYZW(&gPlayState->viewProjectionMtxF, &p, &clip, &w);
+    if (w <= 1.0f) return false; // behind the camera
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    out->x = (clip.x / w * 0.5f + 0.5f) * ds.x;
+    out->y = (0.5f - clip.y / w * 0.5f) * ds.y;
+    return true;
+}
 
 bool LiveAndAlive(const royale::HudState& h) {
     return gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch) && h.haveSelf && h.selfAlive;
@@ -428,9 +461,154 @@ void Loot_Destroy(Actor* actor, PlayState* play) {
     }
 }
 
+// ---- treasure chests ------------------------------------------------------------------------------------------------------
+
+// The game's own chest actor, kept shut and inert until the server says it was opened, then handed back to the game to play its normal
+// opening animation and sounds. (Treasure flags are scene-wide; ours is cleared again after every spawn so chests don't start open.)
+constexpr int kChestFlag = 19;
+
+void ClearChestFlag() {
+    gPlayState->actorCtx.flags.chest &= ~(1u << kChestFlag);
+}
+
+void Chest_Update(Actor* actor, PlayState* play) {
+    auto idx = gLootOf.find(actor);
+    if (idx == gLootOf.end()) { Actor_Kill(actor); return; }
+    LootActor& la = gLoot[idx->second];
+    EnBox* box = reinterpret_cast<EnBox*>(actor);
+    if (!la.opened) {
+        box->alpha = 255; // the game's own update normally fades it in
+        return;
+    }
+    la.origUpdate(actor, play);
+}
+
+void Chest_Destroy(Actor* actor, PlayState* play) {
+    NameTag_RemoveAllForActor(actor);
+    ActorFunc orig = nullptr;
+    auto idx = gLootOf.find(actor);
+    if (idx != gLootOf.end()) {
+        auto la = gLoot.find(idx->second);
+        if (la != gLoot.end()) { orig = la->second.origDestroy; if (la->second.actor == actor) gLoot.erase(la); }
+        gLootOf.erase(idx);
+    }
+    if (orig) orig(actor, play); // removes the chest's collision
+}
+
+void OpenChest(LootActor& la) {
+    if (la.opened) return;
+    la.opened = true;
+    EnBox* box = reinterpret_cast<EnBox*>(la.actor);
+    box->unk_1F4 = la.big ? 1 : -1; // the game's "Link opened this" marker: 1 = the slow opening with golden light, -1 = quick
+    NameTag_RemoveAllForActor(la.actor);
+}
+
+void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
+    const royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
+    const bool big = rarity >= royale::Rarity::Epic;
+    const s16 params = static_cast<s16>(((big ? ENBOX_TYPE_BIG_DEFAULT : ENBOX_TYPE_SMALL) << 12) | (GI_RUPEE_GREEN << 5) | kChestFlag);
+    if (l.taken) Flags_SetTreasure(gPlayState, kChestFlag); else ClearChestFlag(); // opened chests are spawned already open
+    const s16 rot = static_cast<s16>((index * 2654435761u) >> 16);
+    gSpawningLoot = true;
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_BOX, l.x, groundY, l.z, 0, rot, 0, params, false);
+    gSpawningLoot = false;
+    ClearChestFlag();
+    if (actor == nullptr) return;
+    LootActor la;
+    la.actor = actor; la.baseY = groundY; la.chest = true; la.opened = l.taken; la.big = big; la.rarity = rarity;
+    la.origUpdate = actor->update;
+    la.origDestroy = actor->destroy;
+    gLoot[index] = la;
+    gLootOf[actor] = index;
+    actor->update = Chest_Update;
+    actor->destroy = Chest_Destroy;
+    if (!l.taken) {
+        std::string label = std::string(RarityName(rarity)) + " Chest";
+        NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", static_cast<int16_t>(big ? 50 : 34), RarityColor(rarity) });
+    }
+}
+
+// ---- scenery -----------------------------------------------------------------------------------------------------------------
+
+struct PropActor {
+    Actor* actor = nullptr;
+    ActorFunc origDestroy = nullptr;
+};
+std::unordered_map<size_t, PropActor> gProps;        // prop index -> its actor
+std::unordered_map<const Actor*, size_t> gPropOf;
+std::unordered_set<size_t> gBrokenProps;              // rocks and bushes players smashed; they stay gone
+std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
+constexpr float kPropSpawnRadius = 2200.0f;
+constexpr size_t kMaxPropActors = 80;
+
+void Prop_Destroy(Actor* actor, PlayState* play) {
+    ActorFunc orig = nullptr;
+    auto idx = gPropOf.find(actor);
+    if (idx != gPropOf.end()) {
+        const size_t i = idx->second;
+        auto pa = gProps.find(i);
+        if (pa != gProps.end()) { orig = pa->second.origDestroy; gProps.erase(pa); }
+        if (gCulledProps.erase(i) == 0) gBrokenProps.insert(i);
+        gPropOf.erase(idx);
+    }
+    if (orig) orig(actor, play);
+}
+
+void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
+    int16_t id = ACTOR_EN_ISHI;
+    int16_t params = 0;
+    switch (p.kind) {
+        case royale::PropKind::Rock: id = ACTOR_EN_ISHI; params = 0; break;
+        case royale::PropKind::Boulder: id = ACTOR_EN_ISHI; params = 0x3CC1; break; // large rock; switch flag 0x3F so it is never "already smashed"
+        case royale::PropKind::Pillar: id = ACTOR_EN_ISHI; params = 0x3CC1; break;
+        case royale::PropKind::Bush: id = ACTOR_EN_KUSA; params = 0; break;
+        default: return;
+    }
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, id, p.pos.x, groundY, p.pos.z, 0, static_cast<s16>(p.rot), 0, params, false);
+    if (actor == nullptr) return; // the scene didn't have the object loaded for this one; skip it
+    if (p.kind == royale::PropKind::Pillar) actor->scale.y *= 2.2f; // tall standing stones
+    PropActor pa;
+    pa.actor = actor;
+    pa.origDestroy = actor->destroy;
+    gProps[index] = pa;
+    gPropOf[actor] = index;
+    actor->destroy = Prop_Destroy;
+}
+
+void ClearProps() {
+    for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
+}
+
+// Keep a ring of scenery alive around the player, the same for everyone because the list comes from the host.
+void ReconcileProps(const royale::HudState& hud) {
+    const bool show = gSession.Joined() && InField() && hud.state != royale::MatchState::Lobby;
+    if (!show) { ClearProps(); return; }
+    const auto& props = gSession.Client()->Props();
+    Player* player = GET_PLAYER(gPlayState);
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    for (auto& [i, pa] : gProps) {
+        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
+        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    }
+    if (gProps.size() >= kMaxPropActors) return;
+    int spawned = 0;
+    for (size_t i = 0; i < props.size() && spawned < 3 && gProps.size() < kMaxPropActors; i++) {
+        if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
+        const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
+        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
+        float y;
+        if (!FloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
+        SpawnProp(i, props[i], y);
+        spawned++;
+    }
+}
+
 void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
+    if (l.chest) { SpawnChest(index, l, groundY); return; } // generated loot is in chests; only dropped items lie on the ground
     royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
+    gSpawningLoot = true;
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ITEM00, l.x, groundY + 22.0f, l.z, 0, 0, 0, RarityDropType(rarity), false);
+    gSpawningLoot = false;
     if (actor == nullptr) return;
     // Keep the game's rupee model and drawing, but replace its behaviour: no vanilla pickup, our own spin and server-checked grab.
     actor->update = Loot_Update;
@@ -458,12 +636,19 @@ void ReconcileLoot(const royale::HudState& hud) {
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
 
     for (auto it = gLoot.begin(); it != gLoot.end();) {
-        size_t idx = it->first;
-        bool gone = idx >= loot.size() || loot[idx].taken;
-        float dx = loot.size() > idx ? loot[idx].x - px : 1e9f, dz = loot.size() > idx ? loot[idx].z - pz : 1e9f;
-        if (gone || dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius * 1.5f) {
-            Actor_Kill(it->second.actor);
-            gLootOf.erase(it->second.actor);
+        const size_t idx = it->first;
+        LootActor& la = it->second;
+        const bool known = idx < loot.size();
+        const float dx = known ? loot[idx].x - px : 1e9f, dz = known ? loot[idx].z - pz : 1e9f;
+        const bool far = dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius * 1.5f;
+        if (la.chest) {
+            // Chests clean up their own entry when the game destroys them (they have collision to remove first).
+            if (known && loot[idx].taken && !la.opened) OpenChest(la);
+            if ((!known || far) && !la.killing) { la.killing = true; Actor_Kill(la.actor); }
+            ++it;
+        } else if (!known || loot[idx].taken || far) {
+            Actor_Kill(la.actor);
+            gLootOf.erase(la.actor);
             it = gLoot.erase(it);
         } else {
             ++it;
@@ -473,7 +658,7 @@ void ReconcileLoot(const royale::HudState& hud) {
     if (gLoot.size() >= kMaxLootActors) return;
     int spawnedThisFrame = 0;
     for (size_t i = 0; i < loot.size() && spawnedThisFrame < 4 && gLoot.size() < kMaxLootActors; i++) {
-        if (loot[i].taken || gLoot.find(i) != gLoot.end()) continue;
+        if ((loot[i].taken && !loot[i].chest) || gLoot.find(i) != gLoot.end()) continue; // opened chests stay, standing open
         float dx = loot[i].x - px, dz = loot[i].z - pz;
         if (dx * dx + dz * dz > kLootSpawnRadius * kLootSpawnRadius) continue;
         float y;
@@ -481,6 +666,47 @@ void ReconcileLoot(const royale::HudState& hud) {
         SpawnLoot(i, loot[i], y);
         spawnedThisFrame++;
     }
+}
+
+constexpr size_t kNoLoot = SIZE_MAX;
+
+// The closest thing the player could take or open right now (an unopened chest within reach, or an item on the ground).
+size_t NearestLootIndex() {
+    if (!InField() || gSession.Client() == nullptr) return kNoLoot;
+    const auto& loot = gSession.Client()->Loot();
+    Player* pl = GET_PLAYER(gPlayState);
+    size_t best = kNoLoot;
+    float bestD = 1e18f;
+    for (const auto& [idx, la] : gLoot) {
+        if (idx >= loot.size() || loot[idx].taken || la.opened) continue;
+        const float reach = la.chest ? kChestOpenRange : kLootPickupRange;
+        const float dx = la.actor->world.pos.x - pl->actor.world.pos.x, dz = la.actor->world.pos.z - pl->actor.world.pos.z;
+        const float d2 = dx * dx + dz * dz;
+        if (d2 <= reach * reach && d2 < bestD && std::fabs(pl->actor.world.pos.y - la.baseY) < 120.0f) { bestD = d2; best = idx; }
+    }
+    return best;
+}
+
+struct PickupNote {
+    std::string text;
+    royale::Rarity rarity;
+};
+std::deque<PickupNote> gPickupLog;                    // newest first, shown (colour coded) in the menu
+std::string gBannerText;                              // the big "you got" line above the hotbar
+royale::Rarity gBannerRarity = royale::Rarity::Common;
+double gBannerUntil = 0;
+
+void NotePickup(const std::string& label, royale::Rarity rarity, bool fromChest) {
+    gPickupLog.push_front({ (fromChest ? "Chest: " : "") + label, rarity });
+    while (gPickupLog.size() > 10) gPickupLog.pop_back();
+    gBannerText = (fromChest ? "CHEST OPENED  " : "GOT  ") + label;
+    gBannerRarity = rarity;
+    gBannerUntil = ImGui::GetTime() + 3.5;
+}
+
+std::string ShortName(royale::ItemId id) {
+    std::string n = ItemName(id);
+    return n.size() > 15 ? n.substr(0, 14) + "." : n;
 }
 
 // ---- the always-on HUD ------------------------------------------------------------------------------------------------------
@@ -495,6 +721,177 @@ std::string ClockText(float seconds) {
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+
+// The storm: a wall of purple rain standing on the edge of the safe zone, a dark rainy tint with lightning when you are in it.
+void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!InField() || h.safeZone.radius <= 0) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const double t = ImGui::GetTime();
+    const royale::Circle z = h.safeZone;
+    const float baseY = pl->actor.world.pos.y;
+    const int kSegments = 120;
+    for (int i = 0; i < kSegments; i++) {
+        const float a0 = 6.2831853f * i / kSegments, a1 = 6.2831853f * (i + 1) / kSegments;
+        const float x0 = z.center.x + std::cos(a0) * z.radius, z0 = z.center.z + std::sin(a0) * z.radius;
+        const float x1 = z.center.x + std::cos(a1) * z.radius, z1 = z.center.z + std::sin(a1) * z.radius;
+        const float dx = x0 - pl->actor.world.pos.x, dz = z0 - pl->actor.world.pos.z;
+        if (dx * dx + dz * dz > 9000.0f * 9000.0f) continue;
+        ImVec2 b0, t0, b1, t1;
+        if (!WorldToScreen(x0, baseY - 250.0f, z0, &b0) || !WorldToScreen(x0, baseY + 2600.0f, z0, &t0) ||
+            !WorldToScreen(x1, baseY - 250.0f, z1, &b1) || !WorldToScreen(x1, baseY + 2600.0f, z1, &t1)) continue;
+        const int alpha = static_cast<int>(70 + 28 * std::sin(t * 2.4 + i * 0.55));
+        const ImVec2 quad[4] = { b0, b1, t1, t0 };
+        dl->AddConvexPolyFilled(quad, 4, IM_COL32(96, 44, 170, alpha));
+        if (i % 2 == 0) dl->AddLine(t0, b0, IM_COL32(205, 185, 255, 90), 1.6f * scale); // rain falling in the wall
+    }
+
+    if (h.stormDamagePerSecond > 0) {
+        dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(34, 10, 64, 105));
+        for (int i = 0; i < 110; i++) { // slanting rain
+            const float x = std::fmod(i * 97.3f + static_cast<float>(t) * 260.0f, ds.x + 240.0f) - 120.0f;
+            const float y = std::fmod(i * 61.7f + static_cast<float>(t) * 950.0f * (0.7f + 0.3f * (i % 3)), ds.y + 80.0f) - 40.0f;
+            dl->AddLine(ImVec2(x, y), ImVec2(x - 9 * scale, y + 30 * scale), IM_COL32(205, 195, 255, 120), 1.4f * scale);
+        }
+        const float cycle = std::fmod(static_cast<float>(t), 7.3f); // lightning every few seconds
+        if (cycle < 0.2f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(235, 225, 255, static_cast<int>((0.2f - cycle) / 0.2f * 150.0f)));
+    }
+}
+
+// Bottom-left map of the whole field: the storm in purple, the safe zone, chests by rarity, other players and you.
+void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (h.map.radius <= 0 || !InField()) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float R = 92.0f * scale;
+    const ImVec2 c(R + 20.0f * scale, ds.y - R - 28.0f * scale);
+    const float k = R / h.map.radius;
+    auto toMap = [&](float x, float z) { return ImVec2(c.x + (x - h.map.center.x) * k, c.y - (z - h.map.center.z) * k); };
+    auto inside = [&](ImVec2 p) { return (p.x - c.x) * (p.x - c.x) + (p.y - c.y) * (p.y - c.y) < R * R; };
+
+    dl->AddCircleFilled(c, R + 5.0f * scale, IM_COL32(0, 0, 0, 175), 72);
+    dl->AddCircleFilled(c, R, IM_COL32(104, 48, 170, 190), 72);                       // everything is storm...
+    const ImVec2 zc = toMap(h.safeZone.center.x, h.safeZone.center.z);
+    dl->AddCircleFilled(zc, h.safeZone.radius * k, IM_COL32(28, 62, 42, 255), 72);      // ...except the safe zone
+    dl->AddCircle(zc, h.safeZone.radius * k, IM_COL32(255, 255, 255, 235), 72, 2.0f * scale);
+    dl->AddCircle(c, R, IM_COL32(255, 210, 70, 255), 72, 2.0f * scale);
+
+    if (gSession.Client()) {
+        for (const auto& l : gSession.Client()->Loot()) {
+            if (l.taken || !l.chest) continue;
+            const float dx = l.x - pl->actor.world.pos.x, dz = l.z - pl->actor.world.pos.z;
+            if (dx * dx + dz * dz > 2800.0f * 2800.0f) continue;
+            const ImVec2 p = toMap(l.x, l.z);
+            if (!inside(p)) continue;
+            dl->AddRectFilled(ImVec2(p.x - 2.0f * scale, p.y - 2.0f * scale), ImVec2(p.x + 2.0f * scale, p.y + 2.0f * scale), RarityU32(static_cast<royale::Rarity>(l.rarity)));
+        }
+    }
+    for (const auto& st : gSession.Puppets()) {
+        if (!st.alive) continue;
+        const ImVec2 p = toMap(st.x, st.z);
+        if (inside(p)) dl->AddCircleFilled(p, 3.2f * scale, st.isBot ? IM_COL32(255, 100, 100, 255) : IM_COL32(255, 170, 60, 255));
+    }
+    // You: a triangle pointing the way Link faces.
+    const ImVec2 me = toMap(pl->actor.world.pos.x, pl->actor.world.pos.z);
+    const float th = pl->actor.shape.rot.y * (3.14159265f / 32768.0f);
+    const ImVec2 fwd(std::sin(th), -std::cos(th)), side(-fwd.y, fwd.x);
+    const float u = 6.0f * scale;
+    dl->AddTriangleFilled(ImVec2(me.x + fwd.x * u * 1.3f, me.y + fwd.y * u * 1.3f), ImVec2(me.x - fwd.x * u + side.x * u * 0.8f, me.y - fwd.y * u + side.y * u * 0.8f),
+                          ImVec2(me.x - fwd.x * u - side.x * u * 0.8f, me.y - fwd.y * u - side.y * u * 0.8f), IM_COL32(120, 255, 140, 255));
+}
+
+// The item bar, like Fortnite's: weapons (the one in hand highlighted), shield, potions and your ability. D-pad Left cycles weapons;
+// on a touch screen you can tap a slot.
+void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; };
+    const ImU32 grey = IM_COL32(120, 120, 130, 255);
+    std::vector<Slot> slots;
+    slots.push_back({ ShortName(h.weapon), RarityName(h.weaponRarity), RarityU32(h.weaponRarity), true, true, 0.0f, 0 });
+    for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
+        if (i < static_cast<int>(h.inv.reserve.size())) {
+            const auto& r = h.inv.reserve[i];
+            slots.push_back({ ShortName(static_cast<royale::ItemId>(r.item)), RarityName(static_cast<royale::Rarity>(r.rarity)), RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1 });
+        } else {
+            slots.push_back({ "", "", grey, false, false, 0.0f, 0 });
+        }
+    }
+    if (h.hasShield) slots.push_back({ ShortName(h.shield), RarityName(h.shieldRarity), RarityU32(h.shieldRarity), true, false, 0.0f, 0 });
+    else slots.push_back({ "", "Shield", grey, false, false, 0.0f, 0 });
+    if (!h.inv.potions.empty()) {
+        const auto& p = h.inv.potions.front();
+        slots.push_back({ ShortName(static_cast<royale::ItemId>(p.item)), "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10 });
+    } else {
+        slots.push_back({ "", "Potions", grey, false, false, 0.0f, 10 });
+    }
+    if (h.inv.hasAbility) {
+        const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
+        const float cd = royale::AbilityOf(id).cooldown;
+        slots.push_back({ ShortName(id), h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : "READY", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
+                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11 });
+    } else {
+        slots.push_back({ "", "Ability", grey, false, false, 0.0f, 11 });
+    }
+
+    const float w = 84.0f * scale, hgt = 60.0f * scale, gap = 8.0f * scale;
+    const float total = slots.size() * w + (slots.size() - 1) * gap;
+    float x = (ds.x - total) * 0.5f;
+    const float y = ds.y - hgt - 20.0f * scale;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
+    for (size_t i = 0; i < slots.size(); i++) {
+        const Slot& sl = slots[i];
+        const ImVec2 a(x, y), b(x + w, y + hgt);
+        dl->AddRectFilled(a, b, IM_COL32(8, 18, 28, 195), 6.0f * scale);
+        if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
+        dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
+        const float ts = 13.0f * scale;
+        dl->AddText(font, ts, ImVec2(a.x + 6 * scale, a.y + 6 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
+        dl->AddText(font, ts * 0.92f, ImVec2(a.x + 6 * scale, b.y - 21 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
+        if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
+            if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
+            else if (sl.action == 10 && !h.inv.potions.empty()) gSession.RequestUsePotion();
+            else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f) gSession.UseAbility();
+        }
+        x += w + gap;
+    }
+}
+
+// The end-of-match standings.
+void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (h.results.empty()) return;
+    const float pw = std::min(ds.x * 0.9f, 640.0f * scale), rowH = 26.0f * scale;
+    const int shown = std::min<int>(8, static_cast<int>(h.results.size()));
+    const float ph = (shown + 4) * rowH + 70.0f * scale;
+    const ImVec2 a((ds.x - pw) * 0.5f, ds.y * 0.28f), b(a.x + pw, a.y + ph);
+    dl->AddRectFilled(a, b, IM_COL32(8, 16, 26, 225), 10.0f * scale);
+    dl->AddRect(a, b, IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 3.0f * scale);
+    auto put = [&](float x, float y, ImU32 col, float size, const std::string& t) { dl->AddText(font, size, ImVec2(x, y), col, t.c_str()); };
+    float y = a.y + 10.0f * scale;
+    put(a.x + 18 * scale, y, IM_COL32(255, 210, 70, 255), 24 * scale, "RESULTS");
+    y += rowH * 1.3f;
+    const float cName = a.x + 60 * scale, cKills = a.x + pw - 270 * scale, cDmg = a.x + pw - 190 * scale, cPts = a.x + pw - 90 * scale;
+    const ImU32 head = IM_COL32(170, 170, 180, 255);
+    put(a.x + 18 * scale, y, head, 15 * scale, "#"); put(cName, y, head, 15 * scale, "Player"); put(cKills, y, head, 15 * scale, "Kills");
+    put(cDmg, y, head, 15 * scale, "Damage"); put(cPts, y, head, 15 * scale, "Points");
+    y += rowH * 0.9f;
+    bool selfShown = false;
+    auto row = [&](int rank, const royale::ResultsRow& r) {
+        const ImU32 col = r.self ? IM_COL32(120, 255, 140, 255) : IM_COL32(235, 235, 240, 255);
+        put(a.x + 18 * scale, y, col, 17 * scale, std::to_string(rank));
+        put(cName, y, col, 17 * scale, r.name + (r.placement == 1 ? "  (winner)" : ""));
+        put(cKills, y, col, 17 * scale, std::to_string(r.kills));
+        char dmg[16]; std::snprintf(dmg, sizeof(dmg), "%.1f", r.damage);
+        put(cDmg, y, col, 17 * scale, dmg);
+        put(cPts, y, col, 17 * scale, std::to_string(r.score));
+        y += rowH;
+    };
+    for (int i = 0; i < shown; i++) { row(i + 1, h.results[i]); selfShown |= h.results[i].self; }
+    if (!selfShown) {
+        for (size_t i = 0; i < h.results.size(); i++) if (h.results[i].self) { put(a.x + 18 * scale, y, head, 15 * scale, "..."); y += rowH * 0.8f; row(static_cast<int>(i) + 1, h.results[i]); }
+    }
+    y += 6.0f * scale;
+    const std::string footer = h.isHost ? "Press A to play again with everyone who is here" : "Waiting for the host to play again...";
+    ImVec2 sz = font->CalcTextSizeA(18 * scale, FLT_MAX, 0.0f, footer.c_str());
+    put(a.x + (pw - sz.x) * 0.5f, b.y - 32 * scale, IM_COL32(255, 236, 140, 255), 18 * scale, footer);
+}
 
 // The splash shown at the start of every match's countdown, in the look of OoT's title and file-select screens: deep blue-green
 // night, gold lettering with a dark drop shadow, a gold Triforce and a double gold border. It covers the screen for the first
@@ -604,25 +1001,34 @@ void DrawOverlay() {
     }
     if (h.state == royale::MatchState::Countdown && gSkydiving && !splashing) centered(ds.y * 0.16f + 90 * scale, white, 22 * scale, "You will fall from the sky when the countdown ends");
 
+    if (h.state == royale::MatchState::Ending) DrawResultsPanel(dl, font, ds, scale, h);
+
     if (!live || !h.haveSelf) return;
 
-    // Bottom centre: what is at your feet. Upgrades are picked up on their own; anything else waits for D-pad Right.
+    // What is at your feet: chests say how rare they are (not what is inside); items on the ground say what they are.
     if (InField() && h.selfAlive && gSession.Client()) {
-        Player* pl = GET_PLAYER(gPlayState);
+        const size_t near = NearestLootIndex();
         const auto& loot = gSession.Client()->Loot();
-        float bestD = kLootPickupRange * kLootPickupRange;
-        const royale::net::LootNet* closest = nullptr;
-        for (const auto& [idx, la] : gLoot) {
-            if (idx >= loot.size() || loot[idx].taken) continue;
-            const float dx = la.actor->world.pos.x - pl->actor.world.pos.x, dz = la.actor->world.pos.z - pl->actor.world.pos.z;
-            if (dx * dx + dz * dz < bestD && std::fabs(pl->actor.world.pos.y - la.baseY) < 100.0f) { bestD = dx * dx + dz * dz; closest = &loot[idx]; }
-        }
-        if (closest) {
-            const royale::Rarity r = static_cast<royale::Rarity>(closest->rarity);
-            centered(ds.y * 0.80f, RarityU32(r), 24 * scale, ItemLabel(static_cast<royale::ItemId>(closest->item), r));
-            centered(ds.y * 0.80f + 30 * scale, white, 20 * scale, "D-pad Right: take or swap");
+        if (near != kNoLoot && near < loot.size()) {
+            const royale::Rarity r = static_cast<royale::Rarity>(loot[near].rarity);
+            if (loot[near].chest) {
+                centered(ds.y * 0.66f, RarityU32(r), 26 * scale, std::string(RarityName(r)) + " Chest");
+                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "A: open");
+            } else {
+                centered(ds.y * 0.66f, RarityU32(r), 26 * scale, ItemLabel(static_cast<royale::ItemId>(loot[near].item), r));
+                centered(ds.y * 0.66f + 31 * scale, white, 20 * scale, "D-pad Right or A: take or swap");
+            }
         }
     }
+    if (ImGui::GetTime() < gBannerUntil) {
+        const float fade = static_cast<float>(std::min(1.0, gBannerUntil - ImGui::GetTime()));
+        ImU32 col = RarityU32(gBannerRarity);
+        col = (col & 0x00FFFFFF) | (static_cast<ImU32>(255 * fade) << 24);
+        centered(ds.y * 0.58f, col, 30 * scale, gBannerText);
+    }
+    DrawStorm(dl, ds, scale, h);
+    DrawMinimap(dl, ds, scale, h);
+    DrawHotbar(dl, font, ds, scale, h);
 
     // Top left: the numbers.
     float x = 16 * scale, y = 14 * scale, line = 24 * scale;
@@ -746,6 +1152,8 @@ void Say(const std::string& text) {
 
 // B attacks with the weapon the server says you hold; D-pad Down drinks a potion. Damage, range, cooldown and healing are
 // decided by the server, so this only chooses a target: the nearest living player in front of Link and within weapon range.
+int gNextWeaponSlot = 1;     // which backup slot D-pad Left swaps in next
+
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
     if (!LiveAndAlive(hud) || !InField()) return;
@@ -756,15 +1164,22 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         else Say("No potions");
     }
 
-    // D-pad Right: take (and swap for) the nearest item in reach, even if it is not an upgrade.
-    if (in.press.button & BTN_DRIGHT) {
-        size_t best = SIZE_MAX;
-        float bestD = kLootPickupRange * kLootPickupRange;
-        for (const auto& [idx, la] : gLoot) {
-            const float dx = la.actor->world.pos.x - player->actor.world.pos.x, dz = la.actor->world.pos.z - player->actor.world.pos.z;
-            if (dx * dx + dz * dz < bestD && std::fabs(player->actor.world.pos.y - la.baseY) < 100.0f) { bestD = dx * dx + dz * dz; best = idx; }
+    // A (or D-pad Right): open the chest in front of you, or take/swap the item on the ground. Walking over an upgrade picks it up on its own.
+    if (in.press.button & (BTN_A | BTN_DRIGHT)) {
+        const size_t target = NearestLootIndex();
+        if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
+    }
+
+    // D-pad Left: switch to your next weapon, like cycling the hotbar. With backups B and C, hand A goes to B, then C, then back to A.
+    if (in.press.button & BTN_DLEFT) {
+        const int spares = static_cast<int>(hud.inv.reserve.size());
+        if (spares == 0) {
+            Say("No other weapon: open chests to find more");
+        } else {
+            gNextWeaponSlot = gNextWeaponSlot > spares ? 1 : gNextWeaponSlot;
+            gSession.SelectWeapon(gNextWeaponSlot);
+            gNextWeaponSlot = gNextWeaponSlot >= spares ? 1 : gNextWeaponSlot + 1;
         }
-        if (best != SIZE_MAX) gSession.RequestPickup(static_cast<uint32_t>(best), true);
     }
 
     if (in.press.button & BTN_DUP) {
@@ -886,6 +1301,7 @@ void OnPlayerUpdate() {
 
     UpdateSkydive(player, hud);
     HandleCombatInput(player, hud);
+    if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     ApplySpeedBuffs(player, hud);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
@@ -942,9 +1358,16 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::LootTaken:
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
                     const auto& l = gSession.Client()->Loot()[e.index];
-                    Say("Picked up " + ItemLabel(static_cast<royale::ItemId>(l.item), static_cast<royale::Rarity>(l.rarity)));
+                    const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
+                    const std::string label = ItemLabel(static_cast<royale::ItemId>(l.item), got);
+                    Say((l.chest ? "Opened a chest: " : "Picked up ") + label);
+                    NotePickup(label, got, l.chest);
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 }
+                break;
+            case royale::ClientEvent::Type::MapChanged:
+                gBrokenProps.clear();   // a new match (or a rematch): all the scenery is back
+                gPickupLog.clear();
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
                 if (e.item == royale::net::kRevivedItem) {
@@ -1047,6 +1470,7 @@ void OnGameFrameUpdate() {
     ReportEvents(hud);
     ReconcilePuppets(hud.state);
     ReconcileLoot(hud);
+    ReconcileProps(hud);
 }
 
 void OnSceneInit(int16_t) {
@@ -1054,9 +1478,13 @@ void OnSceneInit(int16_t) {
     gPuppetOf.clear();
     gActorOf.clear();
     gPlaying.clear();
+    gPlate.clear();
     gSpawningPuppet = 0;
     gLoot.clear();
     gLootOf.clear();
+    gProps.clear();
+    gPropOf.clear();
+    gCulledProps.clear();
     gInFieldFrames = 0;
 }
 
@@ -1084,7 +1512,10 @@ void RegisterRoyaleMod() {
     // No enemies spawn while in a lobby or match.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
         Actor* actor = (Actor*)actorRef;
-        if (gSession.Joined() && actor->category == ACTORCAT_ENEMY) *should = false;
+        if (!gSession.Joined()) return;
+        if (actor->category == ACTORCAT_ENEMY) *should = false;
+        // Smashed rocks and cut bushes would drop the game's own rupees and hearts; the only items in a match come from the server.
+        if (actor->id == ACTOR_EN_ITEM00 && !gSpawningLoot) *should = false;
     });
 }
 
@@ -1103,6 +1534,7 @@ struct UiState {
     bool loaded = false;
     bool showPosition = false;
     std::string error;
+    std::string exportMsg;   // result of the last map export
     std::vector<std::string> localAddresses;
     int addressAge = 1 << 30; // frames since localAddresses was refreshed
 };
@@ -1325,9 +1757,69 @@ void DrawInMatch(const royale::HudState& h) {
         if (h.hasShield) ImGui::TextColored(RarityIm(h.shieldRarity), "Shield: %s", ItemLabel(h.shield, h.shieldRarity).c_str());
         else ImGui::TextColored(kGrey, "Shield: none");
     }
-    ImGui::TextColored(kGrey, "B: attack    D-pad Down: drink a potion    D-pad Up: use your ability    Walk over items to pick them up");
+    if (!gPickupLog.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(kGold, "Recent pickups");
+        for (const auto& n : gPickupLog) ImGui::TextColored(RarityIm(n.rarity), "%s", n.text.c_str());
+    }
+    ImGui::TextColored(kGrey, "B: attack    D-pad Left: next weapon    A: open chests and take items    D-pad Down: drink a potion    D-pad Up: use your ability    Walk over items to pick them up");
     ImGui::Spacing();
     if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
+}
+
+// Write what the game knows about the current map (the measured field, storm circles, every chest and prop, the players) to a JSON
+// file that tools/map-viewer.html can open. Returns the file's path, or an error message starting with "Could not".
+std::string ExportMapJson() {
+    if (!gSession.Joined() || gSession.Client() == nullptr) return "Could not export: join or host a lobby first";
+    const royale::GameClient& c = *gSession.Client();
+    royale::HudState h = gSession.Hud();
+    std::string json = "{\n";
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "  \"map\": {\"x\": %.1f, \"z\": %.1f, \"radius\": %.1f},\n", h.map.center.x, h.map.center.z, h.map.radius);
+    json += buf;
+    json += "  \"storm\": [";
+    if (const royale::Storm* st = c.GetStorm()) {
+        for (int i = 0; i < royale::kStormPhaseCount; i++) {
+            const royale::Circle& e = st->PhaseEnd(i);
+            std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"radius\": %.1f}", i ? ", " : "", e.center.x, e.center.z, e.radius);
+            json += buf;
+        }
+    }
+    json += "],\n  \"loot\": [";
+    bool first = true;
+    for (const auto& l : c.Loot()) {
+        std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"item\": \"%s\", \"rarity\": %d, \"chest\": %s, \"taken\": %s}", first ? "" : ",\n    ",
+                      l.x, l.z, ItemName(static_cast<royale::ItemId>(l.item)), static_cast<int>(l.rarity), l.chest ? "true" : "false", l.taken ? "true" : "false");
+        json += (first ? "\n    " : "") + std::string(buf);
+        first = false;
+    }
+    json += "\n  ],\n  \"props\": [";
+    first = true;
+    static const char* kKinds[] = { "rock", "boulder", "bush", "pillar" };
+    for (const auto& p : c.Props()) {
+        std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"kind\": \"%s\"}", first ? "" : ", ", p.pos.x, p.pos.z, kKinds[static_cast<int>(p.kind)]);
+        json += buf;
+        first = false;
+    }
+    json += "],\n  \"players\": [";
+    first = true;
+    for (const auto& pl : gSession.Puppets()) {
+        std::snprintf(buf, sizeof(buf), "%s{\"x\": %.1f, \"z\": %.1f, \"bot\": %s}", first ? "" : ", ", pl.x, pl.z, pl.isBot ? "true" : "false");
+        json += buf;
+        first = false;
+    }
+    json += "]";
+    if (InField()) {
+        Player* pl = GET_PLAYER(gPlayState);
+        std::snprintf(buf, sizeof(buf), ",\n  \"you\": {\"x\": %.1f, \"z\": %.1f}", pl->actor.world.pos.x, pl->actor.world.pos.z);
+        json += buf;
+    }
+    json += "\n}\n";
+    const std::string path = Ship::Context::GetPathRelativeToAppDirectory("royale-map.json");
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return "Could not write " + path;
+    out << json;
+    return path;
 }
 
 void DrawResults(const royale::HudState& h) {
@@ -1336,12 +1828,43 @@ void DrawResults(const royale::HudState& h) {
     else if (!h.winnerName.empty()) ImGui::TextColored(kGold, "Winner: %s", h.winnerName.c_str());
     else ImGui::Text("Nobody survived.");
     ImGui::Spacing();
+    if (ImGui::BeginTable("royale_results", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        ImGui::TableSetupColumn("Kills");
+        ImGui::TableSetupColumn("Damage");
+        ImGui::TableSetupColumn("Points");
+        ImGui::TableHeadersRow();
+        int rank = 1;
+        for (const auto& r : h.results) {
+            ImGui::TableNextRow();
+            const ImVec4 col = r.self ? kGreen : ImVec4(1, 1, 1, 1);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", rank++);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s%s", r.name.c_str(), r.placement == 1 ? "  (winner)" : "");
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.kills);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%.1f", r.damage);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.score);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextColored(kGrey, "Points: %d per heart of damage, %d per kill, %d per chest, plus a bonus for lasting longer and %d for winning.",
+                       royale::kPointsPerHeartOfDamage, royale::kPointsPerKill, royale::kPointsPerChest, royale::kPointsForWinning);
+    ImGui::Spacing();
+    if (h.isHost) {
+        if (ImGui::Button("Play again", ImVec2(220, 0))) gSession.RequestPlayAgain();
+        ImGui::TextColored(kGrey, "Starts a new match right away with everyone who is connected.");
+    } else {
+        ImGui::TextColored(kGrey, "Waiting for the host to play again...");
+    }
     if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
 }
 
 void DrawDebug(UiState& ui) {
     if (!ImGui::CollapsingHeader("Developer tools")) return;
     ImGui::Checkbox("Show Link position (for measuring the map)", &ui.showPosition);
+    if (ImGui::Button("Export map data for tools/map-viewer.html")) ui.exportMsg = ExportMapJson();
+    if (!ui.exportMsg.empty() && ui.exportMsg.rfind("Could not", 0) != 0) ImGui::TextWrapped("Wrote %s. Open tools/map-viewer.html in a browser and load that file.", ui.exportMsg.c_str());
+    else if (!ui.exportMsg.empty()) ImGui::TextColored(kRed, "%s", ui.exportMsg.c_str());
     if (ui.showPosition && InGame()) {
         Player* p = GET_PLAYER(gPlayState);
         ImGui::Text("x=%.0f  y=%.0f  z=%.0f  scene=0x%02X", p->actor.world.pos.x, p->actor.world.pos.y, p->actor.world.pos.z,
