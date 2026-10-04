@@ -41,6 +41,8 @@ inline const char* const kPoiNames[] = {
     "Dust Rust Trust",         "Pharaoh Narrow Arrow",  "Sphinx Winks Jinx",       "Camel Mammal Trail",
 };
 
+// The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
+// the centre of the walkable ground and a radius that holds most of it. The host's game still measures the live scene when a match starts.
 struct MapDef {
     const char* name;
     const char* blurb;
@@ -52,15 +54,15 @@ struct MapDef {
 };
 
 constexpr MapDef kMaps[] = {
-    {"Hyrule Field", "Wide green plains with a town in the middle and caves around the edge", 0x51, {{0.0f, 0.0f}, 4000.0f}, Theme::Meadow,
+    {"Hyrule Field", "Wide green plains with a town in the middle and caves around the edge", 0x51, {{-1269.0f, 6635.0f}, 4800.0f}, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
-    {"Lake Hylia", "Shores, docks and little islands: fights on the beaches and bridges", 0x57, {{0.0f, 0.0f}, 3200.0f}, Theme::Water,
+    {"Lake Hylia", "Shores, docks and little islands: fights on the beaches and bridges", 0x57, {{-1072.0f, 5314.0f}, 3200.0f}, Theme::Water,
      {BossKind::Tide, BossKind::Frost}, BossKind::DragonWater},
-    {"Kakariko Village", "A tight village of rooftops and graves: close fights, lots of climbing", 0x52, {{0.0f, 0.0f}, 1900.0f}, Theme::Shadow,
+    {"Kakariko Village", "A tight village of rooftops and graves: close fights, lots of climbing", 0x52, {{50.0f, 276.0f}, 1900.0f}, Theme::Shadow,
      {BossKind::Shade, BossKind::Stone}, BossKind::DragonShadow},
-    {"Death Mountain Crater", "A hot crater rim: lava, ash and narrow ledges", 0x61, {{0.0f, 0.0f}, 2200.0f}, Theme::Fire,
+    {"Death Mountain Crater", "A hot crater rim: lava, ash and narrow ledges", 0x61, {{-136.0f, -5.0f}, 1900.0f}, Theme::Fire,
      {BossKind::Lava, BossKind::Stone}, BossKind::DragonFire},
-    {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{0.0f, 0.0f}, 3500.0f}, Theme::Desert,
+    {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{2648.0f, 85.0f}, 4200.0f}, Theme::Desert,
      {BossKind::Dune, BossKind::Stone}, BossKind::DragonSand},
 };
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);

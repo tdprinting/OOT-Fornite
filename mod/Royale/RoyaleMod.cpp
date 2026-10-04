@@ -207,6 +207,26 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
     return true;
 }
 
+// Floor that would load another scene (a doorway, a cave mouth, the edge of the field). Nothing is ever placed on or near it, so nobody
+// spawns or finds a chest where the exit seal (SealExits) would shove them back. The ROM extractor's numbers (docs/MAPS.md) show how many
+// of these each map has: Kakariko alone has nine loading zones and fourteen exit surfaces.
+bool OnExitFloor(float x, float z) {
+    if (!InField()) return false;
+    CollisionPoly poly;
+    Vec3f pos = { x, 4000.0f, z };
+    const float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
+    if (y <= BGCHECK_Y_MIN + 1.0f) return false;
+    return SurfaceType_GetSceneExitIndex(&gPlayState->colCtx, &poly, BGCHECK_SCENE) != 0;
+}
+bool NearLoadingZone(float x, float z, float within) {
+    if (!InField()) return false;
+    const TransitionActorContext& t = gPlayState->transiActorCtx;
+    for (int i = 0; i < t.numActors && t.list != nullptr; i++) {
+        if (std::hypot(x - t.list[i].pos.x, z - t.list[i].pos.z) < within) return true;
+    }
+    return false;
+}
+
 // ---- climbing blocks ---------------------------------------------------------------------------------------------------------
 // The scene's collision can't be changed, so the stone blocks of the climbs (shared/props.h) are solid in the mod's own terms: FloorAt knows
 // their tops (chests and the ledge assist see them as floor), and ApplyPlatforms holds the player on top of them and out of their sides.
@@ -274,7 +294,7 @@ bool UnderWater(float x, float z, float floorY) {
 
 bool WalkableAt(royale::Vec2 p) {
     float y;
-    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y);
+    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f);
 }
 
 // Probe the floor on a grid across the whole scene and fit a circle around the part that has ground. Takes a few thousand
@@ -283,10 +303,16 @@ bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
     std::vector<royale::Vec2> points;
     std::vector<float> heights;
-    for (float x = -9000.0f; x <= 9000.0f; x += 300.0f) {
-        for (float z = -9000.0f; z <= 9000.0f; z += 300.0f) {
+    // The window is the scene's own collision bounds (the old fixed +-9000 box cut Hyrule Field, which runs from x -11000 to 6700 and z -1800 to 16500,
+    // and put its centre in the wrong place). The step grows with the area so the number of probes stays about the same.
+    const CollisionContext& cc = gPlayState->colCtx;
+    const float x0 = std::max(-20000.0f, cc.minBounds.x), x1 = std::min(20000.0f, cc.maxBounds.x);
+    const float z0 = std::max(-20000.0f, cc.minBounds.z), z1 = std::min(20000.0f, cc.maxBounds.z);
+    const float step = std::max(300.0f, std::sqrt(std::max(1.0f, (x1 - x0) * (z1 - z0)) / 9000.0f));
+    for (float x = x0; x <= x1; x += step) {
+        for (float z = z0; z <= z1; z += step) {
             float y;
-            if (FloorAt(x, z, &y) && !UnderWater(x, z, y)) { points.push_back({ x, z }); heights.push_back(y); }
+            if (FloorAt(x, z, &y) && !UnderWater(x, z, y) && !OnExitFloor(x, z)) { points.push_back({ x, z }); heights.push_back(y); }
         }
     }
     if (points.size() < 100) return false;
