@@ -84,7 +84,7 @@ class BotController {
         bool enemyNear = enemy && enemyDist <= kSight;
 
         // 1. Heal.
-        if (!p.potions.empty() && p.health < kMaxHealth) {
+        if (!p.potions.empty() && p.health < p.maxHealth) {
             bool critical = p.health <= 1.0f;
             bool safe = !enemyNear || enemyDist > 250.0f;
             if ((critical || (safe && p.health <= 2.0f))) {
@@ -146,11 +146,21 @@ class BotController {
                     if (v > currentShield + 0.02f) value = (v - currentShield) * 4.0f;
                     break;
                 }
-                case ItemKind::Potion:
+                case ItemKind::Consumable:
                     if (static_cast<int>(p.potions.size()) < kMaxPotions) value = PotionHeal(s.item, s.rarity) * 0.5f + 0.3f;
                     break;
-                case ItemKind::Utility:
+                case ItemKind::Instant:
+                    if (InstantOf(s.item) != InstantEffect::Heart || p.health < p.maxHealth) value = 0.6f;
                     break;
+                case ItemKind::Ability:
+                    if (!p.hasAbility) value = 0.8f;
+                    break;
+                case ItemKind::Gear: {
+                    const int slot = static_cast<int>(GearOf(s.item).slot);
+                    if (!(p.gearMask & (1 << slot))) value = 0.5f;
+                    else if (s.rarity > p.gear[slot].rarity) value = 0.2f;
+                    break;
+                }
             }
             if (value <= 0) continue;
             float score = value / (d + 150.0f);

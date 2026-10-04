@@ -61,6 +61,11 @@ struct HudState {
     ItemId shield = ItemId::DekuShield;
     Rarity shieldRarity = Rarity::Common;
     float selfX = 0, selfZ = 0;          // the server's view of where you are
+    float maxHealth = kMaxHealth;        // grows with Heart Containers
+    InventoryInfo inv;                   // bag, ability, gear and timed effects (raw; use the *Left fields below)
+    float abilityReadyIn = 0;            // seconds until the ability can be used again (0 = ready)
+    float invulnLeft = 0, speedLeft = 0, revealLeft = 0, stunLeft = 0, burnLeft = 0, shieldLeft = 0;
+    float speedMult = 1;                 // movement speed multiplier from gear and songs (1 = normal)
     std::vector<RosterRow> roster;
     uint16_t hostPort = 0;
     int humanCount = 0;           // people in the lobby (hosts count the server's view)
@@ -144,6 +149,7 @@ class RoyaleSession {
     void ReportAttack(uint16_t target, bool hit) { if (Joined()) client->ReportAttack(target, hit); }
     void RequestPickup(uint32_t lootIndex) { if (Joined()) client->RequestPickup(lootIndex); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
+    void UseAbility() { if (Joined()) client->UseAbility(); }
 
     // Server to game.
     std::vector<PuppetState> Puppets() const {
@@ -201,6 +207,22 @@ class RoyaleSession {
         h.humanCount = static_cast<int>(h.roster.size());
         h.botSlots = kMaxPlayers - h.humanCount;
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        h.inv = client->Inventory();
+        h.maxHealth = h.inv.maxHealth;
+        h.abilityReadyIn = client->AbilityReadyIn();
+        h.invulnLeft = client->Left(h.inv.invulnLeft);
+        h.speedLeft = client->Left(h.inv.speedLeft);
+        h.revealLeft = client->Left(h.inv.revealLeft);
+        h.stunLeft = client->Left(h.inv.stunLeft);
+        h.burnLeft = client->Left(h.inv.burnLeft);
+        h.shieldLeft = client->Left(h.inv.shieldLeft);
+        h.speedMult = 1.0f;
+        for (int slot = 0; slot < kGearSlots; slot++) {
+            if (h.inv.gearMask & (1 << slot)) {
+                h.speedMult *= Scaled(GearOf(static_cast<ItemId>(h.inv.gear[slot].item)).speed, static_cast<Rarity>(h.inv.gear[slot].rarity));
+            }
+        }
+        if (h.speedLeft > 0) h.speedMult *= h.inv.speedMult;
         h.winnerId = client->Winner();
         if (h.winnerId != net::kNoPlayer16) {
             auto w = client->Roster().find(h.winnerId);

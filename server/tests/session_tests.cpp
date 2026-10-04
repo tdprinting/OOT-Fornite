@@ -69,6 +69,10 @@ static void HostCanStartAndBotsAppear() {
     guest.SendLocalPose(kHyruleFieldMap.center.x + 12, 34, kHyruleFieldMap.center.z + 5, 77, 2, 0x51);
     // (the epoch bump at match start means the guest must have seen a snapshot first, which PumpUntil above ensured)
     bool seen = PumpUntil({&host, &guest}, [&] {
+        // The game sends a pose every frame; a single one could be discarded by an epoch bump, so keep sending.
+        guest.SendLocalPose(kHyruleFieldMap.center.x + 12, 34, kHyruleFieldMap.center.z + 5, 77, 2, 0x51);
+        // Snapshots only carry the nearest players, so stand the host next to the guest.
+        host.SendLocalPose(kHyruleFieldMap.center.x, 0, kHyruleFieldMap.center.z, 0, 0, 0x51);
         for (auto& p : host.Puppets()) if (p.id == guest.Hud().selfId) return std::abs(p.y - 34) < 0.5f && p.rot == 77 && p.anim == 2 && p.scene == 0x51;
         return false;
     });

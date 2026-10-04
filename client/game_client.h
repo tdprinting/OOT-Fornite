@@ -1,6 +1,8 @@
 #pragma once
 #include "../shared/protocol.h"
 #include "../shared/transport.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <map>
@@ -12,13 +14,31 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
     size_t index = 0;    // LootTaken / LootAdded
     MatchState state = MatchState::Lobby;
     bool ready = false;  // ReadyChanged
+    uint8_t item = 0;    // AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
+    float x = 0, z = 0;  // AbilityUsed: where the user was
+};
+
+// Everything the local player carries and the timed effects on them, as last reported by the server. The "left" values count down by
+// the local clock between reports; use the accessors on GameClient rather than reading them raw.
+struct InventoryInfo {
+    float maxHealth = kMaxHealth;
+    int heartPieces = 0;
+    std::vector<net::ItemRef> potions;
+    bool hasAbility = false;
+    net::ItemRef ability;
+    float abilityReadyIn = 0;
+    bool hasMark = false;
+    uint8_t gearMask = 0;
+    std::array<net::ItemRef, kGearSlots> gear = {};
+    float invulnLeft = 0, speedLeft = 0, speedMult = 1, revealLeft = 0, stunLeft = 0, burnLeft = 0, regenLeft = 0, shieldLeft = 0;
+    float receivedAt = 0;
 };
 
 // One entry of the lobby list: every human in the match, whether or not they are nearby.
@@ -78,6 +98,8 @@ class GameClient {
     void ReportAttack(uint16_t target, bool hit) { net::AttackReport m; m.target = target; m.hit = hit; SendIfJoined(m); }
     void RequestPickup(uint32_t index) { net::PickupRequest m; m.index = index; SendIfJoined(m); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
+    // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
+    void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
     // Lobby only: tell everyone you are (not) ready. The server ignores this once the match has started.
     void SetReady(bool ready) { net::SetReady m; m.ready = ready; SendIfJoined(m); }
     void Leave() { link.Disconnect(0); }
@@ -92,6 +114,11 @@ class GameClient {
     const Circle& Map() const { return map; }
     const std::vector<net::LootNet>& Loot() const { return loot; }
     const std::map<uint16_t, RosterInfo>& Roster() const { return roster; }
+    const InventoryInfo& Inventory() const { return inventory; }
+    // Seconds left on a timed value from the inventory, counting down since it arrived.
+    float Left(float secondsAtReceipt) const { return (std::max)(0.0f, secondsAtReceipt - (localClock - inventory.receivedAt)); }
+    float AbilityReadyIn() const { return Left(inventory.abilityReadyIn); }
+
     // Who won, once the match is Ending (net::kNoPlayer16 if nobody or not over yet).
     uint16_t Winner() const { return winner; }
     // Seconds since the match state last changed, by the local clock (drives the lobby countdown).
@@ -255,6 +282,28 @@ class GameClient {
                 events.push_back(e);
                 break;
             }
+            case net::MsgType::EvInventory: {
+                net::EvInventory m;
+                if (!net::Decode(data, m)) break;
+                inventory.maxHealth = m.maxHealth; inventory.heartPieces = m.heartPieces; inventory.potions = m.potions;
+                inventory.hasAbility = m.hasAbility; inventory.ability = m.ability; inventory.abilityReadyIn = m.abilityReadyIn;
+                inventory.hasMark = m.hasMark; inventory.gearMask = m.gearMask; inventory.gear = m.gear;
+                inventory.invulnLeft = m.invulnLeft; inventory.speedLeft = m.speedLeft; inventory.speedMult = m.speedMult;
+                inventory.revealLeft = m.revealLeft; inventory.stunLeft = m.stunLeft; inventory.burnLeft = m.burnLeft;
+                inventory.regenLeft = m.regenLeft; inventory.shieldLeft = m.shieldLeft;
+                inventory.receivedAt = localClock;
+                ClientEvent e{ClientEvent::Type::InventoryChanged};
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvAbility: {
+                net::EvAbility m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::AbilityUsed};
+                e.id = m.user; e.item = m.item; e.x = m.x; e.z = m.z;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvMapConfig: {
                 net::EvMapConfig m;
                 if (!net::Decode(data, m)) break;
@@ -330,6 +379,7 @@ class GameClient {
     std::unique_ptr<Storm> storm;
     std::vector<net::LootNet> loot;
     std::map<uint16_t, RosterInfo> roster;
+    InventoryInfo inventory;
     std::map<uint16_t, Remote> players;
     std::vector<ClientEvent> events;
     MatchState state = MatchState::Lobby;

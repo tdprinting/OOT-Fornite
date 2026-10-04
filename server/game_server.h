@@ -208,6 +208,12 @@ class GameServer {
                 if (!sim.match.PickUp(c->playerId, m.index)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::UseAbilityRequest: {
+                net::UseAbilityRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.UseAbility(c->playerId)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::SetReady: {
                 net::SetReady m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -323,6 +329,7 @@ class GameServer {
         clock += kStep;
         tick++;
         BroadcastEvents();
+        SendInventories();
         SendSnapshots();
     }
 
@@ -362,6 +369,29 @@ class GameServer {
                     Broadcast(t);
                     break;
                 }
+                case MatchEvent::Type::AbilityUsed: {
+                    net::EvAbility a;
+                    a.user = static_cast<uint16_t>(e.a);
+                    a.item = e.item;
+                    a.x = e.x;
+                    a.z = e.z;
+                    Broadcast(a);
+                    break;
+                }
+                case MatchEvent::Type::Revived: {
+                    net::EvAbility a;
+                    a.user = static_cast<uint16_t>(e.a);
+                    a.item = net::kRevivedItem;
+                    if (const PlayerState* p = sim.match.Find(e.a)) { a.x = p->pos.x; a.z = p->pos.z; }
+                    Broadcast(a);
+                    break;
+                }
+                case MatchEvent::Type::Teleported: {
+                    // The server moved this player (Hookshot pull, Farore's Wind, Nocturne). Bumping the epoch makes the owner's game
+                    // jump there too, and makes the server ignore the position the client reports until it has seen the move.
+                    if (Client* t = FindByPlayer(e.a)) { t->epoch++; t->lastInputClock = clock; }
+                    break;
+                }
                 case MatchEvent::Type::LootAdded: {
                     net::EvLootAdded a;
                     a.index = static_cast<uint32_t>(e.index);
@@ -370,6 +400,36 @@ class GameServer {
                     break;
                 }
             }
+        }
+    }
+
+    // Each player's own inventory goes to them (and nobody else) whenever it changes.
+    void SendInventories() {
+        const float now = sim.match.Clock();
+        for (auto& c : clients) {
+            if (!c.joined) continue;
+            PlayerState* p = sim.match.Find(c.playerId);
+            if (!p || !p->dirty) continue;
+            p->dirty = false;
+            net::EvInventory inv;
+            inv.maxHealth = p->maxHealth;
+            inv.heartPieces = static_cast<uint8_t>(p->heartPieces);
+            for (const Equipped& e : p->potions) inv.potions.push_back({static_cast<uint8_t>(e.item), static_cast<uint8_t>(e.rarity)});
+            inv.hasAbility = p->hasAbility;
+            inv.ability = {static_cast<uint8_t>(p->ability.item), static_cast<uint8_t>(p->ability.rarity)};
+            inv.abilityReadyIn = (std::max)(0.0f, p->abilityReadyAt - now);
+            inv.hasMark = p->hasMark;
+            inv.gearMask = p->gearMask;
+            for (int i = 0; i < kGearSlots; i++) inv.gear[i] = {static_cast<uint8_t>(p->gear[i].item), static_cast<uint8_t>(p->gear[i].rarity)};
+            inv.invulnLeft = (std::max)(0.0f, p->invulnUntil - now);
+            inv.speedLeft = (std::max)(0.0f, p->speedUntil - now);
+            inv.speedMult = p->speedMult;
+            inv.revealLeft = (std::max)(0.0f, p->revealUntil - now);
+            inv.stunLeft = (std::max)(0.0f, (std::max)(p->stunUntil, p->frozenUntil) - now);
+            inv.burnLeft = (std::max)(0.0f, p->burnUntil - now);
+            inv.regenLeft = (std::max)(0.0f, p->regenUntil - now);
+            inv.shieldLeft = (std::max)(0.0f, p->dmgTakenUntil - now);
+            SendTo(c, inv);
         }
     }
 
@@ -411,7 +471,8 @@ class GameServer {
                 if (o.id == self->id || !o.alive) continue;
                 nearby.push_back({Distance(self->pos, o.pos), &o});
             }
-            size_t keep = (std::min)(nearby.size(), net::kSnapshotMaxPlayers);
+            // Normally just the nearest few; while a Lens of Truth or Saria's Song is active, everybody.
+            size_t keep = (std::min)(nearby.size(), sim.match.Revealing(*self) ? static_cast<size_t>(kMaxPlayers) : net::kSnapshotMaxPlayers);
             std::partial_sort(nearby.begin(), nearby.begin() + static_cast<long>(keep), nearby.end(),
                               [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second->id < b.second->id); });
             for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*nearby[i].second));

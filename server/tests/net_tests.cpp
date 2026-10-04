@@ -110,6 +110,13 @@ static void MessagesRoundTrip() {
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
     { EvLootAdded a, b; a.index = 400; a.loot = {1, 2, 3, 4, true, false}; CHECK(RoundTrips(a, b) && b.index == 400 && b.loot.item == 3); }
     { EvPlayerJoined a, b; a.id = 5; a.flags = kRosterHost | kRosterReady; a.name = "Navi"; CHECK(RoundTrips(a, b) && b.name == "Navi" && b.flags == 3); }
+    { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
+    { EvAbility a, b; a.user = 7; a.item = 55; a.x = 1.5f; a.z = -2; CHECK(RoundTrips(a, b) && b.user == 7 && b.item == 55 && b.x == 1.5f && b.z == -2); }
+    { EvInventory a, b; a.maxHealth = 5; a.heartPieces = 3; a.potions = {{1, 2}, {3, 4}}; a.hasAbility = true; a.hasMark = true; a.ability = {40, 3};
+      a.abilityReadyIn = 12.5f; a.gearMask = 0x05; a.gear[0] = {60, 1}; a.gear[2] = {62, 4}; a.speedMult = 1.4f; a.speedLeft = 6; a.shieldLeft = 2;
+      CHECK(RoundTrips(a, b) && b.maxHealth == 5 && b.heartPieces == 3 && b.potions.size() == 2 && b.potions[1].rarity == 4 && b.hasAbility && b.hasMark
+            && b.ability.item == 40 && b.abilityReadyIn == 12.5f && b.gearMask == 5 && b.gear[0].item == 60 && b.gear[2].rarity == 4 && b.gear[1].item == 0
+            && b.speedMult == 1.4f && b.speedLeft == 6 && b.shieldLeft == 2); }
     { EvPlayerLeft a, b; a.id = 5; CHECK(RoundTrips(a, b) && b.id == 5); }
 }
 

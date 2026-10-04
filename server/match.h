@@ -3,6 +3,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/storm.h"
+#include <array>
 #include <vector>
 
 namespace royale {
@@ -12,36 +13,64 @@ struct Equipped {
     Rarity rarity;
 };
 
+enum class DamageKind : uint8_t { Normal, Storm, Fire, Explosion };
+
 struct PlayerState {
     uint32_t id = 0;
     bool isBot = false;
     bool alive = true;
     float health = kMaxHealth; // hearts
+    float maxHealth = kMaxHealth;
+    int heartPieces = 0;
     Vec2 pos = {};
     // Pose data that the server only relays between clients and never simulates.
     float y = 0;
     int16_t rot = 0; // OoT binary angle: 0x10000 = 360 degrees
     uint8_t anim = 0;
     uint8_t scene = 0; // game scene the player is in (relayed). Bots are always in Hyrule Field.
+
+    // ---- what the player carries
     Equipped weapon = {ItemId::DekuStick, Rarity::Common}; // starter weapon, like Fortnite's pickaxe
     bool hasShield = false;
     Equipped shield = {ItemId::DekuShield, Rarity::Common};
-    std::vector<Equipped> potions;
+    std::vector<Equipped> potions;                         // consumables bag, at most kMaxPotions
+    std::array<Equipped, kGearSlots> gear = {};            // one passive item per slot
+    uint8_t gearMask = 0;                                  // bit n set when gear[n] is filled
+    Equipped ability = {ItemId::DinsFire, Rarity::Common};
+    bool hasAbility = false;
+    float abilityReadyAt = 0;
+    bool hasMark = false;                                  // Farore's Wind
+    Vec2 mark = {};
+    float markExpires = 0;
+
+    // ---- timed effects; every "...Until" is a match-clock time
+    float burnUntil = 0, burnDps = 0;
+    uint32_t burnBy = 0xFFFFFFFFu;
+    float stunUntil = 0, frozenUntil = 0;
+    float invulnUntil = 0;
+    float speedUntil = 0, speedMult = 1;
+    float regenUntil = 0, regenRate = 0;
+    float revealUntil = 0;
+    float dmgTakenUntil = 0, dmgTakenMult = 1;
+
     float attackReadyAt = 0;
     int kills = 0;
+    bool dirty = true; // inventory or status changed since it was last sent to the owner
 };
 
 constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged } type;
-    uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived } type;
+    uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
     float health = 0;       // Damaged: target's health afterwards
     size_t index = 0;       // LootTaken / LootAdded
     MatchState state = MatchState::Lobby; // StateChanged
+    uint8_t item = 0;       // AbilityUsed: which ability
+    float x = 0, z = 0;     // AbilityUsed: where the user stood
 };
 
 struct LootEntry {
@@ -56,6 +85,33 @@ struct AttackResult {
     bool killed = false;
 };
 
+// What a player's gear adds up to right now.
+struct GearTotals {
+    float melee = 1, ranged = 1;
+    float damageTaken = 1;
+    float storm = 1, fire = 1, explosion = 1;
+    float speed = 1;
+    bool stunImmune = false;
+};
+
+inline GearTotals TotalsOf(const PlayerState& p) {
+    GearTotals t;
+    for (int slot = 0; slot < kGearSlots; slot++) {
+        if (!(p.gearMask & (1 << slot))) continue;
+        const GearDef g = GearOf(p.gear[slot].item);
+        const Rarity r = p.gear[slot].rarity;
+        t.melee *= Scaled(g.melee, r);
+        t.ranged *= Scaled(g.ranged, r);
+        t.damageTaken *= Scaled(g.damageTaken, r);
+        t.storm *= Scaled(g.storm, r);
+        t.fire *= Scaled(g.fire, r);
+        t.explosion *= Scaled(g.explosion, r);
+        t.speed *= Scaled(g.speed, r);
+        t.stunImmune = t.stunImmune || g.stunImmune;
+    }
+    return t;
+}
+
 // The server-side match. No networking and no game code in here, so it runs inside the host's game, headless,
 // or in unit tests. Feed it Tick(dt) at kTickHz and call the event methods as messages arrive.
 class Match {
@@ -64,7 +120,8 @@ class Match {
     static constexpr float kDropSec = royale::kDropSec; // spawn protection
     static constexpr float kEndingSec = royale::kEndingSec;
 
-    Match(uint64_t seed, Circle map, int lootCount = 400) : seed(seed), map(map), storm(seed, map) {
+    Match(uint64_t seed, Circle map, int lootCount = 400)
+        : seed(seed), map(map), storm(seed, map), abilityRng(seed ^ 0x6162696Cull) {
         for (const LootSpawn& l : GenerateLoot(seed, map, lootCount, 0.15f)) loot.push_back({l, false});
     }
 
@@ -110,7 +167,12 @@ class Match {
                 for (auto& p : players) {
                     if (!p.alive) continue;
                     float dps = storm.DamagePerSecond(p.pos, stormTime);
-                    if (dps > 0) Damage(p.id, dps * dt);
+                    if (dps > 0) Damage(p.id, dps * dt, kNoPlayer, DamageKind::Storm, false);
+                    if (!p.alive) continue;
+                    if (clock < p.burnUntil) Damage(p.id, p.burnDps * dt, p.burnBy, DamageKind::Fire, false);
+                    if (!p.alive) continue;
+                    if (clock < p.regenUntil && p.health < p.maxHealth) p.health = (std::min)(p.maxHealth, p.health + p.regenRate * dt);
+                    if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 if (Alive() <= 1) Enter(MatchState::Ending);
                 break;
@@ -120,15 +182,30 @@ class Match {
         }
     }
 
-    // Returns true if the player was eliminated by this damage. Ignored during the drop (spawn protection).
-    bool Damage(uint32_t id, float hearts, uint32_t attacker = kNoPlayer) {
+    // Returns true if the player was eliminated by this damage. Ignored during the drop (spawn protection) and while the
+    // player is invulnerable. The player's gear, status effects and (for storm, fire and explosions) the matching resistances
+    // are applied here. A Fairy in the bag turns a killing blow into a revival. `announce` false suppresses the Damaged event
+    // (used for the storm and burning, which tick every frame).
+    bool Damage(uint32_t id, float hearts, uint32_t attacker = kNoPlayer, DamageKind kind = DamageKind::Normal, bool announce = true) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || state == MatchState::Drop || hearts <= 0) return false;
+        if (clock < p->invulnUntil) return false;
+
+        const GearTotals g = TotalsOf(*p);
+        float mult = g.damageTaken;
+        if (kind == DamageKind::Storm) mult *= g.storm;
+        else if (kind == DamageKind::Fire) mult *= g.fire;
+        else if (kind == DamageKind::Explosion) mult *= g.explosion;
+        if (clock < p->dmgTakenUntil) mult *= p->dmgTakenMult;
+        if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
+        hearts *= mult;
+
         p->health -= hearts;
         bool killed = p->health <= 0;
+        if (killed && TryFairy(*p)) killed = false;
         if (killed) p->health = 0;
         // Storm ticks are not announced: health travels in snapshots, only the elimination is an event.
-        if (attacker != kNoPlayer) {
+        if (attacker != kNoPlayer && announce) {
             MatchEvent e{MatchEvent::Type::Damaged};
             e.a = id; e.b = attacker; e.amount = hearts; e.health = p->health;
             events.push_back(e);
@@ -156,7 +233,8 @@ class Match {
     }
 
     // Attack with the attacker's equipped weapon. `hit` is the outcome of the accuracy roll (bots roll it themselves,
-    // for humans the client reports it). A miss still spends the cooldown. Range and cooldown are checked here.
+    // for humans the client reports it). A miss still spends the cooldown. Range and cooldown are checked here, and a stunned
+    // or frozen attacker can't attack at all. The weapon's own effect (burn, freeze, stun, shield piercing, explosion) applies on a hit.
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
@@ -165,19 +243,53 @@ class Match {
         if (!a || !t || a == t || !a->alive || !t->alive) return r;
         WeaponStats w = WeaponOf(a->weapon.item);
         if (w.damage <= 0 || clock < a->attackReadyAt) return r;
+        if (clock < a->stunUntil || clock < a->frozenUntil) return r;
         if (Distance(a->pos, t->pos) > w.range * 1.1f) return r;
         a->attackReadyAt = clock + w.cooldown;
         r.ok = true;
         if (!hit) return r;
-        float reduction = t->hasShield ? ShieldReduction(t->shield.item, t->shield.rarity) : 0.0f;
-        r.damage = w.damage * static_cast<float>(kRarityMultiplier[static_cast<int>(a->weapon.rarity)]) * (1.0f - reduction);
+
+        const GearTotals ag = TotalsOf(*a);
+        const float base = w.damage * RarityScale(a->weapon.rarity) * (w.ranged ? ag.ranged : ag.melee);
+        float reduction = 0.0f;
+        if (w.effect != WeaponEffect::PierceShield && t->hasShield) reduction = ShieldReduction(t->shield.item, t->shield.rarity);
+        r.damage = base * (1.0f - reduction);
         r.hit = true;
-        r.killed = Damage(targetId, r.damage, attackerId);
-        if (r.killed) a->kills++;
+        r.killed = Damage(targetId, r.damage, attackerId, w.splashRadius > 0 ? DamageKind::Explosion : DamageKind::Normal);
+
+        if (!r.killed && t->alive) {
+            const bool immune = TotalsOf(*t).stunImmune;
+            const float seconds = w.effectSeconds * RarityScale(a->weapon.rarity);
+            switch (w.effect) {
+                case WeaponEffect::Burn:
+                    t->burnUntil = clock + seconds;
+                    t->burnDps = (std::max)(clock < t->burnUntil ? t->burnDps : 0.0f, w.effectAmount * RarityScale(a->weapon.rarity));
+                    t->burnBy = attackerId;
+                    t->dirty = true;
+                    break;
+                case WeaponEffect::Freeze:
+                    if (!immune) { t->frozenUntil = (std::max)(t->frozenUntil, clock + seconds); t->dirty = true; }
+                    break;
+                case WeaponEffect::Stun:
+                    if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (w.splashRadius > 0) {
+            const Vec2 centre = t->pos;
+            for (auto& o : players) {
+                if (!o.alive || o.id == attackerId || o.id == targetId) continue;
+                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, DamageKind::Explosion);
+            }
+        }
         return r;
     }
 
-    // Pick up loot entry `index`. Weapons and shields swap with what the player holds (the old one drops on the ground).
+    // Pick up loot entry `index`. Weapons, shields, abilities and gear swap with what the player already has in that slot (the old
+    // one drops on the ground). Consumables need room in the bag. Instant items are used on the spot and stay on the ground when they
+    // would do nothing (a heart at full health).
     bool PickUp(uint32_t id, size_t index) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
@@ -194,13 +306,30 @@ class Match {
                 p->shield = {s.item, s.rarity};
                 p->hasShield = true;
                 break;
-            case ItemKind::Potion:
+            case ItemKind::Consumable:
                 if (static_cast<int>(p->potions.size()) >= kMaxPotions) return false;
                 p->potions.push_back({s.item, s.rarity});
                 break;
-            case ItemKind::Utility:
-                return false;
+            case ItemKind::Instant:
+                if (!UseInstant(*p, s.item, s.rarity)) return false;
+                break;
+            case ItemKind::Ability:
+                if (p->hasAbility) DropEquipment(*p, p->ability);
+                p->ability = {s.item, s.rarity};
+                p->hasAbility = true;
+                p->abilityReadyAt = clock; // ready straight away
+                p->hasMark = false;
+                break;
+            case ItemKind::Gear: {
+                const int slot = static_cast<int>(GearOf(s.item).slot);
+                if (slot < 0 || slot >= kGearSlots) return false;
+                if (p->gearMask & (1 << slot)) DropEquipment(*p, p->gear[slot]);
+                p->gear[slot] = {s.item, s.rarity};
+                p->gearMask = static_cast<uint8_t>(p->gearMask | (1 << slot));
+                break;
+            }
         }
+        p->dirty = true;
         loot[index].taken = true;
         MatchEvent e{MatchEvent::Type::LootTaken};
         e.a = id; e.index = index;
@@ -208,23 +337,73 @@ class Match {
         return true;
     }
 
-    // Drink the potion that restores the missing health with the least waste (or the biggest if none is enough).
+    // Use one item from the bag: the potion that restores the missing health with the least waste when hurt (or the biggest if none
+    // is enough); otherwise something that cures fire or stun; otherwise a Poe. A Fairy is never used this way.
     bool UsePotion(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || p->potions.empty() || p->health >= kMaxHealth) return false;
+        if (!p || !p->alive || p->potions.empty()) return false;
         if (state != MatchState::Drop && state != MatchState::InMatch) return false;
-        float missing = kMaxHealth - p->health;
-        size_t best = 0;
-        for (size_t i = 1; i < p->potions.size(); i++) {
-            float hi = PotionHeal(p->potions[i].item, p->potions[i].rarity);
-            float hb = PotionHeal(p->potions[best].item, p->potions[best].rarity);
-            bool iEnough = hi >= missing, bEnough = hb >= missing;
-            if ((iEnough && !bEnough) || (iEnough == bEnough && (iEnough ? hi < hb : hi > hb))) best = i;
+
+        int best = -1;
+        const float missing = p->maxHealth - p->health;
+        if (missing > 0.01f) {
+            for (size_t i = 0; i < p->potions.size(); i++) {
+                const PotionDef d = PotionOf(p->potions[i].item);
+                if (d.revive || d.heal <= 0) continue;
+                if (best < 0) { best = static_cast<int>(i); continue; }
+                float hi = PotionHeal(p->potions[i].item, p->potions[i].rarity);
+                float hb = PotionHeal(p->potions[best].item, p->potions[best].rarity);
+                bool iEnough = hi >= missing, bEnough = hb >= missing;
+                if ((iEnough && !bEnough) || (iEnough == bEnough && (iEnough ? hi < hb : hi > hb))) best = static_cast<int>(i);
+            }
         }
-        p->health = (std::min)(kMaxHealth, p->health + PotionHeal(p->potions[best].item, p->potions[best].rarity));
-        p->potions.erase(p->potions.begin() + static_cast<long>(best));
+        const bool afflicted = clock < p->burnUntil || clock < p->stunUntil || clock < p->frozenUntil;
+        for (size_t i = 0; best < 0 && afflicted && i < p->potions.size(); i++) {
+            if (PotionOf(p->potions[i].item).cleanse) best = static_cast<int>(i);
+        }
+        for (size_t i = 0; best < 0 && i < p->potions.size(); i++) {
+            const PotionDef d = PotionOf(p->potions[i].item);
+            if (!d.revive && d.damageTaken < 1.0f) best = static_cast<int>(i);
+        }
+        if (best < 0) return false;
+
+        const Equipped used = p->potions[best];
+        const PotionDef d = PotionOf(used.item);
+        p->health = (std::min)(p->maxHealth, p->health + PotionHeal(used.item, used.rarity));
+        if (d.cleanse) Cleanse(*p);
+        if (d.damageTaken < 1.0f) {
+            p->dmgTakenUntil = clock + d.seconds;
+            p->dmgTakenMult = d.damageTaken;
+        }
+        p->potions.erase(p->potions.begin() + best);
+        p->dirty = true;
         return true;
     }
+
+    // Use the ability slot. Fails (and costs nothing) if there is no ability, it is still recharging, the player is stunned, or the
+    // ability needs a target that isn't there (Hookshot with nobody in front). Farore's Wind marks a spot the first time and jumps back
+    // to it the second time.
+    bool UseAbility(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || state != MatchState::InMatch || !p->hasAbility) return false;
+        if (clock < p->abilityReadyAt || clock < p->stunUntil || clock < p->frozenUntil) return false;
+        const ItemId item = p->ability.item;
+        bool startsCooldown = true;
+        if (!RunAbility(*p, item, p->ability.rarity, &startsCooldown)) return false;
+        if (startsCooldown) p->abilityReadyAt = clock + AbilityOf(item).cooldown;
+        p->dirty = true;
+        MatchEvent e{MatchEvent::Type::AbilityUsed};
+        e.a = id; e.item = static_cast<uint8_t>(item); e.x = p->pos.x; e.z = p->pos.z;
+        events.push_back(e);
+        return true;
+    }
+
+    float SpeedMultiplier(const PlayerState& p) const {
+        return TotalsOf(p).speed * (clock < p.speedUntil ? p.speedMult : 1.0f);
+    }
+    bool Revealing(const PlayerState& p) const { return clock < p.revealUntil; }
+    bool Stunned(const PlayerState& p) const { return clock < p.stunUntil || clock < p.frozenUntil; }
+    bool Invulnerable(const PlayerState& p) const { return clock < p.invulnUntil; }
 
     const std::vector<LootEntry>& Loot() const { return loot; }
     size_t AddLoot(const LootSpawn& l) {
@@ -253,11 +432,16 @@ class Match {
         for (auto& p : players) if (p.id == id) return &p;
         return nullptr;
     }
+    const PlayerState* Find(uint32_t id) const {
+        for (const auto& p : players) if (p.id == id) return &p;
+        return nullptr;
+    }
 
     MatchState State() const { return state; }
     int Humans() const { return humans; }
     float StormTime() const { return stormTime; }
     const Storm& GetStorm() const { return storm; }
+    const Circle& MapCircle() const { return map; }
     const std::vector<PlayerState>& Players() const { return players; }
     std::vector<PlayerState>& Players() { return players; }
     uint64_t Seed() const { return seed; }
@@ -283,11 +467,15 @@ class Match {
     void DropEquipment(const PlayerState& p, const Equipped& e) {
         if (!IsStarter(e)) AddLoot({p.pos, e.item, e.rarity, false});
     }
-    // Eliminated players leave their weapon and shield behind for others (the Skulltula pile in the design doc).
+
+    // Eliminated players leave everything they carry behind for others (the Skulltula pile in the design doc).
     void Eliminate(PlayerState& p, uint32_t killer) {
         p.alive = false;
         p.health = 0;
         DropKit(p);
+        if (killer != kNoPlayer && killer != p.id) {
+            if (PlayerState* k = Find(killer)) k->kills++;
+        }
         MatchEvent e{MatchEvent::Type::Eliminated};
         e.a = p.id; e.b = killer;
         events.push_back(e);
@@ -295,11 +483,214 @@ class Match {
     void DropKit(const PlayerState& p) {
         DropEquipment(p, p.weapon);
         if (p.hasShield) DropEquipment(p, p.shield);
+        if (p.hasAbility) DropEquipment(p, p.ability);
+        for (int slot = 0; slot < kGearSlots; slot++) {
+            if (p.gearMask & (1 << slot)) DropEquipment(p, p.gear[slot]);
+        }
+        for (const Equipped& potion : p.potions) DropEquipment(p, potion);
+    }
+
+    // A Fairy in the bag brings a dying player back with half their hearts and a moment of safety.
+    bool TryFairy(PlayerState& p) {
+        for (size_t i = 0; i < p.potions.size(); i++) {
+            if (!PotionOf(p.potions[i].item).revive) continue;
+            p.potions.erase(p.potions.begin() + static_cast<long>(i));
+            p.health = (std::max)(1.0f, p.maxHealth * 0.5f);
+            p.invulnUntil = clock + 2.0f;
+            Cleanse(p);
+            p.dirty = true;
+            MatchEvent e{MatchEvent::Type::Revived};
+            e.a = p.id;
+            events.push_back(e);
+            return true;
+        }
+        return false;
+    }
+
+    static void Cleanse(PlayerState& p) {
+        p.burnUntil = 0;
+        p.stunUntil = 0;
+        p.frozenUntil = 0;
+        p.dirty = true;
+    }
+
+    // Instant items: returns false (and the item stays where it is) if using it now would do nothing.
+    bool UseInstant(PlayerState& p, ItemId item, Rarity rarity) {
+        switch (InstantOf(item)) {
+            case InstantEffect::Heart:
+                if (p.health >= p.maxHealth) return false;
+                p.health = (std::min)(p.maxHealth, p.health + RarityScale(rarity));
+                return true;
+            case InstantEffect::HeartPiece:
+                if (p.maxHealth >= kMaxHealthCap) return false;
+                if (++p.heartPieces >= kHeartPiecesPerContainer) {
+                    p.heartPieces = 0;
+                    p.maxHealth = (std::min)(kMaxHealthCap, p.maxHealth + 1.0f);
+                    p.health = (std::min)(p.maxHealth, p.health + 1.0f);
+                }
+                return true;
+            case InstantEffect::HeartContainer:
+                if (p.maxHealth >= kMaxHealthCap && p.health >= p.maxHealth) return false;
+                p.maxHealth = (std::min)(kMaxHealthCap, p.maxHealth + 1.0f);
+                p.health = (std::min)(p.maxHealth, p.health + 1.0f);
+                return true;
+            case InstantEffect::MagicJar:
+                if (!p.hasAbility || clock >= p.abilityReadyAt) return false;
+                p.abilityReadyAt = clock + (p.abilityReadyAt - clock) * 0.4f;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Everyone alive other than `self`, within `radius` of `self`.
+    template <class F>
+    void ForOthersNear(const PlayerState& self, float radius, F fn) {
+        for (auto& o : players) {
+            if (!o.alive || o.id == self.id) continue;
+            if (Distance(o.pos, self.pos) <= radius) fn(o);
+        }
+    }
+
+    void Teleport(PlayerState& p, Vec2 to) {
+        p.pos = to;
+        p.dirty = true;
+        MatchEvent e{MatchEvent::Type::Teleported};
+        e.a = p.id;
+        events.push_back(e);
+    }
+
+    // The nearest living player in front of `p` (within a 40 degree cone) and `range`. Null if nobody.
+    PlayerState* TargetInFront(const PlayerState& p, float range) {
+        const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
+        PlayerState* best = nullptr;
+        float bestDist = range;
+        for (auto& o : players) {
+            if (!o.alive || o.id == p.id) continue;
+            const float dx = o.pos.x - p.pos.x, dz = o.pos.z - p.pos.z;
+            const float d = std::sqrt(dx * dx + dz * dz);
+            if (d > bestDist) continue;
+            float off = std::atan2(dx, dz) - facing;
+            while (off > 3.14159265f) off -= 6.2831853f;
+            while (off < -3.14159265f) off += 6.2831853f;
+            if (std::fabs(off) > 0.70f) continue;
+            best = &o;
+            bestDist = d;
+        }
+        return best;
+    }
+
+    // Carry out one ability. Returns false if it could not do anything it needs to (no target for a pull).
+    bool RunAbility(PlayerState& p, ItemId item, Rarity rarity, bool* startsCooldown) {
+        const AbilityDef def = AbilityOf(item);
+        const float s = RarityScale(rarity);
+        bool did = false;
+        for (const Effect& fx : def.fx) {
+            switch (fx.type) {
+                case EffectType::None:
+                    break;
+                case EffectType::AoeDamage: {
+                    const DamageKind kind = item == ItemId::DinsFire ? DamageKind::Fire : DamageKind::Normal;
+                    ForOthersNear(p, fx.radius, [&](PlayerState& o) { Damage(o.id, fx.amount * s, p.id, kind); });
+                    did = true;
+                    break;
+                }
+                case EffectType::Heal:
+                    p.health = (std::min)(p.maxHealth, p.health + fx.amount * s);
+                    did = true;
+                    break;
+                case EffectType::Invulnerable:
+                    p.invulnUntil = (std::max)(p.invulnUntil, clock + (std::min)(8.0f, fx.seconds * s));
+                    did = true;
+                    break;
+                case EffectType::SpeedBoost:
+                    p.speedUntil = clock + fx.seconds * s;
+                    p.speedMult = (std::min)(1.8f, 1.0f + (fx.amount - 1.0f) * s);
+                    did = true;
+                    break;
+                case EffectType::RevealAll:
+                    p.revealUntil = clock + fx.seconds * s;
+                    did = true;
+                    break;
+                case EffectType::StunNearby:
+                    ForOthersNear(p, fx.radius, [&](PlayerState& o) {
+                        if (TotalsOf(o).stunImmune) return;
+                        o.stunUntil = (std::max)(o.stunUntil, clock + fx.seconds * s);
+                        o.dirty = true;
+                    });
+                    did = true;
+                    break;
+                case EffectType::PullTarget: {
+                    PlayerState* t = TargetInFront(p, fx.radius * (0.8f + 0.2f * s));
+                    if (!t) break;
+                    const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
+                    Teleport(*t, {p.pos.x + std::sin(facing) * 110.0f, p.pos.z + std::cos(facing) * 110.0f});
+                    if (!TotalsOf(*t).stunImmune) {
+                        t->stunUntil = (std::max)(t->stunUntil, clock + fx.seconds * s);
+                        t->dirty = true;
+                    }
+                    did = true;
+                    break;
+                }
+                case EffectType::MarkAndReturn:
+                    if (p.hasMark && clock < p.markExpires) {
+                        Teleport(p, p.mark);
+                        p.hasMark = false;
+                    } else {
+                        p.hasMark = true;
+                        p.mark = p.pos;
+                        p.markExpires = clock + fx.seconds;
+                        *startsCooldown = false; // marking is free; the jump back starts the recharge
+                    }
+                    did = true;
+                    break;
+                case EffectType::RandomTeleport: {
+                    const Circle zone = storm.SafeZoneAt(stormTime);
+                    Teleport(p, RandomPointIn(abilityRng, zone.radius > 0 ? zone : map, placement, 0.8f));
+                    did = true;
+                    break;
+                }
+                case EffectType::BurnNearby:
+                    ForOthersNear(p, fx.radius, [&](PlayerState& o) {
+                        o.burnUntil = clock + fx.seconds * s;
+                        o.burnDps = (std::max)(clock < o.burnUntil ? o.burnDps : 0.0f, fx.amount * s);
+                        o.burnBy = p.id;
+                        o.dirty = true;
+                    });
+                    did = true;
+                    break;
+                case EffectType::Regen:
+                    p.regenUntil = clock + fx.seconds;
+                    p.regenRate = fx.amount * s;
+                    did = true;
+                    break;
+                case EffectType::Cleanse:
+                    Cleanse(p);
+                    did = true;
+                    break;
+                case EffectType::RandomSong: {
+                    ItemId songs[kItemCount];
+                    int n = 0;
+                    for (int i = 0; i < kItemCount; i++) {
+                        const ItemId candidate = kItems[i].id;
+                        if (!IsSong(candidate)) continue;
+                        if (fx.radius < 0.5f && !IsSimpleSong(candidate)) continue;
+                        songs[n++] = candidate;
+                    }
+                    if (n == 0) break;
+                    bool ignored = true;
+                    did = RunAbility(p, songs[abilityRng.Below(static_cast<uint32_t>(n))], rarity, &ignored) || did;
+                    break;
+                }
+            }
+        }
+        return did;
     }
 
     uint64_t seed;
     Circle map;
     Storm storm;
+    Rng abilityRng;
     MatchState state = MatchState::Lobby;
     float stateTime = 0, stormTime = 0, clock = 0;
     int humans = 0;

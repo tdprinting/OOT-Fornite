@@ -21,13 +21,14 @@ constexpr uint16_t kProtocolVersion = 2; // 2: lobby (ready flags, host marker),
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
-constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N others, plus self
+constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N others, plus self (everybody while revealing)
+constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "used a Fairy to come back"
 
 enum class MsgType : uint8_t {
-    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6,
+    Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -89,6 +90,13 @@ struct PickupRequest {
 
 struct UsePotionRequest {
     static constexpr MsgType kType = MsgType::UsePotionRequest;
+    void Write(ByteWriter&) const {}
+    bool Read(ByteReader& r) { return r.ok; }
+};
+
+// Use the ability slot (spell, song, hookshot...). The server decides whether it worked.
+struct UseAbilityRequest {
+    static constexpr MsgType kType = MsgType::UseAbilityRequest;
     void Write(ByteWriter&) const {}
     bool Read(ByteReader& r) { return r.ok; }
 };
@@ -183,10 +191,10 @@ struct PlayerNet {
     uint8_t scene = 0;
     uint8_t shield = 0, shieldRarity = 0; // valid when kShield is set
     static uint8_t QuantizeHealth(float h) {
-        float v = h / kMaxHealth * 255.0f + 0.5f;
+        float v = h / kMaxHealthCap * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
     }
-    float Health() const { return health / 255.0f * kMaxHealth; }
+    float Health() const { return health / 255.0f * kMaxHealthCap; }
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
         w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity);
@@ -216,7 +224,7 @@ struct Snapshot {
     bool Read(ByteReader& r) {
         tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8();
         size_t n = r.U8();
-        if (n > kSnapshotMaxPlayers + 1 || state > 4 || !Finite(stormTime)) return false;
+        if (n > static_cast<size_t>(kMaxPlayers) || state > 4 || !Finite(stormTime)) return false; // up to everyone, while revealing
         players.assign(n, {});
         for (auto& p : players) if (!p.Read(r)) return false;
         return r.ok;
@@ -291,6 +299,74 @@ struct EvMapConfig {
         loot.assign(n, {});
         for (auto& l : loot) if (!l.Read(r)) return false;
         return r.ok;
+    }
+};
+
+// What one player carries, sent to that player whenever it changes (and to nobody else). Times are "seconds left" at the moment of sending.
+struct ItemRef {
+    uint8_t item = 0, rarity = 0;
+    bool Valid() const { return item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount; }
+};
+
+struct EvInventory {
+    static constexpr MsgType kType = MsgType::EvInventory;
+    float maxHealth = kMaxHealth;
+    uint8_t heartPieces = 0;
+    std::vector<ItemRef> potions;           // the bag, at most kMaxPotions
+    bool hasAbility = false;
+    ItemRef ability;
+    float abilityReadyIn = 0;
+    bool hasMark = false;                   // Farore's Wind has a spot marked
+    uint8_t gearMask = 0;
+    std::array<ItemRef, kGearSlots> gear = {};
+    float invulnLeft = 0, speedLeft = 0, speedMult = 1, revealLeft = 0, stunLeft = 0, burnLeft = 0, regenLeft = 0, shieldLeft = 0;
+
+    void Write(ByteWriter& w) const {
+        w.F32(maxHealth); w.U8(heartPieces);
+        w.U8(static_cast<uint8_t>(potions.size()));
+        for (const auto& p : potions) { w.U8(p.item); w.U8(p.rarity); }
+        w.U8((hasAbility ? 1 : 0) | (hasMark ? 2 : 0));
+        w.U8(ability.item); w.U8(ability.rarity); w.F32(abilityReadyIn);
+        w.U8(gearMask);
+        for (int i = 0; i < kGearSlots; i++) if (gearMask & (1 << i)) { w.U8(gear[i].item); w.U8(gear[i].rarity); }
+        w.F32(invulnLeft); w.F32(speedLeft); w.F32(speedMult); w.F32(revealLeft);
+        w.F32(stunLeft); w.F32(burnLeft); w.F32(regenLeft); w.F32(shieldLeft);
+    }
+    bool Read(ByteReader& r) {
+        maxHealth = r.F32(); heartPieces = r.U8();
+        size_t n = r.U8();
+        if (n > static_cast<size_t>(kMaxPotions)) return false;
+        potions.assign(n, {});
+        for (auto& p : potions) { p.item = r.U8(); p.rarity = r.U8(); if (r.ok && !p.Valid()) return false; }
+        uint8_t flags = r.U8();
+        hasAbility = flags & 1; hasMark = flags & 2;
+        ability.item = r.U8(); ability.rarity = r.U8(); abilityReadyIn = r.F32();
+        if (flags > 3 || (hasAbility && r.ok && !ability.Valid())) return false;
+        gearMask = r.U8();
+        if (gearMask >= (1 << kGearSlots)) return false;
+        for (int i = 0; i < kGearSlots; i++) {
+            gear[i] = {};
+            if (gearMask & (1 << i)) { gear[i].item = r.U8(); gear[i].rarity = r.U8(); if (r.ok && !gear[i].Valid()) return false; }
+        }
+        invulnLeft = r.F32(); speedLeft = r.F32(); speedMult = r.F32(); revealLeft = r.F32();
+        stunLeft = r.F32(); burnLeft = r.F32(); regenLeft = r.F32(); shieldLeft = r.F32();
+        return r.ok && Finite(maxHealth) && maxHealth >= 1 && maxHealth <= kMaxHealthCap && Finite(abilityReadyIn) && abilityReadyIn >= 0 &&
+               Finite(invulnLeft) && Finite(speedLeft) && Finite(speedMult) && speedMult > 0.1f && speedMult < 3 && Finite(revealLeft) &&
+               Finite(stunLeft) && Finite(burnLeft) && Finite(regenLeft) && Finite(shieldLeft) && invulnLeft >= 0 && speedLeft >= 0 &&
+               revealLeft >= 0 && stunLeft >= 0 && burnLeft >= 0 && regenLeft >= 0 && shieldLeft >= 0;
+    }
+};
+
+// Someone used an ability (or, with item == kRevivedItem, came back with a Fairy). Everyone is told, so effects can be shown.
+struct EvAbility {
+    static constexpr MsgType kType = MsgType::EvAbility;
+    uint16_t user = 0;
+    uint8_t item = 0;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.U16(user); w.U8(item); w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) {
+        user = r.U16(); item = r.U8(); x = r.F32(); z = r.F32();
+        return r.ok && (item < static_cast<uint8_t>(ItemId::Count) || item == kRevivedItem) && Finite(x) && Finite(z);
     }
 };
 
