@@ -17,7 +17,7 @@ committed to this repo.
 |---|---|
 | `third_party/Shipwright-Android` | The game: the [Waterdish/Shipwright-Android](https://github.com/Waterdish/Shipwright-Android) fork of Ship of Harkinian 9.0.2, pinned to a commit. Has its own submodules. |
 | `third_party/enet` | ENet 1.3.18 (MIT), the UDP library. |
-| `patches/` | Small patches to the fork: hook for turning a spawned Player into a puppet, CMake hook, window and menu entry, and (`0012`) the Battle Royale boot: the title screen opens the mod's menu and the file select loads the Battle Royale save. |
+| `patches/` | Small patches to the fork: hook for turning a spawned Player into a puppet, CMake hook, window and menu entry. |
 | `mod/Royale/` | `RoyaleMod.cpp/.h` (the game-facing glue, copied into the fork) and `RoyaleSession.h` (host/join layer). |
 | `shared/`, `server/`, `client/` | Match, bots, storm, loot, protocol, `GameServer`, `GameClient`, transports. Plain C++17, unit-tested. |
 | `cmake/royale.cmake` | Pulled into the fork's CMake by patch 0002: builds ENet and our transport and links them into the game. |
@@ -63,21 +63,21 @@ The APK installs as **TDawgs Battle Royale** (`com.tdawg.battleroyale`) and keep
 
 Install it with `adb install` or by copying the APK to the device. Following the fork's own README: open the app, allow the
 file permissions it asks for, answer **Yes** to generating the OTR, **Yes** to looking for a ROM, and pick your ROM file.
-Press **Start** on the title screen to open the Battle Royale menu. The controller's **Back/Select/-** button still opens the Ship of Harkinian menu for graphics and button mapping.
+Press the controller's **Back/Select/-** button to open the menu.
 
 CI builds the APK too (see `.github/workflows/game-build.yml`) and uploads it as a workflow artifact.
 
 ## Playing a match
 
-All players must be running the **same build** (the host rejects a different protocol version). The game loads its own
-Battle Royale save, so there is nothing to pick.
+All players must be running the **same build** (the host rejects a different protocol version). Everyone loads a save and
+stands in **Hyrule Field**: players only see each other there.
 
-1. Press **Start** on the title screen and choose **Play** in the Battle Royale menu.
-2. **Host:** choose **Host a match**, set it up and choose **Open the lobby** (port 7777 unless changed in the settings). **Invite friends** shows your addresses.
+1. Open the menu, go to **Enhancements, OOT Royale**, and open the window.
+2. **Host:** set your name and a port (default 7777) and press **Host**. Share your IP address and port.
    - Same Wi-Fi: use your device's local IP address.
    - Over the internet: forward UDP port 7777 on your router, or have everyone join a VPN such as Tailscale or ZeroTier. (Join codes are planned, not built.)
-3. **Join:** choose **Join a match**, type the host's address and choose **Join**.
-4. The host chooses **Start the match**. Empty slots fill with bots up to 32. After a short countdown everyone is dropped at a
+3. **Join:** enter the host's address and port, press **Join**.
+4. The host presses **Start match**. Empty slots fill with bots up to 32. After a short countdown everyone is dropped at a
    spawn point; the storm closes in; health is controlled by the server.
 5. Keep the game in the foreground on Android while hosting: a backgrounded app can have its sockets paused and players will time out.
 
