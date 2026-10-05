@@ -108,7 +108,9 @@ class GameServer {
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
-        sim.match.SetBossCount((std::min)(bossCount, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
+        // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
+        const int bosses = bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
@@ -719,6 +721,12 @@ class GameServer {
         n.scene = p.scene;
         n.shield = static_cast<uint8_t>(p.shield.item);
         n.shieldRarity = static_cast<uint8_t>(p.shield.rarity);
+        auto worn = [&](GearSlot slot) {
+            const int i = static_cast<int>(slot);
+            return (p.gearMask & (1 << i)) ? static_cast<uint8_t>(p.gear[i].item) : net::PlayerNet::kNoGear;
+        };
+        n.boots = worn(GearSlot::Boots);
+        n.mask = worn(GearSlot::Mask);
         return n;
     }
 

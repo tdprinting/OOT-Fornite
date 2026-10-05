@@ -636,7 +636,220 @@ inline std::vector<Vec2> GenerateAllySpots(uint64_t seed, Circle map, const std:
     return out;
 }
 
+// ---- the Fortnite Map's own places ---------------------------------------------------------------------------------------------------
+// The island's texture has its towns painted on (shared/fortnite_map.h): Tilted Towers' grey blocks, Pleasant Park round its green, the three
+// sheds of Dusty Depot, the farms, the swamp, the dark mass of Wailing Woods. Each named place is built on the spot where the picture has it,
+// with buildings and features made from ordinary props (so bots path round them and every client draws the same), and the toughest ones have a
+// mini boss standing guard. The places are in the order of their names (kPoiNames, the Fortnite Map's list), most famous first: a small match
+// gets the first few, a full one all of them.
+enum class IslandPlace : uint8_t {
+    TiltedTowers, PleasantPark, RetailRow, SaltySprings, LootLake, DustyDepot, GreasyGrove, LonelyLodge, SnobbyShores, ShiftyShafts, FlushFactory,
+    FatalFields, LuckyLanding, HauntedHills, JunkJunction, MoistyMire, AnarchyAcres, WailingWoods, TomatoTown, ParadisePalms, RiskyReels, LazyLinks,
+    FrostyFlights, SweatySands, Count
+};
+constexpr int kIslandPlaceCount = static_cast<int>(IslandPlace::Count);
+static_assert(kIslandPlaceCount == kNamesPerMap, "one place for every name on the Fortnite Map");
+// Where each one is painted, in map units (the texture's pixel times the island's size, see scripts/make_fortnite_map.py; pixel in the comment).
+constexpr Vec2 kIslandSpots[kIslandPlaceCount] = {
+    {-2092, -444},  {-3467, -3454}, {3373, 196},    {550, 1099},    // Tilted Towers (735, 965), Pleasant Park (545, 565), Retail Row (1490, 1050), Salty Springs (1100, 1170)
+    {-174, -2513},  {984, -1008},   {-4227, 1437},  {5255, -1761},  // Loot Lake's east shore (1000, 690), Dusty Depot (1160, 890), Greasy Grove (440, 1215), Lonely Lodge (1750, 790)
+    {-6218, -1234}, {-4046, -519},  {-2418, 5313},  {1274, 3394},   // Snobby Shores (165, 860), Shifty Shafts (465, 955), Flush Factory (690, 1730), Fatal Fields (1200, 1475)
+    {116, 5915},    {-5241, -4733}, {-4698, -6013}, {4459, 4033},   // Lucky Landing (1040, 1810), Haunted Hills (300, 395), Junk Junction (375, 225), Moisty Mire (1640, 1560)
+    {-174, -4545},  {4170, -3266},  {2070, -3078},  {3518, 3206},   // Anarchy Acres (1000, 420), Wailing Woods (1600, 590), Tomato Town (1310, 615), Paradise Palms (1510, 1450)
+    {5473, 1099},   {3011, -4696},  {-2201, 1701},  {3011, -1761},  // Risky Reels (1780, 1170), Lazy Links (1440, 400), Frosty Flights (720, 1250), Sweaty Sands (1440, 790)
+};
+constexpr float kIslandPlaceRadius = 520.0f;
+
+inline void BuildIslandPlace(PoiLayout& out, Rng& rng, IslandPlace what, Vec2 c, float base, const PlacementFn& valid) {
+    using namespace poi_detail;
+    const float pi = 3.14159265f;
+    auto local = [&](float x, float z) { return Rotated({x, z}, base, c); };
+    auto ring = [&](PropKind kind, int n, float r, float phase) {   // n pieces round a circle
+        for (int i = 0; i < n; i++) { const float a = phase + i * 2.0f * pi / n; Piece(out, rng, kind, {std::cos(a) * r, std::sin(a) * r}, base, c, valid); }
+    };
+    auto guard = [&](float x, float z) { const Vec2 p = local(x, z); if (!valid || valid(p)) out.bossSpots.push_back(p); };
+    auto climb = [&](float x, float z) { const Vec2 p = local(x, z); AddClimb(out, p, OutwardDir(p, c), valid); };
+    switch (what) {
+        case IslandPlace::TiltedTowers:   // a tight block of tall buildings round a stepped clock tower, and something nasty in the square
+            AddHouse(out, rng, local(-230, -150), base, valid);
+            AddHouse(out, rng, local(230, -150), base, valid);
+            Ziggurat(out, local(0, 260), valid);
+            climb(-430, 230);
+            guard(0, 60);
+            Spot(out, {-330, 120}, base, c, valid); Spot(out, {330, 120}, base, c, valid);
+            break;
+        case IslandPlace::PleasantPark:   // two houses facing a park: a gazebo post ringed by hedges, a climb behind
+            AddHouse(out, rng, local(-260, -210), base, valid);
+            AddHouse(out, rng, local(260, -210), base, valid);
+            Piece(out, rng, PropKind::Pillar, {0, 160}, base, c, valid);
+            for (int i = 0; i < 6; i++) { const float a = i * pi / 3.0f; Piece(out, rng, PropKind::Bush, {std::cos(a) * 150.0f, 160.0f + std::sin(a) * 150.0f}, base, c, valid); }
+            climb(0, -430);
+            Spot(out, {0, 60}, base, c, valid); Spot(out, {0, 300}, base, c, valid);
+            break;
+        case IslandPlace::RetailRow:      // a row of shops along a street lit by lamp posts, crates (table rocks) out front
+            AddHouse(out, rng, local(-210, -160), base, valid);
+            AddHouse(out, rng, local(210, -160), base, valid);
+            for (int i = 0; i < 4; i++) Piece(out, rng, PropKind::Pillar, {-330.0f + i * 220.0f, 70}, base, c, valid);
+            Stone(out, rng, kTable, {-120, 200}, base, c, valid); Stone(out, rng, kTable, {150, 230}, base, c, valid);
+            climb(0, 400);
+            Spot(out, {0, 130}, base, c, valid);
+            break;
+        case IslandPlace::SaltySprings:   // a house, the ruins of its neighbour and a garden
+            AddHouse(out, rng, local(0, -170), base, valid);
+            AddRuins(out, rng, local(0, 230), base, valid);
+            for (int i = 0; i < 4; i++) Piece(out, rng, PropKind::Bush, {-300.0f + i * 200.0f, 60}, base, c, valid);
+            climb(400, 0);
+            break;
+        case IslandPlace::LootLake:       // the lake house on the shore, rocks at the water's edge and something lurking
+            AddHouse(out, rng, c, base, valid);
+            for (int i = 0; i < 3; i++) Stone(out, rng, i == 1 ? kHuddle : kDome, {-240.0f + i * 240.0f, 300}, base, c, valid);
+            guard(0, -300);
+            Spot(out, {300, -200}, base, c, valid);
+            break;
+        case IslandPlace::DustyDepot:     // two big sheds, crates between them and a lookout climb
+            AddHouse(out, rng, local(-220, 0), base + pi * 0.5f, valid);
+            AddHouse(out, rng, local(220, 0), base + pi * 0.5f, valid);
+            Stone(out, rng, kTable, {0, -240}, base, c, valid); Stone(out, rng, kTable, {0, 240}, base, c, valid);
+            climb(-150, 420);
+            guard(0, 0);
+            break;
+        case IslandPlace::GreasyGrove:    // a diner with its hedges and a well post
+            AddHouse(out, rng, c, base, valid);
+            for (int i = 0; i < 5; i++) Piece(out, rng, PropKind::Bush, {-260.0f + i * 130.0f, 280}, base, c, valid);
+            Piece(out, rng, PropKind::Pillar, {320, -60}, base, c, valid);
+            climb(-380, -200);
+            Spot(out, {0, 200}, base, c, valid);
+            break;
+        case IslandPlace::LonelyLodge:    // the lodge and its tall wooden lookout in the woods
+            AddHouse(out, rng, local(0, -260), base, valid);
+            AddOutpost(out, rng, Outpost::Lookout, local(0, 200), static_cast<int>(rng.Below(4)), valid);
+            Spot(out, {-300, 120}, base, c, valid);
+            break;
+        case IslandPlace::SnobbyShores:   // a villa on the cliffs with its stepped garden
+            AddHouse(out, rng, local(0, -200), base, valid);
+            Ziggurat(out, local(0, 220), valid);
+            break;
+        case IslandPlace::ShiftyShafts:   // the mine: a cave in the hillside, a ridge of spoil and whatever lives in the dark
+            AddCave(out, rng, c, base, valid);
+            AddFormation(out, rng, Formation::Ridge, local(0, -400), base, valid);
+            Spot(out, {250, 260}, base, c, valid);
+            break;
+        case IslandPlace::FlushFactory:   // a walled yard round the factory, a guard inside
+            for (float t = -300.0f; t <= 300.1f; t += 150.0f) {
+                Piece(out, rng, PropKind::Pillar, {t, -300}, base, c, valid);
+                if (std::fabs(t) > 100.0f) Piece(out, rng, PropKind::Pillar, {t, 300}, base, c, valid);   // the gate
+                if (std::fabs(t) < 299.0f) { Piece(out, rng, PropKind::Pillar, {-300, t}, base, c, valid); Piece(out, rng, PropKind::Pillar, {300, t}, base, c, valid); }
+            }
+            AddHouse(out, rng, local(0, -60), base, valid);
+            guard(0, 200);
+            break;
+        case IslandPlace::FatalFields:    // the farm: a barn, a paddock fence and haystacks (bushes)
+            AddHouse(out, rng, local(-260, 0), base, valid);
+            for (int i = 0; i < 4; i++) { Piece(out, rng, PropKind::Pillar, {60.0f + i * 110.0f, -220}, base, c, valid); Piece(out, rng, PropKind::Pillar, {60.0f + i * 110.0f, 220}, base, c, valid); }
+            for (int i = 0; i < 6; i++) Piece(out, rng, PropKind::Bush, {110.0f + (i % 3) * 110.0f, -90.0f + (i / 3) * 180.0f}, base, c, valid);
+            Spot(out, {230, 0}, base, c, valid);
+            break;
+        case IslandPlace::LuckyLanding:   // a temple mound in a ring of standing stones
+            Ziggurat(out, c, valid);
+            for (int i = 0; i < 6; i++) { const float a = base + i * pi / 3.0f; Stone(out, rng, kSlab, {std::cos(a) * 340.0f, std::sin(a) * 340.0f}, 0, c, valid); }
+            Spot(out, {380, 0}, base, c, valid); Spot(out, {-380, 0}, base, c, valid);
+            break;
+        case IslandPlace::HauntedHills:   // the graveyard: rows of tombstones round a ruined chapel, and the dead are restless
+            for (int row = 0; row < 3; row++) for (int col = 0; col < 3; col++) if (row != 1 || col != 1) Piece(out, rng, PropKind::Pillar, {-220.0f + col * 220.0f, -220.0f + row * 220.0f}, base, c, valid);
+            AddRuins(out, rng, local(0, 360), base, valid);
+            guard(0, 0);
+            Spot(out, {0, 110}, base, c, valid);
+            break;
+        case IslandPlace::JunkJunction:   // piles of junk (boulders) to climb over, with a guard in the scrap
+            AddFormation(out, rng, Formation::Pile, local(-200, 0), base, valid);
+            AddFormation(out, rng, Formation::Pile, local(260, 200), base + 1.0f, valid);
+            climb(200, -320);
+            guard(0, 150);
+            Spot(out, {60, -60}, base, c, valid);
+            break;
+        case IslandPlace::MoistyMire:     // the swamp: reed clumps (bushes) and mossy stones, and something hiding in the grass
+            for (int k = 0; k < 4; k++) {
+                const float a = base + k * pi * 0.5f + 0.4f;
+                for (int i = 0; i < 3; i++) Piece(out, rng, PropKind::Bush, {std::cos(a) * 280.0f + (i - 1) * 60.0f, std::sin(a) * 280.0f + (i % 2) * 50.0f}, 0, c, valid);
+            }
+            Stone(out, rng, kHuddle, {-150, 0}, base, c, valid); Stone(out, rng, kSplit, {160, 60}, base, c, valid);
+            guard(0, -80);
+            Spot(out, {0, 160}, base, c, valid);
+            break;
+        case IslandPlace::AnarchyAcres:   // a farmhouse, rows of crops (bushes) and a fence
+            AddHouse(out, rng, local(0, -230), base, valid);
+            for (int i = 0; i < 8; i++) Piece(out, rng, PropKind::Bush, {-300.0f + (i % 4) * 200.0f, 140.0f + (i / 4) * 150.0f}, base, c, valid);
+            for (int i = 0; i < 4; i++) Piece(out, rng, PropKind::Pillar, {-420, -120.0f + i * 130.0f}, base, c, valid);
+            break;
+        case IslandPlace::WailingWoods:   // deep in the woods: a ring of hedges round a circle of standing stones, and its keeper
+            ring(PropKind::Bush, 10, 330.0f, base);
+            AddFormation(out, rng, Formation::Ring, c, base, valid);
+            guard(0, 200);
+            break;
+        case IslandPlace::TomatoTown:     // what is left of the diner, a lamp post either side and a climb to the sign
+            AddRuins(out, rng, c, base, valid);
+            Piece(out, rng, PropKind::Pillar, {-280, 120}, base, c, valid); Piece(out, rng, PropKind::Pillar, {280, 120}, base, c, valid);
+            climb(0, -320);
+            Spot(out, {0, 200}, base, c, valid);
+            break;
+        case IslandPlace::ParadisePalms:  // a hotel by the pool (table rocks) and its hedges
+            AddHouse(out, rng, local(0, -150), base, valid);
+            Stone(out, rng, kTable, {-160, 220}, base, c, valid); Stone(out, rng, kTable, {160, 220}, base, c, valid);
+            for (int i = 0; i < 3; i++) Piece(out, rng, PropKind::Bush, {-200.0f + i * 200.0f, 380}, base, c, valid);
+            break;
+        case IslandPlace::RiskyReels:     // the drive-in: a walled ring to fight in, with posts for the screen
+            AddOutpost(out, rng, Outpost::Arena, c, static_cast<int>(rng.Below(4)), valid);
+            Piece(out, rng, PropKind::Pillar, {-150, -380}, base, c, valid); Piece(out, rng, PropKind::Pillar, {150, -380}, base, c, valid);
+            break;
+        case IslandPlace::LazyLinks:      // the golf course: a flag post on a green ringed by bushes, and a sand trap (table rock)
+            Piece(out, rng, PropKind::Pillar, {0, 0}, base, c, valid);
+            ring(PropKind::Bush, 6, 220.0f, base + 0.3f);
+            Stone(out, rng, kTable, {320, 120}, base, c, valid);
+            Spot(out, {90, 40}, base, c, valid);
+            break;
+        case IslandPlace::FrostyFlights:  // the hangar and its raised runway
+            AddHouse(out, rng, local(0, -260), base, valid);
+            AddOutpost(out, rng, Outpost::Bridge, local(0, 230), 0, valid);
+            break;
+        default:                          // Sweaty Sands: a beach house, its hedges and a climb
+            AddHouse(out, rng, c, base, valid);
+            for (int i = 0; i < 4; i++) Piece(out, rng, PropKind::Bush, {-240.0f + i * 160.0f, 260}, base, c, valid);
+            climb(380, -100);
+            break;
+    }
+}
+
+// The Fortnite Map's layout: its places, as many as the match wants (most famous first), each on its painted spot or as near it as there is
+// ground. A place that won't fit is left out, so a different circle (the tests use one) still gets a sensible map.
+inline PoiLayout GenerateIslandPois(uint64_t seed, Circle map, int count, const PlacementFn& valid) {
+    PoiLayout out;
+    Rng rng(seed ^ 0x69736C65ull);   // "isle"
+    const int wanted = (std::max)(10, (std::min)(kIslandPlaceCount, count * 2));
+    for (int i = 0; i < wanted; i++) {
+        const Vec2 spot = kIslandSpots[i];
+        Vec2 c = spot;
+        bool ok = false;
+        for (int k = 0; k < 25 && !ok; k++) {   // the spot itself, then rings round it
+            const float a = (k - 1) % 8 * 0.785398f, d = k == 0 ? 0.0f : 120.0f * (1 + (k - 1) / 8);
+            c = {spot.x + std::cos(a) * d, spot.z + std::sin(a) * d};
+            ok = (!valid || valid(c)) && Distance(c, map.center) <= map.radius - 150.0f;
+        }
+        if (!ok) continue;
+        Poi p;
+        p.name = static_cast<uint8_t>(kFortniteMapIndex * kNamesPerMap + i);
+        p.center = c;
+        p.radius = kIslandPlaceRadius;
+        out.pois.push_back(p);
+        BuildIslandPlace(out, rng, static_cast<IslandPlace>(i), c, static_cast<float>(rng.Unit() * 6.2831853), valid);
+    }
+    std::vector<Vec2> spots;
+    for (const Vec2& sp : out.lootSpots) if (!valid || valid(sp)) spots.push_back(sp);
+    out.lootSpots = spots;
+    return out;
+}
+
 inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
+    if (ClampMap(mapId) == kFortniteMapIndex) return GenerateIslandPois(seed, map, count, valid);   // the island's places are painted on it
     if (ClampMap(mapId) == 0) return GenerateFieldPois(seed, map, (std::max)(3, (std::min)(8, count - 4)), valid);   // Hyrule Field has places of its own
     PoiLayout out;
     Rng rng(seed ^ 0x706F69ull); // "poi"

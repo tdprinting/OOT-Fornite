@@ -2300,6 +2300,75 @@ static void FortniteMapIsSound() {
     CHECK(dry);
     CHECK(fine.front().x == coarse[0].x && fine.front().z == coarse[0].z && fine.back().x == coarse[3].x && fine.back().z == coarse[3].z);
     CHECK(fine.front().y == coarse[0].y && fine.back().y == coarse[3].y);
+    // Every level of detail lies on the collision's triangles (what you see is what you stand on), and open sea is only ever drawn flat.
+    bool onGround = true;
+    for (int lod = 0; lod < fn::kLods; lod++) {
+        for (int b = 0; b < fn::kCells; b += 7) {
+            std::vector<fn::DrawVert> vs;
+            fn::BlockVertices(b, (b * 5) % fn::kCells, lod, vs);
+            onGround &= vs.size() == static_cast<size_t>(fn::LodVerts(lod));
+            for (const fn::DrawVert& v : vs) {
+                float gy = 0;
+                if (!fn::GroundHeight(std::clamp<float>(v.x, -fn::kHalfX + 0.5f, fn::kHalfX - 0.5f), std::clamp<float>(v.z, -fn::kHalfZ + 0.5f, fn::kHalfZ - 0.5f), &gy)) continue;
+                onGround &= std::fabs(std::max(gy, static_cast<float>(fn::kWaterY)) - v.y) < 3.0f;
+            }
+        }
+    }
+    CHECK(onGround);
+    CHECK(fn::BlockIsOpenWater(0, 0) && fn::BlockIsOpenWater(fn::kCells - 1, fn::kCells - 1));
+    CHECK(!fn::BlockIsOpenWater(static_cast<int>((fn::kSpawnX + fn::kHalfX) / fn::kCellX), static_cast<int>((fn::kSpawnZ + fn::kHalfZ) / fn::kCellZ)));
+    // The lobby spawn is gentle enough to stand on; past the edge there is no ground at all.
+    CHECK(fn::GroundUp(fn::kSpawnX, fn::kSpawnZ) > 0.85f && fn::GroundUp(fn::kHalfX + 5.0f, 0) == 0.0f);
+}
+
+// The Fortnite Map's own places stand on the towns painted on its texture, its trees grow in the painted woods, and its weather is its own.
+static void FortniteIslandPlaces() {
+    namespace fn = royale::fortnite;
+    const Circle map = {{72.0f, -524.0f}, 7400.0f};
+    const PlacementFn land = [](Vec2 p) { float y; return fn::GroundHeight(p.x, p.z, &y) && y > fn::kWaterY + 20 && fn::GroundUp(p.x, p.z) > 0.8f; };
+    const PoiLayout layout = GeneratePois(77, map, 12, land, kFortniteMapIndex);
+    CHECK(layout.pois.size() >= 20);
+    CHECK(!layout.pois.empty() && layout.pois[0].name == kFortniteMapIndex * kNamesPerMap);   // Tilted Towers comes first
+    std::set<int> names;
+    for (const Poi& p : layout.pois) {
+        CHECK(p.name >= kFortniteMapIndex * kNamesPerMap && p.name < (kFortniteMapIndex + 1) * kNamesPerMap);
+        names.insert(p.name);
+        const Vec2 painted = kIslandSpots[p.name - kFortniteMapIndex * kNamesPerMap];
+        CHECK(Distance(p.center, painted) < 650.0f);                          // on its painted town, or right next to it
+        for (const Poi& q : layout.pois) if (&q != &p) CHECK(Distance(p.center, q.center) > 1000.0f);
+    }
+    CHECK(names.size() == layout.pois.size());
+    // Enough of it is built: houses, guards and chests, and it still leaves the match room for loose scenery and the wilds (kMaxProps).
+    int roofs = 0;
+    for (const Prop& pr : layout.props) roofs += pr.kind == PropKind::Roof;
+    CHECK(roofs >= 15);
+    CHECK(layout.bossSpots.size() >= 7);
+    CHECK(layout.lootSpots.size() >= 60);
+    CHECK(layout.props.size() < 650);
+    for (const Prop& pr : layout.props) CHECK(land(pr.pos) || pr.kind == PropKind::Roof);
+    // A small match gets the most famous ones, a different circle (no island at all) still works.
+    CHECK(GeneratePois(77, map, 4, land, kFortniteMapIndex).pois.size() >= 9);
+    CHECK(GeneratePois(77, {{0, 0}, 3000.0f}, 12, nullptr, kFortniteMapIndex).pois.size() >= 3);
+    // Ground cover: the lake is water, Wailing Woods is woods, Tilted Towers is paved, the meadows are the most of the land.
+    auto share = [&](Vec2 c, float r, fn::Cover what) {
+        int n = 0, hit = 0;
+        for (float dx = -r; dx <= r; dx += 40.0f) for (float dz = -r; dz <= r; dz += 40.0f) { n++; hit += fn::CoverAt(c.x + dx, c.z + dz) == what; }
+        return static_cast<float>(hit) / n;
+    };
+    CHECK(share({-1190, -2170}, 250, fn::Cover::Water) > 0.8f);              // Loot Lake
+    CHECK(share(kIslandSpots[static_cast<int>(IslandPlace::WailingWoods)], 500, fn::Cover::Woods) > 0.5f);
+    CHECK(share(kIslandSpots[static_cast<int>(IslandPlace::TiltedTowers)], 250, fn::Cover::Paving) > 0.3f);
+    CHECK(fn::CoverAt(-fn::kHalfX + 10, -fn::kHalfZ + 10) == fn::Cover::Water && fn::CoverAt(fn::kHalfX + 10, 0) == fn::Cover::Water);
+    // The island's weather: winters bring snow, and storms blow in more often than on the field.
+    WeatherOptions o;
+    o.season = 3;
+    int snow = 0;
+    for (int spell = 1; spell < 60; spell++) snow += WeatherForSpell(o, 99, kFortniteMapIndex, spell).sky == Sky::Snow;
+    CHECK(snow > 10);
+    int island[kSkyCount], field[kSkyCount];
+    SkyWeights(kFortniteMapIndex, Season::Spring, island);
+    SkyWeights(0, Season::Spring, field);
+    CHECK(island[static_cast<int>(Sky::Thunder)] > field[static_cast<int>(Sky::Thunder)]);
 }
 
 static void SoloTestHasNoBotsAndKeepsGoing() {
@@ -3441,7 +3510,7 @@ static void BotsUseCoverAndHighGround() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
