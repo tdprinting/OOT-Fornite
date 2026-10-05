@@ -143,7 +143,7 @@ royale::Weather gWeatherShown;
 float gWeatherDensity = 1.0f;       // the local option, 0 to 2
 royale::Vec2 gSignPos = {};         // where the sign in the middle of the map stands (once found)
 bool gSignKnown = false;
-float gClothScale = 1.0f;           // the local option: cloth and wind physics on the hat and glider, 0 (off) to 2
+float gClothScale = 1.0f;           // the local option: cloth and wind physics on the cap, tunic, sheath and glider, 0 (off) to 2
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
 // The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
@@ -8363,29 +8363,32 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
     }
 }
 
-// ---- Link's cap ---------------------------------------------------------------------------------------------------------------
-// The game calls us while it draws the cap's limb (a patch adds the hook, patches/0009): the tail of the cap swings on a spring pushed by the
-// air, which is the wind plus how fast Link is moving, running or falling. Everyone's cap does it, the other players' too.
+// ---- Link's clothes ------------------------------------------------------------------------------------------------------------
+// The game calls us while it draws Link's limbs (patches add the hooks: 0009 for the cap, 0014 for the rest). The tail of the cap, the skirt
+// of the tunic and the sheath on its strap each swing on a spring pushed by the air, which is the wind plus how fast Link is moving, running
+// or falling, and they lag behind when he starts, stops, turns or lands. Everyone's clothes do it: the local player, the other players and
+// the bots (they are all drawn as Player actors).
 struct HatState {
-    royale::HatSpring spring;
+    royale::HatSpring spring;                  // the cap's tail
+    royale::ClothSwing skirt, sheath;          // the tunic's skirt (the waist limb) and the sheath
     float lx = 0, ly = 0, lz = 0;
     float lvx = 0, lvz = 0, lvy = 0;   // last velocity, to feel the acceleration
     double lastT = 0, seen = 0;
     bool have = false;
 };
 std::unordered_map<const void*, HatState> gHats;
+int gClothLimbCalls = 0;       // how many times the game has asked about the tunic (shown in the menu, to prove the hook is wired)
+float gSkirtLastSwing = 0.0f;  // the last skirt swing applied, in degrees
 
-void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
-    gHatHookCalls++;
-    if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
-    const Player* pl = static_cast<const Player*>(playerPtr);
+// Steps every piece of one player's clothing, once per frame however many times the limbs are drawn.
+HatState& StepClothes(const Player* pl) {
     const double now = ImGui::GetTime();
-    HatState& h = gHats[playerPtr];
+    HatState& h = gHats[pl];
     const float x = pl->actor.world.pos.x, y = pl->actor.world.pos.y, z = pl->actor.world.pos.z;
     if (!h.have) { h.lx = x; h.ly = y; h.lz = z; h.lastT = now; h.have = true; }
     h.seen = now;
     const float dt = static_cast<float>(now - h.lastT);
-    if (dt > 0.004f) {   // (the limb is drawn more than once a frame sometimes: only step when time has passed)
+    if (dt > 0.004f) {   // (the limbs are drawn more than once a frame sometimes: only step when time has passed)
         const float vx = std::clamp((x - h.lx) / dt, -900.0f, 900.0f), vy = std::clamp((y - h.ly) / dt, -1500.0f, 1500.0f), vz = std::clamp((z - h.lz) / dt, -900.0f, 900.0f);
         h.lx = x; h.ly = y; h.lz = z; h.lastT = now;
         float wx, wz, wind;
@@ -8393,18 +8396,113 @@ void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
         const float ax = wx - vx, az = wz - vz;
         const float yaw = pl->actor.shape.rot.y * (3.14159265f / 32768.0f), c = std::cos(yaw), sn = std::sin(yaw);
         // The air in Link's frame: x to his left, z in front of him. (Running forward makes air stream back over the cap.)
-        // Link's own acceleration (in his frame) kicks the cap the opposite way: it lags behind a start, and swings forward when he stops or lands.
+        // Link's own acceleration (in his frame) kicks the cloth the opposite way: it lags behind a start, and swings forward when he stops or lands.
         const float dvx = vx - h.lvx, dvz = vz - h.lvz, dvy = vy - h.lvy;
         h.lvx = vx; h.lvz = vz; h.lvy = vy;
         const float accSide = dvx * c - dvz * sn, accFore = dvx * sn + dvz * c;
-        h.spring.Step(std::min(dt, 0.1f), (ax * c - az * sn) * gClothScale, (ax * sn + az * c) * gClothScale, -vy * gClothScale, wind * gClothScale,
-                      static_cast<float>(now), static_cast<float>(reinterpret_cast<uintptr_t>(playerPtr) % 61),
+        const float airX = (ax * c - az * sn) * gClothScale, airZ = (ax * sn + az * c) * gClothScale;
+        const float step = std::min(dt, 0.1f), t = static_cast<float>(now);
+        const float phase = static_cast<float>(reinterpret_cast<uintptr_t>(pl) % 61);
+        h.spring.Step(step, airX, airZ, -vy * gClothScale, wind * gClothScale, t, phase,
                       (accFore * 0.0035f + dvy * 0.0016f) * gClothScale, accSide * 0.0035f * gClothScale);
+        // Ground speed drives the stride's flap. In the water or hanging on a ledge, the stride is not a run, so it doesn't flap.
+        const bool stride = (pl->actor.bgCheckFlags & 1) && !(pl->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER));
+        const float ground = stride ? std::sqrt(vx * vx + vz * vz) * gClothScale : 0.0f;
+        const float fall = std::max(0.0f, -vy) * gClothScale;
+        // A landing (a sudden stop in falling) throws the skirt up-and-forward too.
+        const float landKick = std::max(0.0f, dvy) * 0.6f;
+        h.skirt.Step(royale::kSkirtSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase, (accFore - landKick) * gClothScale, accSide * gClothScale);
+        h.sheath.Step(royale::kSheathSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase + 2.0f, (accFore - landKick) * gClothScale, accSide * gClothScale);
     }
+    return h;
+}
+
+void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
+    gHatHookCalls++;
+    if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
+    HatState& h = StepClothes(static_cast<const Player*>(playerPtr));
     const float toBinary = 32768.0f / 3.14159265f;
     gHatLastSwing = h.spring.fore * 57.2958f;
     rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.spring.fore * toBinary));   // fore and aft: the limb's pitch
     rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(h.spring.side * toBinary));   // sideways: its yaw
+}
+
+// The tunic's skirt is part of the waist limb, which every other limb hangs from. So the waist is swung, and each limb hanging straight off it
+// turns back by exactly the same amount before its own joint is applied: the skirt sways, the legs and the upper body stay where the
+// animation put them. Which limbs hang off the waist is read from the skeleton itself (custom Link models may differ), once per skeleton.
+struct WaistSwing {
+    const void* player = nullptr;
+    s16 before[3] = {}, after[3] = {};
+    bool active = false;
+};
+WaistSwing gWaistSwing;
+std::unordered_map<const void*, uint32_t> gWaistChildren;   // skeleton -> bit mask of the limbs hanging straight off the waist
+
+uint32_t WaistChildrenOf(const Player* pl) {
+    void** skel = pl->skelAnime.skeleton;
+    if (skel == nullptr) return 0;
+    auto it = gWaistChildren.find(skel);
+    if (it != gWaistChildren.end()) return it->second;
+    uint32_t mask = 0;
+    const int count = std::min<int>(pl->skelAnime.limbCount, 31);
+    const LodLimb* waist = static_cast<const LodLimb*>(SEGMENTED_TO_VIRTUAL(skel[PLAYER_LIMB_WAIST - 1]));
+    if (waist != nullptr && count >= PLAYER_LIMB_WAIST) {
+        int child = waist->child;
+        for (int guard = 0; child != LIMB_DONE && child < count && guard < 32; guard++) {
+            mask |= 1u << (child + 1);   // the skeleton counts from 0, the draw hooks from 1
+            const LodLimb* limb = static_cast<const LodLimb*>(SEGMENTED_TO_VIRTUAL(skel[child]));
+            if (limb == nullptr) break;
+            child = limb->sibling;
+        }
+    }
+    if (gWaistChildren.size() > 16) gWaistChildren.clear();
+    gWaistChildren[skel] = mask;
+    return mask;
+}
+
+bool SheathHasChildren(const Player* pl) {
+    void** skel = pl->skelAnime.skeleton;
+    if (skel == nullptr || pl->skelAnime.limbCount < PLAYER_LIMB_SHEATH) return true;
+    const LodLimb* sheath = static_cast<const LodLimb*>(SEGMENTED_TO_VIRTUAL(skel[PLAYER_LIMB_SHEATH - 1]));
+    return sheath == nullptr || sheath->child != LIMB_DONE;
+}
+
+void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
+    if (limbIndex == PLAYER_LIMB_WAIST) {
+        gClothLimbCalls++;
+        gWaistSwing.active = false;
+        if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
+        const Player* pl = static_cast<const Player*>(playerPtr);
+        if (WaistChildrenOf(pl) == 0) return;   // can't tell what hangs off the waist: leave this model alone
+        HatState& h = StepClothes(pl);
+        const float toBinary = 32768.0f / 3.14159265f;
+        gSkirtLastSwing = h.skirt.fore * 57.2958f;
+        gWaistSwing.player = playerPtr;
+        for (int i = 0; i < 3; i++) gWaistSwing.before[i] = rot[i];
+        rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.skirt.fore * toBinary));   // fore and aft
+        rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(h.skirt.side * toBinary));   // sideways
+        for (int i = 0; i < 3; i++) gWaistSwing.after[i] = rot[i];
+        gWaistSwing.active = true;
+        return;
+    }
+    if (!gWaistSwing.active || playerPtr == nullptr) return;
+    if (limbIndex == PLAYER_LIMB_SHEATH && gWaistSwing.player == playerPtr && !SheathHasChildren(static_cast<const Player*>(playerPtr))) {
+        auto it = gHats.find(playerPtr);
+        if (it != gHats.end()) {
+            const float toBinary = 32768.0f / 3.14159265f;
+            rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(it->second.sheath.fore * toBinary));
+            rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(it->second.sheath.side * toBinary));
+        }
+    }
+    if (gWaistSwing.player != playerPtr || limbIndex < 0 || limbIndex > 31) return;
+    if (!(WaistChildrenOf(static_cast<const Player*>(playerPtr)) & (1u << limbIndex))) return;
+    // Undo the waist's swung joint rotation (it was applied Z, then Y, then X), then apply the unswung one: this limb's frame is exactly
+    // what it would have been.
+    const float toRad = 3.14159265f / 32768.0f;
+    Matrix_RotateX(-gWaistSwing.after[0] * toRad, MTXMODE_APPLY);
+    Matrix_RotateY(-gWaistSwing.after[1] * toRad, MTXMODE_APPLY);
+    Matrix_RotateZ(-gWaistSwing.after[2] * toRad, MTXMODE_APPLY);
+    Matrix_RotateZYX(gWaistSwing.before[0], gWaistSwing.before[1], gWaistSwing.before[2], MTXMODE_APPLY);
 }
 
 void ForgetOldHats() {
@@ -8826,6 +8924,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerClothLimb>(OnPlayerClothLimb);
     // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
     // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {
@@ -9323,11 +9422,12 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
         ImGui::SetNextItemWidth(280);
-        if (ImGui::Checkbox("Cloth physics (hats and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+        if (ImGui::Checkbox("Cloth physics (caps, tunics and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
         if (ui.clothOn) {
             ImGui::SetNextItemWidth(280);
             if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
-            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames", gHatHookCalls, gHatLastSwing, gGliderClothFrames);
+            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
+                               gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
         }
         static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
         ImGui::SetNextItemWidth(280);

@@ -570,7 +570,7 @@ Everything below is implemented, covered by the server tests, and described for 
 | Hireable allies (four kinds, follow and fight, healed or freed when the owner falls) | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
 | Climbs, hideaway chests, spaced chest sites | `shared/poi.h`, `shared/loot.h` |
 | Smarter bots (rolls, lock-on footwork, hazards, calm opening, gear first, magic aware) | `server/bot.h` |
-| Cloth and wind (glider canopy, cap tail) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch` |
+| Cloth and wind (glider canopy, cap tail, tunic skirt, sheath) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch`, `patches/0014-player-cloth-limb-hook.patch` |
 | Match replay (recorded by the server, sent at the end, drawn top-down) | `shared/replay.h`, `server/match.h` (`TickReplay`) |
 | Logo everywhere (launcher icons, title screen, menus) | `assets/logo.png`, `scripts/make_logo_assets.py`, `scripts/apply_logo.sh` |
 | The sign in the middle of every map, and Maya the Kokiri | `RoyaleMod.cpp` (sign, Maya), `shared/map.h` |

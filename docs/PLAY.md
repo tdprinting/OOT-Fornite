@@ -122,7 +122,7 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Magic.** A green bar under your shield bar. Abilities cost magic (the white tick shows what yours costs), it refills slowly, and Magic Jars top it up.
 - **Heart Container chests.** A few hidden and climb chests are pink and hold an extra heart. **Adult Power**, a very rare Legendary find, makes you bigger for a minute: you hit harder, take less and run faster.
 - **Climbs.** Stone block staircases (jump and clamber) with the best chest on top; some chests are hidden behind boulders.
-- **Cloth and wind.** The glider's canopy is simulated cloth and Link's cap swings in the wind. There is a slider in the lobby for how much.
+- **Cloth and wind.** The glider's canopy is simulated cloth, and Link's cap, tunic and sheath swing as he runs, stops, jumps and falls, and in the wind (harder in storms and bad weather). Every player and bot does it. There is a slider in the lobby for how much.
 - **The sign and Maya.** A sign stands in the middle of every map and a little Kokiri called Maya somewhere on it: press **A** at the sign to read it and next to Maya to talk to her. Both answer in the game's own text box, like any NPC.
 - **Match replay.** When a match ends, a top-down replay of it plays beside the results.
 - **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
