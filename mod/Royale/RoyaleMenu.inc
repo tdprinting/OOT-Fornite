@@ -332,6 +332,7 @@ struct MenuState {
     struct Hit { ImVec2 a, b; int index; };
     std::vector<Hit> hits;
     float selTop = 0.0f, selBottom = 0.0f;
+    double sohSeenAt = -10;    // the last time the port's own menu was on screen
     int outOfGameFrames = 0;   // frames in a row without a player in the scene (a scene change); the menu closes only after a while
     bool mouseMoved = false;
     ImVec2 lastMouse = ImVec2(-1, -1);
@@ -371,8 +372,10 @@ void MenuOpen(Page page) {
 }
 void MenuOpenHome() { MenuOpen(HomePage()); }
 
-void MenuClose() {
+// `why` is given when the game (not the player) closes the menu: it is shown for a few seconds, so a menu that vanishes says why.
+void MenuClose(const char* why = nullptr) {
     if (!gMenu.open) return;
+    if (why != nullptr) ShowNote(std::string("The menu closed: ") + why, IM_COL32(255, 200, 90, 255), 8.0f);
     gMenu.open = false;
     gMenu.stack.clear();
     gMenu.swallow = 3;
@@ -433,7 +436,7 @@ void LaunchFromTitle(Launch what) {
 void OnMenuMainStart() {
     if (gGameState == nullptr) return;
     Input& in = gGameState->input[0];
-    if (gGameState->init != Play_Init) { gMenu.launching = false; if (gMenu.open) MenuClose(); return; }
+    if (gGameState->init != Play_Init) { gMenu.launching = false; if (gMenu.open) MenuClose("the game left its play screen"); return; }
 
     if (gMenu.passStart) {   // "Item screen": let one Start through so the game opens its own pause screen
         gMenu.passStart = false;
@@ -445,7 +448,7 @@ void OnMenuMainStart() {
     const bool title = OnTitleScreen();
     // Leaving a scene (the waiting room, the map) takes the player away for a moment: that must not close the menu, only really being out of the game does.
     gMenu.outOfGameFrames = InGame() ? 0 : gMenu.outOfGameFrames + 1;
-    if (!title && gMenu.outOfGameFrames > 2 * royale::kTickHz && gMenu.open) MenuClose();
+    if (!title && gMenu.outOfGameFrames > 2 * royale::kTickHz && gMenu.open) MenuClose("there is no player in the scene");
     if (title && gMenu.launching) { ClearInput(in); return; }
 
     if (!gMenu.open) {
@@ -1434,7 +1437,11 @@ void DrawMenu() {
     const float fade = std::clamp(c.t / 0.18f, 0.0f, 1.0f);
     ImGuiIO& io = ImGui::GetIO();
     c.mouse = io.MousePos;
-    c.tap = ImGui::IsMouseClicked(0) && !(SohGui::mSohMenu && SohGui::mSohMenu->IsVisible());
+    // A touch or click that opens the menu (the on-screen Start button, or the "Open the Battle Royale menu" button in the port's own menu)
+    // lands on this menu's first frames as well: it must not press a row, or the "Return" prompt, behind the finger.
+    const bool sohOpen = SohGui::mSohMenu && SohGui::mSohMenu->IsVisible();
+    if (sohOpen) gMenu.sohSeenAt = now;
+    c.tap = ImGui::IsMouseClicked(0) && !sohOpen && c.t > 0.35f && now - gMenu.sohSeenAt > 0.35;
 
     // The world behind dims (lighter on the title screen, so its flight over Hyrule Field shows through).
     const bool title = OnTitleScreen();
