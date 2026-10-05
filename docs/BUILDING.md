@@ -106,7 +106,7 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 - **Attacks are simple.** B attacks with the server-side weapon at the nearest player in a 90 degree cone in front of you, within weapon range. Hit
   detection is therefore generous. Ranged weapons do not fire visible projectiles yet.
 - **Loot looks like rupees.** The game's own rupee models in five colors, plus a name label. No custom models.
-- **Bots do not know the terrain.** They move in straight lines on a flat plane and are drawn on the real floor, so they can pass through walls.
+- **Bots only know the terrain at 60-unit resolution.** The host measures the floor once per match; bots climb ledges and blocks and avoid cliffs and water from that, so a narrow gap or a thin wall can still fool them.
 - **Health is overridden during a live match.** The mod saves your real hearts when the match goes live and restores them when
   you leave or it ends, but if the game crashes or you save mid-match your save file could keep the 3-heart value. Use a
   throwaway save for testing.

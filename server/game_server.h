@@ -63,10 +63,12 @@ class GameServer {
 
     // The host measured the real playable area and wants the lobby's world rebuilt on it: new map circle, loot and storm placed only
     // on positions `valid` accepts (e.g. "there is floor here"). Lobby only; players, ready flags and connections are kept.
-    // Everyone is sent the new map, storm circles and loot in one reliable message.
-    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 150, uint64_t seedOffset = 0) {
+    // `height` measures the floor, so the bots know the ledges, cliffs and hills (see NavGrid). Everyone is sent the new map, storm circles and
+    // loot in one reliable message.
+    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 150, uint64_t seedOffset = 0, HeightFn height = nullptr) {
         if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
         lastValid = valid;
+        lastHeight = height;
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
@@ -112,8 +114,8 @@ class GameServer {
         sim.match.SetPlayerLimit(playerLimit);
         sim.match.SetSoloTest(soloTest);
         if (valid) {
-            auto grid = std::make_shared<NavGrid>(map, valid);
-            for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
+            auto grid = std::make_shared<NavGrid>(map, valid, height);
+            AddSceneryToNav(*grid, props);
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
         }
@@ -173,7 +175,7 @@ class GameServer {
 
     bool PlayAgain() {
         if (sim.match.State() != MatchState::Ending) return false;
-        if (!Reconfigure(mapCircle, lastValid, lastLootCount, FreshSeedOffset())) return false;
+        if (!Reconfigure(mapCircle, lastValid, lastLootCount, FreshSeedOffset(), lastHeight)) return false;
         return StartMatch();
     }
 
@@ -790,6 +792,7 @@ class GameServer {
     float autoStartSec = 0;
     float lobbyElapsed = 0;
     PlacementFn lastValid;
+    HeightFn lastHeight;
     int lastLootCount = 150;
     Circle mapCircle;
     std::vector<Client> clients;

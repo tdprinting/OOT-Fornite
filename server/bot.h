@@ -25,6 +25,10 @@ enum class BotDifficulty : uint8_t { Easy, Normal, Hard };
 //   Decide     in priority order: heal, stay inside the storm, flee a losing fight, fight, loot, hunt, then drift to a good spot.
 //   Act        paths around walls and water with A* (if the host gave it a NavGrid), strafes and dodges in fights, kites melee
 //              enemies when it has range, and uses its ability and consumables when they matter.
+// And it gets about the way a player does: it skydives in at the start (picking a landing spot with chests near it, diving when it can
+// still reach it), sprints on the same stamina bar players have, jumps up ledges and onto climbing blocks and low boulders, drops off
+// small ledges and goes round cliffs and water. It uses the ground in a fight: it can't see or shoot through rocks and hills, so it takes
+// cover behind them to heal or to get away from a bow, and a bot with a bow likes to fight from higher ground.
 // Each bot has its own personality (aggression, caution, greed) so they don't all behave alike. Difficulty changes how well
 // they aim, how fast they react, how far they see and how much they use abilities.
 class BotController {
@@ -45,7 +49,24 @@ class BotController {
     void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); }
     // The scenery, so bots cut bushes and break rocks for rupees and ammo the way players do. The server breaks the prop (SmashProp) for
     // each request DrainSmashes() hands it, and tells the bots about every prop anybody breaks (PropGone).
-    void SetProps(std::vector<Prop> list) { props = std::move(list); propGone.assign(props.size(), false); smashes.clear(); }
+    void SetProps(std::vector<Prop> list) {
+        props = std::move(list); propGone.assign(props.size(), false); smashes.clear();
+        // What can be stood on, bucketed so a bot finds what is under it quickly (LiftAt).
+        stands.clear(); standBuckets.clear();
+        for (const Prop& p : props) {
+            if (PropRadius(p.kind) <= 0) continue;
+            const float top = SceneryHeight(p);
+            Stand st{p.pos, kPlatformHalf, top, true};
+            if (!IsPlatform(p.kind)) {
+                if (p.kind != PropKind::Boulder || top > NavGrid::kClimbUp) continue;
+                st = {p.pos, PropRadius(p.kind) * BoulderScale(p.rot) * 0.8f, top, false};
+            }
+            const int idx = static_cast<int>(stands.size());
+            stands.push_back(st);
+            const int x0 = Bucket(st.at.x - st.half), x1 = Bucket(st.at.x + st.half), z0 = Bucket(st.at.z - st.half), z1 = Bucket(st.at.z + st.half);
+            for (int bx = x0; bx <= x1; bx++) for (int bz = z0; bz <= z1; bz++) standBuckets[BucketKey(bx, bz)].push_back(idx);
+        }
+    }
     void PropGone(size_t index) { if (index < propGone.size()) propGone[index] = true; }
     std::vector<std::pair<uint32_t, size_t>> DrainSmashes() { std::vector<std::pair<uint32_t, size_t>> out; out.swap(smashes); return out; }
     bool HasNav() const { return nav != nullptr; }
@@ -53,15 +74,24 @@ class BotController {
     BotDifficulty Difficulty() const { return difficulty; }
 
     void Step(Match& m, float dt) {
-        if (m.State() != MatchState::Drop && m.State() != MatchState::InMatch) return;
+        const MatchState state = m.State();
+        if (state != MatchState::Countdown && state != MatchState::Drop && state != MatchState::InMatch) return;
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
         repathBudget = 8;
         StepAllies(m, dt);
-        // Bots are "in the air" for most of the drop, so they land and start looting when the humans do, not before.
-        if (m.State() == MatchState::Drop && m.StateTime() < kDropSec * 0.65f) return;
         for (auto& p : m.Players()) {
             if (p.isBot && p.alive) {
+                Memory& air = Mem(p.id);
+                if (!air.started) {   // a bot that is there from the countdown or the drop starts in the sky, like the players
+                    air.started = true;
+                    air.airborne = state != MatchState::InMatch;
+                    if (air.airborne) { air.lift = kSkyHeight; ChooseLanding(m, p, air, soon); }
+                }
+                if (air.airborne) { Glide(m, p, air, soon, dt); continue; }
+                if (state == MatchState::Countdown) continue;
                 Act(m, p, soon, dt);
+                FollowGround(m, p, air, dt);
+                UpdateStamina(air, dt);
                 const Memory& mem = Mem(p.id);
                 Memory& mm = Mem(p.id);
                 if (m.Clock() >= mm.actUntil && mm.queuedFor > 0 && !m.Stunned(p)) {   // the chest is open: hold up what was inside
@@ -148,7 +178,7 @@ class BotController {
     bool Advance(const Match& m, Vec2& pos, float dx, float dz, float dist) {
         PlayerState tmp;
         tmp.pos = pos;
-        const bool moved = Advance(m, tmp, dx, dz, dist);
+        const bool moved = Advance(m, tmp, dx, dz, dist, false);
         pos = tmp.pos;
         return moved;
     }
@@ -236,6 +266,26 @@ class BotController {
         int propIdx = -1;              // the bush or rock it is walking to
         float propEvalAt = 0;
         bool paused = false;           // wandering: stopping for a look round at each spot
+        // getting about like a player: the skydive, sprinting, climbing
+        bool started = false;          // has been seen by Step (decides whether it starts in the sky)
+        bool airborne = false;         // still skydiving
+        Vec2 landAt = {};              // where it is gliding to
+        bool diving = false;
+        float lift = 0;                // height above the scene's floor, sent to clients as its y: a block or boulder top, a fall, the sky
+        float vy = 0;                  // falling speed off a ledge
+        float lastFloor = 0;
+        bool haveFloor = false;
+        float stamina = 1, staminaRest = 0;
+        bool sprintWish = false;       // this tick's plan would like a sprint
+        bool sprintUrgent = false;     // ... and it is running for its life (the storm, a losing fight), so it may spend the last of the bar
+        bool sprinting = false, sprintedThisTick = false;
+        Vec2 cover = {};               // a spot out of sight of the foe, behind scenery or a rise
+        bool haveCover = false;
+        float coverEvalAt = 0;
+        uint32_t coverFrom = kNoPlayer;
+        Vec2 perch = {};               // higher ground to shoot from
+        bool havePerch = false;
+        float perchEvalAt = 0;
     };
 
     Rng rng;
@@ -246,6 +296,12 @@ class BotController {
     std::vector<Prop> props;                          // the scenery (SetProps)
     std::vector<bool> propGone;                       // broken by somebody, or about to be by a bot
     std::vector<std::pair<uint32_t, size_t>> smashes; // bot id, prop index: waiting for the server to break them
+    struct Stand { Vec2 at; float half; float top; bool square; };   // scenery that can be stood on: a block (square) or a low boulder (round)
+    std::vector<Stand> stands;
+    std::unordered_map<int64_t, std::vector<int>> standBuckets;
+    static constexpr float kBucket = 256.0f;
+    static int Bucket(float v) { return static_cast<int>(std::floor(v / kBucket)); }
+    static int64_t BucketKey(int bx, int bz) { return static_cast<int64_t>((static_cast<uint64_t>(static_cast<uint32_t>(bx)) << 32) | static_cast<uint32_t>(bz)); }
 
     Memory& Mem(uint32_t id) {
         auto it = memory.find(id);
@@ -372,9 +428,183 @@ class BotController {
     }
 
     bool Walkable(Vec2 p) const { return !nav || nav->Walkable(p); }
+    bool Standable(Vec2 p) const { return !nav || nav->Standable(p); }
+
+    // ---- the ground under a bot -----------------------------------------------------------------------------------------------
+
+    // The top of the block or low boulder at p (0 when there is none): what a bot standing there is lifted onto.
+    float LiftAt(Vec2 p) const {
+        auto it = standBuckets.find(BucketKey(Bucket(p.x), Bucket(p.z)));
+        if (it == standBuckets.end()) return 0.0f;
+        float top = 0;
+        for (int i : it->second) {
+            const Stand& st = stands[static_cast<size_t>(i)];
+            const bool in = st.square ? std::fabs(p.x - st.at.x) <= st.half && std::fabs(p.z - st.at.z) <= st.half : Distance(p, st.at) <= st.half;
+            if (in) top = (std::max)(top, st.top);
+        }
+        return top;
+    }
+    // Where a bot standing at p has its feet (0 for flat maps).
+    float FeetAt(Vec2 p) const { return (nav ? nav->FloorAt(p) : 0.0f) + (nav ? LiftAt(p) : 0.0f); }
+    // Eye height of anyone, for who can see whom. Humans send their own height; a bot's y is its height above the floor.
+    float EyeOf(const PlayerState& o) const {
+        if (!nav) return 45.0f;
+        return (o.isBot ? nav->FloorAt(o.pos) + o.y : (nav->HasHeights() ? o.y : FeetAt(o.pos))) + 45.0f;
+    }
+    // Can someone with their eyes at (a, ya) see (b, yb)? Hills and the taller scenery in between hide them.
+    bool Sees(Vec2 a, float ya, Vec2 b, float yb) const {
+        if (!nav) return true;
+        const float len = Distance(a, b);
+        const int steps = static_cast<int>(len / 40.0f);
+        for (int i = 1; i < steps; i++) {
+            const float t = static_cast<float>(i) / static_cast<float>(steps);
+            if (t * len < 45.0f || (1.0f - t) * len < 45.0f) continue;   // what you are standing on doesn't hide you
+            const Vec2 at = {a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t};
+            if (nav->TopAt(at) > ya + (yb - ya) * t) return false;
+        }
+        return true;
+    }
+    bool CanSee(const PlayerState& p, const PlayerState& o) const { return Sees(p.pos, EyeOf(p), o.pos, EyeOf(o)); }
+
+    // Can a bot step from a to b? Without a grid anywhere goes; with one, b must be ground or scenery to stand on, and the height between
+    // them no more than a clamber up (NavGrid::kClimbUp) or a safe drop down (NavGrid::kDropDown).
+    bool CanStep(Vec2 a, Vec2 b) const {
+        if (!nav) return true;
+        if (!nav->Standable(b)) return false;
+        return NavGrid::StepOk(FeetAt(a), FeetAt(b));
+    }
+
+    // After moving: keep the bot's height in step with the ground. Up a ledge or onto a block is a jump (shown, and lifted on every
+    // client); off one it falls, so it doesn't snap down the side of a cliff.
+    void FollowGround(Match& m, PlayerState& p, Memory& mem, float dt) {
+        if (!nav) { p.y = 0; return; }
+        const float floorY = nav->FloorAt(p.pos);
+        const float target = LiftAt(p.pos);
+        if (mem.haveFloor) {
+            const float dF = floorY - mem.lastFloor;
+            if (dF < -NavGrid::kStepUp) mem.lift -= dF;                    // walked off a ledge: still up where it was, for now
+            else if (dF > NavGrid::kStepUp) Jump(m, mem);                 // up a ledge of the ground itself
+        }
+        mem.lastFloor = floorY;
+        mem.haveFloor = true;
+        if (target > mem.lift + 1.0f) {
+            if (target - mem.lift > NavGrid::kStepUp * 0.5f) Jump(m, mem);   // onto a block or a boulder
+            mem.lift = (std::min)(target, mem.lift + 700.0f * dt);
+            mem.vy = 0;
+        } else if (mem.lift > target + 0.5f) {
+            mem.vy -= 1400.0f * dt;                                       // falling
+            mem.lift += mem.vy * dt;
+            if (mem.lift <= target) { mem.lift = target; mem.vy = 0; }
+        } else {
+            mem.lift = target; mem.vy = 0;
+        }
+        p.y = mem.lift;
+    }
+
+    // ---- the skydive ----------------------------------------------------------------------------------------------------------
+
+    // Where to land: like a player, a bot glides for a spot it can reach with chests close by, inside the first safe zone. Greedy bots want
+    // the most loot; aggressive ones don't mind a crowd (a hot drop), the rest look for a spot no other bot is heading for.
+    void ChooseLanding(const Match& m, const PlayerState& p, Memory& mem, const Circle& zone) {
+        const float reach = kAirSpeed * (kSkyHeight / kGlideSpeed) * 0.8f;
+        const auto& loot = m.Loot();
+        Vec2 best = p.pos;
+        float bestScore = -1e9f;
+        auto consider = [&](Vec2 c, float bonus) {
+            const float d = Distance(p.pos, c);
+            if (d > reach || !zone.Contains(c) || !Standable(c)) return;
+            int chests = 0;
+            for (const LootEntry& l : loot) if (!l.taken && l.spawn.container && Distance(l.spawn.pos, c) < 450.0f) chests++;
+            int crowd = 0;
+            for (const auto& [id, other] : memory) if (id != p.id && other.airborne && Distance(other.landAt, c) < 500.0f) crowd++;
+            const float score = (bonus + static_cast<float>(chests)) * (0.6f + mem.greed) * (0.75f + 0.5f * static_cast<float>(rng.Unit()))
+                                / (1.0f + static_cast<float>(crowd) * (1.3f - mem.aggression)) - 0.6f * d / reach;
+            if (score > bestScore) { bestScore = score; best = c; }
+        };
+        for (const LootEntry& l : loot) if (!l.taken && l.spawn.container) consider(l.spawn.pos, 0.5f);
+        for (int i = 0; i < 6; i++) {   // and a few spots out in the open, for the bots that want to be left alone
+            const float a = static_cast<float>(rng.Unit() * 6.283185307179586), d = reach * std::sqrt(static_cast<float>(rng.Unit()));
+            consider({p.pos.x + std::sin(a) * d, p.pos.z + std::cos(a) * d}, 0.2f + 0.8f * (1.0f - mem.aggression));
+        }
+        if (nav && !nav->Standable(best)) { Vec2 snapped; if (nav->Snap(best, &snapped, true)) best = snapped; }
+        mem.landAt = best;
+    }
+
+    // Hang in the sky through the countdown, then glide to the landing spot: dive once diving still gets there in time (a good bot dives
+    // the moment it can; a poorer one leaves it later), glide otherwise. Still up when the drop ends: straight down.
+    void Glide(Match& m, PlayerState& p, Memory& mem, const Circle& zone, float dt) {
+        p.anim = static_cast<uint8_t>(Anim::Idle);
+        p.y = mem.lift;
+        if (m.State() == MatchState::Countdown) return;
+        if (!zone.Contains(mem.landAt) && rng.Unit() < 0.05f) ChooseLanding(m, p, mem, zone);
+        const float d = Distance(p.pos, mem.landAt);
+        const float timeToReach = d / kAirSpeed;
+        float fall = kLateFallSpeed;
+        if (m.State() == MatchState::Drop) {
+            mem.diving = timeToReach <= mem.lift / kDiveSpeed * (0.55f + 0.45f * mem.skill);
+            fall = mem.diving ? kDiveSpeed : kGlideSpeed;
+        }
+        if (d > 1.0f) {
+            const float step = (std::min)(d, kAirSpeed * dt);
+            p.pos = {p.pos.x + (mem.landAt.x - p.pos.x) / d * step, p.pos.z + (mem.landAt.z - p.pos.z) / d * step};
+            p.rot = FaceAngle(p.pos, mem.landAt);
+        }
+        const float ground = nav ? LiftAt(p.pos) : 0.0f;
+        mem.lift -= fall * dt;
+        if (mem.lift <= ground) {   // touched down
+            if (nav && !nav->Standable(p.pos)) { Vec2 snapped; if (nav->Snap(p.pos, &snapped, true)) p.pos = snapped; }
+            mem.airborne = false;
+            mem.lift = nav ? LiftAt(p.pos) : 0.0f;
+            mem.vy = 0;
+            mem.haveFloor = false;
+        }
+        p.y = mem.lift;
+    }
+
+    // ---- sprinting -------------------------------------------------------------------------------------------------------------
+
+    // Is the target running away from it (as a fleeing player does)?
+    static bool GettingAway(const Memory& mem, const PlayerState& p, const PlayerState& foe) {
+        const float dx = foe.pos.x - p.pos.x, dz = foe.pos.z - p.pos.z, len = (std::max)(1.0f, std::hypot(dx, dz));
+        return (mem.foeVel.x * dx + mem.foeVel.z * dz) / len > kRunSpeed * 0.6f;
+    }
+
+    // Ask for a sprint on this tick's running. Easy bots only think of it when they must.
+    static void WantSprint(Memory& mem, const Tuning& tune, bool urgent) {
+        if (!urgent && !tune.hunt) return;
+        mem.sprintWish = true;
+        mem.sprintUrgent |= urgent;
+    }
+
+    // The speed multiplier for a stretch of running this tick: a sprint if the plan wants one and there is stamina (it takes a bit more to start
+    // one than to keep going), plain running otherwise.
+    float SprintScale(Memory& mem) {
+        if (!mem.sprintWish) return 1.0f;
+        const float keep = mem.sprintUrgent ? 0.0f : 0.35f;   // a bot keeps some of the bar for getting away, unless this is getting away
+        const bool can = mem.sprinting ? mem.stamina > keep : mem.stamina >= kSprintMinStamina + keep;
+        if (!can) return 1.0f;
+        mem.sprintedThisTick = true;
+        return kSprintMult;
+    }
+    // The same bar players have: drains while sprinting, refills after a short rest.
+    static void UpdateStamina(Memory& mem, float dt) {
+        mem.sprinting = mem.sprintedThisTick;
+        mem.sprintedThisTick = false;
+        mem.sprintWish = false;
+        mem.sprintUrgent = false;
+        if (mem.sprinting) {
+            mem.stamina = (std::max)(0.0f, mem.stamina - dt / kSprintSeconds);
+            mem.staminaRest = kStaminaRest;
+        } else if (mem.staminaRest > 0) {
+            mem.staminaRest -= dt;
+        } else {
+            mem.stamina = (std::min)(1.0f, mem.stamina + dt / kStaminaRefill);
+        }
+    }
 
     // Move up to `dist` units along (dx, dz), sliding along walls: if the straight step is blocked try each side. Returns true if moved.
-    bool Advance(const Match& m, PlayerState& p, float dx, float dz, float dist) {
+    // A `climber` (a bot) may go up and down ledges and onto scenery as CanStep allows; others (allies) keep to open ground.
+    bool Advance(const Match& m, PlayerState& p, float dx, float dz, float dist, bool climber = true) {
         const float len = std::hypot(dx, dz);
         if (len < 1e-4f) return false;
         dx /= len; dz /= len;
@@ -388,7 +618,7 @@ class BotController {
             if (off > map.radius - 20.0f) {
                 next = {map.center.x + (next.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (next.z - map.center.z) / off * (map.radius - 20.0f)};
             }
-            if (!Walkable(next)) continue;
+            if (climber ? !CanStep(p.pos, next) : !Walkable(next)) continue;
             p.pos = next;
             return true;
         }
@@ -398,7 +628,8 @@ class BotController {
     // Walk toward `goal`, following an A* path when the way isn't a clear line. `face` keeps the bot looking at a point (for
     // strafing) instead of where it is going.
     void Steer(Match& m, PlayerState& p, Memory& mem, Vec2 goal, float dt, float speedScale = 1.0f, const Vec2* face = nullptr) {
-        const float step = kRunSpeed * m.SpeedMultiplier(p) * speedScale * dt;
+        const float sprint = speedScale >= 0.9f ? SprintScale(mem) : 1.0f;
+        const float step = kRunSpeed * m.SpeedMultiplier(p) * speedScale * sprint * dt;
         Vec2 aim = goal;
         if (m.Clock() < mem.unstickUntil) {
             aim = {p.pos.x + mem.unstickDir.x * 200.0f, p.pos.z + mem.unstickDir.z * 200.0f};
@@ -410,7 +641,7 @@ class BotController {
                 mem.pathGoal = goal;
                 mem.pathIdx = 0;
                 mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
-                if (!nav->FindPath(p.pos, goal, mem.path)) mem.path.clear(); // unreachable: fall back to walking straight at it
+                if (!nav->FindPath(p.pos, goal, mem.path, true)) mem.path.clear(); // unreachable: fall back to walking straight at it
             }
             while (mem.pathIdx < mem.path.size() && Distance(p.pos, mem.path[mem.pathIdx]) < NavGrid::kCell * 0.6f) mem.pathIdx++;
             if (mem.pathIdx < mem.path.size()) aim = mem.path[mem.pathIdx];
@@ -419,7 +650,7 @@ class BotController {
         const float dx = aim.x - p.pos.x, dz = aim.z - p.pos.z;
         const bool moved = Advance(m, p, dx, dz, (std::min)(step, std::hypot(dx, dz)));
         p.rot = face ? FaceAngle(p.pos, *face) : FaceAngle(p.pos, aim);
-        p.anim = static_cast<uint8_t>(moved ? (speedScale < 0.9f ? Anim::Walk : Anim::Run) : Anim::Idle);
+        p.anim = static_cast<uint8_t>(moved ? (speedScale < 0.9f ? Anim::Walk : sprint > 1.0f ? Anim::Sprint : Anim::Run) : Anim::Idle);
         if (moved && speedScale >= 0.9f && m.Clock() >= mem.nextHopAt && rng.Unit() < 0.0015f + 0.002f * mem.aggression) Hop(m, mem);
 
         // Stuck check: wanted to move for a second but barely got anywhere (a wall the grid doesn't know about): pick a new heading.
@@ -529,13 +760,14 @@ class BotController {
 
     // ---- perception and targeting -----------------------------------------------------------------------------------------
 
-    PlayerState* ChooseTarget(Match& m, PlayerState& p, Memory& mem, float sight) {
+    PlayerState* ChooseTarget(Match& m, PlayerState& p, Memory& mem, float sight, bool xray) {
         PlayerState* best = nullptr;
         float bestScore = 0;
         for (auto& o : m.Players()) {
             if (&o == &p || !o.alive) continue;
             const float d = Distance(p.pos, o.pos);
             if (d > sight) continue;
+            if (!xray && d > 250.0f && !CanSee(p, o)) continue;   // behind a boulder or over a hill (close by, it is heard)
             float adv = (std::min)(3.0f, (std::max)(0.3f, Advantage(m, p, o)));
             float score = adv * (1.0f + (1.0f - o.health / o.maxHealth) * 0.6f) / (d + 100.0f);
             if (o.id == mem.target) score *= 1.3f; // stick with the current target unless something is clearly better
@@ -806,6 +1038,81 @@ class BotController {
         return false;
     }
 
+    // ---- using the ground: cover and high ground ---------------------------------------------------------------------------------
+
+    // Would it drink a potion now if nobody were shooting at it?
+    static bool WantsToDrink(const PlayerState& p, const Situation& s) {
+        for (const Equipped& e : p.potions) {
+            const PotionDef ps = PotionOf(e.item);
+            if (ps.revive) continue;
+            if (ps.shield > 0 ? p.armor < kMaxShield * 0.55f : s.deficit >= 1.0f) return true;
+        }
+        return false;
+    }
+
+    // Is the foe in a position to shoot at it (a ranged weapon, in range, and a clear line)?
+    bool UnderFire(const PlayerState& p, const PlayerState& foe, float dist) const {
+        if (!nav) return false;
+        const WeaponStats w = Match::StatsOf(foe);
+        return w.ranged && Match::HasAmmo(foe, foe.weapon.item) && dist < w.range + 120.0f && dist > 160.0f && CanSee(foe, p);
+    }
+
+    // A spot near by where `foe` can't see it: just behind a tall rock, a pillar or a block on the side away from the foe, or over a rise.
+    // Remembered for a moment so a bot doesn't dither between two rocks.
+    bool FindCover(const Match& m, const PlayerState& p, Memory& mem, const PlayerState& foe) {
+        if (!nav) return false;
+        const float now = m.Clock();
+        if (now < mem.coverEvalAt && mem.coverFrom == foe.id) return mem.haveCover;
+        mem.coverEvalAt = now + 0.8f + 0.4f * static_cast<float>(rng.Unit());
+        mem.coverFrom = foe.id;
+        mem.haveCover = false;
+        const float foeEye = EyeOf(foe);
+        float best = 1e9f;
+        auto consider = [&](Vec2 spot) {
+            if (!nav->Standable(spot) || Distance(spot, foe.pos) < 220.0f) return;
+            if (Sees(spot, FeetAt(spot) + 45.0f, foe.pos, foeEye)) return;
+            const float d = Distance(p.pos, spot);
+            if (d < best) { best = d; mem.cover = spot; mem.haveCover = true; }
+        };
+        for (size_t i = 0; i < props.size(); i++) {
+            const Prop& pr = props[i];
+            if (propGone[i] || PropRadius(pr.kind) <= 0 || SceneryHeight(pr) < 60.0f || Distance(p.pos, pr.pos) > 520.0f) continue;
+            const float dx = pr.pos.x - foe.pos.x, dz = pr.pos.z - foe.pos.z, len = (std::max)(1.0f, std::hypot(dx, dz));
+            const float off = PropRadius(pr.kind) + 50.0f;
+            consider({pr.pos.x + dx / len * off, pr.pos.z + dz / len * off});
+        }
+        if (nav->HasHeights()) {   // over the brow of a hill, behind a ridge
+            for (int k = 0; k < 8; k++) {
+                const float a = static_cast<float>(k) * 0.785398f;
+                for (float r : {160.0f, 320.0f}) consider({p.pos.x + std::sin(a) * r, p.pos.z + std::cos(a) * r});
+            }
+        }
+        return mem.haveCover;
+    }
+
+    // Higher ground to shoot from: a spot close by, well above where it stands, that still sees the foe and keeps it in range.
+    bool FindPerch(const Match& m, const PlayerState& p, Memory& mem, const PlayerState& foe, float want, float range) {
+        if (!nav) return false;
+        const float now = m.Clock();
+        if (now < mem.perchEvalAt) return mem.havePerch;
+        mem.perchEvalAt = now + 1.5f + static_cast<float>(rng.Unit());
+        mem.havePerch = false;
+        const float here = FeetAt(p.pos), foeEye = EyeOf(foe);
+        float best = here + 50.0f;   // worth the walk only if it is a good deal higher
+        for (int k = 0; k < 12; k++) {
+            const float a = static_cast<float>(k) * 0.5235988f;
+            for (float r : {90.0f, 180.0f, 300.0f}) {
+                const Vec2 spot = {p.pos.x + std::sin(a) * r, p.pos.z + std::cos(a) * r};
+                if (!nav->Standable(spot)) continue;
+                const float y = FeetAt(spot), d = Distance(spot, foe.pos);
+                if (y < best || d < want * 0.6f || d > range * 0.9f) continue;
+                if (!Sees(spot, y + 45.0f, foe.pos, foeEye)) continue;
+                best = y; mem.perch = spot; mem.havePerch = true;
+            }
+        }
+        return mem.havePerch;
+    }
+
     // ---- the brain ----------------------------------------------------------------------------------------------------------
 
     void Act(Match& m, PlayerState& p, const Circle& soon, float dt) {
@@ -828,7 +1135,7 @@ class BotController {
         sight *= SightMult(m.CurrentWeather());   // fog, sandstorms and heavy weather hide people
         if (m.Revealing(p)) sight = 1e9f;
 
-        PlayerState* foe = ChooseTarget(m, p, mem, sight);
+        PlayerState* foe = ChooseTarget(m, p, mem, sight, m.Revealing(p));
         if (foe && m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds() && now >= mem.alertUntil) foe = nullptr;   // nobody wants a fight yet
         if (foe) {
             if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
@@ -884,17 +1191,27 @@ class BotController {
         if (foe && s.advantage < fleeBelow && dist < 700.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 3.0f + 2.0f * mem.caution;
         // With only the starting sword a bot runs from anybody who comes close rather than trade blows (they only fight when cornered).
         if (foe && GearFirst() && EffectiveDpsNow(p) < kMinFightDps && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
+        // Run out of puff with the foe on its heels: nowhere left to run, so it turns and fights (it can flee again once it has its breath).
+        if (now < mem.fleeUntil && foe && mem.stamina < 0.1f && dist < 160.0f && !mem.sprinting) mem.fleeUntil = 0;
         s.fleeing = now < mem.fleeUntil && foe != nullptr;
         if (s.fleeing && s.advantage > 1.6f && !(GearFirst() && EffectiveDpsNow(p) < kMinFightDps)) mem.fleeUntil = 0; // the tables turned
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
         if (AvoidHazards(m, p, mem, dt, tune)) return;
+        // Hurt with a bow (or a slingshot, a bomb...) trained on it: get behind something first, then drink.
+        if (foe && !s.outsideZone && WantsToDrink(p, s) && p.health > 1.2f && UnderFire(p, *foe, dist) && FindCover(m, p, mem, *foe) &&
+            Distance(p.pos, mem.cover) > 35.0f) {
+            WantSprint(mem, tune, true);
+            Steer(m, p, mem, mem.cover, dt);
+            return;
+        }
         if (TryHeal(m, p, s)) return;
         if (TryShield(m, p, s)) return;
         TryAbility(m, p, mem, s);
 
         // 1. Storm: stay inside 90% of where the zone will be shortly. Shoot while running but never turn to fight.
         if (s.outsideZone) {
+            WantSprint(mem, tune, true);
             Steer(m, p, mem, soon.center, dt);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
             return;
@@ -938,7 +1255,10 @@ class BotController {
             Vec2 away = Away(p.pos, foe->pos, 500.0f);
             const float pull = 0.35f; // blend toward the safe zone so fleeing doesn't run into the storm
             away = {away.x + (soon.center.x - away.x) * pull, away.z + (soon.center.z - away.z) * pull};
-            if (nav) { Vec2 snapped; if (nav->Snap(away, &snapped)) away = snapped; }
+            if (nav) { Vec2 snapped; if (nav->Snap(away, &snapped, true)) away = snapped; }
+            // From a bow, break its line of sight: behind the nearest rock or rise that is not back toward it.
+            if (UnderFire(p, *foe, dist) && FindCover(m, p, mem, *foe) && Distance(mem.cover, foe->pos) > dist * 0.8f) away = mem.cover;
+            if (dist < 380.0f || UnderFire(p, *foe, dist)) WantSprint(mem, tune, true);   // keeps its breath until the foe is close
             Steer(m, p, mem, away, dt, 1.0f);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
             return;
@@ -960,6 +1280,8 @@ class BotController {
                     if (!m.PickUp(p.id, static_cast<size_t>(idx))) mem.lootIdx = -1;
                     else { mem.lootIdx = -1; mem.lootEvalAt = 0; ShowFind(m, p, mem, got); }
                 } else {
+                    const LootSpawn& want = m.Loot()[static_cast<size_t>(idx)].spawn;
+                    if (want.supply || Distance(p.pos, where) > 650.0f) WantSprint(mem, tune, false);   // first to the supply drop, or a long way
                     Steer(m, p, mem, where, dt);
                 }
                 return;
@@ -973,10 +1295,12 @@ class BotController {
         const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !GearFirst();   // with just the starting sword, nobody goes hunting
         if (tune.hunt && armed && s.deficit < p.maxHealth * 0.4f) {
             if (foe && mem.aggression > 0.45f && s.advantage > 1.0f) {
+                if (dist > 500.0f || GettingAway(mem, p, *foe)) WantSprint(mem, tune, dist < 320.0f);   // closing the last gap on a runner: all it has
                 Steer(m, p, mem, foe->pos, dt);
                 return;
             }
             if (!foe && now - mem.lastSeenAt < 6.0f && mem.aggression > 0.5f && Distance(p.pos, mem.lastSeen) > 80.0f && Circle{soon.center, soon.radius * 0.9f}.Contains(mem.lastSeen)) {
+                if (Distance(p.pos, mem.lastSeen) > 300.0f) WantSprint(mem, tune, false);   // after it before it gets away round the rock
                 Steer(m, p, mem, mem.lastSeen, dt);
                 return;
             }
@@ -992,6 +1316,7 @@ class BotController {
                 if (d < nearestDist) { nearestDist = d; nearest = &o; }
             }
             if (nearest && nearestDist > 250.0f) {
+                if (nearestDist > 900.0f) WantSprint(mem, tune, false);
                 Steer(m, p, mem, nearest->pos, dt, 0.9f);
                 return;
             }
@@ -1005,7 +1330,7 @@ class BotController {
                 const float a = static_cast<float>(rng.Unit() * 6.283185307179586);
                 const float d = soon.radius * 0.5f * std::sqrt(static_cast<float>(rng.Unit()));
                 pick = {soon.center.x + d * std::cos(a), soon.center.z + d * std::sin(a)};
-                if (Walkable(pick)) { mem.wander = {pick.x - soon.center.x, pick.z - soon.center.z}; break; }
+                if (Standable(pick)) { mem.wander = {pick.x - soon.center.x, pick.z - soon.center.z}; break; }
             }
             mem.hasWander = true;
         }
@@ -1080,6 +1405,19 @@ class BotController {
         } else if (foeWillAttack && p.hasShield && !mine.ranged && !IsTwoHanded(p.weapon.item) && m.Clock() >= mem.actUntil && rng.Unit() < 0.25f + 0.5f * mem.caution) {
             ShowPose(m, mem, Anim::Guard, 0.4f);   // no dodge this time: shield up, as a player holds R
         }
+        // A bow is better from up high: a ledge, a block or a hilltop near by that still sees the foe and keeps it in range.
+        if (mine.ranged && tune.kite && dist > want * 0.6f && FindPerch(m, p, mem, foe, want, mine.range)) {
+            if (Distance(p.pos, mem.perch) > 30.0f) {
+                Steer(m, p, mem, mem.perch, dt, 1.0f, &foe.pos);
+                if (p.anim == static_cast<uint8_t>(Anim::Run)) p.anim = static_cast<uint8_t>(Anim::SideR);   // shuffling over, eyes on the foe
+            } else {   // up there: hold it and shoot
+                p.rot = FaceAngle(p.pos, foe.pos);
+                p.anim = static_cast<uint8_t>(Anim::Stance);
+            }
+            TryAttack(m, p, mem, foe, dist);
+            return;
+        }
+        if ((dist > want * 1.8f && dist > 450.0f) || (dist > want + 40.0f && GettingAway(mem, p, foe))) WantSprint(mem, tune, dist < 320.0f);   // close in, or run it down
         Fight(m, p, mem, foe, dist, want, dt, 1.0f);
         // Hop in when closing on a foe from a little way off, the way players jump about in a fight.
         if (dist > want + 60.0f && dist < 520.0f && m.Clock() >= mem.nextHopAt && rng.Unit() < 0.04f * (0.5f + mem.aggression)) Hop(m, mem);
@@ -1087,11 +1425,17 @@ class BotController {
     }
 
 
-    // A jump (C-Up). Bots move on flat ground, so it is only seen: every client lifts the bot in an arc while it shows the jump.
+    // A jump (C-Up) for the fun of it, as players hop about. Every client lifts the bot in an arc while it shows the jump.
     void Hop(Match& m, Memory& mem) {
         if (m.Clock() < mem.actUntil) return;
         ShowPose(m, mem, Anim::Jump, 0.55f);
         mem.nextHopAt = m.Clock() + 2.5f + static_cast<float>(rng.Unit()) * 4.0f;
+    }
+    // A jump that gets it somewhere: up a ledge or onto a block. Shown whatever else it was showing, but not twice in one leap.
+    void Jump(Match& m, Memory& mem) {
+        if (mem.actAnim == Anim::Jump && m.Clock() < mem.actUntil) return;
+        ShowPose(m, mem, Anim::Jump, 0.55f);
+        mem.nextHopAt = (std::max)(mem.nextHopAt, m.Clock() + 1.5f);
     }
 
     // Swing or shoot if the foe is in range and the weapon is ready. Accuracy falls off with distance for ranged weapons.
@@ -1108,6 +1452,12 @@ class BotController {
         }
         if (m.Stunned(foe)) chance = (std::min)(1.0f, chance + 0.25f);
         if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
+        if (nav) {   // the ground: a shot into a rock or a hill is wasted, a sword can't reach up a ledge, and it is easier to shoot down than up
+            const float up = EyeOf(foe) - EyeOf(p);
+            if (w.ranged && !CanSee(p, foe)) chance *= 0.2f;
+            else if (!w.ranged && std::fabs(up) > NavGrid::kClimbUp + 40.0f) chance *= 0.15f;
+            else if (w.ranged && up < -60.0f) chance += 0.08f;
+        }
         BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance), dist);
     }
 };
