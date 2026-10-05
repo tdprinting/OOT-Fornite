@@ -2476,12 +2476,14 @@ float gWallAlpha = 0.0f;    // fades in when a match starts and out when it ends
 float gWallBase = 0.0f;     // roughly where the ground is (the wall reaches well below and far above it)
 bool gWallBaseKnown = false;
 
+bool ScreenCovered();   // a menu or pause screen is over the game (defined with the screen drawing)
+
 // Once per game tick: are you standing in the storm (alive, outside the safe zone), and where is the wall?
 void DriveStorm(const royale::HudState& h) {
     const bool live = gSession.Joined() && InField() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
-    const bool in = live && h.haveSelf && h.selfAlive && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
+    const bool in = live && h.haveSelf && h.selfAlive && !ScreenCovered() && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
     gStormWeather = std::clamp(gStormWeather + (in ? 0.06f : -0.09f), 0.0f, 1.0f);   // about a second to come and go
-    const bool wall = live && h.safeZone.radius > 0;
+    const bool wall = live && h.safeZone.radius > 0 && !(h.haveSelf && !h.selfAlive) && !ScreenCovered();
     if (wall) gWallZone = h.safeZone;
     gWallAlpha = std::clamp(gWallAlpha + (wall ? 0.05f : -0.05f), 0.0f, 1.0f);
     if (!InField() || gPlayState == nullptr) { gWallBaseKnown = false; return; }
@@ -3389,8 +3391,10 @@ std::string SpectateName() {
 }
 
 // Is something covering the game right now (its own pause screen or the port's menu)? Then the storm and weather tints stay off the screen.
+bool RoyaleMenuOpen();   // the Battle Royale menu (RoyaleMenu.inc)
 bool ScreenCovered() {
     if (gPlayState != nullptr && gPlayState->pauseCtx.state != 0) return true;
+    if (RoyaleMenuOpen()) return true;
     return SohGui::mSohMenu && SohGui::mSohMenu->IsVisible();
 }
 
@@ -8279,6 +8283,7 @@ void DrawDebug(UiState& ui) {
 }
 
 #include "RoyaleMenu.inc"
+bool RoyaleMenuOpen() { return gMenu.open; }
 
 // The Battle Royale menu is the game's own now (RoyaleMenu.inc). The port menu's "Battle Royale" page keeps a way into it, the developer tools,
 // and a way back to the game's normal file select.
