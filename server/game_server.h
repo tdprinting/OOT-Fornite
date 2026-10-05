@@ -719,6 +719,12 @@ class GameServer {
         n.scene = p.scene;
         n.shield = static_cast<uint8_t>(p.shield.item);
         n.shieldRarity = static_cast<uint8_t>(p.shield.rarity);
+        auto worn = [&](GearSlot slot) {
+            const int i = static_cast<int>(slot);
+            return (p.gearMask & (1 << i)) ? static_cast<uint8_t>(p.gear[i].item) : net::PlayerNet::kNoGear;
+        };
+        n.boots = worn(GearSlot::Boots);
+        n.mask = worn(GearSlot::Mask);
         return n;
     }
 

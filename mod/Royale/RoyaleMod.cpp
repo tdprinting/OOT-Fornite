@@ -61,6 +61,8 @@ extern "C" {
 #include "variables.h"
 #include "functions.h"
 #include "src/overlays/actors/ovl_En_Box/z_en_box.h" // the treasure chest actor
+#include "src/overlays/actors/ovl_Magic_Fire/z_magic_fire.h" // Din's Fire (its collider and screen tint, for other players' casts)
+#include "src/overlays/effects/ovl_Effect_Ss_HitMark/z_eff_ss_hitmark.h" // the game's hit sparks (a blow ringing off a shield)
 #include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
 #include "objects/object_zo/object_zo.h"           // the Zora NPC: skeleton, animations, eyes
 #include "objects/object_km1/object_km1.h"         // the Kokiri NPC
@@ -545,6 +547,53 @@ Look LookFor(royale::ItemId weapon) {
             return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE };
     }
 }
+// A bottle in the hand, coloured by what is in it, as Link holds one to drink.
+Look BottleLook(royale::ItemId contents) {
+    using royale::ItemId;
+    s8 action = PLAYER_IA_BOTTLE_POTION_RED;
+    switch (contents) {
+        case ItemId::GreenPotion: action = PLAYER_IA_BOTTLE_POTION_GREEN; break;
+        case ItemId::BluePotion: case ItemId::SmallShieldPotion: case ItemId::LargeShieldPotion: action = PLAYER_IA_BOTTLE_POTION_BLUE; break;
+        case ItemId::Milk: action = PLAYER_IA_BOTTLE_MILK_FULL; break;
+        case ItemId::Fish: action = PLAYER_IA_BOTTLE_FISH; break;
+        case ItemId::BlueFire: action = PLAYER_IA_BOTTLE_FIRE; break;
+        case ItemId::Bug: action = PLAYER_IA_BOTTLE_BUG; break;
+        case ItemId::Poe: action = PLAYER_IA_BOTTLE_POE; break;
+        case ItemId::Fairy: action = PLAYER_IA_BOTTLE_FAIRY; break;
+        default: break;
+    }
+    return { PLAYER_MODELGROUP_BOTTLE, action, ITEM_BOTTLE };
+}
+// The shield, boots and mask a player has, as the game's own values for drawing them on Link.
+s32 PlayerShieldFor(royale::ItemId id) {
+    switch (id) {
+        case royale::ItemId::DekuShield: return PLAYER_SHIELD_DEKU;
+        case royale::ItemId::HylianShield: return PLAYER_SHIELD_HYLIAN;
+        case royale::ItemId::MirrorShield: return PLAYER_SHIELD_MIRROR;
+        default: return PLAYER_SHIELD_NONE;
+    }
+}
+s32 PlayerBootsFor(royale::ItemId id) {
+    switch (id) {
+        case royale::ItemId::IronBoots: return PLAYER_BOOTS_IRON;
+        case royale::ItemId::HoverBoots: return PLAYER_BOOTS_HOVER;
+        default: return PLAYER_BOOTS_KOKIRI;
+    }
+}
+u8 PlayerMaskFor(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::KeatonMask: return PLAYER_MASK_KEATON;
+        case ItemId::SkullMask: return PLAYER_MASK_SKULL;
+        case ItemId::SpookyMask: return PLAYER_MASK_SPOOKY;
+        case ItemId::BunnyHood: return PLAYER_MASK_BUNNY;
+        case ItemId::GoronMask: return PLAYER_MASK_GORON;
+        case ItemId::ZoraMask: return PLAYER_MASK_ZORA;
+        case ItemId::GerudoMask: return PLAYER_MASK_GERUDO;
+        case ItemId::MaskOfTruth: return PLAYER_MASK_TRUTH;
+        default: return PLAYER_MASK_NONE;
+    }
+}
 const royale::PuppetState* StateOf(const Actor* actor) {
     auto id = gPuppetOf.find(actor);
     if (id == gPuppetOf.end()) return nullptr;
@@ -918,9 +967,150 @@ void UpdateSongMelody() {
     }
 }
 
-// What a spell, a song or a gadget looks like when somebody uses it, made from the game's own effects: its flame, ice and light particles, shock
-// rings and explosions, and (for your own Link) the real Din's Fire, Nayru's Love and Farore's Wind actors. `at` is the user's feet.
-void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
+// ---- the game's own spell and song effects, on whoever cast them ---------------------------------------------------------------
+
+// Din's Fire, Farore's Wind, Nayru's Love and the ocarina's song swirls are the game's own actors. They are written for Link alone: every frame
+// they find him at the head of the player list and follow him. To put one on another player, that player stands in at the head of the list
+// while the effect sets itself up, updates and draws, so it follows them instead. Anything an effect would do to *your* game is undone for
+// other players' casts: the clean-up that resets the magic meter (the server's), Din's Fire's red tint over the screen and its burning of
+// whatever is near, and the Nayru's Love timer in the save (each diamond keeps its own, so it lasts as long as the server's protection).
+enum class SpellKind : uint8_t { Fire, Wind, Love, Song };
+struct SpellFx {
+    Actor* actor = nullptr;
+    uint16_t who = 0;       // the caster's player id (unused for your own)
+    bool self = false;
+    SpellKind kind = SpellKind::Fire;
+    ActorFunc update = nullptr, draw = nullptr, destroy = nullptr;   // the effect's own
+    int framesLeft = 0;     // Nayru's Love: game frames the diamond still stands
+    int steps = 1;          // updates per frame: the song swirls run at double speed, so they don't hide a fight for five seconds
+};
+std::vector<SpellFx> gSpells;
+constexpr int kLoveFrames = 4 * 20;   // Nayru's Love protects for 4 seconds (shared/items.h)
+float gSelfInvulnLeft = 0.0f;         // seconds the server still protects you: your own diamond stands that long
+
+SpellFx* SpellOf(const Actor* a) {
+    for (SpellFx& f : gSpells) if (f.actor == a) return &f;
+    return nullptr;
+}
+Actor* CasterOf(PlayState* play, const SpellFx& f) {
+    if (f.self) return &GET_PLAYER(play)->actor;
+    auto it = gActorOf.find(f.who);
+    return it != gActorOf.end() ? it->second : nullptr;
+}
+// The caster at the head of the player list for as long as this lives.
+struct CasterFirst {
+    ActorListEntry* list;
+    Actor* old;
+    CasterFirst(PlayState* play, Actor* caster) : list(&play->actorCtx.actorLists[ACTORCAT_PLAYER]), old(list->head) {
+        if (caster != nullptr) list->head = caster;
+    }
+    ~CasterFirst() { list->head = old; }
+};
+// What the diamond reads as the Nayru's Love timer: steady while it lasts, then the game's own flicker and fade over the last second, after
+// which it ends itself (and gives the caster back the usual invincibility timer).
+s16 LoveTimer(int framesLeft) { return static_cast<s16>(framesLeft > 20 ? 600 : 1200 - std::max(0, framesLeft)); }
+
+void Spell_Draw(Actor* a, PlayState* play);
+void Spell_Update(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    Actor* caster = f != nullptr ? CasterOf(play, *f) : nullptr;
+    if (f == nullptr || caster == nullptr || f->update == nullptr || f->framesLeft < -40) { Actor_Kill(a); return; }
+    if (f->kind == SpellKind::Love && f->self && gSelfInvulnLeft > 1.0f) f->framesLeft = std::max(f->framesLeft, static_cast<int>(gSelfInvulnLeft * 20.0f));
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    {
+        CasterFirst first(play, caster);
+        for (int i = 0; i < f->steps; i++) {
+            if (f->kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f->framesLeft);
+            f->update(a, play);
+            if (a->update == nullptr) break;   // it ended itself
+            // The effects change their own update and draw as they go (gathering, then expanding...): keep ours in front.
+            if (a->update != Spell_Update) { f->update = a->update; a->update = Spell_Update; }
+            if (a->draw != nullptr && a->draw != Spell_Draw) { f->draw = a->draw; a->draw = Spell_Draw; }
+        }
+    }
+    gSaveContext.nayrusLoveTimer = love;
+    if (f->kind == SpellKind::Love) f->framesLeft--;
+    if (!f->self && f->kind == SpellKind::Fire) reinterpret_cast<MagicFire*>(a)->collider.base.atFlags &= ~AT_ON;   // the server decides who burns
+}
+void Spell_Draw(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    Actor* caster = f != nullptr ? CasterOf(play, *f) : nullptr;
+    if (f == nullptr || caster == nullptr || f->draw == nullptr) return;
+    if (!f->self && f->kind == SpellKind::Fire) reinterpret_cast<MagicFire*>(a)->screenTintIntensity = 0.0f;   // only the caster's screen glows
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (f->kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f->framesLeft);
+    {
+        CasterFirst first(play, caster);
+        f->draw(a, play);
+    }
+    gSaveContext.nayrusLoveTimer = love;
+}
+void Spell_Destroy(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    if (f == nullptr) return;
+    const auto magicState = gSaveContext.magicState, prevMagicState = gSaveContext.prevMagicState;
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (f->destroy != nullptr) {
+        CasterFirst first(play, CasterOf(play, *f));
+        f->destroy(a, play);
+    }
+    gSaveContext.magicState = magicState;   // the effects reset the magic meter when they end; the meter is the server's
+    gSaveContext.prevMagicState = prevMagicState;
+    gSaveContext.nayrusLoveTimer = love;
+    gSpells.erase(std::remove_if(gSpells.begin(), gSpells.end(), [a](const SpellFx& s) { return s.actor == a; }), gSpells.end());
+}
+
+// Spawns one of the game's spell or song effects on a caster (your own Link when `self`).
+void SpawnSpell(PlayState* play, s16 actorId, s16 params, SpellKind kind, Actor* caster, uint16_t who, bool self) {
+    if (play == nullptr || caster == nullptr || gSpells.size() >= 12) return;
+    SpellFx f;
+    f.who = who;
+    f.self = self;
+    f.kind = kind;
+    f.framesLeft = kLoveFrames;
+    f.steps = kind == SpellKind::Song ? 2 : 1;
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f.framesLeft);   // straight to the diamond: the casting orb dims the whole scene
+    Actor* a = nullptr;
+    {
+        CasterFirst first(play, caster);
+        a = Actor_Spawn(&play->actorCtx, play, actorId, caster->world.pos.x, caster->world.pos.y, caster->world.pos.z, 0, 0, 0, params, true);
+    }
+    gSaveContext.nayrusLoveTimer = love;
+    if (a == nullptr) return;
+    f.actor = a;
+    f.update = a->update;
+    f.draw = a->draw;
+    f.destroy = a->destroy;
+    a->update = Spell_Update;
+    if (a->draw != nullptr) a->draw = Spell_Draw;
+    a->destroy = Spell_Destroy;
+    gSpells.push_back(f);
+}
+
+// The swirl the game shows when Link plays a song on the ocarina, for the songs that have one (the same table the game's message code uses).
+bool SongSwirl(royale::ItemId song, s16* actorId, s16* params) {
+    using royale::ItemId;
+    *params = 0;
+    switch (song) {
+        case ItemId::SariasSong: *actorId = ACTOR_OCEFF_WIPE3; return true;
+        case ItemId::EponasSong: *actorId = ACTOR_OCEFF_WIPE2; return true;
+        case ItemId::ZeldasLullaby: *actorId = ACTOR_OCEFF_WIPE; return true;
+        case ItemId::SongOfTime: *actorId = ACTOR_OCEFF_WIPE; *params = 1; return true;
+        // The warp songs, the Sun's Song and the Song of Storms do more than show a swirl in the game (a warp, a change of time, rain), so they
+        // show the plain one the game uses for the scarecrow's song.
+        case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::RequiemOfSpirit:
+        case ItemId::NocturneOfShadow: case ItemId::PreludeOfLight: case ItemId::SunsSong: case ItemId::SongOfStorms:
+            *actorId = ACTOR_OCEFF_WIPE4; return true;
+        default: return false;
+    }
+}
+
+// What a spell, a song or a gadget looks like when somebody uses it. The spells are the game's own Din's Fire, Nayru's Love and Farore's Wind
+// on whoever cast them, and a song you play yourself brings up the game's own swirl. The rest (and other players' songs, whose swirl fills
+// the screen of whoever played them) are made from the game's own particle effects: its glitter, shock rings and explosions. `at` is the
+// user's feet; `caster` is their actor.
+void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self, Actor* caster, uint16_t who) {
     using royale::ItemId;
     auto ring = [&](Color_RGBA8 prim, Color_RGBA8 env, float radius, int count, float rise, s16 scale) {
         for (int i = 0; i < count; i++) {
@@ -931,22 +1121,17 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
         }
     };
     auto shock = [&](float y) { Vec3f pos = { at.x, at.y + y, at.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 }; EffectSsBlast_SpawnWhiteShockwave(play, &pos, &vel, &accel); };
-    auto spawn = [&](s16 actorId) { if (self) Actor_Spawn(&play->actorCtx, play, actorId, at.x, at.y, at.z, 0, 0, 0, 0, true); };
+    auto spell = [&](s16 actorId, SpellKind kind) { SpawnSpell(play, actorId, 0, kind, caster, who, self); };
+    if (self && (royale::IsSong(item) || item == ItemId::FairyOcarina || item == ItemId::OcarinaOfTime)) {
+        s16 id = 0, params = 0;
+        if (SongSwirl(item, &id, &params)) SpawnSpell(play, id, params, SpellKind::Song, caster, who, true);
+    }
     switch (item) {
-        case ItemId::DinsFire:
-            spawn(ACTOR_MAGIC_FIRE);
-            if (!self) { ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 50.0f, 18, 2.4f, 120); ring({ 255, 120, 0, 255 }, { 255, 0, 0, 255 }, 95.0f, 24, 1.6f, 90); shock(30.0f); }
-            break;
+        case ItemId::DinsFire: spell(ACTOR_MAGIC_FIRE, SpellKind::Fire); break;
+        case ItemId::NayrusLove: spell(ACTOR_MAGIC_DARK, SpellKind::Love); break;
+        case ItemId::FaroresWind: spell(ACTOR_MAGIC_WIND, SpellKind::Wind); break;
         case ItemId::BoleroOfFire:
             ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 60.0f, 20, 2.2f, 110); ring({ 255, 90, 0, 255 }, { 200, 0, 0, 255 }, 110.0f, 28, 1.4f, 90); shock(30.0f);
-            break;
-        case ItemId::NayrusLove:
-            spawn(ACTOR_MAGIC_DARK);
-            if (!self) { ring({ 170, 255, 255, 255 }, { 0, 100, 255, 255 }, 45.0f, 20, 1.8f, 100); shock(40.0f); }
-            break;
-        case ItemId::FaroresWind:
-            spawn(ACTOR_MAGIC_WIND);
-            if (!self) ring({ 200, 255, 200, 255 }, { 0, 200, 60, 255 }, 35.0f, 20, 3.0f, 100);
             break;
         case ItemId::MinuetOfForest: ring({ 200, 255, 120, 255 }, { 0, 200, 0, 255 }, 55.0f, 24, 2.6f, 90); break;
         case ItemId::SerenadeOfWater: ring({ 170, 230, 255, 255 }, { 0, 150, 255, 255 }, 55.0f, 24, 2.6f, 90); shock(20.0f); break;
@@ -984,7 +1169,7 @@ void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     if (self) return;   // your own spell already made its sound and flash when you used it
     auto a = gActorOf.find(who);
     if (a == gActorOf.end() || a->second == nullptr) return;
-    PowerFx(gPlayState, item, a->second->world.pos, false);
+    PowerFx(gPlayState, item, a->second->world.pos, false, a->second, who);
     Player* p = (Player*)a->second;
     if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
     if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
@@ -1080,6 +1265,32 @@ bool HangingFromGlider(const royale::PuppetState* st, const Actor* actor, PlaySt
            actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f;
 }
 
+// What is in someone's hand right now, as the game shows it: their weapon, except while they use something else the way Link does - the
+// bottle while they drink, the ocarina while they play a song, the hookshot while they fire one. A thrown boomerang has left the hand.
+Look ActionLook(uint8_t anim, royale::ItemId weapon, royale::ItemId ability, double abilityAge, royale::ItemId bottle) {
+    using royale::Anim;
+    using royale::ItemId;
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Drink: return BottleLook(bottle);
+        case Anim::Play:
+            if (weapon == ItemId::FairyOcarina || ability == ItemId::FairyOcarina) return LookFor(ItemId::FairyOcarina);
+            return LookFor(ItemId::OcarinaOfTime);
+        case Anim::Throw:
+            if ((ability == ItemId::Hookshot || ability == ItemId::Longshot) && abilityAge < 1.2) return LookFor(ability);
+            if (weapon == ItemId::Boomerang) return LookFor(ItemId::Count);
+            break;
+        default: break;
+    }
+    return LookFor(weapon);
+}
+Look PuppetLook(const royale::PuppetState& s) {
+    const auto ab = gLastAbility.find(s.id);
+    const auto at = gLastAbilityAt.find(s.id);
+    const royale::ItemId ability = ab != gLastAbility.end() ? ab->second : royale::ItemId::Count;
+    const double age = at != gLastAbilityAt.end() ? ImGui::GetTime() - at->second : 1e9;
+    return ActionLook(s.anim, s.weapon, ability, age, royale::ItemId::RedPotion);   // which potion others drink isn't sent: the red one
+}
+
 void Puppet_Update(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
     auto idIt = gPuppetOf.find(actor);
@@ -1108,11 +1319,15 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         actor->scale.x = actor->scale.y = actor->scale.z = k;
     }
 
-    // Hold what the server says this player holds.
-    Look look = LookFor(s.weapon);
-    if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction) {
+    // Hold what the server says this player holds, and wear their shield, boots and mask.
+    player->currentBoots = PlayerBootsFor(s.boots);
+    player->currentMask = PlayerMaskFor(s.mask);
+    const s8 shield = PlayerShieldFor(s.shield);
+    Look look = PuppetLook(s);
+    if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction || player->currentShield != shield) {
         u8 original = gSaveContext.equips.buttonItems[0];
         gSaveContext.equips.buttonItems[0] = look.buttonItem;
+        player->currentShield = shield;
         player->itemAction = player->heldItemAction = look.itemAction;
         Player_SetModelGroup(player, look.modelGroup);
         gSaveContext.equips.buttonItems[0] = original;
@@ -1312,7 +1527,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
-    gSaveContext.equips.buttonItems[0] = st ? LookFor(st->weapon).buttonItem : ITEM_NONE;
+    gSaveContext.equips.buttonItems[0] = st ? PuppetLook(*st).buttonItem : ITEM_NONE;
     if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
     Player_Draw(actor, play);
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
@@ -2850,6 +3065,28 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
             Matrix_Scale(kScale, kScale, kScale, MTXMODE_APPLY);
             gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
             gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gBombchuDL);
+            CLOSE_DISPS(play->state.gfxCtx);
+            return true;
+        }
+        case 4: case 8: {   // a slingshot seed or a thrown deku nut: the game draws both as a spinning, pulsing glint (EnArrow_Draw)
+            const bool seed = p.variant == 4;
+            const u8 alpha = static_cast<u8>(Math_CosS(static_cast<s16>(p.spin * 5000.0f)) * 127.5f + 127.5f);
+            const float scale = (seed ? 50.0f : 150.0f) * kScale;
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Xlu2(play->state.gfxCtx);
+            if (seed) {
+                gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, 255);
+                gDPSetEnvColor(POLY_XLU_DISP++, 0, 255, 255, alpha);
+            } else {
+                gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 12, 0, 0, 255);
+                gDPSetEnvColor(POLY_XLU_DISP++, 250, 250, 0, alpha);
+            }
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_Mult(&play->billboardMtxF, MTXMODE_APPLY);
+            Matrix_RotateZ(((play->gameplayFrames & 0xFF) * 4000) * (3.14159265f / 0x8000), MTXMODE_APPLY);
+            Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+            gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_XLU_DISP++, (Gfx*)gEffSparklesDL);
             CLOSE_DISPS(play->state.gfxCtx);
             return true;
         }
@@ -5042,13 +5279,14 @@ EmoteState gEmote;
 
 bool CanEmote(const royale::HudState& hud) { return LiveAndAlive(hud) && InField() && !gSkydiving; }
 
-void LocalEmote_Draw(Actor* actor, PlayState* play);
+void LocalLink_Draw(Actor* actor, PlayState* play);
+bool LocalDressOn();   // below, with the held weapon
 
 // Gives Link back his own drawing (only if he is still the same Link: a scene change makes a new one).
 void ReleaseEmoteDraw() {
     if (gPlayState == nullptr) return;
     Player* player = GET_PLAYER(gPlayState);
-    if (player != nullptr && player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw;
+    if (player != nullptr && player->actor.draw == LocalLink_Draw) player->actor.draw = Player_Draw;
 }
 
 void StopEmote() {
@@ -5061,18 +5299,18 @@ void StartEmote(int index, const royale::HudState& hud) {
     if (!CanEmote(hud) || index < 0 || index >= royale::kEmoteCount) return;
     StopEmote();
     Player* player = GET_PLAYER(gPlayState);
-    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalEmote_Draw)) return;
+    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalLink_Draw)) return;
     gEmote.id = index;
     gEmote.player = player;
     gEmote.startAt = ImGui::GetTime();
     gEmote.endAt = gEmote.startAt + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
     gLastEmote = index;
-    player->actor.draw = LocalEmote_Draw;
+    player->actor.draw = LocalLink_Draw;
 }
 
 // Any movement, attack or a few seconds ends an emote.
 void UpdateEmote(Player* player, const royale::HudState& hud) {
-    if (gEmote.id < 0) { if (player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw; return; }
+    if (gEmote.id < 0) { if (player->actor.draw == LocalLink_Draw && !LocalDressOn()) player->actor.draw = Player_Draw; return; }
     const Input& in = gPlayState->state.input[0];
     const bool moved = std::fabs(static_cast<float>(in.cur.stick_x)) > 25.0f || std::fabs(static_cast<float>(in.cur.stick_y)) > 25.0f;
     if (!CanEmote(hud) || player != gEmote.player || ImGui::GetTime() > gEmote.endAt || moved ||
@@ -5098,11 +5336,9 @@ void LoadLinkFrame(LinkAnimationHeader* animation, int frame, int limbCount, Vec
     std::memcpy(out, data + stride * frame, stride);
 }
 
-// Poses Link for the emote at this moment: its animations one after another (Link's animations step once per game tick), the last one
+// Poses Link `t` seconds into a sequence of animations: one after another (Link's animations step once per game tick), the last one
 // looping or holding its final pose. He stays where he stands: only the height of the animation's root is used.
-void PoseEmote(Player* player) {
-    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
-    const AnimSeq seq = SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player);
+void PoseSeq(Player* player, const AnimSeq& seq, float t) {
     float f = t * royale::kTickHz;
     LinkAnimationHeader* anim = nullptr;
     int frame = 0;
@@ -5118,16 +5354,26 @@ void PoseEmote(Player* player) {
     LoadLinkFrame(anim, std::max(0, frame), player->skelAnime.limbCount, j);
     j[0].x = rootX;
     j[0].z = rootZ;
+}
+// Poses Link for the emote at this moment.
+void PoseEmote(Player* player) {
+    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
+    PoseSeq(player, SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), t);
+    Vec3s* j = player->skelAnime.jointTable;
     if (gEmote.id == royale::kChickenDanceEmote) {
         ApplyChickenDance(player, t);
         if (player->actor.scale.y > 0.0f) j[0].y = static_cast<s16>(j[0].y + ChickenDanceBob(t) / player->actor.scale.y);
     }
 }
 
-void LocalEmote_Draw(Actor* actor, PlayState* play) {
+void DrawLocalDressed(Player* player, PlayState* play, bool mayPose);   // below, with the held weapon
+// Your own Link while you are in a match (and while you emote): drawn wearing what you have and holding what you use. See DrawLocalDressed.
+void LocalLink_Draw(Actor* actor, PlayState* play) {
     Player* player = reinterpret_cast<Player*>(actor);
-    if (gEmote.id >= 0 && gEmote.player == player && player == GET_PLAYER(play)) PoseEmote(player);
-    Player_Draw(actor, play);
+    if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
+    const bool emote = gEmote.id >= 0 && gEmote.player == player;
+    if (emote) PoseEmote(player);
+    DrawLocalDressed(player, play, !emote);
 }
 
 // The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
@@ -5692,7 +5938,14 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
 // What the local player has just done with an item, held for a moment so that everyone sees the pose (potion, ocarina, bow, swing...).
 int gActionFrames = 0;
 royale::Anim gActionAnim = royale::Anim::Idle;
-void StartAction(royale::Anim pose, float seconds) { gActionAnim = pose; gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz)); }
+double gActionStart = 0;
+royale::ItemId gActionItem = royale::ItemId::Count;   // the bottle being drunk or the ability being used: what Link holds for it (LocalLink_Draw)
+void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale::ItemId::Count) {
+    gActionAnim = pose;
+    gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz));
+    gActionStart = ImGui::GetTime();
+    gActionItem = item;
+}
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;
@@ -5947,23 +6200,20 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
 
 // Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
 // the game has settled Link on the scene's own floor.
-// A burst of sparks round the player and a sound for an item just used.
-void UseBurst(Player* player, Color_RGBA8 colour, u16 sfx) {
-    SparkBurst(gPlayState, player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z, colour, 14, 3.2f);
-    Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-}
-Color_RGBA8 AbilityColour(royale::ItemId id) {
-    using royale::ItemId;
-    switch (id) {
-        case ItemId::DinsFire: case ItemId::BoleroOfFire: return { 255, 110, 40, 255 };
-        case ItemId::NayrusLove: case ItemId::SerenadeOfWater: return { 100, 160, 255, 255 };
-        case ItemId::FaroresWind: case ItemId::MinuetOfForest: case ItemId::SariasSong: return { 110, 240, 130, 255 };
-        case ItemId::LensOfTruth: case ItemId::NocturneOfShadow: return { 190, 110, 255, 255 };
-        case ItemId::SunsSong: case ItemId::PreludeOfLight: return { 255, 240, 140, 255 };
-        case ItemId::SongOfTime: return { 120, 225, 245, 255 };
-        case ItemId::ShockwaveGrenade: return { 190, 110, 255, 255 };
-        default: return { 255, 220, 150, 255 };
+// Drinking: which bottle Link takes out (the potion the server will most likely pick: the first that heals, or the first shield potion),
+// how long it takes, and its sounds (Link's gulp and the hearts refilling).
+constexpr float kDrinkSeconds = 1.5f;
+royale::ItemId BottleToDrink(const royale::HudState& hud, bool shield) {
+    for (const auto& pot : hud.inv.potions) {
+        const royale::ItemId id = static_cast<royale::ItemId>(pot.item);
+        const royale::PotionDef d = royale::PotionOf(id);
+        if (shield ? d.shield > 0 : (!d.revive && d.heal > 0)) return id;
     }
+    return shield ? royale::ItemId::BluePotion : royale::ItemId::RedPotion;
+}
+void DrinkSounds(Player* player) {
+    Player_PlaySfx(&player->actor, static_cast<u16>(NA_SE_VO_LI_DRINK + player->ageProperties->unk_92));
+    Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
 // ---- solid scenery ------------------------------------------------------------------------------------------------------------
@@ -6486,7 +6736,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (in.press.button & BTN_DDOWN) {
-        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 255, 150, 255 }, NA_SE_SY_HP_RECOVER); }
+        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, false)); DrinkSounds(player); }
         else Say("No potions");
     }
 
@@ -6496,7 +6746,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         for (const auto& pot : hud.inv.potions) has |= royale::PotionOf(static_cast<royale::ItemId>(pot.item)).shield > 0;
         if (!has) Say("No shield potion");
         else if (hud.inv.shield >= royale::kMaxShield - 0.05f) Say("Your shield is full");
-        else { gSession.UseShield(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 190, 255, 255 }, NA_SE_SY_HP_RECOVER); }
+        else { gSession.UseShield(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, true)); DrinkSounds(player); }
     }
 
     // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
@@ -6541,9 +6791,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             gSession.UseAbility();
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
-                        : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
-            PowerFx(gPlayState, ab, player->actor.world.pos, true);
-            UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
+                        : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast,
+                        royale::IsSong(ab) ? 1.5f : 0.9f, ab);
+            PowerFx(gPlayState, ab, player->actor.world.pos, true, &player->actor, hud.selfId);
+            Audio_PlaySoundGeneral(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab),
+                                   &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
     }
@@ -6824,9 +7076,77 @@ void SyncRealAmmo(const royale::HudState& hud) {
         gSaveContext.magic = 0x30;
     }
 }
+// What your own Link wears in a match, as the game's values: the boots and mask are only put on him while he is drawn (the game's own iron boots,
+// hover boots and bunny hood would also change how he moves, and the server decides that), the shield for real (it is what he raises).
+struct LocalDress {
+    bool on = false;
+    s8 boots = PLAYER_BOOTS_KOKIRI;
+    u8 mask = PLAYER_MASK_NONE;
+    royale::ItemId weapon = royale::ItemId::BasicSword;
+};
+LocalDress gLocalDress;
+bool LocalDressOn() { return gLocalDress.on; }
+royale::ItemId WornGear(const royale::HudState& hud, royale::GearSlot slot) {
+    const int i = static_cast<int>(slot);
+    return (hud.inv.gearMask & (1 << i)) ? static_cast<royale::ItemId>(hud.inv.gear[i].item) : royale::ItemId::Count;
+}
+void SyncLocalDress(Player* player, const royale::HudState& hud) {
+    gLocalDress.on = gSession.Joined() && IsLive(hud) && hud.selfAlive && InField();
+    gSelfInvulnLeft = hud.invulnLeft;
+    if (!gLocalDress.on) return;
+    gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
+    gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
+    gLocalDress.weapon = hud.weapon;
+    const s8 shield = hud.hasShield ? PlayerShieldFor(hud.shield) : PLAYER_SHIELD_NONE;
+    if (player->currentShield != shield && !(player->stateFlags1 & PLAYER_STATE1_SHIELDING)) {
+        Inventory_ChangeEquipment(EQUIP_TYPE_SHIELD, static_cast<u16>(shield));   // the pause screen and the game's own checks agree (put back after the match)
+        player->currentShield = shield;
+        Player_SetModelGroup(player, Player_ActionToModelGroup(player, player->heldItemAction));
+    }
+    if (player->actor.draw == Player_Draw) player->actor.draw = LocalLink_Draw;
+}
+// Draws your own Link dressed (see LocalDress). While you drink, play a song or use a gadget, the bottle, the ocarina or the hookshot is in his
+// hand as in the game, and if you are standing still he goes through the game's motions for it (the bottle raised, the ocarina played, the
+// spell cast). Swings and shots need none of this: they are the game's own item code (SyncLocalWeapon).
+void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
+    if (!gLocalDress.on) { Player_Draw(&player->actor, play); return; }
+    const s8 boots = player->currentBoots;
+    const u8 mask = player->currentMask;
+    player->currentBoots = gLocalDress.boots;
+    player->currentMask = gLocalDress.mask;
+    const bool using_ = mayPose && gActionFrames > 0 && gActionItem != royale::ItemId::Count && player->meleeWeaponState == 0 &&
+                        !(player->stateFlags1 & (PLAYER_STATE1_SHIELDING | PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD));
+    const s32 group = player->modelGroup;
+    const s8 itemAction = player->itemAction, held = player->heldItemAction;
+    const u8 button = gSaveContext.equips.buttonItems[0];
+    bool swapped = false;
+    if (using_) {
+        const float t = static_cast<float>(ImGui::GetTime() - gActionStart);
+        const Look look = ActionLook(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, gActionItem, t, gActionItem);
+        if (look.modelGroup != group || look.itemAction != held) {
+            gSaveContext.equips.buttonItems[0] = look.buttonItem;
+            player->itemAction = player->heldItemAction = look.itemAction;
+            Player_SetModelGroup(player, look.modelGroup);
+            swapped = true;
+        }
+        if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
+            PoseSeq(player, SeqFor(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, 0, gActionItem, player), t);
+    }
+    Player_Draw(&player->actor, play);
+    if (swapped) {
+        gSaveContext.equips.buttonItems[0] = button;
+        player->itemAction = itemAction;
+        player->heldItemAction = held;
+        Player_SetModelGroup(player, group);
+    }
+    player->currentBoots = boots;
+    player->currentMask = mask;
+}
+
 int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     ApplyItemCvars(gSession.Joined() && IsLive(hud));
+    SyncLocalDress(player, hud);
     const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
     if (!on) {
         if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
@@ -7061,8 +7381,10 @@ void ReportEvents(const royale::HudState& hud) {
                 };
                 if (e.id == hud.selfId && onShield((me->stateFlags1 & PLAYER_STATE1_SHIELDING) != 0, me->actor.shape.rot.y, me->actor.world.pos.x, me->actor.world.pos.z)) {
                     Audio_PlaySoundGeneral(NA_SE_IT_SHIELD_REFLECT_SW, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-                    SparkBurst(gPlayState, me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f,
-                               me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    {   // the spark the game shows when a blow rings off a shield
+                        Vec3f at = { me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f, me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f };
+                        EffectSsHitMark_SpawnFixedScale(gPlayState, EFFECT_HITMARK_METAL, &at);
+                    }
                     gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
                     if (e.other != royale::net::kNoPlayer16) { gIncomingHits.push_back({ e.other, now }); swing(e.other); }
                 } else if (e.id != hud.selfId && gState.count(e.id) && gActorOf.count(e.id) &&
@@ -7071,7 +7393,8 @@ void ReportEvents(const royale::HudState& hud) {
                     if (e.other == hud.selfId) { gHitMarkerAt = now; gHitMarkerKill = e.health <= 0.001f; gFloatingNumbers.push_back({ t->world.pos.x, t->world.pos.y, t->world.pos.z, e.amount, now, false }); }
                     else swing(e.other);
                     if (std::hypot(t->world.pos.x - me->actor.world.pos.x, t->world.pos.z - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SHIELD_REFLECT_SW);
-                    SparkBurst(gPlayState, t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    Vec3f at = { t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f };
+                    EffectSsHitMark_SpawnFixedScale(gPlayState, EFFECT_HITMARK_METAL, &at);
                 } else if (e.id == hud.selfId) {
                     // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
                     Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
@@ -8648,6 +8971,7 @@ void SyncPauseInventory(const royale::HudState& hud) {
             gSaveContext.equips = gSavedInv.equips;
             gSavedInv.have = false;
             gKitHash = 0;
+            if (InGame()) Player_SetEquipmentData(gPlayState, GET_PLAYER(gPlayState));   // and Link wears your own shield again
         }
         return;
     }
