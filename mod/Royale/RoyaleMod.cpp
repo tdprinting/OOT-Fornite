@@ -11,6 +11,7 @@
 #include "build_version.h"
 #include "lilo_anim.h"
 #include "logo_data.h"
+#include "fortnite_map.h"
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
@@ -60,6 +61,8 @@ extern "C" {
 #include "variables.h"
 #include "functions.h"
 #include "src/overlays/actors/ovl_En_Box/z_en_box.h" // the treasure chest actor
+#include "src/overlays/actors/ovl_Magic_Fire/z_magic_fire.h" // Din's Fire (its collider and screen tint, for other players' casts)
+#include "src/overlays/effects/ovl_Effect_Ss_HitMark/z_eff_ss_hitmark.h" // the game's hit sparks (a blow ringing off a shield)
 #include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
 #include "objects/object_zo/object_zo.h"           // the Zora NPC: skeleton, animations, eyes
 #include "objects/object_km1/object_km1.h"         // the Kokiri NPC
@@ -128,6 +131,7 @@ bool InGame() {
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+bool gFortniteScene = false;   // the scene now loaded is Hyrule Field with the Fortnite map's collision (see "the Fortnite map" below)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
 royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
 int gHatHookCalls = 0;       // how many times the game has asked us about the cap (shown in the menu, to prove the hook is wired)
@@ -195,7 +199,12 @@ void WindNow(float* wx, float* wz, float* strength) {
 }
 
 const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
-bool InField() { return InGame() && gPlayState->sceneNum == CurrentMap().scene; }
+// The Fortnite map is played in Hyrule Field's scene, so being in that scene is not enough: it must be the version loaded with the island's collision
+// (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
+bool InField() {
+    return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
+           (!gSession.Joined() || (gMapId == royale::fortnite::kMapId) == gFortniteScene);
+}
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
 const char* SceneName(int scene) {
@@ -210,6 +219,7 @@ const char* SceneName(int scene) {
 int gTravelCooldown = 0; // game frames (20 per second) before another travel request is allowed
 
 bool gOurTravel = false; // a scene change we asked for ourselves (see SealExits)
+void Trace(const char* step);   // the crash breadcrumb trail, defined with the music code
 
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
@@ -221,7 +231,7 @@ bool TravelTo(int entrance) {
     gTravelCooldown = 5 * royale::kTickHz;
     return true;
 }
-bool GoToWaitingRoom() { return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
+bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
 int EntranceFor(int mapId) {
     switch (royale::ClampMap(mapId)) {
         case 1: return ENTR_LAKE_HYLIA_0_1;
@@ -311,8 +321,13 @@ std::string LootLabel(const royale::net::LootNet& l) {
 // Is there floor under (x, z)? Used to measure the map and to keep loot, spawns and storm centres on ground.
 s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "solid scenery" below), -1 when there is none
 
+// On the Fortnite map the scene's ground is the island's own triangles (shared/fortnite_map.h), so its height, slope and water are worked out
+// directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
+bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
+    if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
     Vec3f pos = { x, 4000.0f, z };
     for (int tries = 0; tries < 6; tries++) {
         CollisionPoly poly;
@@ -330,7 +345,7 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
 // spawns or finds a chest where the exit seal (SealExits) would shove them back. The ROM extractor's numbers (docs/MAPS.md) show how many
 // of these each map has: Kakariko alone has nine loading zones and fourteen exit surfaces.
 bool OnExitFloor(float x, float z) {
-    if (!InField()) return false;
+    if (!InField() || OnIsland()) return false;   // the island has no exits
     CollisionPoly poly;
     Vec3f pos = { x, 4000.0f, z };
     const float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
@@ -406,6 +421,7 @@ float gMeasuredRadius = 0;
 
 // Water is no place for a chest or a spawn: the surface is above the floor under it.
 bool UnderWater(float x, float z, float floorY) {
+    if (OnIsland()) return std::fabs(x) < royale::fortnite::kHalfX && std::fabs(z) < royale::fortnite::kHalfZ && floorY + 15.0f < royale::fortnite::kWaterY;   // one sheet over it all
     float surface = 0;
     WaterBox* box = nullptr;
     return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
@@ -415,6 +431,7 @@ bool UnderWater(float x, float z, float floorY) {
 // stand on. (The floor property numbers are the game's own, see FUNC_80041EA4_*.) Looks at the scene's own floor only: our blocks are always fine.
 bool HazardFloorAt(float x, float z) {
     if (!InField()) return false;
+    if (OnIsland()) return royale::fortnite::GroundUp(x, z) < 0.8f;   // off the island, or too steep to stand on
     CollisionPoly poly;
     s32 bgId = BGCHECK_SCENE;
     Vec3f pos = { x, 4000.0f, z };
@@ -470,6 +487,8 @@ bool MeasureField(royale::Circle* out) {
     for (const auto& p : kept) dist.push_back(royale::Distance(p, centre));
     std::sort(dist.begin(), dist.end());
     float radius = dist[static_cast<size_t>(dist.size() * 0.95f)] * 0.95f; // ignore stragglers, keep a margin
+    // The Fortnite map is played on the whole island, coast to coast: its towns run right out to the cliffs (Junk Junction, Lucky Landing).
+    if (gMapId == royale::fortnite::kMapId) radius = dist[std::min(dist.size() - 1, static_cast<size_t>(dist.size() * 0.99f))];
     radius = std::clamp(radius, 1500.0f, royale::MapOf(gMapId).maxRadius); // a smaller arena keeps the fights close and the storm in sight (Hyrule Field may be bigger)
     *out = { centre, radius };
     gMapMeasured = true;
@@ -492,6 +511,15 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
     Vec3f pos = { x, 4000.0f, z };
     float y = BgCheck_AnyRaycastFloor1(&play->colCtx, &poly, &pos);
     return y > BGCHECK_Y_MIN + 1.0f ? y : fallback;
+}
+
+// Where a bot is drawn. The server moves bots in x and z and sends their height above the scene's own floor: 0 on the ground, the top of a
+// climbing block or boulder they stand on, or how high they still are in the skydive. (The scene floor without our scenery, because the
+// scenery near you is solid and would otherwise be counted twice.)
+float BotY(PlayState* play, float x, float z, float lift) {
+    float y = 0;
+    if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    return y + lift;
 }
 
 // How a puppet holds the weapon the server says it has. Player_SetModelGroup and Player_Draw read the *local* equipped sword,
@@ -526,6 +554,53 @@ Look LookFor(royale::ItemId weapon) {
             if (weapon == ItemId::OcarinaOfTime || (weapon >= ItemId::ZeldasLullaby && weapon <= ItemId::PreludeOfLight))
                 return { PLAYER_MODELGROUP_OOT, PLAYER_IA_OCARINA_OF_TIME, ITEM_OCARINA_TIME };
             return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE };
+    }
+}
+// A bottle in the hand, coloured by what is in it, as Link holds one to drink.
+Look BottleLook(royale::ItemId contents) {
+    using royale::ItemId;
+    s8 action = PLAYER_IA_BOTTLE_POTION_RED;
+    switch (contents) {
+        case ItemId::GreenPotion: action = PLAYER_IA_BOTTLE_POTION_GREEN; break;
+        case ItemId::BluePotion: case ItemId::SmallShieldPotion: case ItemId::LargeShieldPotion: action = PLAYER_IA_BOTTLE_POTION_BLUE; break;
+        case ItemId::Milk: action = PLAYER_IA_BOTTLE_MILK_FULL; break;
+        case ItemId::Fish: action = PLAYER_IA_BOTTLE_FISH; break;
+        case ItemId::BlueFire: action = PLAYER_IA_BOTTLE_FIRE; break;
+        case ItemId::Bug: action = PLAYER_IA_BOTTLE_BUG; break;
+        case ItemId::Poe: action = PLAYER_IA_BOTTLE_POE; break;
+        case ItemId::Fairy: action = PLAYER_IA_BOTTLE_FAIRY; break;
+        default: break;
+    }
+    return { PLAYER_MODELGROUP_BOTTLE, action, ITEM_BOTTLE };
+}
+// The shield, boots and mask a player has, as the game's own values for drawing them on Link.
+s32 PlayerShieldFor(royale::ItemId id) {
+    switch (id) {
+        case royale::ItemId::DekuShield: return PLAYER_SHIELD_DEKU;
+        case royale::ItemId::HylianShield: return PLAYER_SHIELD_HYLIAN;
+        case royale::ItemId::MirrorShield: return PLAYER_SHIELD_MIRROR;
+        default: return PLAYER_SHIELD_NONE;
+    }
+}
+s32 PlayerBootsFor(royale::ItemId id) {
+    switch (id) {
+        case royale::ItemId::IronBoots: return PLAYER_BOOTS_IRON;
+        case royale::ItemId::HoverBoots: return PLAYER_BOOTS_HOVER;
+        default: return PLAYER_BOOTS_KOKIRI;
+    }
+}
+u8 PlayerMaskFor(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::KeatonMask: return PLAYER_MASK_KEATON;
+        case ItemId::SkullMask: return PLAYER_MASK_SKULL;
+        case ItemId::SpookyMask: return PLAYER_MASK_SPOOKY;
+        case ItemId::BunnyHood: return PLAYER_MASK_BUNNY;
+        case ItemId::GoronMask: return PLAYER_MASK_GORON;
+        case ItemId::ZoraMask: return PLAYER_MASK_ZORA;
+        case ItemId::GerudoMask: return PLAYER_MASK_GERUDO;
+        case ItemId::MaskOfTruth: return PLAYER_MASK_TRUTH;
+        default: return PLAYER_MASK_NONE;
     }
 }
 const royale::PuppetState* StateOf(const Actor* actor) {
@@ -901,9 +976,150 @@ void UpdateSongMelody() {
     }
 }
 
-// What a spell, a song or a gadget looks like when somebody uses it, made from the game's own effects: its flame, ice and light particles, shock
-// rings and explosions, and (for your own Link) the real Din's Fire, Nayru's Love and Farore's Wind actors. `at` is the user's feet.
-void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
+// ---- the game's own spell and song effects, on whoever cast them ---------------------------------------------------------------
+
+// Din's Fire, Farore's Wind, Nayru's Love and the ocarina's song swirls are the game's own actors. They are written for Link alone: every frame
+// they find him at the head of the player list and follow him. To put one on another player, that player stands in at the head of the list
+// while the effect sets itself up, updates and draws, so it follows them instead. Anything an effect would do to *your* game is undone for
+// other players' casts: the clean-up that resets the magic meter (the server's), Din's Fire's red tint over the screen and its burning of
+// whatever is near, and the Nayru's Love timer in the save (each diamond keeps its own, so it lasts as long as the server's protection).
+enum class SpellKind : uint8_t { Fire, Wind, Love, Song };
+struct SpellFx {
+    Actor* actor = nullptr;
+    uint16_t who = 0;       // the caster's player id (unused for your own)
+    bool self = false;
+    SpellKind kind = SpellKind::Fire;
+    ActorFunc update = nullptr, draw = nullptr, destroy = nullptr;   // the effect's own
+    int framesLeft = 0;     // Nayru's Love: game frames the diamond still stands
+    int steps = 1;          // updates per frame: the song swirls run at double speed, so they don't hide a fight for five seconds
+};
+std::vector<SpellFx> gSpells;
+constexpr int kLoveFrames = 4 * 20;   // Nayru's Love protects for 4 seconds (shared/items.h)
+float gSelfInvulnLeft = 0.0f;         // seconds the server still protects you: your own diamond stands that long
+
+SpellFx* SpellOf(const Actor* a) {
+    for (SpellFx& f : gSpells) if (f.actor == a) return &f;
+    return nullptr;
+}
+Actor* CasterOf(PlayState* play, const SpellFx& f) {
+    if (f.self) return &GET_PLAYER(play)->actor;
+    auto it = gActorOf.find(f.who);
+    return it != gActorOf.end() ? it->second : nullptr;
+}
+// The caster at the head of the player list for as long as this lives.
+struct CasterFirst {
+    ActorListEntry* list;
+    Actor* old;
+    CasterFirst(PlayState* play, Actor* caster) : list(&play->actorCtx.actorLists[ACTORCAT_PLAYER]), old(list->head) {
+        if (caster != nullptr) list->head = caster;
+    }
+    ~CasterFirst() { list->head = old; }
+};
+// What the diamond reads as the Nayru's Love timer: steady while it lasts, then the game's own flicker and fade over the last second, after
+// which it ends itself (and gives the caster back the usual invincibility timer).
+s16 LoveTimer(int framesLeft) { return static_cast<s16>(framesLeft > 20 ? 600 : 1200 - std::max(0, framesLeft)); }
+
+void Spell_Draw(Actor* a, PlayState* play);
+void Spell_Update(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    Actor* caster = f != nullptr ? CasterOf(play, *f) : nullptr;
+    if (f == nullptr || caster == nullptr || f->update == nullptr || f->framesLeft < -40) { Actor_Kill(a); return; }
+    if (f->kind == SpellKind::Love && f->self && gSelfInvulnLeft > 1.0f) f->framesLeft = std::max(f->framesLeft, static_cast<int>(gSelfInvulnLeft * 20.0f));
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    {
+        CasterFirst first(play, caster);
+        for (int i = 0; i < f->steps; i++) {
+            if (f->kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f->framesLeft);
+            f->update(a, play);
+            if (a->update == nullptr) break;   // it ended itself
+            // The effects change their own update and draw as they go (gathering, then expanding...): keep ours in front.
+            if (a->update != Spell_Update) { f->update = a->update; a->update = Spell_Update; }
+            if (a->draw != nullptr && a->draw != Spell_Draw) { f->draw = a->draw; a->draw = Spell_Draw; }
+        }
+    }
+    gSaveContext.nayrusLoveTimer = love;
+    if (f->kind == SpellKind::Love) f->framesLeft--;
+    if (!f->self && f->kind == SpellKind::Fire) reinterpret_cast<MagicFire*>(a)->collider.base.atFlags &= ~AT_ON;   // the server decides who burns
+}
+void Spell_Draw(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    Actor* caster = f != nullptr ? CasterOf(play, *f) : nullptr;
+    if (f == nullptr || caster == nullptr || f->draw == nullptr) return;
+    if (!f->self && f->kind == SpellKind::Fire) reinterpret_cast<MagicFire*>(a)->screenTintIntensity = 0.0f;   // only the caster's screen glows
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (f->kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f->framesLeft);
+    {
+        CasterFirst first(play, caster);
+        f->draw(a, play);
+    }
+    gSaveContext.nayrusLoveTimer = love;
+}
+void Spell_Destroy(Actor* a, PlayState* play) {
+    SpellFx* f = SpellOf(a);
+    if (f == nullptr) return;
+    const auto magicState = gSaveContext.magicState, prevMagicState = gSaveContext.prevMagicState;
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (f->destroy != nullptr) {
+        CasterFirst first(play, CasterOf(play, *f));
+        f->destroy(a, play);
+    }
+    gSaveContext.magicState = magicState;   // the effects reset the magic meter when they end; the meter is the server's
+    gSaveContext.prevMagicState = prevMagicState;
+    gSaveContext.nayrusLoveTimer = love;
+    gSpells.erase(std::remove_if(gSpells.begin(), gSpells.end(), [a](const SpellFx& s) { return s.actor == a; }), gSpells.end());
+}
+
+// Spawns one of the game's spell or song effects on a caster (your own Link when `self`).
+void SpawnSpell(PlayState* play, s16 actorId, s16 params, SpellKind kind, Actor* caster, uint16_t who, bool self) {
+    if (play == nullptr || caster == nullptr || gSpells.size() >= 12) return;
+    SpellFx f;
+    f.who = who;
+    f.self = self;
+    f.kind = kind;
+    f.framesLeft = kLoveFrames;
+    f.steps = kind == SpellKind::Song ? 2 : 1;
+    const s16 love = gSaveContext.nayrusLoveTimer;
+    if (kind == SpellKind::Love) gSaveContext.nayrusLoveTimer = LoveTimer(f.framesLeft);   // straight to the diamond: the casting orb dims the whole scene
+    Actor* a = nullptr;
+    {
+        CasterFirst first(play, caster);
+        a = Actor_Spawn(&play->actorCtx, play, actorId, caster->world.pos.x, caster->world.pos.y, caster->world.pos.z, 0, 0, 0, params, true);
+    }
+    gSaveContext.nayrusLoveTimer = love;
+    if (a == nullptr) return;
+    f.actor = a;
+    f.update = a->update;
+    f.draw = a->draw;
+    f.destroy = a->destroy;
+    a->update = Spell_Update;
+    if (a->draw != nullptr) a->draw = Spell_Draw;
+    a->destroy = Spell_Destroy;
+    gSpells.push_back(f);
+}
+
+// The swirl the game shows when Link plays a song on the ocarina, for the songs that have one (the same table the game's message code uses).
+bool SongSwirl(royale::ItemId song, s16* actorId, s16* params) {
+    using royale::ItemId;
+    *params = 0;
+    switch (song) {
+        case ItemId::SariasSong: *actorId = ACTOR_OCEFF_WIPE3; return true;
+        case ItemId::EponasSong: *actorId = ACTOR_OCEFF_WIPE2; return true;
+        case ItemId::ZeldasLullaby: *actorId = ACTOR_OCEFF_WIPE; return true;
+        case ItemId::SongOfTime: *actorId = ACTOR_OCEFF_WIPE; *params = 1; return true;
+        // The warp songs, the Sun's Song and the Song of Storms do more than show a swirl in the game (a warp, a change of time, rain), so they
+        // show the plain one the game uses for the scarecrow's song.
+        case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::RequiemOfSpirit:
+        case ItemId::NocturneOfShadow: case ItemId::PreludeOfLight: case ItemId::SunsSong: case ItemId::SongOfStorms:
+            *actorId = ACTOR_OCEFF_WIPE4; return true;
+        default: return false;
+    }
+}
+
+// What a spell, a song or a gadget looks like when somebody uses it. The spells are the game's own Din's Fire, Nayru's Love and Farore's Wind
+// on whoever cast them, and a song you play yourself brings up the game's own swirl. The rest (and other players' songs, whose swirl fills
+// the screen of whoever played them) are made from the game's own particle effects: its glitter, shock rings and explosions. `at` is the
+// user's feet; `caster` is their actor.
+void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self, Actor* caster, uint16_t who) {
     using royale::ItemId;
     auto ring = [&](Color_RGBA8 prim, Color_RGBA8 env, float radius, int count, float rise, s16 scale) {
         for (int i = 0; i < count; i++) {
@@ -914,22 +1130,17 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
         }
     };
     auto shock = [&](float y) { Vec3f pos = { at.x, at.y + y, at.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 }; EffectSsBlast_SpawnWhiteShockwave(play, &pos, &vel, &accel); };
-    auto spawn = [&](s16 actorId) { if (self) Actor_Spawn(&play->actorCtx, play, actorId, at.x, at.y, at.z, 0, 0, 0, 0, true); };
+    auto spell = [&](s16 actorId, SpellKind kind) { SpawnSpell(play, actorId, 0, kind, caster, who, self); };
+    if (self && (royale::IsSong(item) || item == ItemId::FairyOcarina || item == ItemId::OcarinaOfTime)) {
+        s16 id = 0, params = 0;
+        if (SongSwirl(item, &id, &params)) SpawnSpell(play, id, params, SpellKind::Song, caster, who, true);
+    }
     switch (item) {
-        case ItemId::DinsFire:
-            spawn(ACTOR_MAGIC_FIRE);
-            if (!self) { ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 50.0f, 18, 2.4f, 120); ring({ 255, 120, 0, 255 }, { 255, 0, 0, 255 }, 95.0f, 24, 1.6f, 90); shock(30.0f); }
-            break;
+        case ItemId::DinsFire: spell(ACTOR_MAGIC_FIRE, SpellKind::Fire); break;
+        case ItemId::NayrusLove: spell(ACTOR_MAGIC_DARK, SpellKind::Love); break;
+        case ItemId::FaroresWind: spell(ACTOR_MAGIC_WIND, SpellKind::Wind); break;
         case ItemId::BoleroOfFire:
             ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 60.0f, 20, 2.2f, 110); ring({ 255, 90, 0, 255 }, { 200, 0, 0, 255 }, 110.0f, 28, 1.4f, 90); shock(30.0f);
-            break;
-        case ItemId::NayrusLove:
-            spawn(ACTOR_MAGIC_DARK);
-            if (!self) { ring({ 170, 255, 255, 255 }, { 0, 100, 255, 255 }, 45.0f, 20, 1.8f, 100); shock(40.0f); }
-            break;
-        case ItemId::FaroresWind:
-            spawn(ACTOR_MAGIC_WIND);
-            if (!self) ring({ 200, 255, 200, 255 }, { 0, 200, 60, 255 }, 35.0f, 20, 3.0f, 100);
             break;
         case ItemId::MinuetOfForest: ring({ 200, 255, 120, 255 }, { 0, 200, 0, 255 }, 55.0f, 24, 2.6f, 90); break;
         case ItemId::SerenadeOfWater: ring({ 170, 230, 255, 255 }, { 0, 150, 255, 255 }, 55.0f, 24, 2.6f, 90); shock(20.0f); break;
@@ -944,13 +1155,11 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
             if (self) Environment_AddLightningBolts(play, 2);
             ring({ 255, 255, 255, 255 }, { 120, 120, 255, 255 }, 70.0f, 20, 2.4f, 90);
             break;
-        case ItemId::ShockwaveGrenade: {
-            Vec3f pos = { at.x, at.y + 20.0f, at.z };
-            Vec3f none = { 0, 0, 0 };
-            EffectSsBomb2_SpawnLayered(play, &pos, &none, &none, 60, 10);
-            shock(20.0f);
+        case ItemId::ShockwaveGrenade:   // a purple blast at the feet that throws the user up
+            ring({ 235, 190, 255, 255 }, { 160, 60, 255, 255 }, 30.0f, 16, 3.4f, 110);
+            ring({ 210, 150, 255, 255 }, { 120, 40, 230, 255 }, 65.0f, 22, 1.2f, 90);
+            shock(4.0f);
             break;
-        }
         case ItemId::MagicBeans: ring({ 180, 255, 140, 255 }, { 60, 200, 0, 255 }, 25.0f, 12, 2.0f, 80); break;
         case ItemId::LensOfTruth: ring({ 235, 190, 255, 255 }, { 150, 80, 220, 255 }, 25.0f, 12, 1.5f, 80); break;
         default: break;
@@ -969,7 +1178,7 @@ void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     if (self) return;   // your own spell already made its sound and flash when you used it
     auto a = gActorOf.find(who);
     if (a == gActorOf.end() || a->second == nullptr) return;
-    PowerFx(gPlayState, item, a->second->world.pos, false);
+    PowerFx(gPlayState, item, a->second->world.pos, false, a->second, who);
     Player* p = (Player*)a->second;
     if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
     if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
@@ -989,7 +1198,7 @@ struct PuppetMotion {
     float speed = 0;            // units per game frame, smoothed
     float prevFrame = 0;        // for footsteps
     int idleFrames = 0;         // standing about: now and then a look round
-    float jumpT = -1;           // a bot's jump arc, 0..1 (bots move on flat ground, so the jump is drawn here)
+    float jumpT = -1;           // a bot's jump arc, 0..1 (the server only says which floor it is on, so the jump is drawn here)
     int floorCheck = 0;
     royale::ItemId heldWeapon = royale::ItemId::Count;
     int flinch = 0;
@@ -1065,6 +1274,32 @@ bool HangingFromGlider(const royale::PuppetState* st, const Actor* actor, PlaySt
            actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f;
 }
 
+// What is in someone's hand right now, as the game shows it: their weapon, except while they use something else the way Link does - the
+// bottle while they drink, the ocarina while they play a song, the hookshot while they fire one. A thrown boomerang has left the hand.
+Look ActionLook(uint8_t anim, royale::ItemId weapon, royale::ItemId ability, double abilityAge, royale::ItemId bottle) {
+    using royale::Anim;
+    using royale::ItemId;
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Drink: return BottleLook(bottle);
+        case Anim::Play:
+            if (weapon == ItemId::FairyOcarina || ability == ItemId::FairyOcarina) return LookFor(ItemId::FairyOcarina);
+            return LookFor(ItemId::OcarinaOfTime);
+        case Anim::Throw:
+            if ((ability == ItemId::Hookshot || ability == ItemId::Longshot) && abilityAge < 1.2) return LookFor(ability);
+            if (weapon == ItemId::Boomerang) return LookFor(ItemId::Count);
+            break;
+        default: break;
+    }
+    return LookFor(weapon);
+}
+Look PuppetLook(const royale::PuppetState& s) {
+    const auto ab = gLastAbility.find(s.id);
+    const auto at = gLastAbilityAt.find(s.id);
+    const royale::ItemId ability = ab != gLastAbility.end() ? ab->second : royale::ItemId::Count;
+    const double age = at != gLastAbilityAt.end() ? ImGui::GetTime() - at->second : 1e9;
+    return ActionLook(s.anim, s.weapon, ability, age, royale::ItemId::RedPotion);   // which potion others drink isn't sent: the red one
+}
+
 void Puppet_Update(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
     auto idIt = gPuppetOf.find(actor);
@@ -1077,8 +1312,8 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 
     actor->world.pos.x = s.x;
     actor->world.pos.z = s.z;
-    // Bots are simulated on a flat plane (y = 0), so stand them on the real floor. Humans report their own height.
-    actor->world.pos.y = s.isBot ? GroundY(play, s.x, s.z, s.y) : s.y;
+    // Bots are simulated in x and z with a height above the floor (BotY). Humans report their own height.
+    actor->world.pos.y = s.isBot ? BotY(play, s.x, s.z, s.y) : s.y;
     actor->shape.rot.y = s.rot;
     actor->world.rot.y = s.rot;
     actor->shape.shadowAlpha = 255;
@@ -1093,11 +1328,15 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         actor->scale.x = actor->scale.y = actor->scale.z = k;
     }
 
-    // Hold what the server says this player holds.
-    Look look = LookFor(s.weapon);
-    if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction) {
+    // Hold what the server says this player holds, and wear their shield, boots and mask.
+    player->currentBoots = PlayerBootsFor(s.boots);
+    player->currentMask = PlayerMaskFor(s.mask);
+    const s8 shield = PlayerShieldFor(s.shield);
+    Look look = PuppetLook(s);
+    if (player->modelGroup != look.modelGroup || player->heldItemAction != look.itemAction || player->currentShield != shield) {
         u8 original = gSaveContext.equips.buttonItems[0];
         gSaveContext.equips.buttonItems[0] = look.buttonItem;
+        player->currentShield = shield;
         player->itemAction = player->heldItemAction = look.itemAction;
         Player_SetModelGroup(player, look.modelGroup);
         gSaveContext.equips.buttonItems[0] = original;
@@ -1230,7 +1469,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         }
         m.prevFrame = cur;
     }
-    // Bots move on flat ground: their jumps, hops and jump slashes are lifted into the air here.
+    // Bots' jumps, hops and jump slashes are lifted into the air here (the server only moves them between floors).
     if (m.jumpT >= 0.0f) {
         const bool big = m.anim == static_cast<uint8_t>(Anim::Jump);
         const float seconds = big ? 0.55f : 0.4f, height = big ? 48.0f : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
@@ -1297,7 +1536,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
-    gSaveContext.equips.buttonItems[0] = st ? LookFor(st->weapon).buttonItem : ITEM_NONE;
+    gSaveContext.equips.buttonItems[0] = st ? PuppetLook(*st).buttonItem : ITEM_NONE;
     if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
     Player_Draw(actor, play);
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
@@ -2178,6 +2417,10 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
 }
 
 constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
+// The Fortnite Map's trees stand where its texture has them painted (fortnite::CoverAt): thick in the woods, a lone one here and there on the
+// meadows, none on the roads or in the towns. Its cells are smaller, so the woods can be dense.
+constexpr float kIslandTreeCell = 200.0f;
+float TreeCell() { return OnIsland() ? kIslandTreeCell : kTreeCell; }
 
 // Each map's plants: Hyrule Field, Lake Hylia and Kakariko keep the leafy trees and green grass (Kakariko's trees sparser), the desert has
 // golden dry grass and palms gathered in oases, and Death Mountain has no grass, only a few dead, burnt trees.
@@ -2185,6 +2428,16 @@ int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
 
 struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
+    if (OnIsland()) {
+        const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kIslandTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kIslandTreeCell;
+        const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
+        const float roll = Flora01(cx, cz, 22), dense = std::min(1.0f, gFoliage);
+        if (cover == royale::fortnite::Cover::Woods ? roll > 0.35f + 0.5f * dense : cover != royale::fortnite::Cover::Meadow || roll > 0.03f * dense) return false;
+        const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
+        if (spot == nullptr || !spot->ok) return false;
+        *out = { x, spot->y, z, 0.85f + 0.55f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+        return true;
+    }
     const int theme = FloraTheme();
     const float grove = theme == 4 ? 0.82f : theme == 3 ? 0.7f : theme == 2 ? 0.55f : 0.45f;   // the desert's oases and the mountain's few trees are rare
     if (Flora01(cx / 2, cz / 2, 21) < grove - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
@@ -2293,6 +2546,14 @@ void DrawFlora(PlayState* play) {
         CLOSE_DISPS(play->state.gfxCtx);
     }
     auto fade = [](float dist, float reach) { const float f = std::clamp((reach - dist) / (reach * 0.25f), 0.0f, 1.0f); return f * f * (3.0f - 2.0f * f); };
+    // Nothing behind the camera is drawn: about half of everything near the player. `size` is how far the thing reaches from its spot.
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;   // not when looking steeply down (the skydive): then all round is in view
+    if (cull) { vx /= vl; vz /= vl; }
+    auto inView = [&](float x, float z, float size) { return !cull || (x - eye.x) * vx + (z - eye.z) * vz > -size; };
+    const bool island = OnIsland();
 
     if (snowOn) {   // mounds of snow, thicker the longer it has snowed
         const float reach = 1000.0f;
@@ -2303,7 +2564,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 31) > gSnowCover * 0.92f) continue;
                 const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 32)) * kSnowCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 33)) * kSnowCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 70.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(2, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, FloraHash(cx, cz, 34) % 4);
@@ -2321,7 +2582,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 71) > deep * 0.9f) continue;
                 const float x = (static_cast<float>(cx) + 0.25f + 0.5f * Flora01(cx, cz, 72)) * kBlanketCell, z = (static_cast<float>(cz) + 0.25f + 0.5f * Flora01(cx, cz, 73)) * kBlanketCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 120.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(4, cx, cz, x, z);   // any ground, like the mounds, in cells of its own
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, 4u + FloraHash(cx, cz, 74) % 4);
@@ -2342,11 +2603,15 @@ void DrawFlora(PlayState* play) {
         const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
         for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < grassy) continue;                                 // not a grassy patch
+                if (Flora01(cx / 6, cz / 6, 41) < (island ? 0.3f : grassy)) continue;               // not a grassy patch
                 if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 40.0f)) continue;
+                if (island) {   // the island's grass grows on its meadows and under its trees, not on the roads, the paving or the fields
+                    const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
+                    if (cover != royale::fortnite::Cover::Meadow && cover != royale::fortnite::Cover::Woods) continue;
+                }
                 const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
@@ -2358,16 +2623,17 @@ void DrawFlora(PlayState* play) {
             }
 
         // trees
-        const float treeReach = 1800.0f + 1800.0f * std::min(1.5f, gFoliage);
-        const int t0x = static_cast<int>(std::floor((px - treeReach) / kTreeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / kTreeCell));
-        const int t0z = static_cast<int>(std::floor((pz - treeReach) / kTreeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / kTreeCell));
+        const float treeReach = (island ? 1500.0f : 1800.0f) + (island ? 1300.0f : 1800.0f) * std::min(1.5f, gFoliage);   // the island's woods are dense: not quite as far
+        const float treeCell = TreeCell();
+        const int t0x = static_cast<int>(std::floor((px - treeReach) / treeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / treeCell));
+        const int t0z = static_cast<int>(std::floor((pz - treeReach) / treeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / treeCell));
         const float tamp = 0.008f + 0.03f * wind;
         for (int cz = t0z; cz <= t1z; cz++)
             for (int cx = t0x; cx <= t1x; cx++) {
                 TreeSpot tr;
                 if (!TreeIn(cx, cz, season, &tr)) continue;
                 const float d = std::hypot(tr.x - px, tr.z - pz);
-                if (d > treeReach) continue;
+                if (d > treeReach || !inView(tr.x, tr.z, 260.0f * tr.scale)) continue;
                 const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
@@ -2388,7 +2654,8 @@ void DrawFlora(PlayState* play) {
                 if (item < 0) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 84)) * kDecorCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 85)) * kDecorCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 80.0f)) continue;
+                if (island && royale::fortnite::CoverAt(x, z) != royale::fortnite::Cover::Meadow && royale::fortnite::CoverAt(x, z) != royale::fortnite::Cover::Woods) continue;
                 const FloraSpot* spot = FloraSpotAt(5, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Decor, static_cast<uint32_t>(item + 6 * theme));
@@ -2408,7 +2675,7 @@ void DrawFlora(PlayState* play) {
                 for (size_t k = 0; k < pieces.size(); k++) {
                     const ClutterPiece& c = pieces[k];
                     const float d = std::hypot(c.x - px, c.z - pz);
-                    if (d > townReach) continue;
+                    if (d > townReach || !inView(c.x, c.z, 80.0f)) continue;
                     const FloraSpot* spot = FloraSpotAt(6, static_cast<int>(pi), static_cast<int>(k), c.x, c.z);
                     if (spot == nullptr || !spot->ok) continue;
                     const GpuMesh* m = GpuMeshFor(royale::MeshKind::Clutter, c.variant);
@@ -2417,6 +2684,38 @@ void DrawFlora(PlayState* play) {
                 }
             }
         }
+    }
+
+    // The island's gusts: when the wind gets up (a storm blowing in, the storm itself, or any breezy autumn day) leaves are torn off its woods and
+    // tumble past the player along the wind, red and gold in autumn, green the rest of the year. Each leaf lives a few seconds, then starts again
+    // somewhere upwind; where they are comes from the time alone, so nothing is stored.
+    const float gust = !island ? 0.0f : std::clamp(std::max({ (wind - 0.25f) * 1.6f, season == 2 ? 0.35f + wind : 0.0f, gStormWeather * 0.8f }), 0.0f, 1.0f);
+    if (gust > 0.05f && gFoliage > 0.01f) {
+        // Each leaf belongs to a square of ground near the player (so it stays put in the world as you run past), starting at a spot in it and
+        // carried downwind for its few seconds.
+        const float cellSize = 700.0f, life = 5.0f, speed = 120.0f + 320.0f * wind;
+        const int perCell = static_cast<int>(7.0f * gust * std::min(1.3f, gFoliage));
+        const int pcx = static_cast<int>(std::floor(px / cellSize)), pcz = static_cast<int>(std::floor(pz / cellSize));
+        for (int ccz = pcz - 1; ccz <= pcz + 1; ccz++)
+            for (int ccx = pcx - 1; ccx <= pcx + 1; ccx++)
+                for (int j = 0; j < perCell; j++) {
+                    const int id = (ccx * 31 + ccz) * 16 + j;
+                    const float clock = t / life + Flora01(ccx * 16 + j, ccz, 101);
+                    const int round = static_cast<int>(std::floor(clock));
+                    const float age = clock - static_cast<float>(round);
+                    const float sx = (static_cast<float>(ccx) + Flora01(id, round, 102)) * cellSize - dx * speed * life * 0.5f;
+                    const float sz = (static_cast<float>(ccz) + Flora01(id, round, 103)) * cellSize - dz * speed * life * 0.5f;
+                    const float flutter = std::sin(t * 3.1f + j) * 30.0f;
+                    const float x = sx + dx * speed * age * life - dz * flutter, z = sz + dz * speed * age * life + dx * flutter;
+                    if (std::hypot(x - px, z - pz) > 1000.0f || !inView(x, z, 20.0f)) continue;
+                    float gy = 0;
+                    if (!RawFloorAt(x, z, &gy)) continue;
+                    const float y = std::max(gy, static_cast<float>(royale::fortnite::kWaterY)) + 25.0f + 140.0f * Flora01(id, round, 104) * (1.0f - age) + std::sin(t * 2.3f + j * 1.7f) * 18.0f;
+                    const GpuMesh* m = GpuMeshFor(royale::MeshKind::LeafPile, season == 2 ? FloraHash(id, round, 105) % 2 : 3u);   // autumn's reds and golds, or a mix with green in it
+                    if (m == nullptr || m->dl.empty()) continue;
+                    const float k = 0.13f * std::min(1.0f, std::min(age, 1.0f - age) * 6.0f);
+                    if (k > 0.004f) DrawFloraMesh(play, m, x, y, z, t * (1.3f + Flora01(id, 3, 106)) + j, std::sin(t * 4.0f + j) * 1.2f, std::cos(t * 3.3f + j * 0.7f) * 1.2f, k);
+                }
     }
 
     if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
@@ -2436,7 +2735,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 51) > 0.15f + 0.45f * gPuddleCover) continue;   // the first puddles show early, more join as it soaks in
                 const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 52)) * kPuddleCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 53)) * kPuddleCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 90.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(3, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4 + (season == 3 ? 4u : 0u));   // frozen over in winter
@@ -2467,8 +2766,9 @@ void ApplyTrees(Player* player) {
     const int season = FloraSeason();
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
     gFloraBudget = 6;
-    for (int cz = static_cast<int>(std::floor((pz - 160.0f) / kTreeCell)); cz <= static_cast<int>(std::floor((pz + 160.0f) / kTreeCell)); cz++)
-        for (int cx = static_cast<int>(std::floor((px - 160.0f) / kTreeCell)); cx <= static_cast<int>(std::floor((px + 160.0f) / kTreeCell)); cx++) {
+    const float cell = TreeCell();
+    for (int cz = static_cast<int>(std::floor((pz - 160.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 160.0f) / cell)); cz++)
+        for (int cx = static_cast<int>(std::floor((px - 160.0f) / cell)); cx <= static_cast<int>(std::floor((px + 160.0f) / cell)); cx++) {
             TreeSpot tr;
             if (!TreeIn(cx, cz, season, &tr)) continue;
             const float r = 20.0f * tr.scale + 14.0f, ddx = px - tr.x, ddz = pz - tr.z, d = std::hypot(ddx, ddz);
@@ -2838,6 +3138,28 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
             CLOSE_DISPS(play->state.gfxCtx);
             return true;
         }
+        case 4: case 8: {   // a slingshot seed or a thrown deku nut: the game draws both as a spinning, pulsing glint (EnArrow_Draw)
+            const bool seed = p.variant == 4;
+            const u8 alpha = static_cast<u8>(Math_CosS(static_cast<s16>(p.spin * 5000.0f)) * 127.5f + 127.5f);
+            const float scale = (seed ? 50.0f : 150.0f) * kScale;
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Xlu2(play->state.gfxCtx);
+            if (seed) {
+                gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, 255);
+                gDPSetEnvColor(POLY_XLU_DISP++, 0, 255, 255, alpha);
+            } else {
+                gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 12, 0, 0, 255);
+                gDPSetEnvColor(POLY_XLU_DISP++, 250, 250, 0, alpha);
+            }
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_Mult(&play->billboardMtxF, MTXMODE_APPLY);
+            Matrix_RotateZ(((play->gameplayFrames & 0xFF) * 4000) * (3.14159265f / 0x8000), MTXMODE_APPLY);
+            Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
+            gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_XLU_DISP++, (Gfx*)gEffSparklesDL);
+            CLOSE_DISPS(play->state.gfxCtx);
+            return true;
+        }
         case 9: {   // the boomerang, spinning flat as in the game
             OPEN_DISPS(play->state.gfxCtx);
             Gfx_SetupDL_25Opa(play->state.gfxCtx);
@@ -2857,6 +3179,25 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
+
+// An item's model with the current matrix: the game's own (GetItem_Draw), or one of ours. Ours are built standing on y 0, so they are
+// lifted to be centred like the game's.
+void DrawItemModel(PlayState* play, int gid) {
+    if (gid != kGidGrenade) { GetItem_Draw(play, static_cast<s16>(gid)); return; }
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Grenade, 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    Matrix_Push();
+    Matrix_Translate(0.0f, -15.5f, 0.0f, MTXMODE_APPLY);
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // colours are baked into the vertices (the purple bands unshaded, so they glow)
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+    Matrix_Pop();
+}
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
 // What each other player last picked up, so it can be held up over their head while they show it off, as Link does.
@@ -2877,7 +3218,7 @@ void DrawHeldFinds(PlayState* play) {
         Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
         Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
         Matrix_Scale(k, k, k, MTXMODE_APPLY);
-        GetItem_Draw(play, static_cast<s16>(f->second.gid));
+        DrawItemModel(play, f->second.gid);
         CLOSE_DISPS(play->state.gfxCtx);
     }
 }
@@ -2902,7 +3243,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
         Matrix_RotateY(r.age * 2.4f, MTXMODE_APPLY);
         Matrix_Scale(k * 20.0f, k * 20.0f, k * 20.0f, MTXMODE_APPLY);
-        GetItem_Draw(play, static_cast<s16>(r.gid));
+        DrawItemModel(play, r.gid);
         CLOSE_DISPS(play->state.gfxCtx);
         i++;
     }
@@ -3058,7 +3399,8 @@ int GidFor(royale::ItemId id) {
         case ItemId::Slingshot: case ItemId::TripleSlingshot: return GID_SLINGSHOT;
         case ItemId::FairyBow: return GID_BOW;
         case ItemId::Boomerang: return GID_BOOMERANG;
-        case ItemId::Bombs: case ItemId::BombAmmo: case ItemId::ShockwaveGrenade: return GID_BOMB;
+        case ItemId::Bombs: case ItemId::BombAmmo: return GID_BOMB;
+        case ItemId::ShockwaveGrenade: return kGidGrenade;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
         case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
@@ -3154,7 +3496,7 @@ void Loot_Draw(Actor* actor, PlayState* play) {
     func_8002ED80(actor, play, 0);
     const float k = GidScale(la.gid);
     Matrix_Scale(k, k, k, MTXMODE_APPLY);
-    GetItem_Draw(play, static_cast<s16>(la.gid));
+    DrawItemModel(play, la.gid);
 }
 
 void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
@@ -3291,11 +3633,11 @@ bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see
 // It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
 // click, so it is read from SDL directly. The game's own top run speed is raised (patches/0011), so Link's legs, footsteps and turning
 // keep up with it; others see the Sprint pose (see ClassifyAnim). Purely local: the server trusts your position.
-constexpr float kSprintMult = 1.35f;        // run speed while sprinting
-constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
-constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
-constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
-constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
+constexpr float kSprintMult = royale::kSprintMult;   // shared/balance.h: the bots sprint with the same numbers
+constexpr float kSprintSeconds = royale::kSprintSeconds;
+constexpr float kStaminaRefill = royale::kStaminaRefill;
+constexpr float kStaminaRest = royale::kStaminaRest;
+constexpr float kSprintMinStamina = royale::kSprintMinStamina;
 float gStamina = 1.0f;
 float gStaminaRestLeft = 0.0f;
 bool gSprinting = false;
@@ -3494,6 +3836,26 @@ ImTextureID UploadRgba(const uint8_t* rgba, int w, int h, int* idInOut) {
     return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(*idInOut));
 }
 
+// The Fortnite map's picture for the minimap: the baked vertex colours of the island, upscaled smoothly by the graphics card.
+ImTextureID FortniteMinimapTexture() {
+    static int texId = -1;
+    static ImTextureID tex = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        constexpr int n = royale::fortnite::kFine + 1;
+        std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
+        for (int i = 0; i < n * n; i++) {
+            rgba[i * 4 + 0] = royale::fortnite::kColours[i * 3 + 0];
+            rgba[i * 4 + 1] = royale::fortnite::kColours[i * 3 + 1];
+            rgba[i * 4 + 2] = royale::fortnite::kColours[i * 3 + 2];
+            rgba[i * 4 + 3] = 255;
+        }
+        tex = UploadRgba(rgba.data(), n, n, &texId);
+    }
+    return tex;
+}
+
 const GameMinimap* GameMinimapFor(int sceneNum) {
     static GameMinimap maps[20];
     const int index = sceneNum - SCENE_HYRULE_FIELD;
@@ -3557,8 +3919,11 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     // The game's minimap, placed with the game's own numbers for where it sits and how world positions land on it (z_map_exp.c's compass
     // icons): pixel u = (offsetX + x / scaleX) / 10 + 160 - minimapX, pixel v = 120 - (offsetY - z / scaleY) / 10 - minimapY.
     const int owIndex = gPlayState->sceneNum - SCENE_HYRULE_FIELD;
-    const GameMinimap* gm = GameMinimapFor(gPlayState->sceneNum);
-    if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
+    const GameMinimap* gm = gFortniteScene ? nullptr : GameMinimapFor(gPlayState->sceneNum);
+    if (gFortniteScene) {   // the island's own picture (its texture), laid over the whole map
+        ImTextureID tex = FortniteMinimapTexture();
+        if (tex != nullptr) dl->AddImage(tex, toMap(-royale::fortnite::kHalfX, -royale::fortnite::kHalfZ), toMap(royale::fortnite::kHalfX, royale::fortnite::kHalfZ), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 210));
+    } else if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
         const float sx = gMapData->owCompassInfo[owIndex][0], sz = gMapData->owCompassInfo[owIndex][1];
         const float ox = gMapData->owCompassInfo[owIndex][2], oy = gMapData->owCompassInfo[owIndex][3];
         const float mx = gMapData->owMinimapPosX[owIndex], my = gMapData->owMinimapPosY[owIndex];
@@ -3708,7 +4073,6 @@ const char* RealIconName(royale::ItemId id) {
         case ItemId::KokiriEmerald: return "gQuestIconKokiriEmeraldTex";
         case ItemId::GoronRuby: return "gQuestIconGoronRubyTex";
         case ItemId::ZoraSapphire: return "gQuestIconZoraSapphireTex";
-        case ItemId::ShockwaveGrenade: return "gItemIconBombTex";
         case ItemId::ZeldasLullaby: case ItemId::EponasSong: case ItemId::SariasSong: case ItemId::SunsSong: case ItemId::SongOfTime: case ItemId::SongOfStorms:
         case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::NocturneOfShadow: case ItemId::RequiemOfSpirit: case ItemId::PreludeOfLight:
             return "gSongNoteTex";   // the game's music note, tinted in each song's colour (see RealIconTint)
@@ -3978,13 +4342,18 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
         case ItemId::NocturneOfShadow: note(purple); break;
         case ItemId::RequiemOfSpirit: note(orange); break;
         case ItemId::PreludeOfLight: note(IM_COL32(255, 245, 150, 255)); break;
-        case ItemId::ShockwaveGrenade:
-            dl->AddCircleFilled(c, u * 0.38f, IM_COL32(60, 70, 90, 255), 16);
-            for (int i = 0; i < 8; i++) {
-                const float a = i * 0.7853982f;
-                dl->AddLine(ImVec2(c.x + std::cos(a) * u * 0.5f, c.y + std::sin(a) * u * 0.5f), ImVec2(c.x + std::cos(a) * u * 0.9f, c.y + std::sin(a) * u * 0.9f), cyan, th * 1.2f);
-            }
+        case ItemId::ShockwaveGrenade: {   // a grey ball with glowing purple bands, like its model
+            const ImU32 glow = IM_COL32(200, 120, 255, 255), halo = IM_COL32(170, 80, 255, 70);
+            dl->AddCircleFilled(c, u * 0.78f, halo, 24);
+            dl->AddCircleFilled(c, u * 0.62f, IM_COL32(150, 152, 162, 255), 24);
+            dl->AddCircleFilled(P(-0.18f, -0.2f), u * 0.24f, IM_COL32(190, 192, 200, 255), 14);       // the shine
+            dl->AddLine(P(-0.62f, 0), P(0.62f, 0), glow, th * 1.6f);                                    // the band round the middle
+            dl->AddBezierQuadratic(P(0, -0.62f), P(0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);       // and the ones over the top
+            dl->AddBezierQuadratic(P(0, -0.62f), P(-0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);
+            dl->AddCircleFilled(P(0, -0.62f), u * 0.12f, IM_COL32(70, 72, 82, 255), 10);              // the cap
+            dl->AddCircle(c, u * 0.62f, IM_COL32(60, 62, 72, 255), 24, th * 0.8f);
             break;
+        }
         case ItemId::KokiriTunic: tunic(green); break;
         case ItemId::GoronTunic: tunic(red); break;
         case ItemId::ZoraTunic: tunic(blue); break;
@@ -4980,13 +5349,14 @@ EmoteState gEmote;
 
 bool CanEmote(const royale::HudState& hud) { return LiveAndAlive(hud) && InField() && !gSkydiving; }
 
-void LocalEmote_Draw(Actor* actor, PlayState* play);
+void LocalLink_Draw(Actor* actor, PlayState* play);
+bool LocalDressOn();   // below, with the held weapon
 
 // Gives Link back his own drawing (only if he is still the same Link: a scene change makes a new one).
 void ReleaseEmoteDraw() {
     if (gPlayState == nullptr) return;
     Player* player = GET_PLAYER(gPlayState);
-    if (player != nullptr && player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw;
+    if (player != nullptr && player->actor.draw == LocalLink_Draw) player->actor.draw = Player_Draw;
 }
 
 void StopEmote() {
@@ -4999,18 +5369,18 @@ void StartEmote(int index, const royale::HudState& hud) {
     if (!CanEmote(hud) || index < 0 || index >= royale::kEmoteCount) return;
     StopEmote();
     Player* player = GET_PLAYER(gPlayState);
-    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalEmote_Draw)) return;
+    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalLink_Draw)) return;
     gEmote.id = index;
     gEmote.player = player;
     gEmote.startAt = ImGui::GetTime();
     gEmote.endAt = gEmote.startAt + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
     gLastEmote = index;
-    player->actor.draw = LocalEmote_Draw;
+    player->actor.draw = LocalLink_Draw;
 }
 
 // Any movement, attack or a few seconds ends an emote.
 void UpdateEmote(Player* player, const royale::HudState& hud) {
-    if (gEmote.id < 0) { if (player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw; return; }
+    if (gEmote.id < 0) { if (player->actor.draw == LocalLink_Draw && !LocalDressOn()) player->actor.draw = Player_Draw; return; }
     const Input& in = gPlayState->state.input[0];
     const bool moved = std::fabs(static_cast<float>(in.cur.stick_x)) > 25.0f || std::fabs(static_cast<float>(in.cur.stick_y)) > 25.0f;
     if (!CanEmote(hud) || player != gEmote.player || ImGui::GetTime() > gEmote.endAt || moved ||
@@ -5036,11 +5406,9 @@ void LoadLinkFrame(LinkAnimationHeader* animation, int frame, int limbCount, Vec
     std::memcpy(out, data + stride * frame, stride);
 }
 
-// Poses Link for the emote at this moment: its animations one after another (Link's animations step once per game tick), the last one
+// Poses Link `t` seconds into a sequence of animations: one after another (Link's animations step once per game tick), the last one
 // looping or holding its final pose. He stays where he stands: only the height of the animation's root is used.
-void PoseEmote(Player* player) {
-    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
-    const AnimSeq seq = SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player);
+void PoseSeq(Player* player, const AnimSeq& seq, float t) {
     float f = t * royale::kTickHz;
     LinkAnimationHeader* anim = nullptr;
     int frame = 0;
@@ -5056,16 +5424,26 @@ void PoseEmote(Player* player) {
     LoadLinkFrame(anim, std::max(0, frame), player->skelAnime.limbCount, j);
     j[0].x = rootX;
     j[0].z = rootZ;
+}
+// Poses Link for the emote at this moment.
+void PoseEmote(Player* player) {
+    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
+    PoseSeq(player, SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), t);
+    Vec3s* j = player->skelAnime.jointTable;
     if (gEmote.id == royale::kChickenDanceEmote) {
         ApplyChickenDance(player, t);
         if (player->actor.scale.y > 0.0f) j[0].y = static_cast<s16>(j[0].y + ChickenDanceBob(t) / player->actor.scale.y);
     }
 }
 
-void LocalEmote_Draw(Actor* actor, PlayState* play) {
+void DrawLocalDressed(Player* player, PlayState* play, bool mayPose);   // below, with the held weapon
+// Your own Link while you are in a match (and while you emote): drawn wearing what you have and holding what you use. See DrawLocalDressed.
+void LocalLink_Draw(Actor* actor, PlayState* play) {
     Player* player = reinterpret_cast<Player*>(actor);
-    if (gEmote.id >= 0 && gEmote.player == player && player == GET_PLAYER(play)) PoseEmote(player);
-    Player_Draw(actor, play);
+    if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
+    const bool emote = gEmote.id >= 0 && gEmote.player == player;
+    if (emote) PoseEmote(player);
+    DrawLocalDressed(player, play, !emote);
 }
 
 // The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
@@ -5183,11 +5561,24 @@ LobbyMusic gLobbyMusic;
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
+// A breadcrumb trail for crashes the phone gives no log for: each step is written to royale-trace.txt (next to the music folder) and closed
+// again straight away, so the last line says how far the game got. The file starts afresh each run.
+void Trace(const char* step) {
+    static bool fresh = true;
+    static std::string last;
+    if (last == step) return;   // a step drawn every frame is written once
+    last = step;
+    std::ofstream out(std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt")), fresh ? std::ios::trunc : std::ios::app);
+    fresh = false;
+    if (out) out << step << "\n";
+}
+
 void QueueOotSongs();
 // The menu is drawn on the render thread, but a scan also copies the game's soundfonts out of its audio data (CaptureOotFonts), which only the
 // game thread may touch. So the menu asks for a scan with this flag and the game thread's frame update does it.
 bool gScanRequested = false;
 void ScanMusicFolder() {
+    Trace("music scan: start");
     gLobbyMusic.tracks.clear();
     std::error_code ec;
     std::filesystem::create_directories(MusicFolder(), ec);
@@ -5203,10 +5594,13 @@ void ScanMusicFolder() {
     gLobbyMusic.scanned = true;
     gLobbyMusic.failed = false;
     gLobbyMusic.status = std::to_string(gLobbyMusic.tracks.size()) + " .wav song(s) found in " + MusicFolder().string();
+    Trace("music scan: listed");
     QueueOotSongs();
+    Trace("music scan: done");
 }
 
 bool LoadNextTrack() {
+    Trace("song load: start");
     LobbyMusic& m = gLobbyMusic;
     for (size_t tries = 0; tries < m.tracks.size(); tries++) {
         const std::filesystem::path& file = m.tracks[m.next++ % m.tracks.size()];
@@ -5219,17 +5613,21 @@ bool LoadNextTrack() {
         }
         SDL_AudioCVT cvt;
         if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_S16SYS, 2, 44100) < 0) { SDL_FreeWAV(buf); continue; }
-        cvt.len = static_cast<int>(len);
-        std::vector<Uint8> work(static_cast<size_t>(len) * (cvt.len_mult > 0 ? cvt.len_mult : 1));
-        std::memcpy(work.data(), buf, len);
-        SDL_FreeWAV(buf);
-        cvt.buf = work.data();
-        if (cvt.needed && SDL_ConvertAudio(&cvt) < 0) continue;
-        const size_t bytes = cvt.needed ? static_cast<size_t>(cvt.len_cvt) : len;
-        m.pcm.assign(bytes / 2, 0);
-        std::memcpy(m.pcm.data(), work.data(), m.pcm.size() * 2);
+        if (!cvt.needed) {   // already 16-bit stereo at 44100 Hz: take it as it is, with no second and third copy of a big song in memory
+            m.pcm.assign(reinterpret_cast<const int16_t*>(buf), reinterpret_cast<const int16_t*>(buf) + len / 2);
+            SDL_FreeWAV(buf);
+        } else {
+            cvt.len = static_cast<int>(len);
+            std::vector<Uint8> work(static_cast<size_t>(len) * (cvt.len_mult > 0 ? cvt.len_mult : 1));
+            std::memcpy(work.data(), buf, len);
+            SDL_FreeWAV(buf);
+            cvt.buf = work.data();
+            if (SDL_ConvertAudio(&cvt) < 0) continue;
+            m.pcm.assign(reinterpret_cast<const int16_t*>(work.data()), reinterpret_cast<const int16_t*>(work.data()) + static_cast<size_t>(cvt.len_cvt) / 2);
+        }
         m.pos = 0;
         m.nowPlaying = file.stem().string();
+        Trace("song load: done");
         return !m.pcm.empty();
     }
     return false;
@@ -5269,7 +5667,8 @@ OotMusic gOot;
 constexpr int kOotSeqPlayer = SEQ_PLAYER_BGM_SUB;
 constexpr uint32_t kOotCacheVersion = 1;   // bump when the conversion changes, so old conversions are made again
 
-bool OotInstrumentsOn() { return MapOption("OotInstruments", true); }
+// Off unless the player turns it on: the conversion copies every soundfont out of the game and runs a background worker, which is heavy for a phone.
+bool OotInstrumentsOn() { return MapOption("OotConvert", false); }
 
 // The game's music soundfonts (the ones its songs use, not the sound effects), copied out for the worker: every instrument and drum
 // kit, with its samples still packed as the game keeps them. Runs once, on the game thread.
@@ -5612,7 +6011,14 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
 // What the local player has just done with an item, held for a moment so that everyone sees the pose (potion, ocarina, bow, swing...).
 int gActionFrames = 0;
 royale::Anim gActionAnim = royale::Anim::Idle;
-void StartAction(royale::Anim pose, float seconds) { gActionAnim = pose; gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz)); }
+double gActionStart = 0;
+royale::ItemId gActionItem = royale::ItemId::Count;   // the bottle being drunk or the ability being used: what Link holds for it (LocalLink_Draw)
+void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale::ItemId::Count) {
+    gActionAnim = pose;
+    gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz));
+    gActionStart = ImGui::GetTime();
+    gActionItem = item;
+}
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;
@@ -5675,6 +6081,7 @@ bool gWasJoined = false;
 int gLastCountdownShown = -1;
 int gAttackCooldown = 0;     // game frames until B may attack again
 bool gPendingStart = false;  // the host pressed Start; waiting to be in Hyrule Field, measure the map, then begin
+bool gSoloStartWanted = false;   // "Fortnite Map solo test" was pressed: start the match as soon as the host is in its own lobby
 int gInFieldFrames = 0;      // frames spent in the field without a transition, so the scene's collision is ready
 bool gSpectating = false;
 
@@ -5866,22 +6273,20 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
 
 // Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
 // the game has settled Link on the scene's own floor.
-// A burst of sparks round the player and a sound for an item just used.
-void UseBurst(Player* player, Color_RGBA8 colour, u16 sfx) {
-    SparkBurst(gPlayState, player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z, colour, 14, 3.2f);
-    Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-}
-Color_RGBA8 AbilityColour(royale::ItemId id) {
-    using royale::ItemId;
-    switch (id) {
-        case ItemId::DinsFire: case ItemId::BoleroOfFire: return { 255, 110, 40, 255 };
-        case ItemId::NayrusLove: case ItemId::SerenadeOfWater: return { 100, 160, 255, 255 };
-        case ItemId::FaroresWind: case ItemId::MinuetOfForest: case ItemId::SariasSong: return { 110, 240, 130, 255 };
-        case ItemId::LensOfTruth: case ItemId::NocturneOfShadow: return { 190, 110, 255, 255 };
-        case ItemId::SunsSong: case ItemId::PreludeOfLight: return { 255, 240, 140, 255 };
-        case ItemId::ShockwaveGrenade: case ItemId::SongOfTime: return { 120, 225, 245, 255 };
-        default: return { 255, 220, 150, 255 };
+// Drinking: which bottle Link takes out (the potion the server will most likely pick: the first that heals, or the first shield potion),
+// how long it takes, and its sounds (Link's gulp and the hearts refilling).
+constexpr float kDrinkSeconds = 1.5f;
+royale::ItemId BottleToDrink(const royale::HudState& hud, bool shield) {
+    for (const auto& pot : hud.inv.potions) {
+        const royale::ItemId id = static_cast<royale::ItemId>(pot.item);
+        const royale::PotionDef d = royale::PotionOf(id);
+        if (shield ? d.shield > 0 : (!d.revive && d.heal > 0)) return id;
     }
+    return shield ? royale::ItemId::BluePotion : royale::ItemId::RedPotion;
+}
+void DrinkSounds(Player* player) {
+    Player_PlaySfx(&player->actor, static_cast<u16>(NA_SE_VO_LI_DRINK + player->ageProperties->unk_92));
+    Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
 // ---- solid scenery ------------------------------------------------------------------------------------------------------------
@@ -6097,6 +6502,179 @@ void EnsureSolidScenery() {
     }
 }
 
+// ---- the Fortnite map ---------------------------------------------------------------------------------------------------------
+// The island (shared/fortnite_map.h) is played inside Hyrule Field's scene. patches/0013 lets us do three things there:
+//   * swap the scene's collision for the island's triangles when the scene loads (Royale_CustomCollision, at the end of this file), so everything
+//     the game does with the ground (walking, rolling, arrows, bombs, the camera, chests, spawns, the skydive's landing) works as on any map;
+//   * not draw the field's rooms (Royale_HideRooms), and kill the scene's own actors (grass, rocks, trees: they stand on the old field's ground);
+//   * and this actor draws the island in their place, with the texture baked into vertex colours (the game draws our meshes that way).
+// Water is one big water box at the water level: lakes, rivers and the sea are the ground below it, and Link swims there.
+struct FortniteGpu {
+    static constexpr int kChunk = 4, kChunks = royale::fortnite::kCells / kChunk;   // blocks per chunk side; chunks per map side
+    std::vector<Vtx> vtx[royale::fortnite::kLods];                            // [lod]: every block's vertices at that level of detail
+    std::vector<Gfx> dl[royale::fortnite::kLods][kChunks * kChunks];          // one display list per chunk and level of detail
+    float lo[kChunks * kChunks] = {}, hi[kChunks * kChunks] = {};             // each chunk's lowest and highest point, for culling
+    bool built = false;
+};
+FortniteGpu gFortniteGpu;
+Actor* gFortniteActor = nullptr;
+bool gFortniteArrived = false;   // the local player has been put on the island since this scene loaded
+
+void BuildFortniteGpu() {
+    namespace fn = royale::fortnite;
+    constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;
+    FortniteGpu& g = gFortniteGpu;
+    for (int lod = 0; lod < fn::kLods; lod++) g.vtx[lod].assign(static_cast<size_t>(fn::kCells) * fn::kCells * fn::LodVerts(lod), Vtx{});   // never resized again: the lists point into them
+    std::fill(std::begin(g.lo), std::end(g.lo), 1.0e9f);
+    std::fill(std::begin(g.hi), std::end(g.hi), -1.0e9f);
+    std::vector<fn::DrawVert> tmp;
+    for (int bj = 0; bj < fn::kCells; bj++) {
+        for (int bi = 0; bi < fn::kCells; bi++) {
+            for (int lod = 0; lod < fn::kLods; lod++) {
+                tmp.clear();
+                fn::BlockVertices(bi, bj, lod, tmp);
+                Vtx* out = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(lod)];
+                for (size_t k = 0; k < tmp.size(); k++) {
+                    out[k].v.ob[0] = tmp[k].x; out[k].v.ob[1] = tmp[k].y; out[k].v.ob[2] = tmp[k].z;
+                    out[k].v.flag = 0;
+                    out[k].v.tc[0] = out[k].v.tc[1] = 0;
+                    out[k].v.cn[0] = tmp[k].r; out[k].v.cn[1] = tmp[k].g; out[k].v.cn[2] = tmp[k].b; out[k].v.cn[3] = 255;
+                }
+                if (lod == 0) {
+                    const int c = (bj / kChunk) * kChunks + bi / kChunk;
+                    for (const fn::DrawVert& v : tmp) { g.lo[c] = std::min<float>(g.lo[c], v.y); g.hi[c] = std::max<float>(g.hi[c], v.y); }
+                }
+            }
+        }
+    }
+    for (int cj = 0; cj < kChunks; cj++) {
+        for (int ci = 0; ci < kChunks; ci++) {
+            for (int lod = 0; lod < fn::kLods; lod++) {
+                std::vector<Gfx>& dl = g.dl[lod][cj * kChunks + ci];
+                dl.assign(kChunk * kChunk * (1 + fn::kSub * fn::kSub * 2) + 1, Gfx{});
+                Gfx* p = dl.data();
+                for (int bj = cj * kChunk; bj < (cj + 1) * kChunk; bj++) {
+                    for (int bi = ci * kChunk; bi < (ci + 1) * kChunk; bi++) {
+                        const int use = fn::BlockIsOpenWater(bi, bj) ? fn::kLods - 1 : lod;   // open water is a flat square at any distance
+                        const int n = fn::LodSquares(use), row = n + 1;
+                        const Vtx* base = &g.vtx[use][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(use)];
+                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), fn::LodVerts(use), 0);
+                        for (int b = 0; b < n; b++) {
+                            for (int a = 0; a < n; a++) {
+                                const int v = b * row + a;
+                                gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
+                                gSP1Triangle(p++, v, v + row + 1, v + row, 0);
+                            }
+                        }
+                    }
+                }
+                gSPEndDisplayList(p++);
+                dl.resize(static_cast<size_t>(p - dl.data()));
+            }
+        }
+    }
+    g.built = true;
+}
+
+void FortniteTerrain_Init(Actor* actor, PlayState*) {
+    Actor_SetScale(actor, 1.0f);
+    actor->world.pos = actor->home.pos = { 0, 0, 0 };
+}
+void FortniteTerrain_Update(Actor*, PlayState*) {}
+void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
+
+// Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
+// per square far away. Open sea costs two triangles a square whatever the distance.
+void FortniteTerrain_Draw(Actor*, PlayState* play) {
+    namespace fn = royale::fortnite;
+    if (!gFortniteGpu.built) BuildFortniteGpu();
+    constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;
+    const Vec3f eye = play->view.eye, at = play->view.lookAt;
+    float fx = at.x - eye.x, fy = at.y - eye.y, fz = at.z - eye.z;
+    const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl > 1.0f) { fx /= fl; fy /= fl; fz /= fl; } else { fx = 0; fy = -1; fz = 0; }
+    const float flat = std::hypot(fx, fz);
+    const float halfX = 0.5f * kChunk * fn::kCellX, halfZ = 0.5f * kChunk * fn::kCellZ;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0.0f, 0.0f, 0.0f, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // the colours are baked in; draw both sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    for (int cj = 0; cj < kChunks; cj++) {
+        for (int ci = 0; ci < kChunks; ci++) {
+            const int c = cj * kChunks + ci;
+            const float cx = -fn::kHalfX + (ci + 0.5f) * kChunk * fn::kCellX, cz = -fn::kHalfZ + (cj + 0.5f) * kChunk * fn::kCellZ;
+            const float cy = 0.5f * (gFortniteGpu.lo[c] + gFortniteGpu.hi[c]), halfY = 0.5f * (gFortniteGpu.hi[c] - gFortniteGpu.lo[c]);
+            const float dx = cx - eye.x, dy = cy - eye.y, dz = cz - eye.z;
+            const float r = std::sqrt(halfX * halfX + halfZ * halfZ + halfY * halfY) + 60.0f;   // the chunk's bounding sphere, with a margin
+            const float along = dx * fx + dy * fy + dz * fz;
+            if (along < -r) continue;                                                           // wholly behind the camera
+            if (flat > 0.6f) {                                                                  // looking out rather than down: also skip what is far off to the side
+                const float hx = fx / flat, hz = fz / flat, ahead = dx * hx + dz * hz, side = std::fabs(dx * hz - dz * hx);
+                if (side - r > std::max(0.0f, ahead + r) * 2.4f) continue;
+            }
+            const float dist = std::hypot(dx, dz);
+            const int lod = dist < 2600.0f ? 0 : dist < 5200.0f ? 1 : 2;
+            gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][c].data()));
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+int FortniteActorId() {
+    static int id = -1;
+    if (id < 0) {
+        ActorDBInit init;
+        init.name = "Royale_Terrain";
+        init.desc = "Battle royale island";
+        init.category = ACTORCAT_BG;
+        init.flags = ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+        init.objectId = OBJECT_GAMEPLAY_KEEP;
+        init.instanceSize = sizeof(Actor);
+        init.init = FortniteTerrain_Init;
+        init.destroy = FortniteTerrain_Destroy;
+        init.update = FortniteTerrain_Update;
+        init.draw = FortniteTerrain_Draw;
+        id = ActorDB::Instance->AddEntry(init).entry.id;
+    }
+    return id;
+}
+
+// Called every frame: the island is drawn while we are in a scene loaded with its collision; the player is put on it once on arrival (the scene
+// puts Link at the field's door, which is somewhere inside or under the island); and a lobby that changes between the field and the island
+// reloads the scene, since the collision is chosen when the scene loads.
+void DriveFortnite(Player* player, const royale::HudState& hud) {
+    if (gPlayState == nullptr || !InGame()) return;
+    const bool onIsland = gFortniteScene && gPlayState->sceneNum == SCENE_HYRULE_FIELD;
+    if (onIsland && gFortniteActor == nullptr) {
+        gFortniteActor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, static_cast<s16>(FortniteActorId()), 0, 0, 0, 0, 0, 0, 0, false);
+    } else if (!onIsland && gFortniteActor != nullptr) {
+        Actor_Kill(gFortniteActor);
+        gFortniteActor = nullptr;
+    }
+    if (!gSession.Joined()) return;
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && gFortniteScene != (gMapId == royale::fortnite::kMapId)) {
+        GoToField();   // the host changed the map: load the scene again with the right ground
+        return;
+    }
+    if (!onIsland) { gFortniteArrived = false; return; }
+    if (gFortniteArrived || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return;
+    gFortniteArrived = true;
+    // A little scatter, so a lobby's players don't all stand in one spot. Only in the lobby: once the match is on, the skydive places everyone.
+    if (hud.state != royale::MatchState::Lobby || gSkydiving) return;
+    namespace fn = royale::fortnite;
+    const float a = static_cast<float>(std::rand() % 628) / 100.0f, r = static_cast<float>(std::rand() % 220);
+    const float x = fn::kSpawnX + std::sin(a) * r, z = fn::kSpawnZ + std::cos(a) * r;
+    float y = 0;
+    if (!fn::GroundHeight(x, z, &y)) return;
+    player->actor.world.pos = { x, y + 12.0f, z };
+    player->actor.prevPos = player->actor.world.pos;
+    player->actor.velocity = { 0, 0, 0 };
+    player->actor.speedXZ = 0.0f;
+    player->fallDistance = 0;
+}
+
 void ApplyPlatforms(Player* player) {
     if (!InField() || SolidActive()) return;
     RefreshPlatforms();
@@ -6251,7 +6829,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (in.press.button & BTN_DDOWN) {
-        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 255, 150, 255 }, NA_SE_SY_HP_RECOVER); }
+        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, false)); DrinkSounds(player); }
         else Say("No potions");
     }
 
@@ -6261,7 +6839,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         for (const auto& pot : hud.inv.potions) has |= royale::PotionOf(static_cast<royale::ItemId>(pot.item)).shield > 0;
         if (!has) Say("No shield potion");
         else if (hud.inv.shield >= royale::kMaxShield - 0.05f) Say("Your shield is full");
-        else { gSession.UseShield(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 190, 255, 255 }, NA_SE_SY_HP_RECOVER); }
+        else { gSession.UseShield(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, true)); DrinkSounds(player); }
     }
 
     // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
@@ -6306,9 +6884,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             gSession.UseAbility();
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
-                        : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
-            PowerFx(gPlayState, ab, player->actor.world.pos, true);
-            UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
+                        : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast,
+                        royale::IsSong(ab) ? 1.5f : 0.9f, ab);
+            PowerFx(gPlayState, ab, player->actor.world.pos, true, &player->actor, hud.selfId);
+            Audio_PlaySoundGeneral(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab),
+                                   &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
     }
@@ -6340,10 +6920,10 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
 // The match-start skydive, as in Fortnite: you spawn high above your spawn point, hang there during the countdown, then fall
 // during the drop. The stick steers, holding Z dives faster, and the ground ends it (anyone still airborne when the drop ends
 // plummets). The server only knows x and z, and protects everyone for the whole drop, so this is all done on the client.
-constexpr float kSkyHeight = 3000.0f;   // units above the ground you start
-constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (the drop lasts 18 s)
-constexpr float kDiveSpeed = 380.0f;    // holding Z
-constexpr float kAirSpeed = 130.0f;     // steering speed
+constexpr float kSkyHeight = royale::kSkyHeight;   // shared/balance.h: the bots skydive with the same numbers
+constexpr float kGlideSpeed = royale::kGlideSpeed;
+constexpr float kDiveSpeed = royale::kDiveSpeed;
+constexpr float kAirSpeed = royale::kAirSpeed;
 // Where you may touch down: floor that is not water, lava, a door, a cliff face or a bottomless drop, inside the circle the storm has left.
 bool SafeLanding(float x, float z, const royale::HudState& hud) {
     float y;
@@ -6419,7 +6999,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
     if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
-    else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
+    else if (hud.state == royale::MatchState::InMatch) fall = royale::kLateFallSpeed;           // the drop is over: land now
     SteerToSafeLanding(player, hud, dt);
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - fall * dt;
@@ -6434,6 +7014,49 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     player->fallDistance = 0;                                                     // no landing damage or hard-landing stun
 }
 
+// The Shockwave Grenade, as in Fortnite: a blast under your feet throws you high into the air, and you take no fall damage (no hard landing,
+// no stagger) until you land and for a moment after. The server only knows x and z, so this is all done here. Link is in his own jump the
+// whole way, so the stick steers him in the air as in any jump, and walls and ledges work as they always do.
+constexpr float kLaunchGraceSeconds = 1.0f;   // still safe this long after touching down (a bounce off a ledge, a slope into a drop)
+int gLaunchFrames = 0;                        // frames since the launch; 0 = no launch going
+bool gLaunchAirborne = false;                 // has left the ground
+double gLaunchSafeUntil = 0;                  // set when you touch down
+
+void LaunchSelf(Player* player, royale::Rarity rarity) {
+    if (gSkydiving || player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD)) return;
+    const float height = 260.0f * royale::RarityScale(rarity);           // Uncommon about 300 units up (six Links), Legendary about 455
+    const float g = player->actor.gravity < -0.3f ? -player->actor.gravity : 1.0f;
+    player->actor.velocity.y = std::sqrt(2.0f * g * height);
+    player->actor.world.pos.y += 2.0f;                                   // off the floor, so the game puts him in his jump next frame
+    player->actor.bgCheckFlags &= ~1;
+    player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
+    gLaunchFrames = 1;
+    gLaunchAirborne = false;
+    gLaunchSafeUntil = 0;
+}
+
+void UpdateLaunch(Player* player) {
+    if (gLaunchFrames == 0) return;
+    gLaunchFrames++;
+    const bool grounded = (player->actor.bgCheckFlags & 1) || (player->stateFlags1 & PLAYER_STATE1_IN_WATER);
+    if (!grounded) gLaunchAirborne = true;
+    // The game measures a fall from the last height it saw you standing at. Moving that up with you means every landing is a short hop.
+    player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
+    player->fallDistance = 0;
+    const double now = ImGui::GetTime();
+    if (!gLaunchAirborne) {
+        if (gLaunchFrames > 10) gLaunchFrames = 0;                       // never got off the ground (hanging on a ledge, say): nothing to protect
+        return;
+    }
+    if (!grounded && gLaunchSafeUntil == 0 && (gLaunchFrames & 1)) {     // a purple trail behind you on the way up and down
+        Vec3f pos = { player->actor.world.pos.x, player->actor.world.pos.y + 10.0f, player->actor.world.pos.z }, vel = { 0, -0.5f, 0 }, accel = { 0, 0, 0 };
+        Color_RGBA8 prim = { 235, 190, 255, 255 }, env = { 160, 60, 255, 255 };
+        EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 90, 20);
+    }
+    if (grounded && gLaunchSafeUntil == 0) gLaunchSafeUntil = now + kLaunchGraceSeconds;
+    if ((gLaunchSafeUntil > 0 && now > gLaunchSafeUntil) || gLaunchFrames > 20 * 30) gLaunchFrames = 0;   // done (or something held you in the air for ages)
+}
+
 // Where you will land if you keep doing what you are doing: a ring on the ground at that spot (and a faint one straight below you), with how
 // high you are. Steering moves the ring, holding Z pulls it closer, so you can pick a landing spot before you get there.
 void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
@@ -6446,7 +7069,7 @@ void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const float sx = in.cur.stick_x, sy = in.cur.stick_y;
     const float mag = std::min(1.0f, std::sqrt(sx * sx + sy * sy) / 60.0f);
     const bool dropping = gStateNow == royale::MatchState::Drop;
-    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : 700.0f;
+    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : royale::kLateFallSpeed;
     const float seconds = std::max(0.0f, (py - below)) / fall;
     float lx = px, lz = pz;
     if (mag > 0.1f) {   // the same steering the skydive uses, held for the rest of the fall
@@ -6546,9 +7169,77 @@ void SyncRealAmmo(const royale::HudState& hud) {
         gSaveContext.magic = 0x30;
     }
 }
+// What your own Link wears in a match, as the game's values: the boots and mask are only put on him while he is drawn (the game's own iron boots,
+// hover boots and bunny hood would also change how he moves, and the server decides that), the shield for real (it is what he raises).
+struct LocalDress {
+    bool on = false;
+    s8 boots = PLAYER_BOOTS_KOKIRI;
+    u8 mask = PLAYER_MASK_NONE;
+    royale::ItemId weapon = royale::ItemId::BasicSword;
+};
+LocalDress gLocalDress;
+bool LocalDressOn() { return gLocalDress.on; }
+royale::ItemId WornGear(const royale::HudState& hud, royale::GearSlot slot) {
+    const int i = static_cast<int>(slot);
+    return (hud.inv.gearMask & (1 << i)) ? static_cast<royale::ItemId>(hud.inv.gear[i].item) : royale::ItemId::Count;
+}
+void SyncLocalDress(Player* player, const royale::HudState& hud) {
+    gLocalDress.on = gSession.Joined() && IsLive(hud) && hud.selfAlive && InField();
+    gSelfInvulnLeft = hud.invulnLeft;
+    if (!gLocalDress.on) return;
+    gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
+    gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
+    gLocalDress.weapon = hud.weapon;
+    const s8 shield = hud.hasShield ? PlayerShieldFor(hud.shield) : PLAYER_SHIELD_NONE;
+    if (player->currentShield != shield && !(player->stateFlags1 & PLAYER_STATE1_SHIELDING)) {
+        Inventory_ChangeEquipment(EQUIP_TYPE_SHIELD, static_cast<u16>(shield));   // the pause screen and the game's own checks agree (put back after the match)
+        player->currentShield = shield;
+        Player_SetModelGroup(player, Player_ActionToModelGroup(player, player->heldItemAction));
+    }
+    if (player->actor.draw == Player_Draw) player->actor.draw = LocalLink_Draw;
+}
+// Draws your own Link dressed (see LocalDress). While you drink, play a song or use a gadget, the bottle, the ocarina or the hookshot is in his
+// hand as in the game, and if you are standing still he goes through the game's motions for it (the bottle raised, the ocarina played, the
+// spell cast). Swings and shots need none of this: they are the game's own item code (SyncLocalWeapon).
+void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
+    if (!gLocalDress.on) { Player_Draw(&player->actor, play); return; }
+    const s8 boots = player->currentBoots;
+    const u8 mask = player->currentMask;
+    player->currentBoots = gLocalDress.boots;
+    player->currentMask = gLocalDress.mask;
+    const bool using_ = mayPose && gActionFrames > 0 && gActionItem != royale::ItemId::Count && player->meleeWeaponState == 0 &&
+                        !(player->stateFlags1 & (PLAYER_STATE1_SHIELDING | PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD));
+    const s32 group = player->modelGroup;
+    const s8 itemAction = player->itemAction, held = player->heldItemAction;
+    const u8 button = gSaveContext.equips.buttonItems[0];
+    bool swapped = false;
+    if (using_) {
+        const float t = static_cast<float>(ImGui::GetTime() - gActionStart);
+        const Look look = ActionLook(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, gActionItem, t, gActionItem);
+        if (look.modelGroup != group || look.itemAction != held) {
+            gSaveContext.equips.buttonItems[0] = look.buttonItem;
+            player->itemAction = player->heldItemAction = look.itemAction;
+            Player_SetModelGroup(player, look.modelGroup);
+            swapped = true;
+        }
+        if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
+            PoseSeq(player, SeqFor(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, 0, gActionItem, player), t);
+    }
+    Player_Draw(&player->actor, play);
+    if (swapped) {
+        gSaveContext.equips.buttonItems[0] = button;
+        player->itemAction = itemAction;
+        player->heldItemAction = held;
+        Player_SetModelGroup(player, group);
+    }
+    player->currentBoots = boots;
+    player->currentMask = mask;
+}
+
 int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     ApplyItemCvars(gSession.Joined() && IsLive(hud));
+    SyncLocalDress(player, hud);
     const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
     if (!on) {
         if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
@@ -6637,6 +7328,7 @@ void OnPlayerUpdate() {
         player->actor.scale.x = player->actor.scale.y = player->actor.scale.z = k;
     }
     UpdateSkydive(player, hud);
+    UpdateLaunch(player);
     ReconcileLocalGlider(gSkydiving);
     if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
         LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
@@ -6649,6 +7341,7 @@ void OnPlayerUpdate() {
     NoticePoi(player, hud);
     if (gActionFrames > 0) gActionFrames--;
     SyncLocalWeapon(player, hud);
+    DriveFortnite(player, hud);
     EnsureSolidScenery();
     gAngryPlayerAlive = !(hud.haveSelf && !hud.selfAlive);
     ApplyPlatforms(player);
@@ -6699,7 +7392,7 @@ void OnPlayerUpdate() {
         if (const royale::PuppetState* t = SpectateTarget()) {
             player->actor.world.pos.x = t->x;
             player->actor.world.pos.z = t->z;
-            player->actor.world.pos.y = t->isBot ? GroundY(gPlayState, t->x, t->z, t->y) : t->y;
+            player->actor.world.pos.y = t->isBot ? BotY(gPlayState, t->x, t->z, t->y) : t->y;
             player->actor.prevPos = player->actor.world.pos;
             player->actor.velocity.y = 0.0f;
             player->actor.shape.rot.y = t->rot;
@@ -6781,8 +7474,10 @@ void ReportEvents(const royale::HudState& hud) {
                 };
                 if (e.id == hud.selfId && onShield((me->stateFlags1 & PLAYER_STATE1_SHIELDING) != 0, me->actor.shape.rot.y, me->actor.world.pos.x, me->actor.world.pos.z)) {
                     Audio_PlaySoundGeneral(NA_SE_IT_SHIELD_REFLECT_SW, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-                    SparkBurst(gPlayState, me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f,
-                               me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    {   // the spark the game shows when a blow rings off a shield
+                        Vec3f at = { me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f, me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f };
+                        EffectSsHitMark_SpawnFixedScale(gPlayState, EFFECT_HITMARK_METAL, &at);
+                    }
                     gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
                     if (e.other != royale::net::kNoPlayer16) { gIncomingHits.push_back({ e.other, now }); swing(e.other); }
                 } else if (e.id != hud.selfId && gState.count(e.id) && gActorOf.count(e.id) &&
@@ -6791,7 +7486,8 @@ void ReportEvents(const royale::HudState& hud) {
                     if (e.other == hud.selfId) { gHitMarkerAt = now; gHitMarkerKill = e.health <= 0.001f; gFloatingNumbers.push_back({ t->world.pos.x, t->world.pos.y, t->world.pos.z, e.amount, now, false }); }
                     else swing(e.other);
                     if (std::hypot(t->world.pos.x - me->actor.world.pos.x, t->world.pos.z - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SHIELD_REFLECT_SW);
-                    SparkBurst(gPlayState, t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    Vec3f at = { t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f };
+                    EffectSsHitMark_SpawnFixedScale(gPlayState, EFFECT_HITMARK_METAL, &at);
                 } else if (e.id == hud.selfId) {
                     // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
                     Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
@@ -6935,6 +7631,8 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
                 if (e.item < royale::kItemCount) AbilityFx(e.id, static_cast<royale::ItemId>(e.item), e.id == hud.selfId, e.x, e.z);
+                if (e.id == hud.selfId && e.item == static_cast<uint8_t>(royale::ItemId::ShockwaveGrenade) && InField())
+                    LaunchSelf(GET_PLAYER(gPlayState), static_cast<royale::Rarity>(hud.inv.ability.rarity));
                 if (e.item == royale::net::kRevivedItem) {
                     if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
@@ -6987,6 +7685,10 @@ void ReportEvents(const royale::HudState& hud) {
 // The host's Start does three things in order: get to Hyrule Field, measure the real playable area and rebuild the world on it
 // (loot, spawns and storm on ground that exists), then begin.
 void DriveStart(const royale::HudState& hud) {
+    if (gSoloStartWanted) {   // the solo test needs no one else: press Start for the host as soon as they are in the lobby
+        if (!gSession.Joined() || !gSession.SoloTest()) gSoloStartWanted = false;
+        else if (hud.isHost && hud.state == royale::MatchState::Lobby && hud.haveSelf && InGame() && !gPendingStart) { gPendingStart = true; gSoloStartWanted = false; }
+    }
     if (!gPendingStart) return;
     if (!gSession.Joined() || !hud.isHost || hud.state != royale::MatchState::Lobby) { gPendingStart = false; return; }
     if (!InGame()) return;
@@ -6994,7 +7696,7 @@ void DriveStart(const royale::HudState& hud) {
     if (gPlayState->transitionTrigger != TRANS_TRIGGER_OFF || ++gInFieldFrames < royale::kTickHz) return; // let the scene settle
     royale::Circle measured;
     if (MeasureField(&measured)) {
-        gSession.ConfigureMap(measured, WalkableAt);
+        gSession.ConfigureMap(measured, WalkableAt, [](royale::Vec2 p, float* y) { return RawFloorAt(p.x, p.z, y); });   // the bots learn the ledges and cliffs
     }
     gSession.StartMatch();
     gPendingStart = false;
@@ -7862,7 +8564,7 @@ void Ally_PostLimb(PlayState* play, s32 limb, Gfx** dList, Vec3s*, void*) {
             Matrix_RotateY(1.57f, MTXMODE_APPLY);
             const float k = GidScale(gid) * 3.0f;
             Matrix_Scale(k, k, k, MTXMODE_APPLY);
-            GetItem_Draw(play, static_cast<s16>(gid));
+            DrawItemModel(play, gid);
             Matrix_Pop();
         }
     }
@@ -8362,6 +9064,7 @@ void SyncPauseInventory(const royale::HudState& hud) {
             gSaveContext.equips = gSavedInv.equips;
             gSavedInv.have = false;
             gKitHash = 0;
+            if (InGame()) Player_SetEquipmentData(gPlayState, GET_PLAYER(gPlayState));   // and Link wears your own shield again
         }
         return;
     }
@@ -8460,6 +9163,7 @@ void OnGameFrameUpdate() {
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
+        Trace("lobby: joined");
         gLastEpoch = gSession.Client()->Epoch();
         WantsWaitingRoom = CVarGetInteger(CVAR_SETTING("Royale.WaitingRoom"), 1) != 0;
         Say(hud.isHost ? "Lobby open. Share your address from the Battle Royale menu" : "Joined the lobby");
@@ -8506,6 +9210,7 @@ void OnGameFrameUpdate() {
 }
 
 void OnSceneInit(int16_t) {
+    Trace("scene: init");
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
@@ -8528,6 +9233,7 @@ void OnSceneInit(int16_t) {
     gInFieldFrames = 0;
     gAngry.clear();
     gSolidActor = nullptr; gSolidBgId = -1; gSolidFailed = false; gSolidSet.clear();   // the scene's collision (and our actor with it) is gone
+    gFortniteActor = nullptr; gFortniteArrived = false;
 }
 
 void RegisterRoyaleMod() {
@@ -8567,6 +9273,15 @@ void RegisterRoyaleMod() {
             actor->destroy = Puppet_Destroy;
             if (gSpawningPuppet >= kCorpseIdBase) { actor->update = Corpse_Update; actor->draw = Corpse_Draw; } // a body, not a live player
         });
+
+    // The Fortnite map has no use for the field's own scenery (grass, rocks, trees, cows): it stands on the old field's ground, not the island's.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneSpawnActors>([]() {
+        if (!gFortniteScene || gPlayState == nullptr || gPlayState->sceneNum != SCENE_HYRULE_FIELD) return;
+        for (int cat = 0; cat < ACTORCAT_MAX; cat++) {
+            if (cat == ACTORCAT_PLAYER) continue;
+            for (Actor* a = gPlayState->actorCtx.actorLists[cat].head; a != nullptr; a = a->next) Actor_Kill(a);
+        }
+    });
 
     // No enemies spawn while in a lobby or match.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
@@ -8715,7 +9430,7 @@ void DrawMinimapOptions() {
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background)", true },
+        { "OotConvert", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
         { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
@@ -8731,15 +9446,16 @@ void DrawMinimapOptions() {
     }
     ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
     ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    if (gLobbyMusic.status.empty()) gScanRequested = true;
-    ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
+    Trace("options: opened");
+    if (gLobbyMusic.status.empty()) ImGui::TextColored(kGrey, "Press Rescan to look for songs.");   // not scanned for you: opening this section stays light
+    else ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
     if (ImGui::Button("Rescan music folder")) gScanRequested = true;
     ImGui::Spacing();
     ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
-    if (!gDragonModel.tried) LoadCustomDragon();
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
-    if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
+    if (ImGui::Button(gDragonModel.tried ? "Reload custom dragon" : "Look for a custom dragon")) LoadCustomDragon();
+    Trace("options: drawn");
 }
 
 // What every item and power does, read from the item table (shared/items.h) so it follows the items as they change. Grouped by kind, with the
@@ -8842,12 +9558,30 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         ui.error.clear();
         SaveUi(ui);
         gSession.ClearLastEnded();
+        Trace("host: pressed");
         if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
             ui.error = "Could not host: " + ui.error;
         } else {
+            Trace("host: server up");
+            RefreshLocalAddresses(ui, true);
+            Trace("host: addresses listed");
+        }
+    }
+    ImGui::Spacing();
+
+    if (ImGui::Button("Fortnite Map: solo test", ImVec2(220, 0))) {
+        ui.port = std::clamp(ui.port, 1024, 65535);
+        ui.error.clear();
+        SaveUi(ui);
+        gSession.ClearLastEnded();
+        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true)) {
+            ui.error = "Could not host: " + ui.error;
+        } else {
+            gSoloStartWanted = true;
             RefreshLocalAddresses(ui, true);
         }
     }
+    ImGui::TextColored(kGrey, "Just you on the Fortnite Map, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
@@ -9259,3 +9993,72 @@ void RegisterRoyaleMenu() {
 RegisterMenuInitFunc royaleMenuInit(RegisterRoyaleMenu);
 
 } // namespace
+
+// ---- the Fortnite map, the parts the game calls (patches/0013) ------------------------------------------------------------------
+
+namespace {
+// The island's collision in the game's own formats. Built once, then it stays: the game keeps pointers into it for as long as the scene is loaded.
+std::vector<Vec3s> gFortniteVtx;
+std::vector<CollisionPoly> gFortnitePoly;
+SurfaceType gFortniteSurface[1];
+CamData gFortniteCam[1];
+WaterBox gFortniteWater[1];
+CollisionHeader gFortniteHeader;
+bool gFortniteBuilt = false;
+
+CollisionHeader* FortniteHeader() {
+    namespace fn = royale::fortnite;
+    if (gFortniteBuilt) return &gFortniteHeader;
+    const fn::Mesh mesh = fn::BuildCollision();
+    gFortniteVtx.resize(mesh.verts.size());
+    for (size_t i = 0; i < mesh.verts.size(); i++) gFortniteVtx[i] = { mesh.verts[i].x, mesh.verts[i].y, mesh.verts[i].z };
+    gFortnitePoly.resize(mesh.polys.size());
+    for (size_t i = 0; i < mesh.polys.size(); i++) {
+        const fn::Poly& p = mesh.polys[i];
+        CollisionPoly& c = gFortnitePoly[i];
+        c = {};
+        c.type = 0;
+        c.flags_vIA = p.a;
+        c.flags_vIB = p.b;
+        c.vIC = p.c;
+        c.normal = { p.nx, p.ny, p.nz };
+        c.dist = p.dist;
+    }
+    gFortniteSurface[0] = {};                       // plain ground: no exit, no damage, the first camera entry
+    gFortniteCam[0] = {};
+    gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
+    gFortniteCam[0].numCameras = 0;
+    gFortniteCam[0].camPosData = nullptr;
+    gFortniteWater[0] = {};                         // one box over the whole island: every room (0x3F), the scene's first light setting
+    gFortniteWater[0].xMin = static_cast<s16>(std::lround(-fn::kHalfX - 2.0f));
+    gFortniteWater[0].zMin = static_cast<s16>(std::lround(-fn::kHalfZ - 2.0f));
+    gFortniteWater[0].xLength = static_cast<s16>(std::lround(2.0f * fn::kHalfX + 4.0f));
+    gFortniteWater[0].zLength = static_cast<s16>(std::lround(2.0f * fn::kHalfZ + 4.0f));
+    gFortniteWater[0].ySurface = static_cast<s16>(fn::kWaterY);
+    gFortniteWater[0].properties = 0x3Fu << 13;
+    gFortniteHeader = {};
+    gFortniteHeader.minBounds = { mesh.lo.x, mesh.lo.y, mesh.lo.z };
+    gFortniteHeader.maxBounds = { mesh.hi.x, mesh.hi.y, mesh.hi.z };
+    gFortniteHeader.numVertices = static_cast<u16>(gFortniteVtx.size());
+    gFortniteHeader.vtxList = gFortniteVtx.data();
+    gFortniteHeader.numPolygons = static_cast<u16>(gFortnitePoly.size());
+    gFortniteHeader.polyList = gFortnitePoly.data();
+    gFortniteHeader.surfaceTypeList = gFortniteSurface;
+    gFortniteHeader.cameraDataList = gFortniteCam;
+    gFortniteHeader.cameraDataListLen = 1;
+    gFortniteHeader.numWaterBoxes = 1;
+    gFortniteHeader.waterBoxes = gFortniteWater;
+    gFortniteBuilt = true;
+    return &gFortniteHeader;
+}
+} // namespace
+
+// Called as every scene loads its collision: the island's, if this is Hyrule Field and the lobby's map is the Fortnite map; otherwise null (the scene's own).
+extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
+    gFortniteScene = false;
+    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || gMapId != royale::fortnite::kMapId) return nullptr;
+    gFortniteScene = true;
+    return FortniteHeader();
+}
+extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }
+extern "C" s32 Royale_HideRooms(void) { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }

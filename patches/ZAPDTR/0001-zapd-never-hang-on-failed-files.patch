@@ -1,0 +1,130 @@
+diff --git a/ZAPD/Main.cpp b/ZAPD/Main.cpp
+index 4e28315..6d3da8d 100644
+--- a/ZAPD/Main.cpp
++++ b/ZAPD/Main.cpp
+@@ -73,6 +73,8 @@ ZRoom room(nullptr);
+ 
+ #include "CrashHandler.h"
+ 
++#include <atomic>
++#include <mutex>
+ #include <string>
+ #include <string_view>
+ #include "tinyxml2.h"
+@@ -89,7 +91,51 @@ void BuildAssetBackground(const fs::path& imageFilePath, const fs::path& outPath
+ void BuildAssetBlob(const fs::path& blobFilePath, const fs::path& outPath);
+ int ExtractFunc(int workerID, int fileListSize, std::string fileListItem, ZFileMode fileMode);
+ 
+-volatile int numWorkersLeft = 0;
++// Workers still running in "ed" mode. Atomic: workers finish on several threads at once, and a lost decrement used to
++// leave the wait loop below spinning forever.
++std::atomic<int> numWorkersLeft = 0;
++std::atomic<int> numWorkersFailed = 0;
++static std::mutex sZapdErrorMutex;
++static std::string sZapdFirstError;
++
++// Optional: called from the thread that runs zapd_main while files are extracted (done == total once they all are).
++extern "C" void (*gZapdProgressCallback)(int done, int total) = nullptr;
++
++// The first error a worker hit during the last zapd_main run, or "" if none.
++extern "C" const char* zapd_last_error()
++{
++	return sZapdFirstError.c_str();
++}
++
++static void RecordWorkerFailure(const std::string& message)
++{
++	printf("Error: %s\n", message.c_str());
++	numWorkersFailed++;
++	std::lock_guard<std::mutex> lock(sZapdErrorMutex);
++	if (sZapdFirstError.empty())
++		sZapdFirstError = message;
++}
++
++// Runs one XML file. Always counts the worker as finished, even when it fails or throws (errors from
++// HANDLE_ERROR are exceptions), so the wait loop always ends.
++static void RunExtractWorker(int workerID, int fileListSize, const std::string& fileListItem,
++                             ZFileMode fileMode)
++{
++	try
++	{
++		if (ExtractFunc(workerID, fileListSize, fileListItem, fileMode) != 0)
++			RecordWorkerFailure("could not extract " + fileListItem);
++	}
++	catch (const std::exception& e)
++	{
++		RecordWorkerFailure(fileListItem + ": " + e.what());
++	}
++	catch (...)
++	{
++		RecordWorkerFailure(fileListItem + ": unknown error");
++	}
++	numWorkersLeft--;
++}
+ 
+ extern void ImportExporters();
+ 
+@@ -106,6 +152,12 @@ extern "C" int zapd_main(int argc, char* argv[])
+ 	Globals* g = new Globals();
+ 	WarningHandler::Init(argc, argv);
+ 
++	numWorkersFailed = 0;
++	{
++		std::lock_guard<std::mutex> lock(sZapdErrorMutex);
++		sZapdFirstError.clear();
++	}
++
+ 	for (int i = 1; i < argc; i++)
+ 	{
+ 		if (!strcmp(argv[i], "--version"))
+@@ -318,13 +370,15 @@ extern "C" int zapd_main(int argc, char* argv[])
+ 				{
+ 					if (Globals::Instance->singleThreaded)
+ 					{
+-						ExtractFunc(i, fileList.size(), fileList[i], fileMode);
++						RunExtractWorker(i, fileList.size(), fileList[i], fileMode);
++						if (gZapdProgressCallback != nullptr)
++							gZapdProgressCallback(i + 1, fileListSize);
+ 					}
+ 					else
+ 					{
+ 						std::string fileListItem = fileList[i];
+ 						pool.push([i, fileListSize, fileListItem, fileMode](int) {
+-							ExtractFunc(i, fileListSize, fileListItem, fileMode);
++							RunExtractWorker(i, fileListSize, fileListItem, fileMode);
+ 						});
+ 					}
+ 				}
+@@ -333,13 +387,22 @@ extern "C" int zapd_main(int argc, char* argv[])
+ 				{
+ 					while (true)
+ 					{
+-						if (numWorkersLeft <= 0)
++						int left = numWorkersLeft;
++						if (gZapdProgressCallback != nullptr)
++							gZapdProgressCallback(fileListSize - (left > 0 ? left : 0), fileListSize);
++						if (left <= 0)
+ 							break;
+ 
+ 						std::this_thread::sleep_for(std::chrono::milliseconds(250));
+ 					}
+ 				}
+ 
++				if (numWorkersFailed > 0)
++				{
++					printf("Error: %i of %i files failed to extract\n", (int)numWorkersFailed, fileListSize);
++					return 1;
++				}
++
+ 				auto end = std::chrono::steady_clock::now();
+ 				auto diff =
+ 					std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+@@ -457,8 +520,6 @@ int ExtractFunc(int workerID, int fileListSize, std::string fileListItem, ZFileM
+ 		Globals::Instance->workerData[workerID]->externalFiles.clear();
+ 		Globals::Instance->workerData[workerID]->segments.clear();
+ 		Globals::Instance->workerData[workerID]->segmentRefFiles.clear();
+-
+-		numWorkersLeft--;
+ 	}
+ 	return 0;
+ }

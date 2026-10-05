@@ -48,6 +48,9 @@ class GameServer {
         return true;
     }
     int PlayerLimit() const { return playerLimit; }
+    // Test mode (see Match::SetSoloTest): no bots, and the match goes on with one player. Survives Reconfigure.
+    void SetSoloTest(bool on) { soloTest = on; sim.match.SetSoloTest(on); }
+    bool SoloTest() const { return soloTest; }
     // The lobby starts the match by itself after this many seconds (0 turns it off). The clock starts when the first player is here.
     void SetAutoStart(float seconds) { autoStartSec = seconds; if (seconds <= 0) lobbyElapsed = 0; }
     float AutoStartSeconds() const { return autoStartSec; }
@@ -60,10 +63,12 @@ class GameServer {
 
     // The host measured the real playable area and wants the lobby's world rebuilt on it: new map circle, loot and storm placed only
     // on positions `valid` accepts (e.g. "there is floor here"). Lobby only; players, ready flags and connections are kept.
-    // Everyone is sent the new map, storm circles and loot in one reliable message.
-    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 150, uint64_t seedOffset = 0) {
+    // `height` measures the floor, so the bots know the ledges, cliffs and hills (see NavGrid). Everyone is sent the new map, storm circles and
+    // loot in one reliable message.
+    bool Reconfigure(Circle map, PlacementFn valid = nullptr, int lootCount = 150, uint64_t seedOffset = 0, HeightFn height = nullptr) {
         if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
         lastValid = valid;
+        lastHeight = height;
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
@@ -103,13 +108,16 @@ class GameServer {
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
-        sim.match.SetBossCount((std::min)(bossCount, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
+        // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
+        const int bosses = bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
+        sim.match.SetSoloTest(soloTest);
         if (valid) {
-            auto grid = std::make_shared<NavGrid>(map, valid);
-            for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
+            auto grid = std::make_shared<NavGrid>(map, valid, height);
+            AddSceneryToNav(*grid, props);
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
         }
@@ -169,7 +177,7 @@ class GameServer {
 
     bool PlayAgain() {
         if (sim.match.State() != MatchState::Ending) return false;
-        if (!Reconfigure(mapCircle, lastValid, lastLootCount, FreshSeedOffset())) return false;
+        if (!Reconfigure(mapCircle, lastValid, lastLootCount, FreshSeedOffset(), lastHeight)) return false;
         return StartMatch();
     }
 
@@ -713,6 +721,12 @@ class GameServer {
         n.scene = p.scene;
         n.shield = static_cast<uint8_t>(p.shield.item);
         n.shieldRarity = static_cast<uint8_t>(p.shield.rarity);
+        auto worn = [&](GearSlot slot) {
+            const int i = static_cast<int>(slot);
+            return (p.gearMask & (1 << i)) ? static_cast<uint8_t>(p.gear[i].item) : net::PlayerNet::kNoGear;
+        };
+        n.boots = worn(GearSlot::Boots);
+        n.mask = worn(GearSlot::Mask);
         return n;
     }
 
@@ -782,9 +796,11 @@ class GameServer {
     int poiCount = 12;
     int bossCount = 0;
     int playerLimit = kMaxPlayers;
+    bool soloTest = false;
     float autoStartSec = 0;
     float lobbyElapsed = 0;
     PlacementFn lastValid;
+    HeightFn lastHeight;
     int lastLootCount = 150;
     Circle mapCircle;
     std::vector<Client> clients;

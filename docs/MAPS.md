@@ -52,3 +52,40 @@ game's own), so the new geometry is built from the mod's solid stone blocks, wal
 * **Safe landings.** The skydive no longer lets you touch down in lava, water, a doorway, on a steep slope or over a bottomless drop, or outside the storm's circle: low down, the glider drifts to the nearest safe ground, and if you fall past the bottom of the map you are put back above it. Spawns, chests and storm centres skip damage floors and steep slopes too (`HazardFloorAt`).
 * **Walkable blocks and rocks.** The climbing blocks, rocks, boulders and standing stones are now the game's own collision (one actor, `Royale_Solid`, rebuilt from the scenery nearest you), so Link lands, walks, rolls and climbs on them like normal ground. If the game has no free collision slot the older mod-side standing code still runs.
 * **Angry villagers.** Hit a villager (a carpenter, say) with a swing, spin or shot and they chase you and hit you for half a heart about once a second (the host takes the health, protocol 21). Get away or leave them alone for about 25 seconds and they walk back to where they were.
+
+## The Fortnite Map
+
+A sixth place, made from Tee's own heightmap and texture (`assets/fortnite/`, no ROM data). It is played inside Hyrule Field's scene, but with the
+scene's ground swapped for the island, so it is a real playable map: the game's own collision (walking, rolling, arrows, bombs, camera), the same
+storm, loot, spawns, skydive and bots as the other maps.
+
+| What | How |
+|---|---|
+| Size | The match circle holds the whole island, coast to coast (the host's game measures the live ground when a match starts: nearly all the land, up to 7400); the whole plane is 14800 x 15400 |
+| Ground | 64 x 64 squares, two triangles each (8192 triangles, 4225 vertices). Heights from the heightmap, y = 0 is the typical land, hills reach about +340, the sea bed is about -520 |
+| Water | One water box at y = -227 over the whole map: lakes, rivers and the sea are the ground below it. Spawns, chests and the storm centre keep off it (`UnderWater`), and Link swims in it |
+| Looks | The texture is baked into vertex colours (the game draws our meshes that way), with a little hill shading: a fine mesh (4 x 4 per square) within 2600 units, 2 x 2 to 5200, two triangles per square beyond. Open sea is always two triangles a square, and chunks behind the camera are not drawn. The minimap shows the texture itself |
+| Places | 24 named places, each built on the town painted on the texture (`GenerateIslandPois`, `kIslandSpots` in `shared/poi.h`): Tilted Towers, Pleasant Park, Dusty Depot, Loot Lake, Wailing Woods and the rest, with houses, sheds, a lodge and lookout, a factory yard, a graveyard, junk piles, a swamp, farms and a drive-in. Nine of them have a mini boss standing guard, and the island gets three more mini bosses than the other maps. A small match gets the first (most famous) few |
+| Foliage | `scripts/make_fortnite_map.py` also reads what covers the ground from the texture's colours (`shared/fortnite_cover_data.h`: water, meadow, woods, paving, dirt). Trees grow where the woods are painted (dense in Wailing Woods, a lone one here and there on the meadows), grass and flowers on the meadows, nothing on the roads, the towns' paving or the fields |
+| Weather | Its own table (`SkyWeights`): more storms and sea fog than the field, real snow in winter. When the wind gets up (a storm coming, the storm itself, any autumn day) leaves blow across the island |
+| Lobby spawn | Flat inland ground near the island's middle (`kSpawnX`, `kSpawnZ`), with a little scatter |
+| Storm | The usual: a circle fitted to the measured ground, shrinking to centres on dry land |
+
+How it plugs into the game (`patches/0013-royale-custom-collision.patch`, `RoyaleMod.cpp`, "the Fortnite map"):
+
+* when Hyrule Field's scene loads while the lobby's map is the Fortnite Map, the scene's collision is replaced with the island's (`Royale_CustomCollision`),
+  with finer lookup cells and more list nodes (`BgCheck_Allocate`);
+* the field's rooms are not drawn (`Royale_HideRooms`) and the scene's own actors are removed; a `Royale_Terrain` actor draws the island instead;
+* if the host switches between Hyrule Field and the Fortnite Map, the scene is loaded again, since the ground is chosen when it loads.
+
+To change the island: edit `XZ_SCALE`, `Y_SCALE`, `WATER_H` at the top of `scripts/make_fortnite_map.py`, run it (needs numpy and pillow) and commit
+`shared/fortnite_map_data.h` and `shared/fortnite_cover_data.h`. On the island the mod answers "how high is the ground here" from the triangles
+themselves (`OnIsland` in `RawFloorAt`, `UnderWater`, `HazardFloorAt`), not with the game's raycasts, which makes laying out a match much cheaper. To use a different heightmap or texture, replace `assets/fortnite/heightmap.png` (16 bit, heights between -0.964 and 0.964)
+and `texture.jpg`, or start again from a Blender plane with `--from-obj`.
+
+**Status:** the island data, collision mesh, levels of detail, places, ground cover and weather are unit tested (`FortniteMapIsSound`, `FortniteIslandPlaces`); the engine patch and the drawing compile in CI but, like
+the rest of the mod, none of it has been run in the game yet.
+
+**Solo test button:** the Battle Royale menu has "Fortnite Map: solo test" under "Host a lobby". It hosts a lobby on the Fortnite Map with no bots and no lobby timer,
+and starts the match by itself as soon as you are in it (`Match::SetSoloTest`). Everything else runs as in a real match, and the match goes on until you are out
+instead of ending when one player is left.

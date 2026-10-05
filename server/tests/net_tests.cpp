@@ -101,11 +101,12 @@ static void MessagesRoundTrip() {
     { EvReady a, b; a.id = 9; a.ready = true; CHECK(RoundTrips(a, b) && b.id == 9 && b.ready); }
     { Snapshot a, b; a.tick = 99; a.stormTime = 12.5f; a.state = 3; a.alive = 9; a.epoch = 2;
       PlayerNet p; p.id = 1031; p.x = 1; p.y = 2; p.z = 3; p.rot = -5; p.health = PlayerNet::QuantizeHealth(1.5f);
-      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7; p.scene = 0x51; p.shield = 17; p.shieldRarity = 3;
+      p.flags = PlayerNet::kAlive | PlayerNet::kBot; p.weapon = 2; p.weaponRarity = 4; p.potions = 2; p.anim = 7; p.scene = 0x51; p.shield = 17; p.shieldRarity = 3; p.boots = 52; p.mask = 60;
       a.players = {p, p};
-      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51 && b.players[0].shield == 17 && b.players[0].shieldRarity == 3);
+      CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51 && b.players[0].shield == 17 && b.players[0].shieldRarity == 3 &&
+            b.players[1].boots == 52 && b.players[1].mask == 60);
       CHECK(std::abs(b.players[0].Health() - 1.5f) < 0.01f);
-      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 25); } // documented per-player size
+      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 27); } // documented per-player size
     { EvDamaged a, b; a.target = 1; a.attacker = 2; a.amount = 1.5f; a.health = 0.5f; CHECK(RoundTrips(a, b) && b.amount == 1.5f && b.attacker == 2); }
     { EvEliminated a, b; a.victim = 3; CHECK(RoundTrips(a, b) && b.victim == 3 && b.killer == kNoPlayer16); }
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
@@ -1390,6 +1391,14 @@ static void ShieldAndWeaponReachTheSnapshot() {
     CHECK(self && self->weapon == static_cast<uint8_t>(ItemId::MasterSword) && self->weaponRarity == static_cast<uint8_t>(Rarity::Epic));
     CHECK(self && (self->flags & PlayerNet::kShield) && self->shield == static_cast<uint8_t>(ItemId::MirrorShield) &&
           self->shieldRarity == static_cast<uint8_t>(Rarity::Legendary));
+    // Nothing worn yet; then boots and a mask, which everyone sees drawn on the player.
+    CHECK(self && self->boots == PlayerNet::kNoGear && self->mask == PlayerNet::kNoGear);
+    p->gear[static_cast<int>(GearSlot::Boots)] = {ItemId::HoverBoots, Rarity::Rare};
+    p->gear[static_cast<int>(GearSlot::Mask)] = {ItemId::BunnyHood, Rarity::Common};
+    p->gearMask |= (1 << static_cast<int>(GearSlot::Boots)) | (1 << static_cast<int>(GearSlot::Mask));
+    rig.Run(0.5f);
+    self = a.Self();
+    CHECK(self && self->boots == static_cast<uint8_t>(ItemId::HoverBoots) && self->mask == static_cast<uint8_t>(ItemId::BunnyHood));
 }
 
 int main() {

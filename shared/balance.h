@@ -16,6 +16,21 @@ constexpr float kEndingSec = 10.0f;
 // World units are OoT units. Link runs about 100 units/s.
 constexpr float kRunSpeed = 100.0f;
 constexpr float kPickupRange = 50.0f;
+
+// The skydive at the start of the match (players and bots alike): you hang this high above the ground during the countdown, then fall
+// during the drop, steering as you go. Holding Z dives faster.
+constexpr float kSkyHeight = 3000.0f;   // units above the ground you start
+constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (the drop lasts 18 s)
+constexpr float kDiveSpeed = 380.0f;    // diving
+constexpr float kAirSpeed = 130.0f;     // steering speed
+constexpr float kLateFallSpeed = 700.0f;   // still in the air when the drop ends: down you come
+
+// Sprinting: faster running that drains a stamina bar, which refills after a short rest.
+constexpr float kSprintMult = 1.35f;        // run speed while sprinting
+constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
+constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
+constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
+constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
 constexpr float kMaxHealth = 3.0f; // hearts
 constexpr int kMaxPotions = 3;
 constexpr float kLobbyAutoStartSec = 120.0f; // the lobby starts the match by itself after this long (the host can turn it off)

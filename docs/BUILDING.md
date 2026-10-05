@@ -106,7 +106,7 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 - **Attacks are simple.** B attacks with the server-side weapon at the nearest player in a 90 degree cone in front of you, within weapon range. Hit
   detection is therefore generous. Ranged weapons do not fire visible projectiles yet.
 - **Loot looks like rupees.** The game's own rupee models in five colors, plus a name label. No custom models.
-- **Bots do not know the terrain.** They move in straight lines on a flat plane and are drawn on the real floor, so they can pass through walls.
+- **Bots only know the terrain at 60-unit resolution.** The host measures the floor once per match; bots climb ledges and blocks and avoid cliffs and water from that, so a narrow gap or a thin wall can still fool them.
 - **Health is overridden during a live match.** The mod saves your real hearts when the match goes live and restores them when
   you leave or it ends, but if the game crashes or you save mid-match your save file could keep the 3-heart value. Use a
   throwaway save for testing.
@@ -117,3 +117,7 @@ sudo apt-get install cmake ninja-build libsdl2-dev libsdl2-net-dev libpng-dev li
 
 ## Patches
 `patches/0009-player-hat-limb-hook.patch` adds the hook the cap physics uses. Patches are applied in order and each is checked to be "already applied" on re-runs, so a patch must not touch lines next to another patch's changes.
+
+`patches/0014-android-rom-loading-screen-and-fixes.patch` adds the first-run loading screen (`LoadingOverlay.java`): it shows each setup step (file setup, finding the ROM, verifying it, extracting assets, packing `oot.otr`) with a progress bar, warns when a step stops moving, and shows errors on screen instead of a black screen or a silent exit. It also fixes ways the first run could hang forever: closing the ROM picker, a denied storage permission, a failed ROM copy, and half-copied files from an interrupted setup (setup now writes `.setup-complete` in the game folder when it finishes, and redoes itself otherwise). The ROM search now also looks in the `TDawgsBattleRoyale` folder. Its progress shows in `adb logcat -s RoyaleLoading`.
+
+`patches/ZAPDTR/` patches the ROM extractor: a failed or crashing asset file used to leave extraction waiting forever (and two workers finishing at once could lose count of each other), which looked like a black screen that never ends. Failures now stop extraction with the error shown on the loading screen.

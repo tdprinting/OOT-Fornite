@@ -1,0 +1,60 @@
+diff --git a/soh/soh/z_scene_otr.cpp b/soh/soh/z_scene_otr.cpp
+index b4f8a29..eba497b 100644
+--- a/soh/soh/z_scene_otr.cpp
++++ b/soh/soh/z_scene_otr.cpp
+@@ -71,10 +71,14 @@ bool Scene_CommandUnused2(PlayState* play, SOH::ISceneCommand* cmd) {
+     return false;
+ }
+ 
++// OOT Royale: the mod can swap a scene's collision for its own (the Fortnite map is played inside Hyrule Field's scene).
++extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play);
++
+ bool Scene_CommandCollisionHeader(PlayState* play, SOH::ISceneCommand* cmd) {
+     // SOH::SetCollisionHeader* cmdCol = std::static_pointer_cast<SOH::SetCollisionHeader>(cmd);
+     SOH::SetCollisionHeader* cmdCol = (SOH::SetCollisionHeader*)cmd;
+-    BgCheck_Allocate(&play->colCtx, play, (CollisionHeader*)cmdCol->GetRawPointer());
++    CollisionHeader* royaleHeader = Royale_CustomCollision(play);
++    BgCheck_Allocate(&play->colCtx, play, royaleHeader != NULL ? royaleHeader : (CollisionHeader*)cmdCol->GetRawPointer());
+ 
+     return false;
+ }
+diff --git a/soh/src/code/z_bgcheck.c b/soh/src/code/z_bgcheck.c
+index 3ae4cab..e3fc653 100644
+--- a/soh/src/code/z_bgcheck.c
++++ b/soh/src/code/z_bgcheck.c
+@@ -1580,6 +1580,16 @@ void BgCheck_Allocate(CollisionContext* colCtx, PlayState* play, CollisionHeader
+             colCtx->subdivAmount.z = 16;
+         }
+     }
++    {
++        // OOT Royale: the Fortnite map's ground is thousands of triangles over a wide area: finer cells, and room for their lists.
++        extern s32 Royale_IsCustomCollision(CollisionHeader * header);
++        if (Royale_IsCustomCollision(colHeader)) {
++            colCtx->memSize = 0x23000; // doubled below like every scene: room for about 58000 list nodes (the most a u16 count allows is 65535)
++            colCtx->subdivAmount.x = 32;
++            colCtx->subdivAmount.y = 2;
++            colCtx->subdivAmount.z = 32;
++        }
++    }
+     colCtx->lookupTbl = THA_AllocEndAlign(
+         &play->state.tha,
+         colCtx->subdivAmount.x * sizeof(StaticLookup) * colCtx->subdivAmount.y * colCtx->subdivAmount.z, ~1);
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+index dfc832f..d887202 100644
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -1534,9 +1534,12 @@ void Play_Draw(PlayState* play) {
+                 } else {
+                     roomDrawFlags = HREG(84);
+                 }
++                extern s32 Royale_HideRooms(void); // OOT Royale: the Fortnite map draws its own island instead of the field
+                 Scene_Draw(play);
+-                Room_Draw(play, &play->roomCtx.curRoom, roomDrawFlags & 3);
+-                Room_Draw(play, &play->roomCtx.prevRoom, roomDrawFlags & 3);
++                if (!Royale_HideRooms()) {
++                    Room_Draw(play, &play->roomCtx.curRoom, roomDrawFlags & 3);
++                    Room_Draw(play, &play->roomCtx.prevRoom, roomDrawFlags & 3);
++                }
+             }
+         }
+ 

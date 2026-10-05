@@ -240,6 +240,10 @@ class Match {
         return true;
     }
     int PlayerLimit() const { return playerLimit; }
+    // Test mode: Start() adds no bots, and the match does not end just because one player is left (it ends when nobody is). Everything else
+    // (storm, loot, bosses, supply drops, allies, weather) runs as in a real match. Lobby only.
+    bool SetSoloTest(bool on) { if (state != MatchState::Lobby) return false; soloTest = on; return true; }
+    bool SoloTest() const { return soloTest; }
 
     bool AddHuman(uint32_t id) {
         if (state != MatchState::Lobby || static_cast<int>(players.size()) >= playerLimit) return false;
@@ -252,7 +256,7 @@ class Match {
         if (state != MatchState::Lobby || players.empty()) return false;
         humans = static_cast<int>(players.size());
         uint32_t nextId = 1000;
-        while (static_cast<int>(players.size()) < playerLimit) {
+        while (!soloTest && static_cast<int>(players.size()) < playerLimit) {
             players.push_back(MakePlayer(nextId++, true));
             players.back().scene = static_cast<uint8_t>(MapOf(mapId).scene);
         }
@@ -296,7 +300,7 @@ class Match {
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
-                if (Alive() <= 1) Enter(MatchState::Ending);
+                if (Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
             case MatchState::Lobby:
@@ -2167,20 +2171,27 @@ class Match {
                     Cleanse(p);
                     did = true;
                     break;
-                case EffectType::Shockwave: {
-                    // Everyone near is thrown straight away from the user (the server moves them; their game follows), then left dazed.
-                    ForOthersNear(p, fx.radius, [&](PlayerState& o) {
-                        float dx = o.pos.x - p.pos.x, dz = o.pos.z - p.pos.z;
-                        float len = std::hypot(dx, dz);
-                        if (len < 1.0f) { dx = 1.0f; dz = 0.0f; len = 1.0f; }
-                        const float push = fx.amount * s;
-                        Vec2 to = {o.pos.x + dx / len * push, o.pos.z + dz / len * push};
-                        const float off = Distance(to, map.center);
-                        if (off > map.radius - 20.0f) to = {map.center.x + (to.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (to.z - map.center.z) / off * (map.radius - 20.0f)};
-                        if (placement && !placement(to)) to = {o.pos.x + dx / len * push * 0.4f, o.pos.z + dz / len * push * 0.4f}; // no ground there: a shorter throw
-                        Teleport(o, to);
-                        if (!TotalsOf(o).stunImmune) { o.stunUntil = (std::max)(o.stunUntil, clock + fx.seconds * s); o.dirty = true; }
-                    });
+                case EffectType::Launch: {
+                    // A mobility blast. A player's own game throws them into the air and keeps them safe from the landing (the server only knows
+                    // x and z). Bots move on flat ground, so the server carries a bot through the air instead: away from the nearest enemy, or
+                    // the way it faces when nobody is close.
+                    if (!p.isBot) { did = true; break; }
+                    const float facing = static_cast<float>(p.rot) * (3.14159265f / 32768.0f);
+                    float dx = std::sin(facing), dz = std::cos(facing);
+                    const PlayerState* foe = nullptr;
+                    float foeDist = 800.0f;
+                    for (const auto& o : players) {
+                        if (!o.alive || o.id == p.id) continue;
+                        const float d = Distance(o.pos, p.pos);
+                        if (d < foeDist) { foeDist = d; foe = &o; }
+                    }
+                    if (foe && foeDist > 1.0f) { dx = (p.pos.x - foe->pos.x) / foeDist; dz = (p.pos.z - foe->pos.z) / foeDist; }
+                    const float carry = fx.amount * s;
+                    Vec2 to = {p.pos.x + dx * carry, p.pos.z + dz * carry};
+                    const float off = Distance(to, map.center);
+                    if (off > map.radius - 20.0f) to = {map.center.x + (to.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (to.z - map.center.z) / off * (map.radius - 20.0f)};
+                    if (placement && !placement(to)) to = {p.pos.x + dx * carry * 0.4f, p.pos.z + dz * carry * 0.4f}; // no ground there: a shorter hop
+                    if (!placement || placement(to)) Teleport(p, to);
                     did = true;
                     break;
                 }
@@ -2210,6 +2221,7 @@ class Match {
     MatchState state = MatchState::Lobby;
     float stateTime = 0, stormTime = 0, clock = 0;
     int humans = 0;
+    bool soloTest = false;
     std::vector<PlayerState> players;
     std::vector<LootEntry> loot;
     std::vector<MatchEvent> events;

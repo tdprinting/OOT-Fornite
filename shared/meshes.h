@@ -17,7 +17,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -1318,6 +1318,43 @@ inline MeshData SandDrift(uint32_t variant) {
     return Mound(120.0f, 48.0f, 17.0f, 720 + variant, [&](int f) { return (f % 3 == 0) ? Rgb{196, 160, 100} : (pick.Next() < 0.5f ? Rgb{222, 190, 126} : Rgb{238, 212, 150}); });
 }
 
+
+// The Shockwave Grenade: a gunmetal ball, about the size of a bomb, with glowing purple bands around its middle and over the top, and a dark
+// cap. The bands are raised rings (not paint) so they read as sharp lines, and they are not shaded, so they look lit from inside.
+inline void GlowRing(MeshData& m, V3 c, float radius, float tube, int segs, bool vertical, float yaw) {
+    const float pi = 3.14159265f;
+    const Rgb face = {225, 150, 255}, edge = {150, 60, 230};
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    auto at = [&](int i, int k) {   // point k (0..2) of the tube's triangular cross-section at step i around the ring
+        const float a = 2.0f * pi * static_cast<float>(i) / segs;
+        const float t = 2.0f * pi * static_cast<float>(k) / 3.0f;
+        const float r = radius + std::cos(t) * tube, h = std::sin(t) * tube;
+        V3 q = vertical ? V3{std::cos(a) * r, std::sin(a) * r, h} : V3{std::cos(a) * r, h, std::sin(a) * r};
+        return V3{c.x + q.x * cy + q.z * sy, c.y + q.y, c.z - q.x * sy + q.z * cy};
+    };
+    for (int i = 0; i < segs; i++)
+        for (int k = 0; k < 3; k++) {
+            const Rgb col = k == 0 ? face : edge;   // the outer side brightest
+            const V3 a = at(i, k), b = at(i + 1, k), c2 = at(i + 1, (k + 1) % 3), d = at(i, (k + 1) % 3);
+            Put(m, a, col); Put(m, b, col); Put(m, c2, col);
+            Put(m, a, col); Put(m, c2, col); Put(m, d, col);
+        }
+}
+
+inline MeshData Grenade() {
+    constexpr float r = 14.0f;
+    const V3 c = {0, r + 1.5f, 0};   // raised a little so the rings over the top clear the ground too
+    MeshData m;
+    Ellipsoid(m, c, {r, r, r}, 8, 14, [&](V3 n, V3) {
+        if (n.y > 0.85f) return Rgb{70, 72, 82};                                  // the dark cap on top
+        return n.y < -0.5f ? Rgb{140, 142, 152} : Rgb{176, 178, 188};            // gunmetal grey, darker underneath
+    });
+    GlowRing(m, c, r + 0.3f, 1.3f, 12, false, 0.0f);                             // around the middle
+    GlowRing(m, c, r + 0.3f, 1.1f, 12, true, 0.0f);                              // over the top, crossing it
+    GlowRing(m, c, r + 0.3f, 1.1f, 12, true, 1.5707963f);
+    return m;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -1350,6 +1387,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
+        case MeshKind::Grenade: return mesh_detail::Grenade();
         default: return {};
     }
 }

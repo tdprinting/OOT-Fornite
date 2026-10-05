@@ -30,6 +30,10 @@ struct PuppetState {
     ItemId weapon = ItemId::BasicSword;
     Rarity weaponRarity = Rarity::Common;
     uint32_t tunic = SkinRgb(0); // 0xRRGGBB, the colour this player chose (bots wear a preset by id)
+    // What is drawn on them as the game draws it: the shield on their back or arm, the boots and the mask (ItemId::Count for none).
+    ItemId shield = ItemId::Count;
+    ItemId boots = ItemId::Count;
+    ItemId mask = ItemId::Count;
 };
 
 // One line of the lobby list.
@@ -104,7 +108,8 @@ class RoyaleSession {
     enum class Mode : uint8_t { Idle, Hosting, Joined };
 
     // Start a match server on `port` and join it as the host's own player (through 127.0.0.1, like everyone else).
-    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr) {
+    // `soloTest` makes it a test environment on the Fortnite Map: no bots, no lobby timer, and the match goes on with one player.
+    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false) {
         Leave();
         std::string err;
         hostTransport = net::ENetTransport::Host(port, kMaxPlayers, &err);
@@ -118,7 +123,13 @@ class RoyaleSession {
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
         server->SetMajorBoss(majorBoss);
         server->SetWeatherOptions(weatherOptions);
-        if (selectedMap != 0) server->SelectMap(selectedMap);
+        if (soloTest) {
+            server->SetSoloTest(true);
+            server->SetAutoStart(0);
+        }
+        const int map = soloTest ? kFortniteMapIndex : selectedMap;   // the test does not change the map remembered for the next lobby
+        if (map != 0) server->SelectMap(map);
+        solo = soloTest;
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;
@@ -150,11 +161,14 @@ class RoyaleSession {
         clientTransport.reset();
         server.reset();
         hostTransport.reset();
+        solo = false;
         mode = Mode::Idle;
     }
 
     // Host only, lobby only: rebuild the world on the measured map (see GameServer::Reconfigure).
-    bool ConfigureMap(Circle map, PlacementFn valid = nullptr) { return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid), 150, GameServer::FreshSeedOffset()); }
+    bool ConfigureMap(Circle map, PlacementFn valid = nullptr, HeightFn height = nullptr) {
+        return mode == Mode::Hosting && server && server->Reconfigure(map, std::move(valid), 150, GameServer::FreshSeedOffset(), std::move(height));
+    }
 
     // The tunic colour (0xRRGGBB) the other players see you in. Set before hosting or joining.
     void SetTunic(uint32_t rgb) { tunic = rgb; }
@@ -172,6 +186,7 @@ class RoyaleSession {
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
+    bool SoloTest() const { return solo && mode == Mode::Hosting; }
     bool StartMatch() { return mode == Mode::Hosting && server && server->StartMatch(); }
 
     // Call once per rendered frame with the real elapsed time. The server steps itself at a fixed 20 Hz inside.
@@ -220,6 +235,9 @@ class RoyaleSession {
             s.health = p.Health();
             s.weapon = static_cast<ItemId>(p.weapon);
             s.weaponRarity = static_cast<Rarity>(p.weaponRarity);
+            if (p.flags & net::PlayerNet::kShield) s.shield = static_cast<ItemId>(p.shield);
+            if (p.boots != net::PlayerNet::kNoGear) s.boots = static_cast<ItemId>(p.boots);
+            if (p.mask != net::PlayerNet::kNoGear) s.mask = static_cast<ItemId>(p.mask);
             out.push_back(std::move(s));
         }
         return out;
@@ -342,6 +360,7 @@ class RoyaleSession {
     uint32_t tunic = SkinRgb(0);
     int playerLimit = kMaxPlayers;
     int selectedMap = 0;
+    bool solo = false;
     bool majorBoss = true;
     WeatherOptions weatherOptions;
     float autoStart = kLobbyAutoStartSec;
