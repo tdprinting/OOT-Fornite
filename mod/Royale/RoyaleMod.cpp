@@ -5216,15 +5216,18 @@ bool LoadNextTrack() {
         }
         SDL_AudioCVT cvt;
         if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_S16SYS, 2, 44100) < 0) { SDL_FreeWAV(buf); continue; }
-        cvt.len = static_cast<int>(len);
-        std::vector<Uint8> work(static_cast<size_t>(len) * (cvt.len_mult > 0 ? cvt.len_mult : 1));
-        std::memcpy(work.data(), buf, len);
-        SDL_FreeWAV(buf);
-        cvt.buf = work.data();
-        if (cvt.needed && SDL_ConvertAudio(&cvt) < 0) continue;
-        const size_t bytes = cvt.needed ? static_cast<size_t>(cvt.len_cvt) : len;
-        m.pcm.assign(bytes / 2, 0);
-        std::memcpy(m.pcm.data(), work.data(), m.pcm.size() * 2);
+        if (!cvt.needed) {   // already 16-bit stereo at 44100 Hz: take it as it is, with no second and third copy of a big song in memory
+            m.pcm.assign(reinterpret_cast<const int16_t*>(buf), reinterpret_cast<const int16_t*>(buf) + len / 2);
+            SDL_FreeWAV(buf);
+        } else {
+            cvt.len = static_cast<int>(len);
+            std::vector<Uint8> work(static_cast<size_t>(len) * (cvt.len_mult > 0 ? cvt.len_mult : 1));
+            std::memcpy(work.data(), buf, len);
+            SDL_FreeWAV(buf);
+            cvt.buf = work.data();
+            if (SDL_ConvertAudio(&cvt) < 0) continue;
+            m.pcm.assign(reinterpret_cast<const int16_t*>(work.data()), reinterpret_cast<const int16_t*>(work.data()) + static_cast<size_t>(cvt.len_cvt) / 2);
+        }
         m.pos = 0;
         m.nowPlaying = file.stem().string();
         return !m.pcm.empty();
@@ -5267,7 +5270,7 @@ constexpr int kOotSeqPlayer = SEQ_PLAYER_BGM_SUB;
 constexpr uint32_t kOotCacheVersion = 1;   // bump when the conversion changes, so old conversions are made again
 
 // Off unless the player turns it on: the conversion copies every soundfont out of the game and runs a background worker, which is heavy for a phone.
-bool OotInstrumentsOn() { return MapOption("OotInstruments", false); }
+bool OotInstrumentsOn() { return MapOption("OotConvert", false); }
 
 // The game's music soundfonts (the ones its songs use, not the sound effects), copied out for the worker: every instrument and drum
 // kit, with its samples still packed as the game keeps them. Runs once, on the game thread.
@@ -8712,7 +8715,7 @@ void DrawMinimapOptions() {
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
+        { "OotConvert", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
         { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
