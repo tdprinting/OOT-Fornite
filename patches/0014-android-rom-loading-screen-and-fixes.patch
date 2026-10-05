@@ -1,0 +1,1550 @@
+diff --git a/Android/app/src/main/java/com/dishii/soh/AssetCopyUtil.java b/Android/app/src/main/java/com/dishii/soh/AssetCopyUtil.java
+index ed42e52..e7b3c18 100644
+--- a/Android/app/src/main/java/com/dishii/soh/AssetCopyUtil.java
++++ b/Android/app/src/main/java/com/dishii/soh/AssetCopyUtil.java
+@@ -11,52 +11,84 @@ import java.io.OutputStream;
+ 
+ public class AssetCopyUtil {
+ 
++    public interface Progress {
++        void onFile(int done, int total, String name);
++    }
++
+     public static void copyAssetsToExternal(Context context, String assetsFolderPath, String externalFolderPath) throws IOException {
+-        AssetManager assetManager = context.getAssets();
+-        String[] assetFiles = assetManager.list(assetsFolderPath);
++        copyAssetsToExternal(context, assetsFolderPath, externalFolderPath, false, null);
++    }
+ 
+-        for (String assetFile : assetFiles) {
+-            String assetPath = assetsFolderPath + File.separator + assetFile;
+-            String externalPath = externalFolderPath + File.separator + assetFile;
++    // Copies an asset folder to external storage. Each file is written to a ".part" file and renamed when complete, so
++    // an interrupted copy never leaves a truncated file behind that a later run would mistake for a good one.
++    // overwrite: replace files that already exist (used when the previous setup did not finish).
++    public static void copyAssetsToExternal(Context context, String assetsFolderPath, String externalFolderPath,
++                                            boolean overwrite, Progress progress) throws IOException {
++        AssetManager assetManager = context.getAssets();
++        java.util.List<String> files = new java.util.ArrayList<>();
++        listAssetFiles(assetManager, assetsFolderPath, "", files);
+ 
+-            if (assetManager.list(assetPath).length > 0) {
+-                // It's a directory
+-                // Check if the directory exists in the external storage
+-                File externalDir = new File(externalPath);
+-                if (!externalDir.exists()) {
+-                    externalDir.mkdirs(); // Create the directory if it doesn't exist
++        int done = 0;
++        for (String rel : files) {
++            String assetPath = assetsFolderPath + File.separator + rel;
++            File externalFile = new File(externalFolderPath, rel);
++            if (progress != null) progress.onFile(done, files.size(), rel);
++            if (overwrite || !externalFile.exists()) {
++                File parent = externalFile.getParentFile();
++                if (parent != null && !parent.exists() && !parent.mkdirs() && !parent.exists()) {
++                    throw new IOException("Could not create folder " + parent.getAbsolutePath());
+                 }
++                try (InputStream in = assetManager.open(assetPath)) {
++                    writeAtomically(in, externalFile);
++                }
++            }
++            done++;
++        }
++        if (progress != null) progress.onFile(done, files.size(), "");
++    }
+ 
+-                // Recursively copy contents of the directory
+-                copyAssetsToExternal(context, assetPath, externalPath);
+-            } else {
+-                // It's a file
+-                File externalFile = new File(externalPath);
+-                if (!externalFile.exists()) {
+-                    // Check if the file exists in the external storage
+-                    InputStream in = null;
+-                    OutputStream out = null;
+-
+-                    try {
+-                        in = assetManager.open(assetPath);
+-                        out = new FileOutputStream(externalPath);
++    private static void listAssetFiles(AssetManager assetManager, String base, String rel, java.util.List<String> out)
++            throws IOException {
++        String path = rel.isEmpty() ? base : base + File.separator + rel;
++        String[] children = assetManager.list(path);
++        if (children == null || children.length == 0) {
++            if (!rel.isEmpty()) out.add(rel);
++            return;
++        }
++        for (String child : children) {
++            listAssetFiles(assetManager, base, rel.isEmpty() ? child : rel + File.separator + child, out);
++        }
++    }
+ 
+-                        byte[] buffer = new byte[1024];
+-                        int read;
+-                        while ((read = in.read(buffer)) != -1) {
+-                            out.write(buffer, 0, read);
+-                        }
++    // Streams `in` into `dest` through a temporary file, so `dest` only ever exists complete.
++    public static void writeAtomically(InputStream in, File dest) throws IOException {
++        writeAtomically(in, dest, null);
++    }
+ 
+-                    } finally {
+-                        if (in != null) {
+-                            in.close();
+-                        }
+-                        if (out != null) {
+-                            out.close();
+-                        }
+-                    }
+-                }
++    // bytesWritten, when given, is called with the running total as the copy goes.
++    public static void writeAtomically(InputStream in, File dest, java.util.function.LongConsumer bytesWritten)
++            throws IOException {
++        File part = new File(dest.getAbsolutePath() + ".part");
++        try (OutputStream out = new FileOutputStream(part)) {
++            byte[] buffer = new byte[64 * 1024];
++            int read;
++            long total = 0;
++            while ((read = in.read(buffer)) != -1) {
++                out.write(buffer, 0, read);
++                total += read;
++                if (bytesWritten != null) bytesWritten.accept(total);
+             }
++        } catch (IOException e) {
++            part.delete();
++            throw e;
++        }
++        if (dest.exists() && !dest.delete()) {
++            part.delete();
++            throw new IOException("Could not replace " + dest.getAbsolutePath());
++        }
++        if (!part.renameTo(dest)) {
++            part.delete();
++            throw new IOException("Could not write " + dest.getAbsolutePath());
+         }
+     }
+ 
+@@ -64,7 +96,11 @@ public class AssetCopyUtil {
+         if (!targetDir.exists()) {
+             targetDir.mkdirs();
+         }
+-        for (File file : sourceDir.listFiles()) {
++        File[] children = sourceDir.listFiles();
++        if (children == null) {
++            throw new IOException("Could not list " + sourceDir.getAbsolutePath());
++        }
++        for (File file : children) {
+             File dest = new File(targetDir, file.getName());
+             if (file.isDirectory()) {
+                 copyDirectory(file, dest);
+diff --git a/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java b/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java
+new file mode 100644
+index 0000000..fb40008
+--- /dev/null
++++ b/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java
+@@ -0,0 +1,260 @@
++package com.dishii.soh;
++
++import android.app.Activity;
++import android.graphics.Color;
++import android.graphics.Typeface;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
++import android.util.Log;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.Button;
++import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.ProgressBar;
++import android.widget.TextView;
++
++// Full screen loading screen shown over the (still black) game surface while the app sets up its files, finds the ROM
++// and extracts the game assets. Shows the current step, a progress bar, how long the step has been running, a warning
++// when nothing has moved for a while, and errors. Safe to call from any thread.
++public class LoadingOverlay {
++    private static final String TAG = "RoyaleLoading";
++    private static final int TICK_MS = 1000;
++
++    private final Activity activity;
++    private final Handler ui = new Handler(Looper.getMainLooper());
++    private FrameLayout root;
++    private TextView stepText, detailText, percentText, timeText, warningText, errorTitle, errorText;
++    private ProgressBar bar;
++    private Button closeButton;
++
++    // State (only touched on the UI thread)
++    private String step = "", detail = "";
++    private int percent = -1;
++    private int stallSeconds = 30;
++    private boolean waitingForUser = false;
++    private boolean failed = false;
++    private boolean done = false;
++    private long startTime, stepStartTime, lastChangeTime;
++
++    public LoadingOverlay(Activity activity) {
++        this.activity = activity;
++        startTime = stepStartTime = lastChangeTime = SystemClock.elapsedRealtime();
++    }
++
++    // Must be called on the UI thread once the content view exists.
++    public void attach(ViewGroup parent) {
++        root = new FrameLayout(activity);
++        root.setBackgroundColor(Color.rgb(12, 16, 22));
++        root.setClickable(true); // swallow touches so the on-screen controller underneath is not pressed
++        root.setFocusable(true);
++
++        LinearLayout box = new LinearLayout(activity);
++        box.setOrientation(LinearLayout.VERTICAL);
++        box.setGravity(Gravity.CENTER_HORIZONTAL);
++        int pad = dp(24);
++        box.setPadding(pad, pad, pad, pad);
++
++        TextView title = text(26, Color.rgb(232, 200, 96));
++        title.setTypeface(Typeface.DEFAULT_BOLD);
++        title.setText("TDawgs Battle Royale");
++        title.setGravity(Gravity.CENTER);
++        box.addView(title);
++
++        stepText = text(20, Color.WHITE);
++        stepText.setGravity(Gravity.CENTER);
++        stepText.setPadding(0, dp(18), 0, dp(10));
++        box.addView(stepText);
++
++        bar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
++        bar.setMax(1000);
++        box.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(14)));
++
++        LinearLayout row = new LinearLayout(activity);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        detailText = text(14, Color.rgb(170, 178, 190));
++        row.addView(detailText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++        percentText = text(14, Color.rgb(170, 178, 190));
++        row.addView(percentText);
++        row.setPadding(0, dp(6), 0, 0);
++        box.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT));
++
++        timeText = text(13, Color.rgb(120, 128, 140));
++        timeText.setPadding(0, dp(4), 0, 0);
++        box.addView(timeText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT));
++
++        warningText = text(15, Color.rgb(255, 176, 64));
++        warningText.setPadding(0, dp(14), 0, 0);
++        warningText.setVisibility(View.GONE);
++        box.addView(warningText);
++
++        errorTitle = text(20, Color.rgb(255, 92, 92));
++        errorTitle.setTypeface(Typeface.DEFAULT_BOLD);
++        errorTitle.setPadding(0, dp(16), 0, dp(4));
++        errorTitle.setVisibility(View.GONE);
++        box.addView(errorTitle);
++
++        errorText = text(15, Color.rgb(255, 210, 210));
++        errorText.setVisibility(View.GONE);
++        box.addView(errorText);
++
++        closeButton = new Button(activity);
++        closeButton.setText("Close app");
++        closeButton.setVisibility(View.GONE);
++        closeButton.setOnClickListener(v -> {
++            activity.finishAffinity();
++            System.exit(0);
++        });
++        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
++                ViewGroup.LayoutParams.WRAP_CONTENT);
++        blp.topMargin = dp(16);
++        box.addView(closeButton, blp);
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT,
++                Gravity.CENTER);
++        root.addView(box, lp);
++        parent.addView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
++                ViewGroup.LayoutParams.MATCH_PARENT));
++
++        render();
++        ui.postDelayed(tick, TICK_MS);
++    }
++
++    // percent: 0..100, or -1 when the step has no measurable progress (the bar animates instead).
++    // stallSeconds: how long the step may go without any change before the "taking too long" warning shows.
++    public void setStatus(String newStep, String newDetail, int newPercent, int newStallSeconds) {
++        ui.post(() -> {
++            if (done || failed) return;
++            long now = SystemClock.elapsedRealtime();
++            String s = newStep == null ? "" : newStep;
++            String d = newDetail == null ? "" : newDetail;
++            if (!s.equals(step)) stepStartTime = now;
++            if (!s.equals(step) || !d.equals(detail) || newPercent != percent) lastChangeTime = now;
++            step = s;
++            detail = d;
++            percent = newPercent;
++            stallSeconds = newStallSeconds;
++            waitingForUser = false;
++            Log.i(TAG, step + (detail.isEmpty() ? "" : " | " + detail) + (percent >= 0 ? " | " + percent + "%" : ""));
++            render();
++        });
++    }
++
++    // While a question or the file picker is up, the stall warning is paused: the app is waiting on the player.
++    public void setWaitingForUser(boolean waiting) {
++        ui.post(() -> {
++            if (waitingForUser == waiting) return;
++            waitingForUser = waiting;
++            lastChangeTime = SystemClock.elapsedRealtime();
++            render();
++        });
++    }
++
++    public void showError(String title, String message) {
++        ui.post(() -> {
++            if (done) return;
++            failed = true;
++            Log.e(TAG, "Error: " + title + ": " + message);
++            render();
++            errorTitle.setText(title);
++            errorText.setText(message + "\n\nYour files are kept. Close the app and open it again to retry.");
++        });
++    }
++
++    // Back to normal after a problem the player fixed without restarting (e.g. granting file access in Settings).
++    public void clearError() {
++        ui.post(() -> {
++            if (!failed) return;
++            failed = false;
++            errorTitle.setVisibility(View.GONE);
++            errorText.setVisibility(View.GONE);
++            render();
++        });
++    }
++
++    public void finish() {
++        ui.post(() -> {
++            if (done) return;
++            done = true;
++            ui.removeCallbacks(tick);
++            if (root != null && root.getParent() != null) {
++                ((ViewGroup) root.getParent()).removeView(root);
++            }
++            Log.i(TAG, "Loading finished after " + seconds(SystemClock.elapsedRealtime() - startTime) + "s");
++        });
++    }
++
++    private final Runnable tick = new Runnable() {
++        @Override
++        public void run() {
++            if (done) return;
++            render();
++            ui.postDelayed(this, TICK_MS);
++        }
++    };
++
++    private void render() {
++        if (root == null) return;
++        long now = SystemClock.elapsedRealtime();
++
++        stepText.setText(step.isEmpty() ? "Starting..." : step);
++        detailText.setText(waitingForUser ? "Waiting for you..." : detail);
++        if (percent >= 0) {
++            bar.setIndeterminate(false);
++            bar.setProgress(Math.min(1000, percent * 10));
++            percentText.setText(percent + "%");
++        } else {
++            bar.setIndeterminate(!failed);
++            percentText.setText("");
++        }
++        timeText.setText("This step: " + clock(now - stepStartTime) + "    Total: " + clock(now - startTime));
++
++        if (failed) {
++            warningText.setVisibility(View.GONE);
++            errorTitle.setVisibility(View.VISIBLE);
++            errorText.setVisibility(View.VISIBLE);
++            closeButton.setVisibility(View.VISIBLE);
++            return;
++        }
++
++        long quiet = seconds(now - lastChangeTime);
++        if (!waitingForUser && stallSeconds > 0 && quiet >= stallSeconds) {
++            boolean veryLong = quiet >= stallSeconds * 4L;
++            warningText.setText((veryLong ? "This looks stuck. " : "This is taking longer than usual. ")
++                    + "Nothing has changed for " + clock(quiet * 1000) + ".\n"
++                    + (veryLong ? "Close the app and open it again; setup will start over safely."
++                                : "It may still finish. If this keeps counting up for a few minutes, the app is stuck."));
++            warningText.setVisibility(View.VISIBLE);
++            closeButton.setVisibility(veryLong ? View.VISIBLE : View.GONE);
++        } else {
++            warningText.setVisibility(View.GONE);
++            closeButton.setVisibility(View.GONE);
++        }
++    }
++
++    private TextView text(int sp, int color) {
++        TextView t = new TextView(activity);
++        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        t.setTextColor(color);
++        return t;
++    }
++
++    private int dp(int v) {
++        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
++                activity.getResources().getDisplayMetrics());
++    }
++
++    private static long seconds(long ms) {
++        return ms / 1000;
++    }
++
++    private static String clock(long ms) {
++        long s = ms / 1000;
++        return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60);
++    }
++}
+diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+index 2b045bc..160b2f4 100644
+--- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
++++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+@@ -42,9 +42,17 @@ public class MainActivity extends SDLActivity{
+ 
+     SharedPreferences preferences;
+     private static final CountDownLatch setupLatch = new CountDownLatch(1);
++    // Loading screen shown until the game draws its first frame (see SohLoading_* in soh/Extractor/Extract.cpp)
++    LoadingOverlay loading;
++    // Written when first-time setup finished, so an interrupted setup is redone instead of trusted
++    private static final String SETUP_MARKER = ".setup-complete";
++    private boolean waitingForPermission = false;
++    private boolean setupStarted = false;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
++        // Created first so the setup below can report progress; its views are added after super.onCreate
++        loading = new LoadingOverlay(this);
+ 
+         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+ 
+@@ -62,6 +70,55 @@ public class MainActivity extends SDLActivity{
+ 
+         setupControllerOverlay();
+         attachController();
++
++        loading.attach((ViewGroup) getContentView());
++    }
++
++    // ---- Loading screen, called from native code on the game thread ----
++    public void loadingStatus(String step, String detail, int percent, int stallSeconds) {
++        if (loading != null) loading.setStatus(step, detail, percent, stallSeconds);
++    }
++
++    public void loadingWaiting(boolean waiting) {
++        if (loading != null) loading.setWaitingForUser(waiting);
++    }
++
++    public void loadingError(String title, String message) {
++        if (loading != null) loading.showError(title, message);
++    }
++
++    public void loadingDone() {
++        if (loading != null) loading.finish();
++    }
++
++    @Override
++    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
++        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
++        if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
++            onStoragePermissionAnswered();
++        }
++    }
++
++    @Override
++    protected void onResume() {
++        super.onResume();
++        // The player may grant "All files access" in Settings and come back without a result being delivered
++        if (waitingForPermission && hasStoragePermission()) {
++            onStoragePermissionAnswered();
++        }
++    }
++
++    private void onStoragePermissionAnswered() {
++        if (hasStoragePermission()) {
++            waitingForPermission = false;
++            loading.clearError();
++            doVersionCheck();
++            checkAndSetupFiles();
++        } else if (loading != null) {
++            loading.showError("Storage permission needed",
++                    "The game needs file access to find your ROM and store the game files in the "
++                    + "TDawgsBattleRoyale folder. It cannot continue without it.");
++        }
+     }
+ 
+     public static void waitForSetupFromNative() {
+@@ -149,6 +206,8 @@ public class MainActivity extends SDLActivity{
+     private static final int FILE_PICKER_REQUEST_CODE = 0;
+ 
+     private void requestStoragePermission() {
++        waitingForPermission = true;
++        loading.setStatus("Waiting for storage permission", "Allow file access so the game can find your ROM", -1, 0);
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+             // Android 11+ → MANAGE_EXTERNAL_STORAGE
+             if (!Environment.isExternalStorageManager()) {
+@@ -178,36 +237,58 @@ public class MainActivity extends SDLActivity{
+         File assetsFolder = new File(targetRootFolder, "assets");
+         File sohOtrFile = new File(targetRootFolder, "soh.otr");
+ 
++        if (setupStarted) {
++            return; // already running (permission result and onResume can both land here)
++        }
++        setupStarted = true;
++
+         boolean isMissingAssets = !assetsFolder.exists() || assetsFolder.listFiles() == null || assetsFolder.listFiles().length == 0;
+         boolean isMissingSohOtr = !sohOtrFile.exists();
++        // An earlier setup that was interrupted (app closed, crash) can leave half-copied files behind
++        boolean isSetupIncomplete = !new File(targetRootFolder, SETUP_MARKER).exists();
+ 
+-        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr) {
++        if (!targetRootFolder.exists() || isMissingAssets || isMissingSohOtr || isSetupIncomplete) {
++            loading.setStatus("Setup required", "Press OK to create the game files", -1, 0);
++            loading.setWaitingForUser(true);
+             new AlertDialog.Builder(this)
+                     .setTitle("Setup Required")
+                     .setMessage("Some required files are missing. The app will create them (~1 minute). Press OK to begin.")
+                     .setCancelable(false)
+                     .setPositiveButton("OK", (dialog, which) -> {
+-                        Executors.newSingleThreadExecutor().execute(() -> {
+-                            runOnUiThread(() -> Toast.makeText(this, "Setting up files...", Toast.LENGTH_SHORT).show());
+-                            setupFilesInBackground(targetRootFolder);
+-                        });
++                        loading.setStatus("Setting up game files", "", 0, 30);
++                        Executors.newSingleThreadExecutor().execute(() -> setupFilesInBackground(targetRootFolder));
+                     })
+                     .show();
+         } else {
+             // No setup needed, still need to count down
++            loading.setStatus("Loading game files", "", -1, 60);
+             setupLatch.countDown();
+         }
+     }
+ 
+ 
+     private void setupFilesInBackground(File targetRootFolder) {
++        try {
++            setupFiles(targetRootFolder);
++        } catch (Throwable e) {
++            // Leave the game thread waiting: without these files it can only fail. Show why instead of a black screen.
++            Log.e("setupFiles", "Setup failed", e);
++            loading.showError("Could not create the game files",
++                    e.getMessage() != null ? e.getMessage() : e.toString());
++            return;
++        }
++        loading.setStatus("Loading game files", "", -1, 60);
++        setupLatch.countDown();
++    }
+ 
++    private void setupFiles(File targetRootFolder) throws IOException {
+         File sourceOldRoot = getExternalFilesDir(null);
+         File sourceSavesDir = new File(sourceOldRoot, "Save"); // how to tell if there's anything to migrate
+ 
+         // === Migration from old Android/data/.../files/ directory ===
+         if (sourceOldRoot != null && sourceSavesDir.isDirectory()) {
+             Log.i("setupFiles", "Migrating old data from: " + sourceOldRoot.getAbsolutePath());
++            loading.setStatus("Setting up game files", "Moving old save data", -1, 30);
+ 
+             File[] sourceFiles = sourceOldRoot.listFiles();
+             if (sourceFiles != null) {
+@@ -230,18 +311,12 @@ public class MainActivity extends SDLActivity{
+                     }
+                 }
+             }
+-
+-            runOnUiThread(() -> Toast.makeText(this, "Save data migrated", Toast.LENGTH_SHORT).show());
+         }
+ 
+         // Ensure root folder exists
+-        if (!targetRootFolder.exists()) {
+-            if (!targetRootFolder.mkdirs()) {
+-                Log.e("setupFiles", "Failed to create root folder");
+-                runOnUiThread(() -> Toast.makeText(this, "Failed to create folder", Toast.LENGTH_LONG).show());
+-                setupLatch.countDown();
+-                return;
+-            }
++        if (!targetRootFolder.exists() && !targetRootFolder.mkdirs()) {
++            throw new IOException("Could not create the folder " + targetRootFolder.getAbsolutePath()
++                    + ". Check that the app has file access and the storage is not full.");
+         }
+ 
+         // Always ensure mods folder exists
+@@ -250,38 +325,37 @@ public class MainActivity extends SDLActivity{
+             targetModsDir.mkdirs();
+         }
+ 
+-        // Copy assets/ from internal
++        // Rewrite every file when the last setup did not finish: a file cut short by a crash would otherwise be kept
++        File marker = new File(targetRootFolder, SETUP_MARKER);
++        boolean overwrite = !marker.exists();
++
++        // Copy assets/ from internal (0-90% of the bar)
+         File targetAssetsDir = new File(targetRootFolder, "assets");
+-        try {
+-            if (!targetAssetsDir.exists()) {
+-                targetAssetsDir.mkdirs();
+-            }
+-            AssetCopyUtil.copyAssetsToExternal(this, "assets", targetAssetsDir.getAbsolutePath());
+-            runOnUiThread(() -> Toast.makeText(this, "Assets copied", Toast.LENGTH_SHORT).show());
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-            runOnUiThread(() -> Toast.makeText(this, "Error copying assets", Toast.LENGTH_LONG).show());
++        if (!targetAssetsDir.exists() && !targetAssetsDir.mkdirs()) {
++            throw new IOException("Could not create the folder " + targetAssetsDir.getAbsolutePath());
+         }
++        final long[] lastReport = { 0 };
++        AssetCopyUtil.copyAssetsToExternal(this, "assets", targetAssetsDir.getAbsolutePath(), overwrite,
++                (done, total, name) -> {
++                    long now = android.os.SystemClock.elapsedRealtime();
++                    if (done == total || now - lastReport[0] > 100) {
++                        lastReport[0] = now;
++                        int pct = total > 0 ? (int) (90L * done / total) : 0;
++                        loading.setStatus("Setting up game files", "Copying extractor files (" + done + " / " + total + ")", pct, 30);
++                    }
++                });
+ 
+-        // Copy soh.otr from internal assets
++        // Copy soh.otr from internal assets (90-100%)
++        loading.setStatus("Setting up game files", "Copying soh.otr", 90, 30);
+         File targetOtrFile = new File(targetRootFolder, "soh.otr");
+-        try (InputStream in = getAssets().open("soh.otr");
+-             OutputStream out = new FileOutputStream(targetOtrFile)) {
+-
+-            byte[] buffer = new byte[1024];
+-            int read;
+-            while ((read = in.read(buffer)) != -1) {
+-                out.write(buffer, 0, read);
+-            }
+-
+-            runOnUiThread(() -> Toast.makeText(this, "soh.otr copied", Toast.LENGTH_SHORT).show());
+-
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-            runOnUiThread(() -> Toast.makeText(this, "Error copying soh.otr", Toast.LENGTH_LONG).show());
++        try (InputStream in = getAssets().open("soh.otr")) {
++            AssetCopyUtil.writeAtomically(in, targetOtrFile);
+         }
+ 
+-        setupLatch.countDown();
++        try (OutputStream out = new FileOutputStream(marker)) {
++            out.write(String.valueOf(BuildConfig.VERSION_CODE).getBytes());
++        }
++        loading.setStatus("Setting up game files", "Done", 100, 30);
+     }
+ 
+ 
+@@ -293,6 +367,11 @@ public class MainActivity extends SDLActivity{
+     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+         super.onActivityResult(requestCode, resultCode, data);
+ 
++        if (requestCode == FILE_PICKER_REQUEST_CODE && (resultCode != RESULT_OK || data == null || data.getData() == null)) {
++            // Picker closed without choosing a file: tell the game thread so it stops waiting
++            nativeHandleSelectedFile(null);
++            return;
++        }
+         if (requestCode == FILE_PICKER_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
+             // Handle file selection
+             Uri selectedFileUri = data.getData();
+@@ -302,36 +381,57 @@ public class MainActivity extends SDLActivity{
+             File destinationFile = new File(destinationDirectory, fileName);
+ 
+             if (destinationDirectory != null && selectedFileUri != null) {
+-                try {
+-                    InputStream in = getContentResolver().openInputStream(selectedFileUri);
+-                    OutputStream out = new FileOutputStream(destinationFile);
+-
+-                    byte[] buffer = new byte[4096];
+-                    int bytesRead;
+-                    while ((bytesRead = in.read(buffer)) != -1) {
+-                        out.write(buffer, 0, bytesRead);
+-                    }
+-
+-                    in.close();
+-                    out.close();
+-                } catch (IOException e) {
+-                    e.printStackTrace();
+-                }
++                copyPickedRomInBackground(selectedFileUri, destinationFile);
+             }
+ 
+-            // Now pass the path of the file in the new folder
+-            nativeHandleSelectedFile(destinationFile.getPath());
+-
+         } else if (requestCode == STORAGE_PERMISSION_REQUEST_CODE) {
+             // Handle MANAGE_EXTERNAL_STORAGE result
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+-                if (Environment.isExternalStorageManager()) {
+-                    checkAndSetupFiles();
+-                } else {
+-                    Toast.makeText(this, "Storage permission is required to access files.", Toast.LENGTH_LONG).show();
++            onStoragePermissionAnswered();
++        }
++    }
++
++    // Copies the picked ROM next to the game files, off the UI thread (it is up to 64 MB), then hands its path to
++    // the game thread waiting in Extractor::GetRomPathFromBox. An empty path tells it the copy failed.
++    private void copyPickedRomInBackground(Uri uri, File destinationFile) {
++        loading.setStatus("Copying your ROM", "", 0, 30);
++        Executors.newSingleThreadExecutor().execute(() -> {
++            String result = "";
++            try {
++                File dir = destinationFile.getParentFile();
++                if (dir != null && !dir.exists()) {
++                    dir.mkdirs();
+                 }
++                long size = -1;
++                try (android.database.Cursor c = getContentResolver().query(uri,
++                        new String[] { android.provider.OpenableColumns.SIZE }, null, null, null)) {
++                    if (c != null && c.moveToFirst() && !c.isNull(0)) {
++                        size = c.getLong(0);
++                    }
++                } catch (Exception e) {
++                    Log.w("RomPicker", "Could not read the file size", e);
++                }
++                final long total = size;
++                final long[] lastReport = { 0 };
++                try (InputStream in = getContentResolver().openInputStream(uri)) {
++                    if (in == null) {
++                        throw new IOException("The file could not be opened");
++                    }
++                    AssetCopyUtil.writeAtomically(in, destinationFile, written -> {
++                        long now = android.os.SystemClock.elapsedRealtime();
++                        if (now - lastReport[0] > 100) {
++                            lastReport[0] = now;
++                            int pct = total > 0 ? (int) Math.min(100, 100L * written / total) : -1;
++                            loading.setStatus("Copying your ROM", (written / (1024 * 1024)) + " MB", pct, 30);
++                        }
++                    });
++                }
++                result = destinationFile.getPath();
++            } catch (Exception e) {
++                Log.e("RomPicker", "Copying the ROM failed", e);
++                loading.setStatus("Could not copy your ROM", e.getMessage() != null ? e.getMessage() : e.toString(), -1, 0);
+             }
+-        }
++            nativeHandleSelectedFile(result);
++        });
+     }
+ 
+     public void openFilePicker() {
+diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
+index 1277ce4..1c6496e 100644
+--- a/soh/soh/Extractor/Extract.cpp
++++ b/soh/soh/Extractor/Extract.cpp
+@@ -47,8 +47,12 @@
+ 
+ #include <SDL2/SDL_messagebox.h>
+ 
++#include <algorithm>
+ #include <array>
++#include <atomic>
++#include <cstdarg>
+ #include <fstream>
++#include <mutex>
+ #include <filesystem>
+ #include <unordered_map>
+ #include <random>
+@@ -78,7 +82,7 @@ static const std::unordered_map<uint32_t, const char*> verMap = {
+     { OOT_PAL_GC_MQ_DBG, "PAL MQ Debug" },  { OOT_PAL_10, "PAL N64 1.0" },
+     { OOT_PAL_11, "PAL N64 1.1" },          { OOT_NTSC_US_GC, "NTSC Gamecube US" },
+     { OOT_NTSC_JP_GC, "NTSC Gamecube JP" }, { OOT_NTSC_JP_GC_CE, "NTSC Gamecube JP (Collector's Edition)" },
+-    { OOT_NTSC_US_GC, "NTSC MQ US" },       { OOT_NTSC_JP_GC, "NTSC MQ JP" },
++    { OOT_NTSC_US_MQ, "NTSC MQ US" },       { OOT_NTSC_JP_MQ, "NTSC MQ JP" },
+     { OOT_NTSC_10, "NTSC N64 1.0" },        { OOT_NTSC_11, "NTSC N64 1.1" },
+     { OOT_NTSC_12, "NTSC N64 1.2" },
+ };
+@@ -115,27 +119,136 @@ enum class ButtonId : int {
+ };
+ 
+ #ifdef __ANDROID__
+-const char* javaRomPath = NULL;
+-bool fileDialogOpen = false;
++// Set by the UI thread when the file picker returns; read by the game thread waiting in GetRomPathFromBox.
++static std::mutex javaRomPathMutex;
++static std::string javaRomPath; // empty: cancelled or the copy failed
++static std::atomic<bool> fileDialogOpen{ false };
++
++// Calls a void method on MainActivity. The game thread never returns to Java, so every local reference made here
++// must be freed or the JNI local reference table eventually overflows and aborts the app.
++static void CallActivityVoid(const char* name, const char* sig, ...) {
++    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
++    jobject activity = (jobject)SDL_AndroidGetActivity();
++    if (env == nullptr || activity == nullptr) {
++        return;
++    }
++    jclass cls = env->GetObjectClass(activity);
++    jmethodID method = env->GetMethodID(cls, name, sig);
++    if (method != nullptr) {
++        va_list args;
++        va_start(args, sig);
++        env->CallVoidMethodV(activity, method, args);
++        va_end(args);
++    }
++    if (env->ExceptionCheck()) {
++        env->ExceptionDescribe();
++        env->ExceptionClear();
++    }
++    env->DeleteLocalRef(cls);
++    env->DeleteLocalRef(activity);
++}
++
++static jstring NewJavaString(JNIEnv* env, const char* text) {
++    return env->NewStringUTF(text != nullptr ? text : "");
++}
+ 
+ //function to be called from C
+-void openFilePickerFromC(JNIEnv* env, jobject javaObject) {
++void openFilePickerFromC() {
+     fileDialogOpen = true;
+-    jclass javaClass = env->GetObjectClass(javaObject);
+-    jmethodID openFilePickerMethod = env->GetMethodID(javaClass, "openFilePicker", "()V");
+-    env->CallVoidMethod(javaObject, openFilePickerMethod);
++    CallActivityVoid("openFilePicker", "()V");
+ }
+-// Define the native method to handle the selected file path
++// Define the native method to handle the selected file path. A null or empty path means no usable file was picked.
+ extern "C" void JNICALL Java_com_dishii_soh_MainActivity_nativeHandleSelectedFile(JNIEnv* env, jobject obj, jstring filePath) {
+-    const char* filePathStr = env->GetStringUTFChars(filePath, 0);
+-    javaRomPath = strdup(filePathStr); // save filepath to string
++    std::string path;
++    if (filePath != nullptr) {
++        const char* filePathStr = env->GetStringUTFChars(filePath, 0);
++        if (filePathStr != nullptr) {
++            path = filePathStr;
++            env->ReleaseStringUTFChars(filePath, filePathStr);
++        }
++    }
++    {
++        std::lock_guard<std::mutex> lock(javaRomPathMutex);
++        javaRomPath = path;
++    }
+     fileDialogOpen = false;
+-    env->ReleaseStringUTFChars(filePath, filePathStr);
+ }
+ 
++extern "C" void SohLoading_SetStatus(const char* step, const char* detail, int percent, int stallSeconds) {
++    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
++    if (env == nullptr) {
++        return;
++    }
++    jstring jStep = NewJavaString(env, step);
++    jstring jDetail = NewJavaString(env, detail);
++    CallActivityVoid("loadingStatus", "(Ljava/lang/String;Ljava/lang/String;II)V", jStep, jDetail, (jint)percent,
++                     (jint)stallSeconds);
++    env->DeleteLocalRef(jStep);
++    env->DeleteLocalRef(jDetail);
++}
++
++extern "C" void SohLoading_SetWaiting(bool waitingForPlayer) {
++    CallActivityVoid("loadingWaiting", "(Z)V", (jboolean)waitingForPlayer);
++}
++
++extern "C" void SohLoading_Error(const char* title, const char* message) {
++    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
++    if (env == nullptr) {
++        return;
++    }
++    jstring jTitle = NewJavaString(env, title);
++    jstring jMessage = NewJavaString(env, message);
++    CallActivityVoid("loadingError", "(Ljava/lang/String;Ljava/lang/String;)V", jTitle, jMessage);
++    env->DeleteLocalRef(jTitle);
++    env->DeleteLocalRef(jMessage);
++}
++
++extern "C" void SohLoading_Done(void) {
++    static bool sDone = false;
++    if (sDone) {
++        return;
++    }
++    sDone = true;
++    CallActivityVoid("loadingDone", "()V");
++}
++
++#else
++extern "C" void SohLoading_SetStatus(const char*, const char*, int, int) {
++}
++extern "C" void SohLoading_SetWaiting(bool) {
++}
++extern "C" void SohLoading_Error(const char*, const char*) {
++}
++extern "C" void SohLoading_Done(void) {
++}
++#endif
++
++// Pauses the loading screen's "stuck" warning while a message box waits for the player.
++struct WaitingForPlayer {
++    WaitingForPlayer() {
++        SohLoading_SetWaiting(true);
++    }
++    ~WaitingForPlayer() {
++        SohLoading_SetWaiting(false);
++    }
++};
++
++void Extractor::ShowFatalErrorAndExit(const char* title, const char* text) {
++#ifdef __ANDROID__
++    // exit() from the game thread can leave Android showing a black window. Keep the error on screen instead; the
++    // loading screen's Close button ends the app.
++    SohLoading_Error(title, text);
++    while (true) {
++        SDL_Delay(1000);
++    }
++#else
++    ShowErrorBox(title, text);
++    exit(1);
+ #endif
++}
+ 
+ void Extractor::ShowErrorBox(const char* title, const char* text) {
++    WaitingForPlayer waiting;
+ #ifdef _WIN32
+     MessageBoxA(nullptr, text, title, MB_OK | MB_ICONERROR);
+ #else
+@@ -162,6 +275,7 @@ void Extractor::ShowCompressedErrorBox() const {
+ }
+ 
+ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
++    WaitingForPlayer waiting;
+     std::unique_ptr<char[]> boxBuffer = std::make_unique<char[]>(mCurrentRomPath.size() + 100);
+     SDL_MessageBoxData boxData = { 0 };
+     SDL_MessageBoxButtonData buttons[3] = { { 0 } };
+@@ -184,14 +298,15 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
+     boxData.buttons = buttons;
+     snprintf(boxBuffer.get(), mCurrentRomPath.size() + 100,
+              "Rom detected: %s, Header CRC32: %8X. It appears to be: %s. Use this rom?", mCurrentRomPath.c_str(),
+-             verCrc, verMap.at(verCrc));
++             verCrc, verMap.contains(verCrc) ? verMap.at(verCrc) : "an unknown version");
+ 
+     SDL_ShowMessageBox(&boxData, &ret);
+     return ret;
+ }
+ 
+ int Extractor::ShowYesNoBox(const char* title, const char* box) {
+-    int ret;
++    WaitingForPlayer waiting;
++    int ret = IDNO;
+ #ifdef _WIN32
+     ret = MessageBoxA(nullptr, box, title, MB_YESNO | MB_ICONQUESTION);
+ #else
+@@ -209,7 +324,9 @@ int Extractor::ShowYesNoBox(const char* title, const char* box) {
+     boxData.message = box;
+     boxData.title = title;
+     boxData.buttons = buttons;
+-    SDL_ShowMessageBox(&boxData, &ret);
++    if (SDL_ShowMessageBox(&boxData, &ret) != 0 || (ret != IDYES && ret != IDNO)) {
++        ret = IDNO;
++    }
+ #endif
+     return ret;
+ }
+@@ -223,9 +340,14 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+     std::ifstream inFile;
+     std::vector<std::string>::iterator it = roms.begin();
+ 
++    size_t checked = 0;
++    const size_t total = roms.size();
+     while (it != roms.end()) {
+         std::string rom = *it;
+         SetRomInfo(rom);
++        checked++;
++        SohLoading_SetStatus("Checking ROM files", std::filesystem::path(rom).filename().string().c_str(),
++                             (int)(100 * (checked - 1) / (total > 0 ? total : 1)), 30);
+ 
+         // Skip. We will handle rom size errors later on after filtering
+         if (!ValidateRomSize()) {
+@@ -234,6 +356,10 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+         }
+ 
+         inFile.open(rom, std::ios::in | std::ios::binary);
++        if (!inFile.is_open()) {
++            it = roms.erase(it);
++            continue;
++        }
+         inFile.read((char*)mRomData.get(), mCurRomSize);
+         inFile.clear();
+         inFile.close();
+@@ -293,31 +419,39 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
+     }
+     closedir(d);
+ #elif defined(__ANDROID__)
++    std::vector<std::string> searchDirs = { mSearchPath };
+     const char* androidAssetPath = SDL_AndroidGetExternalStoragePath();
+-    if (androidAssetPath == NULL) {
+-        printf("Error accessing Android assets directory: %s\n", SDL_GetError());
+-        return;
++    if (androidAssetPath != NULL) {
++        searchDirs.push_back(androidAssetPath);
+     }
+ 
+-    // Use androidAssetPath for file operations
+-    // Example: List files in the directory
+-    DIR* dir;
+-    struct dirent* entry;
+-
+-    if ((dir = opendir(androidAssetPath)) != NULL) {
++    for (const std::string& searchDir : searchDirs) {
++        if (searchDir.empty()) {
++            continue;
++        }
++        DIR* dir = opendir(searchDir.c_str());
++        if (dir == NULL) {
++            SDL_Log("Could not open %s to look for roms", searchDir.c_str());
++            continue;
++        }
++        struct dirent* entry;
+         while ((entry = readdir(dir)) != NULL) {
+-            if (entry->d_type == DT_REG) {
+-                char* filename = entry->d_name;
+-                // Check file extension and process accordingly
+-                if (strstr(filename, ".n64") || strstr(filename, ".z64") || strstr(filename, ".v64")) {
+-                    std::string fullPath = std::string(androidAssetPath) + "/" + filename;
+-                    roms.push_back(fullPath);
+-                }
++            std::string filename = entry->d_name;
++            std::string fullPath = searchDir + "/" + filename;
++            std::error_code ec;
++            if (!std::filesystem::is_regular_file(fullPath, ec)) {
++                continue;
++            }
++            std::string ext = std::filesystem::path(filename).extension().string();
++            for (char& c : ext) {
++                c = (char)tolower((unsigned char)c);
++            }
++            if ((ext == ".n64" || ext == ".z64" || ext == ".v64") &&
++                std::find(roms.begin(), roms.end(), fullPath) == roms.end()) {
++                roms.push_back(fullPath);
+             }
+         }
+         closedir(dir);
+-    } else {
+-        printf("Error opening directory: %s\n", androidAssetPath);
+     }
+ #else
+     for (const auto& file : std::filesystem::directory_iterator(mSearchPath)) {
+@@ -371,27 +505,30 @@ bool Extractor::GetRomPathFromBox() {
+     mCurrentRomPath = nameBuffer;
+ 
+ #elif defined(__ANDROID__)
+-    JNIEnv* javaEnv = (JNIEnv*)SDL_AndroidGetJNIEnv();
+-    jobject javaObject = (jobject)SDL_AndroidGetActivity();
+-    std::vector<std::string> selection;
+-    openFilePickerFromC(javaEnv, javaObject);
+-    while(fileDialogOpen){
+-        //Do nothing until a file is chosen
+-        SDL_Delay(250);
++    {
++        std::lock_guard<std::mutex> lock(javaRomPathMutex);
++        javaRomPath.clear();
++    }
++    SohLoading_SetStatus("Pick your Ocarina of Time ROM", "Choose the .z64, .n64 or .v64 file", -1, 0);
++    SohLoading_SetWaiting(true);
++    openFilePickerFromC();
++    // MainActivity always answers: with the copied file's path, or an empty path when the picker was closed or the
++    // copy failed. The copy itself reports its own progress.
++    while (fileDialogOpen) {
++        SDL_Delay(100);
+     }
+-    SDL_Log("%s",javaRomPath);
+-    selection.push_back(javaRomPath);
++    std::string picked;
++    {
++        std::lock_guard<std::mutex> lock(javaRomPathMutex);
++        picked = javaRomPath;
++    }
++    SDL_Log("Picked rom: %s", picked.c_str());
+ 
+-    if (selection.empty()) {
++    if (picked.empty()) {
+         return false;
+     }
+ 
+-    mCurrentRomPath = selection[0];
+-
+-    if (javaRomPath) {
+-        free((void*)javaRomPath);
+-        javaRomPath = NULL;
+-    }
++    mCurrentRomPath = picked;
+ 
+ #else
+     auto selection = pfd::open_file("Select a file", mSearchPath, { "N64 Roms", "*.z64 *.n64 *.v64" }).result();
+@@ -411,7 +548,10 @@ uint32_t Extractor::GetRomVerCrc() const {
+ }
+ 
+ size_t Extractor::GetCurRomSize() const {
+-    return std::filesystem::file_size(mCurrentRomPath);
++    // A missing or unreadable file reports size 0 (rejected as a bad size) instead of throwing and crashing
++    std::error_code ec;
++    uintmax_t size = std::filesystem::file_size(mCurrentRomPath, ec);
++    return ec ? 0 : (size_t)size;
+ }
+ 
+ bool Extractor::ValidateAndFixRom() {
+@@ -482,16 +622,25 @@ bool Extractor::ManuallySearchForRom() {
+         return false;
+     }
+ 
++    SohLoading_SetStatus("Reading your ROM", std::filesystem::path(mCurrentRomPath).filename().string().c_str(), -1, 30);
++    if (!ValidateRomSize()) {
++        ShowSizeErrorBox();
++        return false;
++    }
++
+     inFile.open(mCurrentRomPath, std::ios::in | std::ios::binary);
+ 
+     if (!inFile.is_open()) {
+-        return false; // TODO Handle error
++        std::string msg = "Could not open " + mCurrentRomPath + ".";
++        ShowErrorBox("Could not read the rom", msg.c_str());
++        return false;
+     }
+ 
+     inFile.read((char*)mRomData.get(), mCurRomSize);
+     inFile.close();
+     BitConverter::RomToBigEndian(mRomData.get(), mCurRomSize);
+ 
++    SohLoading_SetStatus("Verifying your ROM", "Checking it is a supported version", -1, 30);
+     if (!ValidateRom()) {
+         return false;
+     }
+@@ -536,6 +685,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+ 
+     mSearchPath = searchPath;
+ 
++    SohLoading_SetStatus("Searching for your ROM", searchPath.c_str(), -1, 30);
+     GetRoms(roms);
+     FilterRoms(roms, searchMode);
+ 
+@@ -565,6 +715,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+             continue;
+         }
+ 
++        SohLoading_SetStatus("Reading your ROM", std::filesystem::path(rom).filename().string().c_str(), -1, 30);
+         inFile.open(rom, std::ios::in | std::ios::binary);
+         inFile.read((char*)mRomData.get(), mCurRomSize);
+         inFile.clear();
+@@ -574,6 +725,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+         int option = ShowRomPickBox(GetRomVerCrc());
+ 
+         if (option == (int)ButtonId::YES) {
++            SohLoading_SetStatus("Verifying your ROM", "Checking it is a supported version", -1, 30);
+             if (!ValidateRom(true)) {
+                 if (rom == roms.back()) {
+                     ShowCrcErrorBox();
+@@ -620,9 +772,10 @@ bool Extractor::IsMasterQuest() const {
+         case OOT_PAL_11:
+         case OOT_PAL_GC:
+         case OOT_PAL_GC_DBG1:
++        case OOT_PAL_GC_DBG2:
+             return false;
+         default:
+-            UNREACHABLE;
++            return false;
+     }
+ }
+ 
+@@ -657,9 +810,8 @@ const char* Extractor::GetZapdVerStr() const {
+         case OOT_NTSC_12:
+             return "N64_NTSC_12";
+         default:
+-            // We should never be in a state where this path happens.
+-            UNREACHABLE;
+-            break;
++            // Only reachable with a rom whose header is not in verMap; CallZapd reports it.
++            return nullptr;
+     }
+ }
+ 
+@@ -667,7 +819,17 @@ std::string Extractor::Mkdtemp() {
+ #ifndef __ANDROID__
+     std::string temp_dir = std::filesystem::temp_directory_path().string();
+ #else
+-    std::string temp_dir = SDL_AndroidGetExternalStoragePath();
++    const char* externalPath = SDL_AndroidGetExternalStoragePath();
++    std::string temp_dir = externalPath != nullptr ? externalPath : SDL_AndroidGetInternalStoragePath();
++    // Remove work folders left behind by an extraction that was interrupted (each holds a copy of the assets)
++    try {
++        std::error_code cleanupError;
++        for (const auto& entry : std::filesystem::directory_iterator(temp_dir, cleanupError)) {
++            if (entry.path().filename().string().rfind("extractor-", 0) == 0) {
++                std::filesystem::remove_all(entry.path(), cleanupError);
++            }
++        }
++    } catch (const std::exception& e) { SDL_Log("Could not clean old extractor folders: %s", e.what()); }
+ #endif
+     // create 6 random alphanumeric characters
+     static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+@@ -687,7 +849,26 @@ std::string Extractor::Mkdtemp() {
+ }
+ 
+ extern "C" int zapd_main(int argc, char** argv);
++extern "C" void (*gZapdProgressCallback)(int done, int total);
++extern "C" const char* zapd_last_error();
+ 
++// Extraction gets 5-90% of the bar, packing the archive the rest.
++static void ReportZapdProgress(int done, int total) {
++    static int sLastDone = -1;
++    if (done == sLastDone) {
++        return;
++    }
++    sLastDone = done;
++    if (total > 0 && done < total) {
++        char detail[64];
++        snprintf(detail, sizeof(detail), "%d of %d asset files", done, total);
++        SohLoading_SetStatus("Extracting game assets from your ROM", detail, 5 + 85 * done / total, 120);
++    } else {
++        SohLoading_SetStatus("Packing the game archive", "Writing all assets into one file", 90, 240);
++    }
++}
++
++// Returns true when the game archive (oot.otr or oot-mq.otr) was written to exportdir. On failure, shows why.
+ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
+     constexpr int argc = 18;
+     char xmlPath[1024];
+@@ -697,72 +878,110 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
+     const char* version = GetZapdVerStr();
+     const char* otrFile = IsMasterQuest() ? "oot-mq.otr" : "oot.otr";
+ 
+-    std::string romPath = std::filesystem::absolute(mCurrentRomPath).string();
+-    installPath = std::filesystem::absolute(installPath).string();
+-    exportdir = std::filesystem::absolute(exportdir).string();
+-    // Work this out in the temporary folder
+-    std::string tempdir = Mkdtemp();
+-    std::string curdir = std::filesystem::current_path().string();
++    if (version == nullptr) {
++        ShowErrorBox("Unsupported rom", "This rom version cannot be extracted. Please use a supported rom.");
++        return false;
++    }
++
++    std::string tempdir;
++    std::string curdir;
++    std::string failure;
++    int zapdResult = 1;
++
++    SohLoading_SetStatus("Preparing to extract", "Copying the extractor files", -1, 120);
++    try {
++        std::string romPath = std::filesystem::absolute(mCurrentRomPath).string();
++        installPath = std::filesystem::absolute(installPath).string();
++        exportdir = std::filesystem::absolute(exportdir).string();
++        // Work this out in the temporary folder
++        tempdir = Mkdtemp();
++        curdir = std::filesystem::current_path().string();
+ #if defined(_WIN32) || defined(__ANDROID__)
+-    std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
+-                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
++        std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
++                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
+ #else
+-    std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
++        std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
+ #endif
+ 
+-    std::filesystem::current_path(tempdir);
+-
+-    snprintf(xmlPath, 1024, "assets/extractor/xmls/%s", version);
+-    snprintf(confPath, 1024, "assets/extractor/Config_%s.xml", version);
+-    snprintf(portVersion, 18, "%d.%d.%d", gBuildVersionMajor, gBuildVersionMinor, gBuildVersionPatch);
+-
+-    argv[0] = "ZAPD";
+-    argv[1] = "ed";
+-    argv[2] = "-i";
+-    argv[3] = xmlPath;
+-    argv[4] = "-b";
+-    argv[5] = romPath.c_str();
+-    argv[6] = "-fl";
+-    argv[7] = "assets/extractor/filelists";
+-    argv[8] = "-gsf";
+-    argv[9] = "1";
+-    argv[10] = "-rconf";
+-    argv[11] = confPath;
+-    argv[12] = "-se";
+-    argv[13] = "OTR";
+-    argv[14] = "--otrfile";
+-    argv[15] = otrFile;
+-    argv[16] = "--portVer";
+-    argv[17] = portVersion;
++        std::filesystem::current_path(tempdir);
++
++        snprintf(xmlPath, 1024, "assets/extractor/xmls/%s", version);
++        snprintf(confPath, 1024, "assets/extractor/Config_%s.xml", version);
++        snprintf(portVersion, 18, "%d.%d.%d", gBuildVersionMajor, gBuildVersionMinor, gBuildVersionPatch);
++
++        argv[0] = "ZAPD";
++        argv[1] = "ed";
++        argv[2] = "-i";
++        argv[3] = xmlPath;
++        argv[4] = "-b";
++        argv[5] = romPath.c_str();
++        argv[6] = "-fl";
++        argv[7] = "assets/extractor/filelists";
++        argv[8] = "-gsf";
++        argv[9] = "1";
++        argv[10] = "-rconf";
++        argv[11] = confPath;
++        argv[12] = "-se";
++        argv[13] = "OTR";
++        argv[14] = "--otrfile";
++        argv[15] = otrFile;
++        argv[16] = "--portVer";
++        argv[17] = portVersion;
+ 
+ #ifdef _WIN32
+-    // Grab a handle to the command window.
+-    HWND cmdWindow = GetConsoleWindow();
+-
+-    // Normally the command window is hidden. We want the window to be shown here so the user can see the progess of the
+-    // extraction.
+-    ShowWindow(cmdWindow, SW_SHOW);
+-    SetWindowPos(cmdWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+-#else
+-    // Show extraction in background message until linux/mac can have visual progress
+-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Extracting",
+-                             "Extraction will now begin in the background.\n\nPlease be patient for the process to "
+-                             "finish. Do not close the main program.",
+-                             nullptr);
++        // Grab a handle to the command window.
++        HWND cmdWindow = GetConsoleWindow();
++
++        // Normally the command window is hidden. We want the window to be shown here so the user can see the progess of the
++        // extraction.
++        ShowWindow(cmdWindow, SW_SHOW);
++        SetWindowPos(cmdWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
++#elif !defined(__ANDROID__)
++        // Show extraction in background message until linux/mac can have visual progress
++        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Extracting",
++                                 "Extraction will now begin in the background.\n\nPlease be patient for the process to "
++                                 "finish. Do not close the main program.",
++                                 nullptr);
+ #endif
+ 
+-    zapd_main(argc, (char**)argv.data());
++        SohLoading_SetStatus("Extracting game assets from your ROM", "Starting", 5, 120);
++        gZapdProgressCallback = ReportZapdProgress;
++        zapdResult = zapd_main(argc, (char**)argv.data());
++        gZapdProgressCallback = nullptr;
+ 
+ #ifdef _WIN32
+-    // Hide the command window again.
+-    ShowWindow(cmdWindow, SW_HIDE);
++        // Hide the command window again.
++        ShowWindow(cmdWindow, SW_HIDE);
+ #endif
+ 
+-    std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
++        if (zapdResult != 0) {
++            failure = std::string("The extractor stopped with an error.\n\n") + zapd_last_error();
++        } else if (!std::filesystem::exists(otrFile) || std::filesystem::file_size(otrFile) == 0) {
++            failure = std::string("The extractor finished but did not create ") + otrFile + ".";
++        } else {
++            SohLoading_SetStatus("Saving the game archive", otrFile, 98, 120);
++            std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
++        }
++    } catch (const std::exception& e) {
++        gZapdProgressCallback = nullptr;
++        failure = std::string("The extraction failed: ") + e.what();
++    }
+ 
+-    // Go back to where this game was executed from
+-    std::filesystem::current_path(curdir);
+-    std::filesystem::remove_all(tempdir);
++    // Go back to where this game was executed from, and clean up
++    std::error_code ec;
++    if (!curdir.empty()) {
++        std::filesystem::current_path(curdir, ec);
++    }
++    if (!tempdir.empty()) {
++        std::filesystem::remove_all(tempdir, ec);
++    }
+ 
+-    return 0;
++    if (!failure.empty()) {
++        printf("Extraction failed: %s\n", failure.c_str());
++        // A half-written archive would make the next launch skip extraction and fail later
++        std::filesystem::remove(exportdir + "/" + otrFile, ec);
++        ShowErrorBox("Extraction failed", failure.c_str());
++        return false;
++    }
++    return true;
+ }
+diff --git a/soh/soh/Extractor/Extract.h b/soh/soh/Extractor/Extract.h
+index ae4fa74..7576de7 100644
+--- a/soh/soh/Extractor/Extract.h
++++ b/soh/soh/Extractor/Extract.h
+@@ -9,9 +9,25 @@
+ // Values come from windows.h
+ #ifndef IDYES
+ #define IDYES 6
++// Loading screen (Android: LoadingOverlay.java; elsewhere these do nothing).
++// percent: 0-100 or -1 for "no measurable progress". stallSeconds: how long the step may sit unchanged before the
++// screen warns that it may be stuck (0 = never, e.g. while waiting for the player).
++extern "C" void SohLoading_SetStatus(const char* step, const char* detail, int percent, int stallSeconds);
++extern "C" void SohLoading_SetWaiting(bool waitingForPlayer);
++extern "C" void SohLoading_Error(const char* title, const char* message);
++extern "C" void SohLoading_Done(void);
++
+ #endif
+ #ifndef IDNO
+ #define IDNO 7
++// Loading screen (Android: LoadingOverlay.java; elsewhere these do nothing).
++// percent: 0-100 or -1 for "no measurable progress". stallSeconds: how long the step may sit unchanged before the
++// screen warns that it may be stuck (0 = never, e.g. while waiting for the player).
++extern "C" void SohLoading_SetStatus(const char* step, const char* detail, int percent, int stallSeconds);
++extern "C" void SohLoading_SetWaiting(bool waitingForPlayer);
++extern "C" void SohLoading_Error(const char* title, const char* message);
++extern "C" void SohLoading_Done(void);
++
+ #endif
+ 
+ static constexpr size_t MB_BASE = 1024 * 1024;
+@@ -57,6 +73,9 @@ class Extractor {
+     // TODO create some kind of abstraction for message boxes.
+     static int ShowYesNoBox(const char* title, const char* text);
+     static void ShowErrorBox(const char* title, const char* text);
++    // Shows an error the game cannot continue from, then exits. On Android the error stays on the loading screen
++    // (with a Close button) instead of the app vanishing or leaving a black screen.
++    [[noreturn]] static void ShowFatalErrorAndExit(const char* title, const char* text);
+     bool IsMasterQuest() const;
+ 
+     bool Run(std::string searchPath, RomSearchMode searchMode = RomSearchMode::Both);
+@@ -64,4 +83,12 @@ class Extractor {
+     const char* GetZapdStr();
+     std::string Mkdtemp();
+ };
++// Loading screen (Android: LoadingOverlay.java; elsewhere these do nothing).
++// percent: 0-100 or -1 for "no measurable progress". stallSeconds: how long the step may sit unchanged before the
++// screen warns that it may be stuck (0 = never, e.g. while waiting for the player).
++extern "C" void SohLoading_SetStatus(const char* step, const char* detail, int percent, int stallSeconds);
++extern "C" void SohLoading_SetWaiting(bool waitingForPlayer);
++extern "C" void SohLoading_Error(const char* title, const char* message);
++extern "C" void SohLoading_Done(void);
++
+ #endif
+diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
+index 09162db..66041ad 100644
+--- a/soh/soh/OTRGlobals.cpp
++++ b/soh/soh/OTRGlobals.cpp
+@@ -980,8 +980,7 @@ void CheckSoHOTRVersion(std::string otrPath) {
+ 
+     if (!std::filesystem::exists(otrPath)) {
+ #if not defined(__SWITCH__) && not defined(__WIIU__)
+-        Extractor::ShowErrorBox("soh.otr file is missing", msg.c_str());
+-        exit(1);
++        Extractor::ShowFatalErrorAndExit("soh.otr file is missing", msg.c_str());
+ #elif defined(__SWITCH__)
+         Ship::Switch::PrintErrorMessageToScreen(("\x1b[2;2HYou are missing the soh.otr file." + msg).c_str());
+ #elif defined(__WIIU__)
+@@ -994,8 +993,7 @@ void CheckSoHOTRVersion(std::string otrPath) {
+     if (otrVersion.major != gBuildVersionMajor || otrVersion.minor != gBuildVersionMinor ||
+         otrVersion.patch != gBuildVersionPatch) {
+ #if not defined(__SWITCH__) && not defined(__WIIU__)
+-        Extractor::ShowErrorBox("soh.otr file version does not match", msg.c_str());
+-        exit(1);
++        Extractor::ShowFatalErrorAndExit("soh.otr file version does not match", msg.c_str());
+ #elif defined(__SWITCH__)
+         Ship::Switch::PrintErrorMessageToScreen(("\x1b[2;2HYou have an old soh.otr file." + msg).c_str());
+ #elif defined(__WIIU__)
+@@ -1041,21 +1039,20 @@ void DetectOTRVersion(std::string fileName, bool isMQ) {
+         if (Extractor::ShowYesNoBox("Old OTR File Found", msgBuf) == IDYES) {
+             std::string installPath = Ship::Context::GetAppBundlePath();
+             if (!std::filesystem::exists(installPath + "/assets/extractor")) {
+-                Extractor::ShowErrorBox(
++                Extractor::ShowFatalErrorAndExit(
+                     "Extractor assets not found",
+                     "Unable to regenerate. Missing assets/extractor folder needed to generate OTR file.\n\nExiting...");
+-                exit(1);
+             }
+ 
+             Extractor extract;
+             if (!extract.Run(Ship::Context::GetAppDirectoryPath(appShortName),
+-                             isMQ ? RomSearchMode::MQ : RomSearchMode::Vanilla)) {
+-                Extractor::ShowErrorBox("Error", "An error occured, no OTR file was generated.\n\nExiting...");
+-                exit(1);
++                             isMQ ? RomSearchMode::MQ : RomSearchMode::Vanilla) ||
++                !extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName))) {
++                Extractor::ShowFatalErrorAndExit("Error", "An error occured, no OTR file was generated.\n\nExiting...");
+             }
+-            extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName));
+         } else {
+-            exit(1);
++            Extractor::ShowFatalErrorAndExit("Game files out of date",
++                                             "The game archive must be regenerated from your ROM before playing.");
+         }
+ 
+ #elif defined(__SWITCH__)
+@@ -1151,6 +1148,7 @@ extern "C" void InitOTR() {
+     CheckAndCreateModFolder();
+ #endif
+ 
++    SohLoading_SetStatus("Checking game files", "", -1, 60);
+     CheckSoHOTRVersion(Ship::Context::GetPathRelativeToAppBundle("soh.otr"));
+ 
+     if (!std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot-mq.otr", appShortName)) &&
+@@ -1159,33 +1157,33 @@ extern "C" void InitOTR() {
+ #if not defined(__SWITCH__) && not defined(__WIIU__)
+         std::string installPath = Ship::Context::GetAppBundlePath();
+         if (!std::filesystem::exists(installPath + "/assets/extractor")) {
+-            Extractor::ShowErrorBox(
++            Extractor::ShowFatalErrorAndExit(
+                 "Extractor assets not found",
+                 "No OTR files found. Missing assets/extractor folder needed to generate OTR file.\n\nExiting...");
+-            exit(1);
+         }
+ 
+         bool generatedOtrIsMQ = false;
++        SohLoading_SetStatus("Game files needed", "Your ROM must be extracted once", -1, 0);
+         if (Extractor::ShowYesNoBox("No OTR Files", "No OTR files found. Generate one now?") == IDYES) {
+             Extractor extract;
+-            if (!extract.Run(Ship::Context::GetAppDirectoryPath(appShortName))) {
+-                Extractor::ShowErrorBox("Error", "An error occured, no OTR file was generated.\n\nExiting...");
+-                exit(1);
++            if (!extract.Run(Ship::Context::GetAppDirectoryPath(appShortName)) ||
++                !extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName))) {
++                Extractor::ShowFatalErrorAndExit("Error", "An error occured, no OTR file was generated.\n\nExiting...");
+             }
+-            extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName));
+             generatedOtrIsMQ = extract.IsMasterQuest();
+         } else {
+-            exit(1);
++            Extractor::ShowFatalErrorAndExit("No game files",
++                                             "The game cannot start without extracting your Ocarina of Time ROM.");
+         }
++        SohLoading_SetStatus("Extraction complete", "", 100, 0);
+         if (Extractor::ShowYesNoBox("Extraction Complete", "ROM Extracted. Extract another?") == IDYES) {
+             Extractor extract;
+             if (!extract.Run(Ship::Context::GetAppDirectoryPath(appShortName),
+-                             generatedOtrIsMQ ? RomSearchMode::Vanilla : RomSearchMode::MQ)) {
++                             generatedOtrIsMQ ? RomSearchMode::Vanilla : RomSearchMode::MQ) ||
++                !extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName))) {
+                 Extractor::ShowErrorBox(
+                     "Error",
+                     "An error occured, an OTR file may have been generated by a different step.\n\nContinuing...");
+-            } else {
+-                extract.CallZapd(installPath, Ship::Context::GetAppDirectoryPath(appShortName));
+             }
+         }
+ 
+@@ -1203,6 +1201,7 @@ extern "C" void InitOTR() {
+     DetectOTRVersion("oot.otr", false);
+     DetectOTRVersion("oot-mq.otr", true);
+ 
++    SohLoading_SetStatus("Starting the game", "Loading game files", -1, 90);
+     OTRGlobals::Instance = new OTRGlobals();
+     CustomMessageManager::Instance = new CustomMessageManager();
+     ItemTableManager::Instance = new ItemTableManager();
+@@ -1337,6 +1336,8 @@ extern "C" uint64_t GetUnixTimestamp() {
+ }
+ 
+ extern "C" void Graph_StartFrame() {
++    // The game is drawing now: take the loading screen down (only does anything on the first frame)
++    SohLoading_Done();
+ #ifndef __WIIU__
+     using Ship::KbScancode;
+     int32_t dwScancode = OTRGlobals::Instance->context->GetWindow()->GetLastScancode();

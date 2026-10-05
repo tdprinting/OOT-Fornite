@@ -2,6 +2,7 @@
 # Apply our patches to the Shipwright-Android submodule and to its nested libultraship submodule.
 #   patches/*.patch              -> third_party/Shipwright-Android
 #   patches/libultraship/*.patch -> third_party/Shipwright-Android/libultraship
+#   patches/ZAPDTR/*.patch       -> third_party/Shipwright-Android/ZAPDTR (the ROM extractor)
 # Idempotent: patches that are already applied are skipped.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,3 +24,4 @@ apply_dir() {
 }
 apply_dir "$ROOT/third_party/Shipwright-Android" "$ROOT/patches"
 apply_dir "$ROOT/third_party/Shipwright-Android/libultraship" "$ROOT/patches/libultraship"
+apply_dir "$ROOT/third_party/Shipwright-Android/ZAPDTR" "$ROOT/patches/ZAPDTR"
