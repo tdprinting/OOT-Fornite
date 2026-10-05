@@ -84,6 +84,7 @@ void* AudioLoad_SyncLoadFont(u32 fontId);
 extern char** sequenceMap;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
+s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
@@ -887,6 +888,62 @@ void UpdateSongMelody() {
     }
 }
 
+// What a spell, a song or a gadget looks like when somebody uses it, made from the game's own effects: its flame, ice and light particles, shock
+// rings and explosions, and (for your own Link) the real Din's Fire, Nayru's Love and Farore's Wind actors. `at` is the user's feet.
+void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
+    using royale::ItemId;
+    auto ring = [&](Color_RGBA8 prim, Color_RGBA8 env, float radius, int count, float rise, s16 scale) {
+        for (int i = 0; i < count; i++) {
+            const float a = i * (6.2831853f / count);
+            Vec3f pos = { at.x + std::sin(a) * radius, at.y + 6.0f + Rand_ZeroOne() * 12.0f, at.z + std::cos(a) * radius };
+            Vec3f vel = { std::sin(a) * 0.6f, rise * (0.6f + Rand_ZeroOne()), std::cos(a) * 0.6f }, accel = { 0, 0.05f, 0 };
+            EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, 30);
+        }
+    };
+    auto shock = [&](float y) { Vec3f pos = { at.x, at.y + y, at.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 }; EffectSsBlast_SpawnWhiteShockwave(play, &pos, &vel, &accel); };
+    auto spawn = [&](s16 actorId) { if (self) Actor_Spawn(&play->actorCtx, play, actorId, at.x, at.y, at.z, 0, 0, 0, 0, true); };
+    switch (item) {
+        case ItemId::DinsFire:
+            spawn(ACTOR_MAGIC_FIRE);
+            if (!self) { ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 50.0f, 18, 2.4f, 120); ring({ 255, 120, 0, 255 }, { 255, 0, 0, 255 }, 95.0f, 24, 1.6f, 90); shock(30.0f); }
+            break;
+        case ItemId::BoleroOfFire:
+            ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 60.0f, 20, 2.2f, 110); ring({ 255, 90, 0, 255 }, { 200, 0, 0, 255 }, 110.0f, 28, 1.4f, 90); shock(30.0f);
+            break;
+        case ItemId::NayrusLove:
+            spawn(ACTOR_MAGIC_DARK);
+            if (!self) { ring({ 170, 255, 255, 255 }, { 0, 100, 255, 255 }, 45.0f, 20, 1.8f, 100); shock(40.0f); }
+            break;
+        case ItemId::FaroresWind:
+            spawn(ACTOR_MAGIC_WIND);
+            if (!self) ring({ 200, 255, 200, 255 }, { 0, 200, 60, 255 }, 35.0f, 20, 3.0f, 100);
+            break;
+        case ItemId::MinuetOfForest: ring({ 200, 255, 120, 255 }, { 0, 200, 0, 255 }, 55.0f, 24, 2.6f, 90); break;
+        case ItemId::SerenadeOfWater: ring({ 170, 230, 255, 255 }, { 0, 150, 255, 255 }, 55.0f, 24, 2.6f, 90); shock(20.0f); break;
+        case ItemId::NocturneOfShadow: ring({ 230, 160, 255, 255 }, { 200, 50, 255, 255 }, 55.0f, 24, 2.6f, 90); break;
+        case ItemId::RequiemOfSpirit: ring({ 255, 210, 120, 255 }, { 255, 150, 0, 255 }, 70.0f, 24, 2.0f, 100); shock(30.0f); break;
+        case ItemId::PreludeOfLight: case ItemId::ZeldasLullaby: ring({ 255, 255, 220, 255 }, { 255, 230, 100, 255 }, 40.0f, 18, 2.8f, 100); break;
+        case ItemId::SunsSong: ring({ 255, 255, 180, 255 }, { 255, 220, 0, 255 }, 80.0f, 28, 2.0f, 110); shock(40.0f); break;
+        case ItemId::SongOfTime: ring({ 190, 255, 255, 255 }, { 80, 190, 240, 255 }, 80.0f, 28, 2.0f, 110); shock(40.0f); break;
+        case ItemId::EponasSong: ring({ 255, 200, 140, 255 }, { 200, 120, 40, 255 }, 45.0f, 16, 1.6f, 80); break;
+        case ItemId::SariasSong: ring({ 190, 255, 190, 255 }, { 0, 220, 100, 255 }, 45.0f, 16, 1.6f, 80); break;
+        case ItemId::SongOfStorms:
+            if (self) Environment_AddLightningBolts(play, 2);
+            ring({ 255, 255, 255, 255 }, { 120, 120, 255, 255 }, 70.0f, 20, 2.4f, 90);
+            break;
+        case ItemId::ShockwaveGrenade: {
+            Vec3f pos = { at.x, at.y + 20.0f, at.z };
+            Vec3f none = { 0, 0, 0 };
+            EffectSsBomb2_SpawnLayered(play, &pos, &none, &none, 60, 10);
+            shock(20.0f);
+            break;
+        }
+        case ItemId::MagicBeans: ring({ 180, 255, 140, 255 }, { 60, 200, 0, 255 }, 25.0f, 12, 2.0f, 80); break;
+        case ItemId::LensOfTruth: ring({ 235, 190, 255, 255 }, { 150, 80, 220, 255 }, 25.0f, 12, 1.5f, 80); break;
+        default: break;
+    }
+}
+
 // Someone used an ability: the spell's sound and Link's shout from where they stand, and the tune if it was a song and they are close.
 void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     gLastAbility[who] = item;
@@ -896,9 +953,10 @@ void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     Player* me = GET_PLAYER(gPlayState);
     const float d = std::hypot(x - me->actor.world.pos.x, z - me->actor.world.pos.z);
     if (song && (self || d < 900.0f)) PlaySongMelody(OcarinaSongOf(item));
-    if (self) return;   // your own spell already made its sound when you used it
+    if (self) return;   // your own spell already made its sound and flash when you used it
     auto a = gActorOf.find(who);
     if (a == gActorOf.end() || a->second == nullptr) return;
+    PowerFx(gPlayState, item, a->second->world.pos, false);
     Player* p = (Player*)a->second;
     if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
     if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
@@ -5475,6 +5533,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
                         : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
+            PowerFx(gPlayState, ab, player->actor.world.pos, true);
             UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
             if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
@@ -5498,8 +5557,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         player->actor.shape.rot.y = player->actor.world.rot.y = aim;
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
-    if (hasAmmo && w.ranged) SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f, player->actor.world.pos.z, aim);
-    else Audio_PlaySoundGeneral(NA_SE_IT_SWORD_SWING_HARD, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     SmashPropInFront(player, w);
 }
@@ -5567,28 +5625,89 @@ void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     gHaveLastPos = active;
 }
 
-// Link holds what the server says he holds (a sword in the hand, the bow across the back...), the way the puppets do. The save's own B item is left
-// pointing at the sword so the game's own swing and sound play when you hit B, and put back when the match is over.
+// Link holds what the server says he holds, using the game's own item code. The matching real item (Deku Stick, bow, bombs...) sits on the B
+// button, so the game itself draws it, puts it in his hand and runs its swing, shot or throw; before this the item was forced into his hand with
+// B empty, and the game put it away again a moment later. The save's own B item is put back when the match is over.
 royale::ItemId gLocalWeaponShown = static_cast<royale::ItemId>(255);
 bool gLocalLookApplied = false;
 u8 gSavedButtonItem0 = ITEM_NONE;
+u8 RealItemFor(royale::ItemId w) {
+    using royale::ItemId;
+    switch (w) {
+        case ItemId::BasicSword: case ItemId::KokiriSword: return ITEM_SWORD_KOKIRI;
+        case ItemId::MasterSword: return ITEM_SWORD_MASTER;
+        case ItemId::BiggoronSword: return ITEM_SWORD_BGS;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return ITEM_HAMMER;
+        case ItemId::DekuStick: return ITEM_STICK;
+        case ItemId::FairyBow: return ITEM_BOW;
+        case ItemId::FireArrows: return ITEM_BOW_ARROW_FIRE;
+        case ItemId::IceArrows: return ITEM_BOW_ARROW_ICE;
+        case ItemId::LightArrows: return ITEM_BOW_ARROW_LIGHT;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: return ITEM_SLINGSHOT;
+        case ItemId::Boomerang: return ITEM_BOOMERANG;
+        case ItemId::Bombs: return ITEM_BOMB;
+        case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
+        case ItemId::DekuNuts: return ITEM_NUT;
+        default: return ITEM_NONE;
+    }
+}
+// The game's own enhancements that let any Link hold and shoot any item (child with the bow, adult with the slingshot); on only during a match.
+const char* const kItemCvars[3] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment") };
+int gSavedItemCvars[3] = {};
+bool gItemCvarsOn = false;
+void ApplyItemCvars(bool on) {
+    if (on == gItemCvarsOn) return;
+    gItemCvarsOn = on;
+    for (int i = 0; i < 3; i++) {
+        if (on) { gSavedItemCvars[i] = CVarGetInteger(kItemCvars[i], 0); CVarSetInteger(kItemCvars[i], 1); }
+        else CVarSetInteger(kItemCvars[i], gSavedItemCvars[i]);
+    }
+}
+// The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
+void SyncRealAmmo(const royale::HudState& hud) {
+    auto set = [&](int slot, royale::AmmoKind k) { gSaveContext.inventory.ammo[slot] = static_cast<s8>(std::min(99, static_cast<int>(hud.ammo[static_cast<size_t>(k)]))); };
+    set(SLOT_BOW, royale::AmmoKind::Arrows);
+    set(SLOT_SLINGSHOT, royale::AmmoKind::Seeds);
+    set(SLOT_BOMB, royale::AmmoKind::Bombs);
+    set(SLOT_BOMBCHU, royale::AmmoKind::Bombchus);
+    set(SLOT_NUT, royale::AmmoKind::Nuts);
+    gSaveContext.inventory.ammo[SLOT_STICK] = 9;   // sticks never run out
+    if (hud.weapon == royale::ItemId::FireArrows || hud.weapon == royale::ItemId::IceArrows || hud.weapon == royale::ItemId::LightArrows) {
+        gSaveContext.isMagicAcquired = true;
+        gSaveContext.magicLevel = 1;
+        gSaveContext.magicCapacity = 0x30;
+        gSaveContext.magic = 0x30;
+    }
+}
+int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
+    ApplyItemCvars(gSession.Joined() && IsLive(hud));
     const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
     if (!on) {
         if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
         return;
     }
     const Look look = LookFor(hud.weapon);
+    const u8 item = RealItemFor(hud.weapon);
     if (!gLocalLookApplied) { gSavedButtonItem0 = gSaveContext.equips.buttonItems[0]; gLocalLookApplied = true; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
-    if (hud.weapon != gLocalWeaponShown || player->heldItemAction != look.itemAction) {
+    SyncRealAmmo(hud);
+    gSaveContext.equips.buttonItems[0] = item;
+    // The interface puts the bow, slingshot and bombchu back from this value when it refreshes the B button, so it must name the same item.
+    gSaveContext.buttonStatus[0] = item;
+    if (item == ITEM_NONE) return;
+    const bool free = !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_START_CHANGING_HELD_ITEM | PLAYER_STATE1_SHIELDING)) &&
+                      player->stateFlags2 == (player->stateFlags2 & ~PLAYER_STATE2_OCARINA_PLAYING);
+    const s8 want = Player_ItemToItemAction(item);
+    if (hud.weapon != gLocalWeaponShown || player->heldItemAction != want) {
+        if (!free) return;
+        if (gUseRetry > 0) { gUseRetry--; return; }
         gLocalWeaponShown = hud.weapon;
-        const bool sword = look.modelGroup == PLAYER_MODELGROUP_SWORD_AND_SHIELD || look.modelGroup == PLAYER_MODELGROUP_BGS;
-        gSaveContext.equips.buttonItems[0] = sword ? look.buttonItem : static_cast<u8>(ITEM_NONE);
-        u8 original = gSaveContext.equips.buttonItems[0];
-        gSaveContext.equips.buttonItems[0] = look.buttonItem;
-        player->itemAction = player->heldItemAction = look.itemAction;
-        Player_SetModelGroup(player, look.modelGroup);
-        gSaveContext.equips.buttonItems[0] = original;
+        gUseRetry = 10;
+        Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
+        if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
+            player->itemAction = player->heldItemAction = look.itemAction;
+            Player_SetModelGroup(player, look.modelGroup);
+        }
     }
 }
 
@@ -5756,6 +5875,25 @@ void ReportEvents(const royale::HudState& hud) {
                     else if (gState.count(e.other)) { weapon = gState[e.other].weapon; fx = gState[e.other].x; fz = gState[e.other].z; haveFrom = true; }
                     if (e.id == hud.selfId) { tx2 = me->actor.world.pos.x; tz2 = me->actor.world.pos.z; haveTo = true; }
                     else if (gState.count(e.id)) { tx2 = gState[e.id].x; tz2 = gState[e.id].z; haveTo = true; }
+                    if (haveTo) {   // fire, ice, light and nuts leave the game's own mark on whoever they hit
+                        float ty0 = me->actor.world.pos.y;
+                        if (e.id != hud.selfId) { auto tgt = gActorOf.find(e.id); if (tgt != gActorOf.end()) ty0 = tgt->second->world.pos.y; }
+                        Vec3f hit = { tx2, ty0 + 35.0f, tz2 };
+                        using royale::ItemId;
+                        if (weapon == ItemId::FireArrows) {
+                            for (int i = 0; i < 4; i++) { Vec3f p2 = { hit.x + (Rand_ZeroOne() - 0.5f) * 30.0f, hit.y + (Rand_ZeroOne() - 0.5f) * 40.0f, hit.z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+                                                          Color_RGBA8 pc = { 255, 200, 0, 255 }, ec = { 255, 0, 0, 255 }; Vec3f v = { 0, 1.5f, 0 }, ac = { 0, 0.05f, 0 };
+                                                          EffectSsKiraKira_SpawnDispersed(gPlayState, &p2, &v, &ac, &pc, &ec, 110, 24); }
+                            SparkBurst(gPlayState, hit.x, hit.y, hit.z, { 255, 120, 20, 255 }, 10, 3.0f);
+                        } else if (weapon == ItemId::IceArrows) {
+                            EffectSsIcePiece_SpawnBurst(gPlayState, &hit, 1.0f);
+                        } else if (weapon == ItemId::LightArrows) {
+                            EffectSsHitMark_SpawnFixedScale(gPlayState, 0, &hit);
+                            SparkBurst(gPlayState, hit.x, hit.y, hit.z, { 255, 255, 170, 255 }, 14, 4.0f);
+                        } else if (weapon == ItemId::DekuNuts) {
+                            EffectSsHitMark_SpawnFixedScale(gPlayState, 0, &hit);
+                        }
+                    }
                     if (haveFrom && haveTo && weapon == royale::ItemId::HomingBombchus) {
                         for (int i = 0; i <= 14; i++) {
                             const float k = i / 14.0f;
