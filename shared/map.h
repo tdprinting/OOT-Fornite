@@ -85,6 +85,17 @@ inline constexpr const char* kMayaGreeting = "Hi Daddy I'm a Goo goo!";
 // Lilo, a cat who may be sitting somewhere on the map (an option): talk to her and she says this, then there is an accident.
 inline constexpr const char* kLiloName = "Lilo";
 inline constexpr const char* kLiloLine = "meoooww I smell a fart nearby";
+// What Lilo says when you talk to her while she follows you as a pet: one line at a time, in turn. All of these are said through the game's own
+// text box (RoyaleMod.cpp, "talking").
+inline constexpr int kLiloPetLineCount = 6;
+inline constexpr const char* kLiloPetLines[kLiloPetLineCount] = {
+    "Mrrrow! (Lilo bumps her head against your leg.)",
+    "Mew? (She wants to know if you found any good chests.)",
+    "Prrrrrrrr... (She purrs as loud as a Goron.)",
+    "Mew mew! (She is ready for the next fight.)",
+    "Mrrp. (She keeps one eye on the storm for you.)",
+    "*sniff sniff* meoooww I smell a fart nearby",
+};
 
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");

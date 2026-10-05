@@ -9,6 +9,7 @@
 #include "anim.h"
 #include "cloth.h"
 #include "build_version.h"
+#include "lilo_anim.h"
 #include "logo_data.h"
 #include "map.h"
 #include "meshes.h"
@@ -42,6 +43,7 @@
 #include "soh/ShipInit.hpp"
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/Enhancements/nametag.h"
+#include "soh/Enhancements/custom-message/CustomMessageManager.h"
 #include "soh/Notification/Notification.h"
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/SohGui/SohMenu.h"
@@ -82,11 +84,26 @@ void* AudioLoad_SyncLoadFont(u32 fontId);
 extern char** sequenceMap;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
+s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
+#include "soh/framebuffer_effects.h"             // the Pictograph Box's screen capture, for the map pictures
+void SaveManager_ThreadPoolWait(void);
+void Save_InitFile(int isDebug);   // (soh/SaveManager.h declares these for C files only)
+void Save_SaveFile(void);
+bool Save_Exist(int fileNum);
+unsigned char* stbi_load_from_memory(const unsigned char* buffer, int len, int* x, int* y, int* comp, int req_comp);   // (stb_image, linked into the game)
+void stbi_image_free(void* data);
 }
+#include "soh/SaveManager.h"                     // the Battle Royale save (made and loaded by the menu)
+#include "textures/do_action_static/do_action_static.h"   // the game's "Decide" and "Return" button words
+#include "textures/place_title_cards/g_pn_27.h"   // the place-name cards of the five maps
+#include "textures/place_title_cards/g_pn_32.h"
+#include "textures/place_title_cards/g_pn_28.h"
+#include "textures/place_title_cards/g_pn_40.h"
+#include "textures/place_title_cards/g_pn_55.h"
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
 static_assert(SCENE_TEMPLE_OF_TIME == royale::kWaitingRoomScene, "update kWaitingRoomScene in shared/map.h");
@@ -726,6 +743,9 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::Emote3: return AnimSeq(RA(demo_kaoage), false).Add(RA(demo_kaoage_wait), true);   // looks up
         case Anim::Emote4: return AnimSeq(RA(demo_kenmiru1), false).Add(RA(demo_kenmiru1_wait), true);   // admires a sword
         case Anim::Emote5: return AnimSeq(RA(normal_wait), true);       // the chicken dance poses the limbs itself (ApplyChickenDance)
+        case Anim::Emote6: return AnimSeq(RA(demo_get_itemA), false);   // holds his prize high, the item-get pose
+        case Anim::Emote7: return AnimSeq(RA(demo_kousan), false);      // gives up
+        case Anim::Emote8: return AnimSeq(RA(demo_kakeyori_mimawasi), false).Add(RA(demo_kakeyori_wait), true);   // looks all around
         default: return AnimSeq(RA(normal_wait), true);                 // Idle and anything newer than this build
     }
 }
@@ -871,6 +891,62 @@ void UpdateSongMelody() {
     }
 }
 
+// What a spell, a song or a gadget looks like when somebody uses it, made from the game's own effects: its flame, ice and light particles, shock
+// rings and explosions, and (for your own Link) the real Din's Fire, Nayru's Love and Farore's Wind actors. `at` is the user's feet.
+void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
+    using royale::ItemId;
+    auto ring = [&](Color_RGBA8 prim, Color_RGBA8 env, float radius, int count, float rise, s16 scale) {
+        for (int i = 0; i < count; i++) {
+            const float a = i * (6.2831853f / count);
+            Vec3f pos = { at.x + std::sin(a) * radius, at.y + 6.0f + Rand_ZeroOne() * 12.0f, at.z + std::cos(a) * radius };
+            Vec3f vel = { std::sin(a) * 0.6f, rise * (0.6f + Rand_ZeroOne()), std::cos(a) * 0.6f }, accel = { 0, 0.05f, 0 };
+            EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, 30);
+        }
+    };
+    auto shock = [&](float y) { Vec3f pos = { at.x, at.y + y, at.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 }; EffectSsBlast_SpawnWhiteShockwave(play, &pos, &vel, &accel); };
+    auto spawn = [&](s16 actorId) { if (self) Actor_Spawn(&play->actorCtx, play, actorId, at.x, at.y, at.z, 0, 0, 0, 0, true); };
+    switch (item) {
+        case ItemId::DinsFire:
+            spawn(ACTOR_MAGIC_FIRE);
+            if (!self) { ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 50.0f, 18, 2.4f, 120); ring({ 255, 120, 0, 255 }, { 255, 0, 0, 255 }, 95.0f, 24, 1.6f, 90); shock(30.0f); }
+            break;
+        case ItemId::BoleroOfFire:
+            ring({ 255, 200, 0, 255 }, { 255, 0, 0, 255 }, 60.0f, 20, 2.2f, 110); ring({ 255, 90, 0, 255 }, { 200, 0, 0, 255 }, 110.0f, 28, 1.4f, 90); shock(30.0f);
+            break;
+        case ItemId::NayrusLove:
+            spawn(ACTOR_MAGIC_DARK);
+            if (!self) { ring({ 170, 255, 255, 255 }, { 0, 100, 255, 255 }, 45.0f, 20, 1.8f, 100); shock(40.0f); }
+            break;
+        case ItemId::FaroresWind:
+            spawn(ACTOR_MAGIC_WIND);
+            if (!self) ring({ 200, 255, 200, 255 }, { 0, 200, 60, 255 }, 35.0f, 20, 3.0f, 100);
+            break;
+        case ItemId::MinuetOfForest: ring({ 200, 255, 120, 255 }, { 0, 200, 0, 255 }, 55.0f, 24, 2.6f, 90); break;
+        case ItemId::SerenadeOfWater: ring({ 170, 230, 255, 255 }, { 0, 150, 255, 255 }, 55.0f, 24, 2.6f, 90); shock(20.0f); break;
+        case ItemId::NocturneOfShadow: ring({ 230, 160, 255, 255 }, { 200, 50, 255, 255 }, 55.0f, 24, 2.6f, 90); break;
+        case ItemId::RequiemOfSpirit: ring({ 255, 210, 120, 255 }, { 255, 150, 0, 255 }, 70.0f, 24, 2.0f, 100); shock(30.0f); break;
+        case ItemId::PreludeOfLight: case ItemId::ZeldasLullaby: ring({ 255, 255, 220, 255 }, { 255, 230, 100, 255 }, 40.0f, 18, 2.8f, 100); break;
+        case ItemId::SunsSong: ring({ 255, 255, 180, 255 }, { 255, 220, 0, 255 }, 80.0f, 28, 2.0f, 110); shock(40.0f); break;
+        case ItemId::SongOfTime: ring({ 190, 255, 255, 255 }, { 80, 190, 240, 255 }, 80.0f, 28, 2.0f, 110); shock(40.0f); break;
+        case ItemId::EponasSong: ring({ 255, 200, 140, 255 }, { 200, 120, 40, 255 }, 45.0f, 16, 1.6f, 80); break;
+        case ItemId::SariasSong: ring({ 190, 255, 190, 255 }, { 0, 220, 100, 255 }, 45.0f, 16, 1.6f, 80); break;
+        case ItemId::SongOfStorms:
+            if (self) Environment_AddLightningBolts(play, 2);
+            ring({ 255, 255, 255, 255 }, { 120, 120, 255, 255 }, 70.0f, 20, 2.4f, 90);
+            break;
+        case ItemId::ShockwaveGrenade: {
+            Vec3f pos = { at.x, at.y + 20.0f, at.z };
+            Vec3f none = { 0, 0, 0 };
+            EffectSsBomb2_SpawnLayered(play, &pos, &none, &none, 60, 10);
+            shock(20.0f);
+            break;
+        }
+        case ItemId::MagicBeans: ring({ 180, 255, 140, 255 }, { 60, 200, 0, 255 }, 25.0f, 12, 2.0f, 80); break;
+        case ItemId::LensOfTruth: ring({ 235, 190, 255, 255 }, { 150, 80, 220, 255 }, 25.0f, 12, 1.5f, 80); break;
+        default: break;
+    }
+}
+
 // Someone used an ability: the spell's sound and Link's shout from where they stand, and the tune if it was a song and they are close.
 void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     gLastAbility[who] = item;
@@ -880,9 +956,10 @@ void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     Player* me = GET_PLAYER(gPlayState);
     const float d = std::hypot(x - me->actor.world.pos.x, z - me->actor.world.pos.z);
     if (song && (self || d < 900.0f)) PlaySongMelody(OcarinaSongOf(item));
-    if (self) return;   // your own spell already made its sound when you used it
+    if (self) return;   // your own spell already made its sound and flash when you used it
     auto a = gActorOf.find(who);
     if (a == gActorOf.end() || a->second == nullptr) return;
+    PowerFx(gPlayState, item, a->second->world.pos, false);
     Player* p = (Player*)a->second;
     if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
     if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
@@ -1249,25 +1326,31 @@ void SpawnPuppet(const royale::PuppetState& s) {
 
 // ---- falling limp: what is left of a player who was eliminated -------------------------------------------------------------------
 
-// A body that tumbles and slides to a stop with simple physics (gravity, bounces off the ground, friction, a spin that dies away), then lies
-// in Link's own knocked-down pose. It is a puppet actor that runs its own physics instead of following the network.
+// A ragdoll: the body is thrown by the blow, tumbles through the air, bounces, then rolls over and over along the ground (and down any slope)
+// with its limbs flopping loose, until it comes to rest on its back or its front. It stays there for a couple of minutes, and anyone who walks
+// into it shoves it along. It is a puppet actor that runs its own physics instead of following the network.
 constexpr uint16_t kCorpseIdBase = 0xF000;
 constexpr uint16_t kAllyIdBase = 0xE000;   // puppet ids from here up to the corpses are hireable allies (index = id - base)
+constexpr float kCorpseSeconds = 150.0f;   // how long a body lies there
+constexpr size_t kMaxCorpses = 16;         // more than this and the oldest one goes
+constexpr float kBodyRadius = 8.0f;        // half the thickness of Link lying down: how far the body's middle is off the ground
 struct Corpse {
     Actor* actor = nullptr;
     royale::Vec2 vel = {};       // horizontal speed, units per second
     float vy = 0;                // vertical speed
     float spin = 0;              // radians per second around the vertical axis
-    float roll = 0, rollVel = 0; // a floppy wobble (binary angle units)
+    float roll = 0, rollVel = 0; // rolling over around the body's long axis (radians, radians per second)
     float age = 0;
     royale::ItemId weapon = royale::ItemId::DekuStick;
     uint32_t tunic = royale::SkinRgb(0);
     bool animStarted = false;
     float pitch = 0, pitchVel = 0;        // tumbling head over heels in the air (radians)
     royale::Vec2 lastVel = {};
-    float lastVy = 0;
-    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians), see ApplyRagdollLimbs
+    float lastVy = 0, lastRollVel = 0;
+    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians)
     int bounces = 0;
+    float still = 0;             // seconds it has lain still; a body at rest skips the ground checks
+    bool dying = false;          // asked the game to remove it
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
 };
@@ -1275,10 +1358,17 @@ std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
 uint16_t gNextCorpse = kCorpseIdBase;
 std::unordered_map<uint16_t, royale::PuppetState> gLastSeen; // the last state of each living puppet, to see who just died
+std::unordered_map<uint16_t, double> gFellAt;                // player id -> when their body was made, so one elimination makes one body
 
 void ForgetCorpse(const Actor* actor) {
     auto corpse = gCorpseOf.find(actor);
     if (corpse != gCorpseOf.end()) { gCorpses.erase(corpse->second); gCorpseOf.erase(corpse); }
+}
+
+float WrapAngle(float a) {
+    while (a > 3.14159265f) a -= 6.2831853f;
+    while (a < -3.14159265f) a += 6.2831853f;
+    return a;
 }
 
 void Corpse_Update(Actor* actor, PlayState* play) {
@@ -1308,63 +1398,110 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     }
     const float dt = 1.0f / royale::kTickHz;
     c.age += dt;
-    if (c.age > 25.0f) { Actor_Kill(actor); return; }
+    if (c.age > kCorpseSeconds) { c.dying = true; Actor_Kill(actor); return; }
 
-    // Rigid-body-ish motion: gravity and a little air drag; the body tumbles head over heels in the air, bounces (losing most of its energy each time),
-    // slides with friction that is stronger the slower it goes, and the spin dies away until it lies still.
-    const bool wasAir = c.vy != 0.0f || c.bounces == 0;
-    c.vy -= 980.0f * dt;
-    c.vel.x *= 1.0f - 0.35f * dt; c.vel.z *= 1.0f - 0.35f * dt;
-    actor->world.pos.x += c.vel.x * dt;
-    actor->world.pos.z += c.vel.z * dt;
-    actor->world.pos.y += c.vy * dt;
-    const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
-    bool onGround = false;
-    if (actor->world.pos.y <= ground) {
-        actor->world.pos.y = ground;
-        onGround = true;
-        if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the spin changes, and the limbs fling
-            c.vy = -c.vy * 0.34f;
-            c.bounces++;
-            c.vel.x *= 0.72f; c.vel.z *= 0.72f;
-            c.pitchVel *= -0.45f;
-            c.rollVel += (c.vel.x > 0 ? 1.0f : -1.0f) * 2600.0f;
-            for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 9.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 9.0f; }
-        } else {
-            c.vy = 0;
-            const float speed = std::hypot(c.vel.x, c.vel.z);
-            const float drag = (speed > 60.0f ? 3.2f : 7.5f) * dt;   // sliding to a stop
-            c.vel.x *= std::max(0.0f, 1.0f - drag); c.vel.z *= std::max(0.0f, 1.0f - drag);
-            c.spin *= std::max(0.0f, 1.0f - 4.0f * dt);
+    // Walking into a body shoves it (and sets it rolling). Not while invisible: a spectator stands on their own body.
+    {
+        Player* local = GET_PLAYER(play);
+        const float dx = actor->world.pos.x - local->actor.world.pos.x, dz = actor->world.pos.z - local->actor.world.pos.z;
+        const float d = std::hypot(dx, dz);
+        if (!(local->stateFlags2 & PLAYER_STATE2_DISABLE_DRAW) && d < 30.0f && d > 0.01f && std::fabs(actor->world.pos.y - local->actor.world.pos.y) < 40.0f &&
+            local->actor.speedXZ > 1.0f) {
+            const float push = (30.0f - d) * 6.0f + local->actor.speedXZ * 12.0f;
+            c.vel.x += dx / d * push * dt * 8.0f;
+            c.vel.z += dz / d * push * dt * 8.0f;
+            c.still = 0;
         }
     }
-    (void)wasAir;
-    // Head over heels while airborne; once down, the tumble eases out and the knocked-down pose takes over.
-    if (!onGround) { c.pitch += c.pitchVel * dt; }
-    else { c.pitch *= std::max(0.0f, 1.0f - 6.0f * dt); c.pitchVel *= std::max(0.0f, 1.0f - 6.0f * dt); }
+
+    const float yaw = actor->shape.rot.y * (3.14159265f / 32768.0f);
+    const royale::Vec2 side = { std::cos(yaw), -std::sin(yaw) };   // the body's own left, which is the way it rolls
+    const royale::Vec2 fwd = { std::sin(yaw), std::cos(yaw) };     // along the body, head to feet
+    const bool resting = c.still > 2.0f;
+    bool onGround = false;
+    if (!resting) {
+        // Gravity and a little air drag in the air; bounces that lose most of the energy; on the ground it rolls freely sideways
+        // (rolling barely slows it) but drags along its length, and rolls down slopes.
+        c.vy -= 980.0f * dt;
+        c.vel.x *= 1.0f - 0.35f * dt; c.vel.z *= 1.0f - 0.35f * dt;
+        actor->world.pos.x += c.vel.x * dt;
+        actor->world.pos.z += c.vel.z * dt;
+        actor->world.pos.y += c.vy * dt;
+        const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
+        const float lift = kBodyRadius * (1.0f - std::cos(c.roll));   // rolled onto its side or front, the middle of the body is higher
+        if (actor->world.pos.y <= ground + lift) {
+            actor->world.pos.y = ground + lift;
+            onGround = true;
+            if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the tumble changes, and the limbs fling
+                c.vy = -c.vy * 0.34f;
+                c.bounces++;
+                c.vel.x *= 0.72f; c.vel.z *= 0.72f;
+                c.pitchVel *= -0.45f;
+                const float kick = (c.vel.x * side.x + c.vel.z * side.z) >= 0.0f ? 1.0f : -1.0f;
+                c.vel.x += side.x * kick * 90.0f; c.vel.z += side.z * kick * 90.0f;   // landing knocks it over sideways
+                for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 9.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 9.0f; }
+            } else {
+                c.vy = 0;
+                // Down the slope.
+                const float gx = (GroundY(play, actor->world.pos.x + 10.0f, actor->world.pos.z, ground) - GroundY(play, actor->world.pos.x - 10.0f, actor->world.pos.z, ground)) / 20.0f;
+                const float gz = (GroundY(play, actor->world.pos.x, actor->world.pos.z + 10.0f, ground) - GroundY(play, actor->world.pos.x, actor->world.pos.z - 10.0f, ground)) / 20.0f;
+                if (std::hypot(gx, gz) > 0.08f && std::hypot(gx, gz) < 2.5f) {   // a real slope, not a wall or a ledge
+                    c.vel.x -= gx * 520.0f * dt;
+                    c.vel.z -= gz * 520.0f * dt;
+                }
+                float vs = c.vel.x * side.x + c.vel.z * side.z, vf = c.vel.x * fwd.x + c.vel.z * fwd.z;
+                vs *= std::max(0.0f, 1.0f - (std::fabs(vs) > 40.0f ? 0.9f : 3.5f) * dt);   // rolling
+                vf *= std::max(0.0f, 1.0f - (std::fabs(vf) > 60.0f ? 3.2f : 7.5f) * dt);   // sliding to a stop
+                c.vel = { side.x * vs + fwd.x * vf, side.z * vs + fwd.z * vf };
+                c.spin *= std::max(0.0f, 1.0f - 4.0f * dt);
+                // Rolling without slipping: moving to its left turns it over that way.
+                const float rolling = -vs / kBodyRadius;
+                if (std::fabs(vs) > 12.0f) {
+                    c.rollVel += (rolling - c.rollVel) * std::min(1.0f, 10.0f * dt);
+                } else {   // nearly stopped: it flops down onto its back or its front, whichever is nearer
+                    const float rest = std::round(c.roll / 3.14159265f) * 3.14159265f;
+                    c.rollVel += (rest - c.roll) * 40.0f * dt;
+                    c.rollVel *= std::max(0.0f, 1.0f - 6.0f * dt);
+                }
+            }
+        }
+        if (!onGround) c.rollVel *= 1.0f - 0.2f * dt;   // a sideways tumble keeps going through the air
+        c.roll += c.rollVel * dt;
+        if (c.roll > 6.2831853f || c.roll < -6.2831853f) c.roll = std::fmod(c.roll, 6.2831853f);
+
+        // Head over heels while airborne; once down, the tumble eases out to lying flat.
+        if (!onGround) { c.pitch += c.pitchVel * dt; }
+        else { c.pitch = WrapAngle(c.pitch) * std::max(0.0f, 1.0f - 6.0f * dt); c.pitchVel *= std::max(0.0f, 1.0f - 6.0f * dt); }
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
+        actor->world.rot.y = actor->shape.rot.y;
+
+        const bool moving = onGround ? (std::hypot(c.vel.x, c.vel.z) > 4.0f || std::fabs(c.rollVel) > 0.3f) : true;
+        c.still = moving ? 0.0f : c.still + dt;
+    }
+    // The last few seconds it sinks out of sight.
+    if (c.age > kCorpseSeconds - 3.0f) actor->world.pos.y -= 10.0f * dt;
     actor->shape.rot.x = static_cast<s16>(c.pitch * (32768.0f / 3.14159265f));
-    actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
-    actor->world.rot.y = actor->shape.rot.y;
-    // A loose roll that wobbles and settles.
-    c.rollVel += -c.roll * 30.0f * dt;
-    c.rollVel *= 0.93f;
-    c.roll += c.rollVel * dt;
-    actor->shape.rot.z = static_cast<s16>(std::clamp(c.roll, -2500.0f, 2500.0f));
+    actor->shape.rot.z = static_cast<s16>(c.roll * (32768.0f / 3.14159265f));
     actor->shape.shadowAlpha = 255;
 
-    // The limbs lag behind the body: every change of speed (the blow, each bounce, the stop) swings them, springs pull them back to limp.
+    // Limp limbs: they lag behind every change of speed and of roll (the blow, each bounce, each turn over), flop toward the ground when the body
+    // lies on its side, and only weak springs pull them back.
     {
         const float ax = (c.vel.x - c.lastVel.x) / dt, az = (c.vel.z - c.lastVel.z) / dt, ay = (c.vy - c.lastVy) / dt;
-        c.lastVel = c.vel; c.lastVy = c.vy;
+        const float ar = (c.rollVel - c.lastRollVel) / dt;
+        c.lastVel = c.vel; c.lastVy = c.vy; c.lastRollVel = c.rollVel;
         const float kick = std::clamp((std::fabs(ax) + std::fabs(az) + std::fabs(ay) * 0.4f) * 0.0009f, 0.0f, 1.4f);
+        const float droop = std::sin(c.roll) * 0.7f;   // gravity, sideways across the body
         for (int i = 0; i < 9; i++) {
+            const float sign = i % 2 ? -1.0f : 1.0f;
             for (int a = 0; a < 2; a++) {
-                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f)) * (i % 2 ? -1.0f : 1.0f) + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
+                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f - ar * 0.004f)) * sign + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
                 c.limbVel[i][a] += push;
-                if (!onGround) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
-                c.limbVel[i][a] += -c.limb[i][a] * 55.0f * dt;
-                c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.5f * dt);
-                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.1f, 1.1f);
+                if (!onGround && !resting) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
+                const float target = a == 1 && i > 0 ? droop : 0.0f;
+                c.limbVel[i][a] += (target - c.limb[i][a]) * 28.0f * dt;
+                c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.0f * dt);
+                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.2f, 1.2f);
             }
         }
     }
@@ -1404,7 +1541,7 @@ void Corpse_Draw(Actor* actor, PlayState* play) {
 // An emote: a copy of the local player's character stands where they are and plays the gesture, while the real one is hidden. Moving or attacking
 // ends it. Returns the actor so the caller can remove it.
 Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
-    if (gCorpses.size() >= 14 || gPlayState == nullptr) return nullptr;
+    if (gCorpses.size() >= kMaxCorpses + 2 || gPlayState == nullptr) return nullptr;
     const uint16_t id = gNextCorpse++;
     if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
     gSpawningPuppet = id;
@@ -1422,22 +1559,40 @@ Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
     return actor;
 }
 
+// The body of player `s`, thrown along (pushX, pushZ). Once per elimination: the elimination event and the puppet list can both report it.
 void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
-    if (gCorpses.size() >= 12 || gPlayState == nullptr) return;
+    if (gPlayState == nullptr) return;
+    const double now = ImGui::GetTime();
+    auto fell = gFellAt.find(s.id);
+    if (fell != gFellAt.end() && now - fell->second < 10.0) return;
+    gFellAt[s.id] = now;
+    {   // room for one more: the oldest body goes
+        size_t bodies = 0;
+        Corpse* oldest = nullptr;
+        for (auto& [cid, body] : gCorpses) {
+            if (body.pinned || body.dying) continue;
+            bodies++;
+            if (oldest == nullptr || body.age > oldest->age) oldest = &body;
+        }
+        if (bodies >= kMaxCorpses && oldest != nullptr) { oldest->dying = true; Actor_Kill(oldest->actor); }
+    }
     const uint16_t id = gNextCorpse++;
     if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
     gSpawningPuppet = id;
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
     if (actor == nullptr) return;
+    actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);   // a body can't be Z-targeted like a player
     Corpse c;
     c.actor = actor;
-    const float len = std::max(1.0f, std::hypot(pushX, pushZ));
-    c.vel = { pushX / len * 250.0f, pushZ / len * 250.0f };   // thrown back by the blow
+    const float len = std::max(0.001f, std::hypot(pushX, pushZ));
+    const float yaw = s.rot * (3.14159265f / 32768.0f);
+    const float sideways = (id & 1 ? 1.0f : -1.0f) * 110.0f;                   // and a little to one side, so it lands rolling
+    c.vel = { pushX / len * 250.0f + std::cos(yaw) * sideways, pushZ / len * 250.0f - std::sin(yaw) * sideways };
     c.vy = 330.0f;
     c.pitchVel = -7.0f - (id % 3);                            // flips over backwards
-    c.spin = (id & 1 ? 1.0f : -1.0f) * 3.2f;
-    c.rollVel = (id & 1 ? 1.0f : -1.0f) * 4000.0f;
+    c.spin = (id & 1 ? 1.0f : -1.0f) * 2.0f;
+    c.rollVel = -sideways / kBodyRadius * 0.5f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
     gCorpses[id] = c;
@@ -1527,12 +1682,16 @@ bool LiveAndAlive(const royale::HudState& h) {
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
 void PlayOneShot(int kind);
+void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale); // below, with the skydive
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 bool LiloNear();
 void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 bool MayaNear();
 void TalkToMaya();
+bool SignNear();
+bool MessageBoxUp();
+void PressedATalk();   // A next to Lilo, Maya or the sign: the game's own text box (see "talking")
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);
@@ -3114,6 +3273,7 @@ std::string ClockText(float seconds) {
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see OnEmoteWheelInput), so it can't lock on and flatten the camera
 
 // Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
 // It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
@@ -3870,28 +4030,136 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     }
 }
 
-bool gEmotePanelOpen = false;
+// ---- the emote wheel ---------------------------------------------------------------------------------------------------------------
+// Hold C-Right and the wheel comes up in the middle of the screen: point the stick at an emote and let go of C-Right to do it (or press A).
+// A quick tap of C-Right does the last one again; B closes it. By touch or mouse, tap EMOTE (bottom right), then tap an emote.
+// While it is up the stick picks an emote instead of moving Link. It is drawn in the look of the game's pause menu: the text-box black,
+// gold rules and the pulsing corner cursor.
+struct EmoteWheel {
+    bool open = false;
+    bool byTouch = false;   // opened with the EMOTE button: stays up until an emote (or anywhere else) is tapped
+    double openedAt = 0;
+    int hover = -1;         // the emote pointed at, -1 for none yet
+};
+EmoteWheel gWheel;
+int gLastEmote = 0;         // what a quick tap of C-Right does again
 void StartEmote(int index, const royale::HudState& hud); // below, with the emote logic
+bool CanEmote(const royale::HudState& hud);
 
-// The emote button (bottom right): tap it to open the list, tap an emote to play it. C-Right plays them in turn.
+void OpenEmoteWheel(bool byTouch) {
+    gWheel = EmoteWheel{};
+    gWheel.open = true;
+    gWheel.byTouch = byTouch;
+    gWheel.openedAt = ImGui::GetTime();
+    Audio_PlaySoundGeneral(NA_SE_SY_DECIDE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+void CloseEmoteWheel() { gWheel = EmoteWheel{}; }
+
+// Which emote a direction points at: x to the right, y up. The emotes go clockwise from the top.
+int WheelSliceAt(float x, float y) {
+    float turns = std::atan2(x, y) / 6.2831853f;
+    if (turns < 0.0f) turns += 1.0f;
+    return static_cast<int>(turns * royale::kEmoteCount + 0.5f) % royale::kEmoteCount;
+}
+
+void WheelText(ImDrawList* dl, ImFont* font, float size, ImVec2 centre, ImU32 col, const char* text) {
+    const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0, text);
+    const ImVec2 at(centre.x - sz.x * 0.5f, centre.y - sz.y * 0.5f);
+    const float o = std::max(1.5f, size * 0.06f);
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) if (dx || dy) dl->AddText(font, size, ImVec2(at.x + dx * o, at.y + dy * o), IM_COL32(20, 10, 0, 235), text);
+    dl->AddText(font, size, at, col, text);
+}
+
 void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    if (!h.selfAlive || !InField()) return;
+    if (!h.selfAlive || !InField()) { if (gWheel.open) CloseEmoteWheel(); return; }
     ImGuiIO& io = ImGui::GetIO();
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
-    const float w = 128.0f * scale, hgt = 40.0f * scale;
-    const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
-    auto inside = [&](ImVec2 p0, ImVec2 p1) { return io.MousePos.x >= p0.x && io.MousePos.x <= p1.x && io.MousePos.y >= p0.y && io.MousePos.y <= p1.y; };
-    dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
-    dl->AddRect(a, b, gEmotePanelOpen ? IM_COL32(255, 236, 120, 255) : IM_COL32(190, 190, 200, 255), 6.0f * scale, 0, 2.5f * scale);
-    dl->AddText(font, 16.0f * scale, ImVec2(a.x + 12 * scale, a.y + 10 * scale), IM_COL32(255, 255, 255, 255), "EMOTE");
-    if (tap && inside(a, b)) gEmotePanelOpen = !gEmotePanelOpen;
-    if (!gEmotePanelOpen) return;
-    for (int i = 0; i < royale::kEmoteCount; i++) {
-        const ImVec2 ea(a.x - 40.0f * scale, a.y - (i + 1) * (hgt + 6.0f * scale)), eb(b.x, ea.y + hgt);
-        dl->AddRectFilled(ea, eb, OotPanel(215), 6.0f * scale);
-        dl->AddRect(ea, eb, IM_COL32(120, 200, 255, 255), 6.0f * scale, 0, 2.0f * scale);
-        dl->AddText(font, 15.0f * scale, ImVec2(ea.x + 10 * scale, ea.y + 11 * scale), IM_COL32(255, 255, 255, 255), royale::kEmoteNames[i]);
-        if (tap && inside(ea, eb)) StartEmote(i, h);
+    const ImU32 gold = IM_COL32(255, 214, 90, 255), goldDark = IM_COL32(176, 118, 24, 255);
+    const ImU32 lit = IM_COL32(255, 236, 120, 255);
+    bool used = false;   // a tap the wheel has dealt with
+
+    // The EMOTE button, bottom right.
+    {
+        const float w = 128.0f * scale, hgt = 40.0f * scale;
+        const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
+        dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
+        dl->AddRect(a, b, gWheel.open ? lit : goldDark, 6.0f * scale, 0, 2.5f * scale);
+        WheelText(dl, font, 16.0f * scale, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), IM_COL32(255, 255, 255, 255), "EMOTE");
+        if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
+            used = true;
+            if (gWheel.open) CloseEmoteWheel();
+            else if (CanEmote(h)) OpenEmoteWheel(true);
+        }
+    }
+    if (!gWheel.open) return;
+
+    const ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+    const float outer = 168.0f * scale, inner = 58.0f * scale, mid = (outer + inner) * 0.5f;
+    const int n = royale::kEmoteCount;
+    const float t = static_cast<float>(ImGui::GetTime() - gWheel.openedAt);
+    const float grow = std::min(1.0f, t / 0.12f);   // pops open
+    const float R = outer * (0.85f + 0.15f * grow), r = inner;
+
+    // The mouse or a finger points at an emote too.
+    const float mx = io.MousePos.x - c.x, my = io.MousePos.y - c.y, md = std::sqrt(mx * mx + my * my);
+    if (gWheel.byTouch && md > r && md < R + 30.0f * scale) gWheel.hover = WheelSliceAt(mx, -my);
+
+    // The ring: the text-box black, a gold rule round each edge, and spokes between the emotes.
+    dl->AddCircleFilled(ImVec2(c.x + 5 * scale, c.y + 6 * scale), R, IM_COL32(0, 0, 0, 70), 64);
+    for (int i = 0; i < n; i++) {
+        const float a0 = (i - 0.5f) / n * 6.2831853f - 1.5707963f, a1 = (i + 0.5f) / n * 6.2831853f - 1.5707963f;
+        dl->PathClear();
+        dl->PathArcTo(c, R, a0, a1, 24);
+        dl->PathArcTo(c, r, a1, a0, 12);
+        dl->PathFillConvex(i == gWheel.hover ? IM_COL32(70, 52, 20, 235) : OotPanel(215));
+    }
+    dl->AddCircle(c, R, goldDark, 64, 2.0f * scale);
+    dl->AddCircle(c, R - 5 * scale, (gold & 0x00FFFFFF) | 0x8C000000, 64, 1.0f * scale);
+    dl->AddCircle(c, r, goldDark, 48, 2.0f * scale);
+    for (int i = 0; i < n; i++) {
+        const float a = (i + 0.5f) / n * 6.2831853f - 1.5707963f;
+        dl->AddLine(ImVec2(c.x + std::cos(a) * r, c.y + std::sin(a) * r), ImVec2(c.x + std::cos(a) * (R - 5 * scale), c.y + std::sin(a) * (R - 5 * scale)),
+                    (goldDark & 0x00FFFFFF) | 0xB4000000, 1.5f * scale);
+    }
+    // The names, and the pulsing corner cursor round the one pointed at.
+    for (int i = 0; i < n; i++) {
+        const float a = static_cast<float>(i) / n * 6.2831853f - 1.5707963f;
+        const ImVec2 p(c.x + std::cos(a) * mid, c.y + std::sin(a) * mid);
+        const bool sel = i == gWheel.hover;
+        // Two short lines at most: the names are split at the first space when they are long.
+        std::string name = royale::kEmoteNames[i];
+        const size_t space = name.find(' ');
+        const float size = 15.0f * scale;
+        if (name.size() > 9 && space != std::string::npos) {
+            WheelText(dl, font, size, ImVec2(p.x, p.y - size * 0.55f), sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.substr(0, space).c_str());
+            WheelText(dl, font, size, ImVec2(p.x, p.y + size * 0.55f), sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.substr(space + 1).c_str());
+        } else {
+            WheelText(dl, font, size, p, sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.c_str());
+        }
+        if (sel) {
+            const float pulse = 0.5f + 0.5f * std::sin(t * 6.0f);
+            const float hw = 44.0f * scale + 3.0f * scale * pulse, hh = 24.0f * scale + 3.0f * scale * pulse, len = 10.0f * scale, w = 3.0f * scale;
+            const ImU32 col = (lit & 0x00FFFFFF) | (static_cast<ImU32>(255 * (0.75f + 0.25f * pulse)) << 24);
+            const ImVec2 q0(p.x - hw, p.y - hh), q1(p.x + hw, p.y + hh);
+            dl->AddLine(q0, ImVec2(q0.x + len, q0.y), col, w); dl->AddLine(q0, ImVec2(q0.x, q0.y + len), col, w);
+            dl->AddLine(ImVec2(q1.x, q0.y), ImVec2(q1.x - len, q0.y), col, w); dl->AddLine(ImVec2(q1.x, q0.y), ImVec2(q1.x, q0.y + len), col, w);
+            dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q0.x + len, q1.y), col, w); dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q0.x, q1.y - len), col, w);
+            dl->AddLine(q1, ImVec2(q1.x - len, q1.y), col, w); dl->AddLine(q1, ImVec2(q1.x, q1.y - len), col, w);
+        }
+    }
+    // The middle: what will happen, and how.
+    dl->AddCircleFilled(c, r - 3 * scale, OotPanel(230), 48);
+    WheelText(dl, font, 17.0f * scale, ImVec2(c.x, c.y - 9 * scale), gold, "EMOTE");
+    WheelText(dl, font, 12.0f * scale, ImVec2(c.x, c.y + 11 * scale), IM_COL32(236, 228, 190, 255), gWheel.byTouch ? "tap one" : "B: close");
+
+    if (tap && !used) {
+        if (md > r && md < R + 30.0f * scale) {
+            const int pick = WheelSliceAt(mx, -my);
+            CloseEmoteWheel();
+            StartEmote(pick, h);
+        } else {
+            CloseEmoteWheel();   // a tap anywhere else puts it away
+        }
     }
 }
 
@@ -4441,7 +4709,8 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive");
+    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
+    if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
@@ -4478,10 +4747,14 @@ void DrawOverlay() {
             const royale::AllyDef& def = royale::kAllyDefs[ally];
             const bool afford = h.rupees >= def.price;
             prompt(afford ? IM_COL32(255, 222, 110, 255) : IM_COL32(255, 130, 120, 255), "Hire " + std::string(def.name) + " (" + std::to_string(def.price) + " rupees)");
+        } else if (MessageBoxUp()) {
+            // reading: the text box has the screen
         } else if (MayaNear()) {
             prompt(IM_COL32(255, 170, 215, 255), "Talk to Maya");
         } else if (LiloNear()) {
-            prompt(IM_COL32(235, 235, 230, 255), "Pet Lilo");
+            prompt(IM_COL32(235, 235, 230, 255), "Talk to Lilo");
+        } else if (SignNear()) {
+            prompt(IM_COL32(255, 232, 160, 255), "Read the sign");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -4600,46 +4873,145 @@ void EnsureHudWindow() {
 // ---- local player <-> session ----------------------------------------------------------------------------------------
 
 // ---- emotes -------------------------------------------------------------------------------------------------------------------
+// Your own Link does the emote himself: the game keeps running him as usual (standing still), and just before he is drawn his pose is
+// replaced with the emote's frame. (It used to be done by a stand-in copy of Link while the real one was hidden, which could leave him
+// invisible afterwards with only his shadow showing.)
 
 struct EmoteState {
     int id = -1;               // which emote is playing, -1 for none
-    double endAt = 0;
-    Actor* actor = nullptr;    // the double that performs it
+    double startAt = 0, endAt = 0;
+    Player* player = nullptr;  // the Link whose drawing was taken over
 };
 EmoteState gEmote;
-int gNextEmote = 0;            // what C-Right plays next
+
+bool CanEmote(const royale::HudState& hud) { return LiveAndAlive(hud) && InField() && !gSkydiving; }
+
+void LocalEmote_Draw(Actor* actor, PlayState* play);
+
+// Gives Link back his own drawing (only if he is still the same Link: a scene change makes a new one).
+void ReleaseEmoteDraw() {
+    if (gPlayState == nullptr) return;
+    Player* player = GET_PLAYER(gPlayState);
+    if (player != nullptr && player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw;
+}
 
 void StopEmote() {
     if (gEmote.id < 0) return;
-    if (gEmote.actor) Actor_Kill(gEmote.actor);
+    ReleaseEmoteDraw();
     gEmote = EmoteState{};
 }
 
 void StartEmote(int index, const royale::HudState& hud) {
-    if (!LiveAndAlive(hud) || !InField() || gSkydiving) return;
+    if (!CanEmote(hud) || index < 0 || index >= royale::kEmoteCount) return;
     StopEmote();
     Player* player = GET_PLAYER(gPlayState);
-    royale::PuppetState me;
-    me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
-    me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic;
-    Actor* a = SpawnEmoteDouble(me, index);
-    if (a == nullptr) return;
+    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalEmote_Draw)) return;
     gEmote.id = index;
-    gEmote.actor = a;
-    gEmote.endAt = ImGui::GetTime() + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
-    gEmotePanelOpen = false;
+    gEmote.player = player;
+    gEmote.startAt = ImGui::GetTime();
+    gEmote.endAt = gEmote.startAt + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
+    gLastEmote = index;
+    player->actor.draw = LocalEmote_Draw;
 }
 
-// While an emote plays, the real character is hidden and any movement, attack or a few seconds ends it.
+// Any movement, attack or a few seconds ends an emote.
 void UpdateEmote(Player* player, const royale::HudState& hud) {
-    if (gEmote.id < 0) return;
+    if (gEmote.id < 0) { if (player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw; return; }
     const Input& in = gPlayState->state.input[0];
     const bool moved = std::fabs(static_cast<float>(in.cur.stick_x)) > 25.0f || std::fabs(static_cast<float>(in.cur.stick_y)) > 25.0f;
-    if (!LiveAndAlive(hud) || !InField() || ImGui::GetTime() > gEmote.endAt || moved || (in.press.button & (BTN_B | BTN_A | BTN_CUP | BTN_DDOWN | BTN_DUP))) {
+    if (!CanEmote(hud) || player != gEmote.player || ImGui::GetTime() > gEmote.endAt || moved ||
+        (in.press.button & (BTN_B | BTN_A | BTN_Z | BTN_R | BTN_CUP | BTN_CLEFT | BTN_CDOWN | BTN_DDOWN | BTN_DUP))) {
         StopEmote();
-        return;
     }
-    player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
+}
+
+// Copies one frame of one of Link's animations straight into a joint table, the same way the game's own loader reads it (patched Ship of
+// Harkinian reads the frame at once rather than by DMA), so it can be done while drawing, after the game has posed Link for the frame.
+void LoadLinkFrame(LinkAnimationHeader* animation, int frame, int limbCount, Vec3s* out) {
+    if (animation == nullptr) return;
+    if (ResourceMgr_OTRSigCheck(reinterpret_cast<char*>(animation)) != 0)
+        animation = reinterpret_cast<LinkAnimationHeader*>(ResourceMgr_LoadAnimByName(reinterpret_cast<const char*>(animation)));
+    if (animation == nullptr) return;
+    const LinkAnimationHeader* header = static_cast<const LinkAnimationHeader*>(SEGMENTED_TO_VIRTUAL(animation));
+    char path[128];
+    snprintf(path, sizeof(path), "misc/link_animetion/gPlayerAnimData_%06X",
+             static_cast<unsigned>(reinterpret_cast<uintptr_t>(header->segment) - 0x07000000));
+    const char* data = ResourceMgr_LoadPlayerAnimByName(path);
+    if (data == nullptr) return;
+    const size_t stride = sizeof(Vec3s) * limbCount + 2;   // every limb, then the eyes and mouth
+    std::memcpy(out, data + stride * frame, stride);
+}
+
+// Poses Link for the emote at this moment: its animations one after another (Link's animations step once per game tick), the last one
+// looping or holding its final pose. He stays where he stands: only the height of the animation's root is used.
+void PoseEmote(Player* player) {
+    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
+    const AnimSeq seq = SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player);
+    float f = t * royale::kTickHz;
+    LinkAnimationHeader* anim = nullptr;
+    int frame = 0;
+    for (int i = 0; i < seq.count; i++) {
+        const float len = static_cast<float>(Animation_GetLastFrame(seq.step[i].anim)) + 1.0f;
+        if (seq.step[i].loop) { anim = seq.step[i].anim; frame = static_cast<int>(std::fmod(f, len)); break; }
+        if (f < len || i == seq.count - 1) { anim = seq.step[i].anim; frame = static_cast<int>(std::min(f, len - 1.0f)); break; }
+        f -= len;
+    }
+    if (anim == nullptr) return;
+    Vec3s* j = player->skelAnime.jointTable;
+    const s16 rootX = j[0].x, rootZ = j[0].z;
+    LoadLinkFrame(anim, std::max(0, frame), player->skelAnime.limbCount, j);
+    j[0].x = rootX;
+    j[0].z = rootZ;
+    if (gEmote.id == royale::kChickenDanceEmote) {
+        ApplyChickenDance(player, t);
+        if (player->actor.scale.y > 0.0f) j[0].y = static_cast<s16>(j[0].y + ChickenDanceBob(t) / player->actor.scale.y);
+    }
+}
+
+void LocalEmote_Draw(Actor* actor, PlayState* play) {
+    Player* player = reinterpret_cast<Player*>(actor);
+    if (gEmote.id >= 0 && gEmote.player == player && player == GET_PLAYER(play)) PoseEmote(player);
+    Player_Draw(actor, play);
+}
+
+// The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
+// choose an emote instead of moving Link.
+void OnEmoteWheelInput() {
+    if (gPlayState == nullptr || !gSession.Joined() || !InGame()) { if (gWheel.open) CloseEmoteWheel(); return; }
+    Input& in = gPlayState->state.input[0];
+    const royale::HudState hud = gSession.Hud();
+    // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
+    // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
+    gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
+    if (gSkydiving) in.cur.button &= ~BTN_Z, in.press.button &= ~BTN_Z, in.rel.button &= ~BTN_Z;
+    if (!gWheel.open) {
+        if (!(in.press.button & BTN_CRIGHT) || !CanEmote(hud)) return;
+        OpenEmoteWheel(false);
+    }
+    if (!CanEmote(hud) || (in.press.button & BTN_START)) { CloseEmoteWheel(); return; }
+    if (in.press.button & BTN_B) {
+        CloseEmoteWheel();
+        Audio_PlaySoundGeneral(NA_SE_SY_FSEL_CLOSE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    } else {
+        const float sx = in.cur.stick_x, sy = in.cur.stick_y;
+        if (sx * sx + sy * sy > 35.0f * 35.0f) {   // the last emote pointed at stays chosen when the stick springs back
+            const int slice = WheelSliceAt(sx, sy);
+            if (slice != gWheel.hover)
+                Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+            gWheel.hover = slice;
+        }
+        int pick = -1;
+        if (in.press.button & BTN_A) pick = gWheel.hover;
+        if (!gWheel.byTouch && !(in.cur.button & BTN_CRIGHT)) {   // let go of C-Right
+            if (gWheel.hover >= 0) pick = gWheel.hover;
+            else if (ImGui::GetTime() - gWheel.openedAt < 0.3) pick = gLastEmote;   // a quick tap: the last one again
+            else CloseEmoteWheel();
+        }
+        if (pick >= 0) { CloseEmoteWheel(); StartEmote(pick, hud); }
+    }
+    // This frame's buttons and stick were the wheel's.
+    in.cur.button = in.press.button = in.rel.button = 0;
+    in.cur.stick_x = in.cur.stick_y = in.rel.stick_x = in.rel.stick_y = in.press.stick_x = in.press.stick_y = 0;
 }
 
 // The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
@@ -5213,6 +5585,8 @@ bool gSpectating = false;
 // ending, doesn't leave the player's save file with 3 hearts.
 bool gHealthOverridden = false;
 s16 gSavedCapacity = 0, gSavedHealth = 0;
+s16 gMatchHealth = 16;   // what the save's health should read this frame while the server owns it (never 0, see OnPlayerUpdate)
+u8 gMatchSeqId = 0xFF, gMatchAmbienceId = 0xFF;   // the scene's music, to put back if the game's own death ever starts (see CancelGameDeath)
 
 bool IsLive(const royale::HudState& h) {
     return h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
@@ -5453,11 +5827,6 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    if ((in.press.button & BTN_CRIGHT) && gEmote.id < 0) {
-        StartEmote(gNextEmote, hud);
-        gNextEmote = (gNextEmote + 1) % royale::kEmoteCount;
-    }
-
     if (in.press.button & BTN_DDOWN) {
         if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 255, 150, 255 }, NA_SE_SY_HP_RECOVER); }
         else Say("No potions");
@@ -5473,7 +5842,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
-    if (in.press.button & BTN_A) {
+    // While a text box is up, A belongs to it.
+    if ((in.press.button & BTN_A) && !MessageBoxUp()) {
         const size_t target = NearestLootIndex();
         if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
         else {   // nothing to open or take: maybe somebody to hire
@@ -5482,10 +5852,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 const royale::AllyDef& def = royale::kAllyDefs[ally];
                 if (hud.inv.rupees < def.price) Say(std::string("The ") + def.name + " wants " + std::to_string(def.price) + " rupees (you have " + std::to_string(hud.inv.rupees) + ")");
                 else gSession.HireAlly(ally);
-            } else if (MayaNear()) {
-                TalkToMaya();
-            } else if (LiloNear()) {
-                TalkToLilo();
+            } else {
+                PressedATalk();
             }
         }
     }
@@ -5516,6 +5884,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
                         : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
+            PowerFx(gPlayState, ab, player->actor.world.pos, true);
             UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
             if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
@@ -5539,8 +5908,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         player->actor.shape.rot.y = player->actor.world.rot.y = aim;
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
-    if (hasAmmo && w.ranged) SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f, player->actor.world.pos.z, aim);
-    else Audio_PlaySoundGeneral(NA_SE_IT_SWORD_SWING_HARD, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     SmashPropInFront(player, w);
 }
@@ -5572,10 +5940,10 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     }
 
     gGliderRoll += ((mag > 0.1f ? -sx / 80.0f * 0.5f : 0.0f) - gGliderRoll) * 0.12f;                  // bank into the turn
-    gGliderDiving = hud.state == royale::MatchState::Drop && (in.cur.button & BTN_Z);
+    gGliderDiving = hud.state == royale::MatchState::Drop && gDiveHeld;
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
-    if (hud.state == royale::MatchState::Drop) fall = (in.cur.button & BTN_Z) ? kDiveSpeed : kGlideSpeed;
+    if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - fall * dt;
@@ -5588,6 +5956,46 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     player->actor.velocity.y = 0.0f;
     player->actor.speedXZ = 0.0f;
     player->fallDistance = 0;                                                     // no landing damage or hard-landing stun
+}
+
+// Where you will land if you keep doing what you are doing: a ring on the ground at that spot (and a faint one straight below you), with how
+// high you are. Steering moves the ring, holding Z pulls it closer, so you can pick a landing spot before you get there.
+void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    if (gPlayState == nullptr || !InField()) return;
+    Player* player = GET_PLAYER(gPlayState);
+    const Input& in = gPlayState->state.input[0];
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z, py = player->actor.world.pos.y;
+    const float below = GroundY(gPlayState, px, pz, -1.0e6f);
+    if (below < -1.0e5f) return;
+    const float sx = in.cur.stick_x, sy = in.cur.stick_y;
+    const float mag = std::min(1.0f, std::sqrt(sx * sx + sy * sy) / 60.0f);
+    const bool dropping = gStateNow == royale::MatchState::Drop;
+    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : 700.0f;
+    const float seconds = std::max(0.0f, (py - below)) / fall;
+    float lx = px, lz = pz;
+    if (mag > 0.1f) {   // the same steering the skydive uses, held for the rest of the fall
+        const float yaw = static_cast<float>(Camera_GetInputDirYaw(GET_ACTIVE_CAM(gPlayState))) * (3.14159265f / 32768.0f);
+        const float a = yaw + std::atan2(-sx, sy);
+        lx += std::sin(a) * kAirSpeed * mag * seconds;
+        lz += std::cos(a) * kAirSpeed * mag * seconds;
+    }
+    const float ly = GroundY(gPlayState, lx, lz, py);
+    const ImU32 gold = IM_COL32(255, 236, 120, 255);
+    ImVec2 at, under;
+    const bool haveUnder = WorldToScreen(px, below + 2.0f, pz, &under);
+    if (WorldToScreen(lx, (ly > -1.0e5f ? ly : below) + 2.0f, lz, &at) && at.x > 0 && at.x < ds.x && at.y > 0 && at.y < ds.y) {
+        const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
+        const float r = (16.0f + 3.0f * pulse) * scale;
+        dl->AddCircle(at, r + 2 * scale, IM_COL32(0, 0, 0, 160), 24, 5.0f * scale);
+        dl->AddCircle(at, r, gold, 24, 3.0f * scale);
+        dl->AddCircleFilled(at, 3.5f * scale, gold);
+        if (haveUnder && mag > 0.1f) dl->AddLine(under, at, IM_COL32(255, 236, 120, 90), 2.0f * scale);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%d m", static_cast<int>((py - below) * 0.1f));
+        const ImVec2 sz = font->CalcTextSizeA(15.0f * scale, FLT_MAX, 0, text);
+        dl->AddText(font, 15.0f * scale, ImVec2(at.x - sz.x * 0.5f + scale, at.y + r + 5 * scale + scale), IM_COL32(0, 0, 0, 220), text);
+        dl->AddText(font, 15.0f * scale, ImVec2(at.x - sz.x * 0.5f, at.y + r + 5 * scale), IM_COL32(255, 255, 255, 255), text);
+    }
 }
 
 // Boots, Epona's Song and friends: the server allows a faster run and the game applies it by stretching the step Link just took.
@@ -5608,29 +6016,110 @@ void ApplySpeedBuffs(Player* player, const royale::HudState& hud) {
     gHaveLastPos = active;
 }
 
-// Link holds what the server says he holds (a sword in the hand, the bow across the back...), the way the puppets do. The save's own B item is left
-// pointing at the sword so the game's own swing and sound play when you hit B, and put back when the match is over.
+// Link holds what the server says he holds, using the game's own item code. The matching real item (Deku Stick, bow, bombs...) sits on the B
+// button, so the game itself draws it, puts it in his hand and runs its swing, shot or throw; before this the item was forced into his hand with
+// B empty, and the game put it away again a moment later. The save's own B item is put back when the match is over.
 royale::ItemId gLocalWeaponShown = static_cast<royale::ItemId>(255);
 bool gLocalLookApplied = false;
 u8 gSavedButtonItem0 = ITEM_NONE;
+u8 RealItemFor(royale::ItemId w) {
+    using royale::ItemId;
+    switch (w) {
+        case ItemId::BasicSword: case ItemId::KokiriSword: return ITEM_SWORD_KOKIRI;
+        case ItemId::MasterSword: return ITEM_SWORD_MASTER;
+        case ItemId::BiggoronSword: return ITEM_SWORD_BGS;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return ITEM_HAMMER;
+        case ItemId::DekuStick: return ITEM_STICK;
+        case ItemId::FairyBow: return ITEM_BOW;
+        case ItemId::FireArrows: return ITEM_BOW_ARROW_FIRE;
+        case ItemId::IceArrows: return ITEM_BOW_ARROW_ICE;
+        case ItemId::LightArrows: return ITEM_BOW_ARROW_LIGHT;
+        case ItemId::Slingshot: case ItemId::TripleSlingshot: return ITEM_SLINGSHOT;
+        case ItemId::Boomerang: return ITEM_BOOMERANG;
+        case ItemId::Bombs: return ITEM_BOMB;
+        case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
+        case ItemId::DekuNuts: return ITEM_NUT;
+        default: return ITEM_NONE;
+    }
+}
+// The game's own enhancements that let any Link hold and shoot any item (child with the bow, adult with the slingshot); on only during a match.
+const char* const kItemCvars[3] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment") };
+int gSavedItemCvars[3] = {};
+bool gItemCvarsOn = false;
+void ApplyItemCvars(bool on) {
+    if (on == gItemCvarsOn) return;
+    gItemCvarsOn = on;
+    for (int i = 0; i < 3; i++) {
+        if (on) { gSavedItemCvars[i] = CVarGetInteger(kItemCvars[i], 0); CVarSetInteger(kItemCvars[i], 1); }
+        else CVarSetInteger(kItemCvars[i], gSavedItemCvars[i]);
+    }
+}
+// The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
+void SyncRealAmmo(const royale::HudState& hud) {
+    auto set = [&](int slot, royale::AmmoKind k) { gSaveContext.inventory.ammo[slot] = static_cast<s8>(std::min(99, static_cast<int>(hud.ammo[static_cast<size_t>(k)]))); };
+    set(SLOT_BOW, royale::AmmoKind::Arrows);
+    set(SLOT_SLINGSHOT, royale::AmmoKind::Seeds);
+    set(SLOT_BOMB, royale::AmmoKind::Bombs);
+    set(SLOT_BOMBCHU, royale::AmmoKind::Bombchus);
+    set(SLOT_NUT, royale::AmmoKind::Nuts);
+    gSaveContext.inventory.ammo[SLOT_STICK] = 9;   // sticks never run out
+    if (hud.weapon == royale::ItemId::FireArrows || hud.weapon == royale::ItemId::IceArrows || hud.weapon == royale::ItemId::LightArrows) {
+        gSaveContext.isMagicAcquired = true;
+        gSaveContext.magicLevel = 1;
+        gSaveContext.magicCapacity = 0x30;
+        gSaveContext.magic = 0x30;
+    }
+}
+int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
+    ApplyItemCvars(gSession.Joined() && IsLive(hud));
     const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
     if (!on) {
         if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
         return;
     }
     const Look look = LookFor(hud.weapon);
+    const u8 item = RealItemFor(hud.weapon);
     if (!gLocalLookApplied) { gSavedButtonItem0 = gSaveContext.equips.buttonItems[0]; gLocalLookApplied = true; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
-    if (hud.weapon != gLocalWeaponShown || player->heldItemAction != look.itemAction) {
+    SyncRealAmmo(hud);
+    gSaveContext.equips.buttonItems[0] = item;
+    // The interface puts the bow, slingshot and bombchu back from this value when it refreshes the B button, so it must name the same item.
+    gSaveContext.buttonStatus[0] = item;
+    if (item == ITEM_NONE) return;
+    const bool free = !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_START_CHANGING_HELD_ITEM | PLAYER_STATE1_SHIELDING)) &&
+                      player->stateFlags2 == (player->stateFlags2 & ~PLAYER_STATE2_OCARINA_PLAYING);
+    const s8 want = Player_ItemToItemAction(item);
+    if (hud.weapon != gLocalWeaponShown || player->heldItemAction != want) {
+        if (!free) return;
+        if (gUseRetry > 0) { gUseRetry--; return; }
         gLocalWeaponShown = hud.weapon;
-        const bool sword = look.modelGroup == PLAYER_MODELGROUP_SWORD_AND_SHIELD || look.modelGroup == PLAYER_MODELGROUP_BGS;
-        gSaveContext.equips.buttonItems[0] = sword ? look.buttonItem : static_cast<u8>(ITEM_NONE);
-        u8 original = gSaveContext.equips.buttonItems[0];
-        gSaveContext.equips.buttonItems[0] = look.buttonItem;
-        player->itemAction = player->heldItemAction = look.itemAction;
-        Player_SetModelGroup(player, look.modelGroup);
-        gSaveContext.equips.buttonItems[0] = original;
+        gUseRetry = 10;
+        Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
+        if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
+            player->itemAction = player->heldItemAction = look.itemAction;
+            Player_SetModelGroup(player, look.modelGroup);
+        }
     }
+}
+
+// In a match only the server eliminates anyone. If the game's own death started anyway (health hit 0 inside the player's update, before
+// this hook could put it back), undo it before the game-over screen, its music or its camera take over: the player would otherwise be
+// stuck in the dying animation while spectating, then thrown to the game-over menu.
+void CancelGameDeath(Player* player) {
+    if (!(player->stateFlags1 & PLAYER_STATE1_DEAD) && gPlayState->gameOverCtx.state == GAMEOVER_INACTIVE) {
+        gMatchSeqId = gSaveContext.seqId;
+        gMatchAmbienceId = gSaveContext.natureAmbienceId;
+        return;
+    }
+    gPlayState->gameOverCtx.state = GAMEOVER_INACTIVE;
+    player->stateFlags1 &= ~PLAYER_STATE1_DEAD;
+    gPlayState->func_11D54(player, gPlayState);   // back to standing still
+    OnePointCutscene_EndCutscene(gPlayState, SUBCAM_ACTIVE);   // the death's close-up camera
+    Audio_QueueSeqCmd(0x100000FF | (SEQ_PLAYER_FANFARE << 24));   // stop the game-over tune
+    func_800F47FC();                                               // the death muted the music; bring it back up
+    gSaveContext.seqId = gMatchSeqId;
+    gSaveContext.natureAmbienceId = gMatchAmbienceId;
+    if (gMatchSeqId != 0xFF) Audio_QueueSeqCmd((SEQ_PLAYER_BGM_MAIN << 24) | gMatchSeqId);
 }
 
 void OnPlayerUpdate() {
@@ -5704,13 +6193,17 @@ void OnPlayerUpdate() {
         gSaveContext.healthCapacity = static_cast<s16>(std::lround(hud.maxHealth * 16.0f));
         // An eliminated player does not die in the game (that would end in the game-over screen). They become an invisible,
         // invulnerable spectator who can still walk around and watch the rest of the match.
-        gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : gSaveContext.healthCapacity;
+        // Never 0 while alive, even for a sliver of health or the tick where the server has zeroed health but not yet sent the
+        // elimination: the game starts its own death and game-over screen the moment the save's health reads 0.
+        gMatchHealth = hud.selfAlive ? static_cast<s16>(std::max(1L, std::lround(hud.selfHealth * 16.0f))) : gSaveContext.healthCapacity;
+        gSaveContext.health = gMatchHealth;
+        CancelGameDeath(player);
     }
     static bool wasDead = false;
     if (dead && !wasDead && InField()) {
         royale::PuppetState me;
         me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
-        me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
+        me.id = hud.selfId; me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
         const float a = me.rot * (3.14159265f / 32768.0f);
         SpawnCorpse(me, -std::sin(a), -std::cos(a));
     }
@@ -5773,6 +6266,25 @@ void ReportEvents(const royale::HudState& hud) {
                     else if (gState.count(e.other)) { weapon = gState[e.other].weapon; fx = gState[e.other].x; fz = gState[e.other].z; haveFrom = true; }
                     if (e.id == hud.selfId) { tx2 = me->actor.world.pos.x; tz2 = me->actor.world.pos.z; haveTo = true; }
                     else if (gState.count(e.id)) { tx2 = gState[e.id].x; tz2 = gState[e.id].z; haveTo = true; }
+                    if (haveTo) {   // fire, ice, light and nuts leave the game's own mark on whoever they hit
+                        float ty0 = me->actor.world.pos.y;
+                        if (e.id != hud.selfId) { auto tgt = gActorOf.find(e.id); if (tgt != gActorOf.end()) ty0 = tgt->second->world.pos.y; }
+                        Vec3f hit = { tx2, ty0 + 35.0f, tz2 };
+                        using royale::ItemId;
+                        if (weapon == ItemId::FireArrows) {
+                            for (int i = 0; i < 4; i++) { Vec3f p2 = { hit.x + (Rand_ZeroOne() - 0.5f) * 30.0f, hit.y + (Rand_ZeroOne() - 0.5f) * 40.0f, hit.z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+                                                          Color_RGBA8 pc = { 255, 200, 0, 255 }, ec = { 255, 0, 0, 255 }; Vec3f v = { 0, 1.5f, 0 }, ac = { 0, 0.05f, 0 };
+                                                          EffectSsKiraKira_SpawnDispersed(gPlayState, &p2, &v, &ac, &pc, &ec, 110, 24); }
+                            SparkBurst(gPlayState, hit.x, hit.y, hit.z, { 255, 120, 20, 255 }, 10, 3.0f);
+                        } else if (weapon == ItemId::IceArrows) {
+                            EffectSsIcePiece_SpawnBurst(gPlayState, &hit, 1.0f);
+                        } else if (weapon == ItemId::LightArrows) {
+                            EffectSsHitMark_SpawnFixedScale(gPlayState, 0, &hit);
+                            SparkBurst(gPlayState, hit.x, hit.y, hit.z, { 255, 255, 170, 255 }, 14, 4.0f);
+                        } else if (weapon == ItemId::DekuNuts) {
+                            EffectSsHitMark_SpawnFixedScale(gPlayState, 0, &hit);
+                        }
+                    }
                     if (haveFrom && haveTo && weapon == royale::ItemId::HomingBombchus) {
                         for (int i = 0; i <= 14; i++) {
                             const float k = i / 14.0f;
@@ -5955,6 +6467,24 @@ void ReportEvents(const royale::HudState& hud) {
                     auto victim = gActorOf.find(e.id);
                     if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
                 }
+                // The server stops sending eliminated players, so their puppet just vanishes: leave their body here instead, thrown away
+                // from whoever got them (or backwards, for the storm). Your own body is made in OnPlayerUpdate.
+                if (!me && InField() && !royale::IsBossId(e.id) && gState.count(e.id) && gState[e.id].scene == gPlayState->sceneNum) {
+                    royale::PuppetState body = gState[e.id];
+                    auto actor = gActorOf.find(e.id);
+                    if (actor != gActorOf.end() && actor->second != nullptr) {   // where it is drawn right now, not the last network sample
+                        body.x = actor->second->world.pos.x; body.y = actor->second->world.pos.y; body.z = actor->second->world.pos.z;
+                    }
+                    const float a = body.rot * (3.14159265f / 32768.0f);
+                    float px = -std::sin(a), pz = -std::cos(a);
+                    const Player* self = GET_PLAYER(gPlayState);
+                    float kx = 0, kz = 0;
+                    bool haveKiller = false;
+                    if (mine) { kx = self->actor.world.pos.x; kz = self->actor.world.pos.z; haveKiller = true; }
+                    else if (gState.count(e.other)) { kx = gState[e.other].x; kz = gState[e.other].z; haveKiller = true; }
+                    if (haveKiller && std::hypot(body.x - kx, body.z - kz) > 1.0f) { px = body.x - kx; pz = body.z - kz; }
+                    SpawnCorpse(body, px, pz);
+                }
                 const std::string victim = me ? std::string("You") : nameOf(e.id);
                 std::string line;
                 if (e.other == royale::net::kNoPlayer16) line = victim + (me ? " were" : " was") + " caught by the storm";
@@ -5995,33 +6525,7 @@ void DriveStart(const royale::HudState& hud) {
 // ---- Battle Royale save files, the lobby timer, and the time of day --------------------------------------------------------------
 
 bool gWasInGame = false;
-int gMenuOpenCountdown = -1;
 int gLobbyAnnounced = 1 << 30;
-
-// Open the game's own menu on the Battle Royale page.
-void OpenRoyaleMenu() {
-    CVarSetString(CVAR_SETTING("Menu.ActiveHeader"), "Battle Royale");
-    if (SohGui::mSohMenu && !SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
-}
-
-// A save made with the "Battle Royale" quest option opens the Battle Royale menu a few seconds after it loads, so the mode starts from
-// there: host a lobby or join one, with no digging through the menus. (The quest option is in the file select; see patches/0008.)
-void NoticeRoyaleFile() {
-    const bool in = InGame();
-    if (in && !gWasInGame) {
-        char key[48];
-        std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.BRFile%d"), static_cast<int>(gSaveContext.fileNum));
-        if (CVarGetInteger(key, 0) != 0 && !gSession.Joined()) gMenuOpenCountdown = 60; // about 3 seconds
-    }
-    gWasInGame = in;
-    if (gMenuOpenCountdown > 0 && --gMenuOpenCountdown == 0) {
-        if (InGame() && !gSession.Joined()) {
-            OpenRoyaleMenu();
-            Say("Battle Royale: host a lobby or join one from this menu");
-        }
-        gMenuOpenCountdown = -1;
-    }
-}
 
 // The lobby counts down on the server. At zero the host's game does what the Start button does (it has to go to the field and measure the
 // map first); the server starts the match by itself if that never happens.
@@ -6173,14 +6677,58 @@ void DriveStormAlerts(const royale::HudState& hud) {
     }
 }
 
+// ---- talking: the game's own text box --------------------------------------------------------------------------------------------
+// Lilo, Maya and the sign speak through the game's real message system: the same text box, font, letter-by-letter typing and sounds as every
+// NPC. Their lines are custom messages in a "RoyaleMod" table (text ids from 0x7F00, which patches/0012 looks up), and they offer to talk the
+// way the game's own NPCs do, so the A button says "Speak", Link turns to face them and the box opens, waits for A and closes as usual.
+constexpr u16 kTextLilo = 0x7F00;       // Lilo sitting on the map
+constexpr u16 kTextLiloPet = 0x7F01;    // Lilo the pet: 0x7F01 onwards, one per line in royale::kLiloPetLines
+constexpr u16 kTextMaya = 0x7F10;
+constexpr u16 kTextSign = 0x7F20;
+static_assert(kTextLiloPet + royale::kLiloPetLineCount <= kTextMaya, "Lilo's pet lines run into Maya's text id");
+bool gRoyaleMessagesMade = false;
+
+void RegisterRoyaleMessages() {
+    if (gRoyaleMessagesMade || CustomMessageManager::Instance == nullptr) return;
+    CustomMessageManager* cm = CustomMessageManager::Instance;
+    cm->AddCustomMessageTable("RoyaleMod");
+    cm->CreateMessage("RoyaleMod", kTextLilo, CustomMessage(royale::kLiloLine));
+    for (int i = 0; i < royale::kLiloPetLineCount; i++)
+        cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextLiloPet + i), CustomMessage(royale::kLiloPetLines[i]));
+    cm->CreateMessage("RoyaleMod", kTextMaya, CustomMessage(royale::kMayaGreeting));
+    cm->CreateMessage("RoyaleMod", kTextSign, CustomMessage(royale::kMapSignText, TEXTBOX_TYPE_WOODEN));
+    gRoyaleMessagesMade = true;
+}
+
+// True while the text box is open for this actor.
+bool TalkingTo(const Actor* actor) {
+    return actor != nullptr && gPlayState != nullptr && gPlayState->msgCtx.msgMode != MSGMODE_NONE && gPlayState->msgCtx.talkActor == actor;
+}
+
+// Called from an actor's update: offers Link a talk within `range` (he takes it with A, like with any NPC). True on the frame the talk starts.
+bool OfferTalk(Actor* actor, PlayState* play, u16 textId, float range) {
+    actor->textId = textId;
+    if (Actor_ProcessTalkRequest(actor, play)) return true;
+    func_8002F2CC(actor, play, range);   // the game's "offer to talk" (Actor_OfferTalk in the decompilation)
+    return false;
+}
+
+bool MessageBoxUp() { return gPlayState != nullptr && gPlayState->msgCtx.msgMode != MSGMODE_NONE; }
+
+// Opens the box directly, for an A press the game did not take as a talk (Link facing the other way, say). Does nothing if a box is already up.
+bool StartTalk(Actor* actor, u16 textId) {
+    if (actor == nullptr || MessageBoxUp()) return false;
+    Message_StartTextbox(gPlayState, textId, actor);
+    return true;
+}
+
 // ---- Maya ---------------------------------------------------------------------------------------------------------------------
 // A little Kokiri called Maya stands in a random spot on every map (the same spot for everyone in the match). Walk up and press A to talk to her.
 Actor* gMayaActor = nullptr;
 royale::Vec2 gMayaPos = {};
 bool gMayaKnown = false;
-double gMayaTalkStart = -100.0;
-constexpr double kMayaTalkSeconds = 5.0;
 
+void TalkToMaya();
 void Maya_Update(Actor* actor, PlayState* play) {
     Player* pl = GET_PLAYER(play);
     const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
@@ -6189,12 +6737,14 @@ void Maya_Update(Actor* actor, PlayState* play) {
         actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.12f);
     }
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 60.0f;
+    if (OfferTalk(actor, play, kTextMaya, royale::kHireRange)) TalkToMaya();
 }
 void Maya_Draw(Actor* actor, PlayState* play) {
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Ally, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    const bool talking = ImGui::GetTime() - gMayaTalkStart < kMayaTalkSeconds;
+    const bool talking = TalkingTo(actor);
     const float hop = talking ? std::fabs(std::sin(t * 9.0f)) * 16.0f : std::fabs(std::sin(t * 2.2f)) * 3.0f;   // she bounces when she talks
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
@@ -6263,15 +6813,15 @@ bool MayaNear() {
     return std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z) < royale::kHireRange;
 }
 
+// The talk itself is the game's text box; this is the sparkle that goes with it.
 void TalkToMaya() {
-    gMayaTalkStart = ImGui::GetTime();
     if (gPlayState != nullptr && gMayaActor != nullptr)
         SparkBurst(gPlayState, gMayaPos.x, gMayaActor->world.pos.y + 90.0f, gMayaPos.z, { 255, 190, 220, 255 }, 16, 3.0f);
-    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
-// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+// Her name over her head (what she says is in the game's own text box).
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gMayaActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z);
@@ -6283,115 +6833,98 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(40, 10, 30, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 170, 215, 255), label);
     }
-    const double since = ImGui::GetTime() - gMayaTalkStart;
-    if (since >= 0.0 && since < kMayaTalkSeconds) {
-        const std::string full = royale::kMayaGreeting;
-        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 28.0));
-        const std::string text = full.substr(0, shown);
-        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(40, 18, 40, 228), 12.0f * scale);
-        dl->AddRect(box, end, IM_COL32(255, 170, 215, 255), 12.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(255, 170, 215, 255), royale::kMayaName);
-        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 248, 252, 255), text.c_str(), nullptr, wrap);
+}
+
+// ---- Lilo's model -------------------------------------------------------------------------------------------------------------------
+// Lilo is a low poly model made in Blender (tools/lilo/, assets/lilo/lilo.blend) in the N64 style: about 650 triangles, a 64x32 fur texture and a
+// 32x32 face in three versions (eyes open, half shut, shut), a skeleton of 25 bones and eleven animation clips: idle, walk, run, jump, sit, talk,
+// groom, sleep, stretch, pounce and happy (shared/lilo_model.h). She is skinned on the CPU every frame (the way the game itself skins Epona), lit by
+// a fixed sun baked into the vertex colours, and drawn with her own two textures.
+constexpr float kLiloPetScale = 0.8f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52); Link is about 60
+constexpr float kLiloMapScale = 1.0f;
+
+void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
+    namespace L = royale::lilo;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * L::kVertCount));
+    if (vtx == nullptr) return;
+    // The sun: high, a little in front and to one side, turned into the model's own axes (the inverse of Matrix_RotateY(yaw)).
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < L::kVertCount; i++) {
+        const L::Vert& v = L::kVerts[i];
+        float p[3], n[3];
+        L::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.52f + 0.58f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(242.0f * lit);
+        o.v.cn[3] = 255;
     }
-}
-
-// ---- the cat, drawn in parts and animated (Lilo on the map, and Lilo as a pet that follows you) ----------------------------------------------------
-// A body, a head, four legs and a chain of tail segments (shared/meshes.h), posed from a CatPose. The pose is only ever eased towards a target, so every
-// change of mood (walking, sitting, grooming, curling up to sleep) blends instead of snapping.
-struct CatPose {
-    float bodyPitch = 0, bodyDrop = 0, bodyYaw = 0;       // nose up (radians), how far the body sinks, a wiggle of the hindquarters
-    float swing[4] = {0, 0, 0, 0};                        // front left, front right, hind left, hind right: forward is negative
-    float legScale[4] = {1, 1, 1, 1};                     // tucked-up legs are short
-    float headPitch = 0, headYaw = 0;                     // down (radians), turn
-    float tailUp = 1.0f, tailCurl = 0.1f, tailSway = 0;   // the tail's angle from straight up, how much each segment curls, side to side
-    int eyes = 0;                                         // CatHead variant: 0 open, 1 shut, 2 mewing, 3 half shut
-};
-void ApproachPose(CatPose& c, const CatPose& t, float k) {
-    auto a = [&](float& x, float y) { x += (y - x) * k; };
-    a(c.bodyPitch, t.bodyPitch); a(c.bodyDrop, t.bodyDrop); a(c.bodyYaw, t.bodyYaw);
-    for (int i = 0; i < 4; i++) { a(c.swing[i], t.swing[i]); a(c.legScale[i], t.legScale[i]); }
-    a(c.headPitch, t.headPitch); a(c.headYaw, t.headYaw); a(c.tailUp, t.tailUp); a(c.tailCurl, t.tailCurl); a(c.tailSway, t.tailSway);
-    c.eyes = t.eyes;
-}
-
-void DrawCatPart(PlayState* play, royale::MeshKind kind, uint32_t variant) {
-    const GpuMesh* m = GpuMeshFor(kind, variant);
-    if (m == nullptr || m->dl.empty()) return;
-    OPEN_DISPS(play->state.gfxCtx);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(m->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void DrawCat(PlayState* play, float x, float y, float z, float yaw, float scale, const CatPose& p) {
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    CLOSE_DISPS(play->state.gfxCtx);
-    constexpr float kLeg = 24.0f;
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // her texture times the vertex colour
     Matrix_Translate(x, y, z, MTXMODE_NEW);
     Matrix_RotateY(yaw, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    // legs: front left/right, hind left/right; each swings about its hip and is squashed if tucked
-    static const float kHip[4][3] = { {8, 24, 14}, {-8, 24, 14}, {10, 24, -16}, {-10, 24, -16} };
-    for (int i = 0; i < 4; i++) {
-        Matrix_Push();
-        Matrix_Translate(kHip[i][0], kHip[i][1] + p.bodyDrop, kHip[i][2], MTXMODE_APPLY);
-        Matrix_RotateX(p.swing[i], MTXMODE_APPLY);
-        Matrix_Scale(1.0f, p.legScale[i], 1.0f, MTXMODE_APPLY);
-        Matrix_Translate(0, -kLeg, 0, MTXMODE_APPLY);
-        DrawCatPart(play, royale::MeshKind::CatLeg, i < 2 ? 0u : 1u);
-        Matrix_Pop();
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const int face = std::clamp(eyes, 0, 2);
+    int loaded = -1;
+    for (int b = 0; b < L::kBatchCount; b++) {
+        const L::Batch& bt = L::kBatches[b];
+        const int tex = bt.texture == L::kFace ? 1 + face : 0;
+        if (tex != loaded) {
+            if (tex == 0)
+                gDPLoadTextureBlock(POLY_OPA_DISP++, L::kFurTex, G_IM_FMT_RGBA, G_IM_SIZ_16b, L::kFurW, L::kFurH, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                    G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            else
+                gDPLoadTextureBlock(POLY_OPA_DISP++, L::kFaceTex[tex - 1], G_IM_FMT_RGBA, G_IM_SIZ_16b, L::kFaceW, L::kFaceH, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                    G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, L::kTris[t][0], L::kTris[t][1], L::kTris[t][2], 0, L::kTris[t + 1][0], L::kTris[t + 1][1], L::kTris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, L::kTris[t][0], L::kTris[t][1], L::kTris[t][2], 0);
     }
-    // body, pitched about the hips (so sitting up lifts the chest and keeps the rump down)
-    Matrix_Push();
-    Matrix_Translate(0, p.bodyDrop, 0, MTXMODE_APPLY);
-    Matrix_Translate(0, 24, -18, MTXMODE_APPLY);
-    Matrix_RotateY(p.bodyYaw, MTXMODE_APPLY);
-    Matrix_RotateX(-p.bodyPitch, MTXMODE_APPLY);
-    Matrix_Translate(0, -24, 18, MTXMODE_APPLY);
-    DrawCatPart(play, royale::MeshKind::CatBody, 0);
-    // head on its neck (a child of the body, so it is levelled by headPitch)
-    Matrix_Push();
-    Matrix_Translate(0, 36, 22, MTXMODE_APPLY);
-    Matrix_RotateX(p.headPitch - 0.0f, MTXMODE_APPLY);
-    Matrix_RotateY(p.headYaw, MTXMODE_APPLY);
-    DrawCatPart(play, royale::MeshKind::CatHead, static_cast<uint32_t>(p.eyes));
-    Matrix_Pop();
-    // the tail: five segments, each bent a little further than the one before, swaying
-    Matrix_Push();
-    Matrix_Translate(0, 30, -28, MTXMODE_APPLY);
-    Matrix_RotateX(-p.tailUp, MTXMODE_APPLY);   // 0 is straight up, about 1.5 is level, pointing back
-    Matrix_RotateZ(p.tailSway * 0.4f, MTXMODE_APPLY);
-    for (int seg = 0; seg < 5; seg++) {
-        DrawCatPart(play, royale::MeshKind::CatTailSeg, seg == 4 ? 2u : static_cast<uint32_t>(seg & 1));
-        Matrix_Translate(0, 11.5f, 0, MTXMODE_APPLY);
-        Matrix_RotateX(p.tailCurl, MTXMODE_APPLY);
-        Matrix_RotateZ(p.tailSway * 0.22f, MTXMODE_APPLY);
-    }
-    Matrix_Pop();
-    Matrix_Pop();
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Her eyes: what the mood wants, with a quick blink every few seconds while they are open.
+int LiloEyes(float seconds, int wanted) {
+    if (wanted != royale::lilo::kEyesOpen) return wanted;
+    return std::fmod(seconds, 3.7f) < 0.13f ? royale::lilo::kEyesShut : royale::lilo::kEyesOpen;
 }
 
 // -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
-enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy };
+// Her moods pick her animation clip; the clips cross-fade, so walking, sitting, grooming and curling up to sleep blend instead of snapping. Stand
+// still facing her and press A to talk: she sits and mews her line in the game's own text box.
+enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy, Jump, Talk };
 struct CatBrain {
     Actor* actor = nullptr;
     CatMood mood = CatMood::Follow;
-    float moodT = 0, phase = 0, idle = 0, sitT = 0;
+    float moodT = 0, idle = 0, sitT = 0;
     float x = 0, z = 0, y = 0, yaw = 0, speed = 0;
-    float nextAt = 6.0f, blink = 0;
+    float nextAt = 6.0f;
     float leapX = 0, leapZ = 0;
     size_t pickups = 0;
     bool placed = false;
-    CatPose pose;
+    int line = 0;    // what she says next (royale::kLiloPetLines)
+    int eyes = 0;
+    royale::lilo::Animator anim;
 };
 CatBrain gCat;
+
+void SetMood(CatBrain& c, CatMood m) { c.mood = m; c.moodT = 0; }
 
 void CatPoof(PlayState* play, float x, float y, float z) {
     for (int i = 0; i < 7; i++) {
@@ -6403,6 +6936,7 @@ void CatPoof(PlayState* play, float x, float y, float z) {
 }
 
 void Cat_Update(Actor* actor, PlayState* play) {
+    namespace L = royale::lilo;
     CatBrain& c = gCat;
     const float dt = 1.0f / royale::kTickHz;
     Player* pl = GET_PLAYER(play);
@@ -6418,142 +6952,141 @@ void Cat_Update(Actor* actor, PlayState* play) {
         c.x = wantX; c.z = wantZ; c.y = py; c.placed = true;
         CatPoof(play, c.x, c.y, c.z);
         dx = dz = 0; d = 0;
-        c.mood = CatMood::Stand; c.moodT = 0;
+        SetMood(c, CatMood::Stand);
     }
     c.moodT += dt;
     if (playerStill) c.idle += dt; else c.idle = 0;
-    if (gPickupLog.size() != c.pickups) { if (gPickupLog.size() > c.pickups && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; } c.pickups = gPickupLog.size(); }
-    if (gEmote.id >= 0 && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; }
+    const bool talking = TalkingTo(actor);
+    if (talking && c.mood != CatMood::Talk) SetMood(c, CatMood::Talk);
+    if (!talking && c.mood == CatMood::Talk) {   // done talking: she stays sitting a while, and has something new to say next time
+        SetMood(c, CatMood::Sit);
+        c.sitT = 0; c.nextAt = 4.0f;
+        c.line = (c.line + 1) % royale::kLiloPetLineCount;
+    }
+    if (c.mood != CatMood::Talk) {
+        if (gPickupLog.size() != c.pickups) { if (gPickupLog.size() > c.pickups && c.mood != CatMood::Happy) SetMood(c, CatMood::Happy); c.pickups = gPickupLog.size(); }
+        if (gEmote.id >= 0 && c.mood != CatMood::Happy) SetMood(c, CatMood::Happy);
+        // you jump, she jumps
+        if ((c.mood == CatMood::Follow || c.mood == CatMood::Stand) && !(pl->actor.bgCheckFlags & 1) && pl->actor.velocity.y > 4.0f && d < 400.0f)
+            SetMood(c, CatMood::Jump);
+    }
 
-    CatPose t;   // the pose she is easing towards
-    t.tailUp = 0.9f; t.tailCurl = 0.07f;
-    float blinkNow = 0.0f;
-    c.blink -= dt;
-    if (c.blink < -3.5f) c.blink = 0.14f;
-    blinkNow = c.blink > 0.0f ? 1.0f : 0.0f;
-    const float tm = static_cast<float>(ImGui::GetTime());
+    const float tm = static_cast<float>(play->gameplayFrames) * dt;
     bool moving = false;
     float heading = c.yaw;
+    int clip = L::kIdle, eyes = L::kEyesOpen;
+    float rate = 1.0f;
+    auto follow = [&](float minSpeed) {   // go to her place: a walk when it is near, a run when you have gone on ahead
+        c.speed += (std::clamp((d - 40.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
+        heading = std::atan2(dx, dz);
+        c.x += std::sin(heading) * c.speed * dt;
+        c.z += std::cos(heading) * c.speed * dt;
+        moving = true;
+    };
 
     switch (c.mood) {
         case CatMood::Follow: case CatMood::Stand: {
-            if (d > 58.0f) {   // go to her place: a walk when it is near, a trot when you have run on
-                c.speed += (std::clamp((d - 40.0f) * 2.8f, 45.0f, 290.0f) - c.speed) * 0.2f;
-                heading = std::atan2(dx, dz);
-                c.x += std::sin(heading) * c.speed * dt;
-                c.z += std::cos(heading) * c.speed * dt;
-                moving = true;
+            if (d > 58.0f) {
+                follow(45.0f);
                 c.mood = CatMood::Follow;
             } else {
                 c.speed *= 0.7f;
-                if (c.mood == CatMood::Follow) { c.mood = CatMood::Stand; c.moodT = 0; }
-                if (c.idle > 1.6f) { c.mood = CatMood::Sit; c.moodT = 0; c.sitT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f; }
+                if (c.mood == CatMood::Follow) SetMood(c, CatMood::Stand);
+                if (c.idle > 1.6f) { SetMood(c, CatMood::Sit); c.sitT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f; }
             }
-            if (c.mood == CatMood::Stand) {   // standing about: looks around, tail swishing slowly
-                t.tailSway = std::sin(tm * 1.7f) * 0.5f; t.headYaw = std::sin(tm * 0.6f) * 0.5f;
-            }
+            if (moving && c.speed > 150.0f) { clip = L::kRun; rate = std::clamp(c.speed / 230.0f, 0.8f, 1.4f); }
+            else if (moving) { clip = L::kWalk; rate = std::clamp(c.speed / 75.0f, 0.6f, 1.8f); }
             break;
         }
         case CatMood::Sit: case CatMood::Groom: {
             c.sitT += dt;
-            t.bodyPitch = 0.95f; t.bodyDrop = -9.0f;
-            t.swing[0] = t.swing[1] = 0.12f; t.swing[2] = t.swing[3] = -1.5f; t.legScale[2] = t.legScale[3] = 0.7f;
-            t.headPitch = -0.7f; t.tailUp = 1.55f; t.tailCurl = 0.34f; t.tailSway = std::sin(tm * 1.2f) * 0.6f;
-            t.headYaw = std::sin(tm * 0.45f) * 0.35f;
+            clip = c.mood == CatMood::Groom ? L::kGroom : L::kSit;
             if (c.mood == CatMood::Groom) {   // a front paw to the mouth and a lick
-                t.swing[0] = -2.1f + std::sin(tm * 11.0f) * 0.12f;
-                t.headPitch = -0.1f + std::sin(tm * 11.0f) * 0.06f; t.headYaw = 0.35f; t.eyes = 3;
-                if (c.moodT > 3.0f) { c.mood = CatMood::Sit; c.moodT = 0; }
+                eyes = L::kEyesHalf;
+                if (c.moodT > 3.0f) SetMood(c, CatMood::Sit);
             } else if (c.moodT > c.nextAt) {
                 const float r = Rand_ZeroOne();
-                c.moodT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f;
-                if (r < 0.45f) c.mood = CatMood::Groom;
-                else if (r < 0.7f) c.mood = CatMood::Stretch;
-                else c.mood = CatMood::Pounce;
+                c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f;
+                SetMood(c, r < 0.45f ? CatMood::Groom : r < 0.7f ? CatMood::Stretch : CatMood::Pounce);
             }
-            if (c.sitT > 16.0f && c.mood == CatMood::Sit) { c.mood = CatMood::Loaf; c.moodT = 0; }
-            if (!playerStill || d > 150.0f) { c.mood = CatMood::Follow; c.moodT = 0; }
+            if (c.sitT > 16.0f && c.mood == CatMood::Sit) SetMood(c, CatMood::Loaf);
+            if (!playerStill || d > 150.0f) SetMood(c, CatMood::Follow);
             break;
         }
-        case CatMood::Loaf: {   // curled up asleep: the paws tucked under, head down, eyes shut, little 'z's
-            t.bodyDrop = -16.0f; t.bodyPitch = 0.0f;
-            for (int i = 0; i < 4; i++) { t.legScale[i] = 0.4f; t.swing[i] = i < 2 ? -0.5f : 0.5f; }
-            t.headPitch = 0.4f; t.eyes = 1; t.tailUp = 1.6f; t.tailCurl = 0.5f; t.tailSway = std::sin(tm * 0.8f) * 0.2f;
-            t.bodyPitch = std::sin(tm * 1.4f) * 0.015f;   // breathing
+        case CatMood::Loaf: {   // curled up asleep: paws tucked under, eyes shut, little 'z's
+            clip = L::kSleep;
+            eyes = L::kEyesShut;
             if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
                 Vec3f pos = { c.x + std::sin(c.yaw) * 20.0f, c.y + 40.0f, c.z + std::cos(c.yaw) * 20.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
                 Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
                 EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
             }
-            if (!playerStill || d > 150.0f) { c.mood = CatMood::Stretch; c.moodT = 0; }
+            if (!playerStill || d > 150.0f) SetMood(c, CatMood::Stretch);
             break;
         }
-        case CatMood::Stretch: {   // front legs forward, chest down, rump up
-            t.bodyPitch = -0.42f; t.bodyDrop = -4.0f;
-            t.swing[0] = t.swing[1] = -1.0f; t.headPitch = 0.7f; t.tailUp = 0.15f; t.tailCurl = 0.05f; t.eyes = 3;
-            t.swing[2] = t.swing[3] = 0.15f;
-            if (c.moodT > 2.2f) { c.mood = playerStill ? CatMood::Sit : CatMood::Follow; c.moodT = 0; }
+        case CatMood::Stretch: {   // front legs forward, chest down, rump up, and a yawn
+            clip = L::kStretch;
+            eyes = L::kEyesHalf;
+            if (c.moodT > 2.0f) SetMood(c, playerStill ? CatMood::Sit : CatMood::Follow);
             break;
         }
         case CatMood::Pounce: {   // crouch and wiggle, then a leap at nothing
+            clip = L::kPounce;
             if (c.moodT < 0.9f) {
-                t.bodyDrop = -12.0f; t.bodyPitch = -0.12f; t.headPitch = 0.3f;
-                t.bodyYaw = std::sin(c.moodT * 30.0f) * 0.14f; t.tailUp = 0.9f; t.tailSway = std::sin(c.moodT * 25.0f) * 1.2f;
-                for (int i = 0; i < 4; i++) t.swing[i] = i < 2 ? -0.3f : 0.4f;
-                heading = c.yaw;
                 c.leapX = std::sin(c.yaw) * 75.0f; c.leapZ = std::cos(c.yaw) * 75.0f;
             } else if (c.moodT < 1.35f) {
-                const float u = (c.moodT - 0.9f) / 0.45f;
                 c.x += c.leapX * dt / 0.45f; c.z += c.leapZ * dt / 0.45f;
-                c.y = py;   // (the height is added below)
-                t.bodyPitch = 0.3f - u * 0.6f; t.swing[0] = t.swing[1] = -1.1f; t.swing[2] = t.swing[3] = 0.9f; t.tailUp = 0.2f;
-            } else { c.mood = CatMood::Stand; c.moodT = 0; }
+            } else if (c.moodT > 1.5f) {
+                SetMood(c, CatMood::Stand);
+            }
             break;
         }
-        case CatMood::Happy: {   // hops and the tail goes straight up
-            t.tailUp = 0.05f; t.tailSway = std::sin(tm * 22.0f) * 0.25f; t.eyes = 1;
-            t.bodyDrop = std::fabs(std::sin(c.moodT * 9.0f)) * 9.0f;
-            for (int i = 0; i < 4; i++) t.swing[i] = std::sin(c.moodT * 9.0f + i) * 0.2f;
-            if (c.moodT > 1.5f) { c.mood = CatMood::Stand; c.moodT = 0; }
+        case CatMood::Happy: {   // hops with her tail straight up
+            clip = L::kHappy;
+            eyes = L::kEyesShut;
+            if (c.moodT > 1.5f) SetMood(c, CatMood::Stand);
+            break;
+        }
+        case CatMood::Jump: {   // up after you, still heading for her place
+            clip = L::kJump;
+            if (d > 20.0f) follow(std::min(c.speed, 290.0f));
+            if (c.moodT > L::ClipSeconds(L::kJump)) SetMood(c, CatMood::Follow);
+            break;
+        }
+        case CatMood::Talk: {   // sitting, facing you, mewing
+            clip = L::kTalk;
+            c.speed = 0;
+            heading = std::atan2(px - c.x, pz - c.z);
             break;
         }
     }
-    if (moving) {   // the gait: diagonal pairs of legs, quicker and wider as she speeds up
-        c.phase += c.speed * dt * 0.052f;
-        const float amp = std::clamp(0.45f + c.speed * 0.0016f, 0.45f, 0.95f), s = std::sin(c.phase);
-        t.swing[0] = t.swing[3] = amp * s;
-        t.swing[1] = t.swing[2] = -amp * s;
-        t.bodyDrop = -std::fabs(std::sin(c.phase)) * 2.2f;
-        t.tailUp = c.speed > 160.0f ? 0.6f : 0.95f; t.tailSway = std::sin(c.phase * 0.5f) * 0.4f;
-        t.headYaw = 0; t.headPitch = c.speed > 160.0f ? 0.1f : 0.0f;
-    }
+    // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
+    if (!talking && c.mood != CatMood::Jump && c.mood != CatMood::Pounce && pspeed < 3.0f &&
+        OfferTalk(actor, play, static_cast<u16>(kTextLiloPet + c.line), 120.0f))
+        SetMood(c, CatMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)
-    if (!moving && c.mood != CatMood::Pounce) {
-        if (d < 400.0f) heading = std::atan2(px - c.x, pz - c.z);
-    }
+    if (!moving && c.mood != CatMood::Pounce && c.mood != CatMood::Talk && d < 400.0f) heading = std::atan2(px - c.x, pz - c.z);
     {
         float diff = heading - c.yaw;
         while (diff > 3.14159265f) diff -= 6.2831853f;
         while (diff < -3.14159265f) diff += 6.2831853f;
-        c.yaw += diff * (moving ? 0.25f : 0.08f);
+        c.yaw += diff * (moving ? 0.25f : c.mood == CatMood::Talk ? 0.3f : 0.08f);
     }
-    if (blinkNow > 0.5f && t.eyes == 0) t.eyes = 1;
-    ApproachPose(c.pose, t, moving ? 0.35f : 0.18f);
-    c.pose.eyes = t.eyes;
+    c.anim.Play(clip, 0.25f);
+    c.anim.Update(dt, rate);
+    c.eyes = LiloEyes(tm, eyes);
 
-    float floorY = c.y;
-    floorY = GroundY(play, c.x, c.z, c.y);
-    float hop = 0.0f;
-    if (c.mood == CatMood::Pounce && c.moodT >= 0.9f && c.moodT < 1.35f) hop = std::sin((c.moodT - 0.9f) / 0.45f * 3.14159f) * 32.0f;
-    if (c.mood == CatMood::Happy) hop = std::fabs(std::sin(c.moodT * 9.0f)) * 10.0f;
-    c.y = floorY;
-    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y + hop;
+    c.y = GroundY(play, c.x, c.z, c.y);   // her clips carry their own hops and leaps
+    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y;
     actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 30.0f;
 }
 
 void Cat_Draw(Actor* actor, PlayState* play) {
-    DrawCat(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gCat.yaw, 0.8f, gCat.pose);
+    royale::lilo::Pose pose;
+    gCat.anim.Evaluate(pose);
+    DrawLiloModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gCat.yaw, kLiloPetScale, pose, gCat.eyes);
 }
 void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
 
@@ -6574,46 +7107,47 @@ void ReconcileCatPet(const royale::HudState& hud) {
     a->destroy = Cat_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 22.0f;
+    a->shape.shadowScale = 18.0f;
     gCat.actor = a;
     gCat.placed = false;
     gCat.pickups = gPickupLog.size();
-    gCat.pose = CatPose{};
+    gCat.mood = CatMood::Follow;
+    gCat.anim = royale::lilo::Animator{};
 }
 
-// ---- Lilo -------------------------------------------------------------------------------------------------------------------------
-// An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): a grey and white cat called Lilo sits at a random spot on the
-// map. Talk to her with A: she says her line, and a moment later there is a noise and a greenish cloud.
+// ---- Lilo ---------------------------------------------------------------------------------------------------------------------------
+// An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): Lilo sits at a random spot on the map. Talk to her with A: she
+// says her line in the game's text box, and when you close it there is a noise and a greenish cloud.
 Actor* gLiloActor = nullptr;
 royale::Vec2 gLiloPos = {};
 bool gLiloKnown = false;
 double gLiloTalkStart = -100.0;
-bool gLiloFarted = true;
+bool gLiloFarted = true, gLiloHeard = false;
 double gFartCloudUntil = 0;
-constexpr double kLiloTalkSeconds = 5.0, kLiloFartAt = 1.7;
+royale::lilo::Animator gLiloAnim;
+int gLiloEyes = 0;
 
+void TalkToLilo();
 void Lilo_Update(Actor* actor, PlayState* play) {
+    namespace L = royale::lilo;
     Player* pl = GET_PLAYER(play);
+    const bool talking = TalkingTo(actor);
     const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
     if (dx * dx + dz * dz < 600.0f * 600.0f) {   // she watches you come
         const s16 want = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.1f);
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * (talking ? 0.25f : 0.1f));
     }
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 40.0f;
+    if (OfferTalk(actor, play, kTextLilo, royale::kHireRange)) TalkToLilo();
+    gLiloAnim.Play(talking ? L::kTalk : L::kSit, 0.3f);
+    gLiloAnim.Update(1.0f / royale::kTickHz);
+    gLiloEyes = LiloEyes(static_cast<float>(play->gameplayFrames) / royale::kTickHz, L::kEyesOpen);
 }
 void Lilo_Draw(Actor* actor, PlayState* play) {
-    const float t = static_cast<float>(ImGui::GetTime());
-    const double since = ImGui::GetTime() - gLiloTalkStart;
-    const bool talking = since >= 0.0 && since < kLiloTalkSeconds;
-    CatPose p;   // sitting up, watching, tail curled; when "speaking" she mews and sways
-    p.bodyPitch = 0.95f; p.bodyDrop = -9.0f;
-    p.swing[0] = p.swing[1] = 0.12f; p.swing[2] = p.swing[3] = -1.5f; p.legScale[2] = p.legScale[3] = 0.7f;
-    p.headPitch = -0.7f; p.tailUp = 1.55f; p.tailCurl = 0.34f;
-    p.tailSway = talking ? std::sin(t * 9.0f) * 1.0f : std::sin(t * 1.3f) * 0.6f;
-    p.headYaw = talking ? std::sin(t * 12.0f) * 0.12f : std::sin(t * 0.5f) * 0.3f;
-    p.eyes = talking ? ((static_cast<int>(t * 6.0f) & 1) ? 2 : 0) : (std::fmod(t, 4.3f) < 0.13f ? 1 : 0);
-    const float lift = talking && since < kLiloFartAt ? 6.0f * std::fabs(std::sin(t * 8.0f)) : 0.0f;
-    DrawCat(play, actor->world.pos.x, actor->world.pos.y + lift, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), 1.0f, p);
+    royale::lilo::Pose pose;
+    gLiloAnim.Evaluate(pose);
+    DrawLiloModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), kLiloMapScale, pose, gLiloEyes);
 }
 void Lilo_Destroy(Actor* actor, PlayState*) { if (gLiloActor == actor) gLiloActor = nullptr; }
 
@@ -6658,8 +7192,10 @@ void ReconcileLilo(const royale::HudState& hud) {
     a->destroy = Lilo_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 28.0f;
+    a->shape.shadowScale = 22.0f;
     gLiloActor = a;
+    gLiloAnim = royale::lilo::Animator{};
+    gLiloAnim.Play(royale::lilo::kSit, 0.0f);
 }
 
 bool LiloNear() {
@@ -6668,20 +7204,24 @@ bool LiloNear() {
     return std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z) < royale::kHireRange;
 }
 
+// The talk itself is the game's text box (Lilo_Update); this arms the accident for when it closes.
 void TalkToLilo() {
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
-    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    gLiloHeard = false;
 }
 
-// The accident: the noise, and a cloud of greenish-brown puffs behind the cat that drifts up and thins out.
+// The accident: once her text box has closed, the noise, and a cloud of greenish-brown puffs behind the cat that drifts up and thins out.
 void UpdateLiloFx() {
     if (gLiloActor == nullptr || gPlayState == nullptr || !InField()) return;
     const double now = ImGui::GetTime();
-    if (!gLiloFarted && now - gLiloTalkStart >= kLiloFartAt) {
-        gLiloFarted = true;
-        gFartCloudUntil = now + 2.6;
-        PlayOneShot(2);
+    if (!gLiloFarted) {
+        if (TalkingTo(gLiloActor)) gLiloHeard = true;
+        else if (gLiloHeard || now - gLiloTalkStart > 4.0) {
+            gLiloFarted = true;
+            gFartCloudUntil = now + 2.6;
+            PlayOneShot(2);
+        }
     }
     if (now < gFartCloudUntil) {
         const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
@@ -6697,32 +7237,19 @@ void UpdateLiloFx() {
     }
 }
 
-// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+// Her name over her head (what she says is in the game's own text box).
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gLiloActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z);
     ImVec2 at;
-    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 125.0f, gLiloPos.z, &at)) {
+    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 78.0f, gLiloPos.z, &at)) {
         const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
         const char* label = royale::kLiloName;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 20, 20, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(235, 235, 230, 255), label);
-    }
-    const double since = ImGui::GetTime() - gLiloTalkStart;
-    if (since >= 0.0 && since < kLiloTalkSeconds) {
-        const std::string full = royale::kLiloLine;
-        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 22.0));
-        const std::string text = full.substr(0, shown);
-        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(30, 30, 36, 228), 12.0f * scale);
-        dl->AddRect(box, end, IM_COL32(220, 220, 225, 255), 12.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(200, 200, 210, 255), royale::kLiloName);
-        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
     }
 }
 
@@ -7100,7 +7627,11 @@ void ForgetOldHats() {
 Actor* gSignActor = nullptr;
 double gSignReadAt = -100.0;
 
-void Sign_Update(Actor* actor, PlayState*) { actor->focus.pos = actor->world.pos; }
+void Sign_Update(Actor* actor, PlayState* play) {
+    actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 120.0f;
+    OfferTalk(actor, play, kTextSign, 220.0f);   // read it with A, in the game's wooden sign box
+}
 void Sign_Draw(Actor* actor, PlayState* play) {
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Sign, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
@@ -7163,28 +7694,32 @@ void ReconcileSign(const royale::HudState& hud) {
     gSignActor = a;
 }
 
-// A label over the sign from a distance, and the message in a box at the bottom of the screen when you stand in front of it.
+bool SignNear() {
+    if (gSignActor == nullptr || !InField()) return false;
+    Player* pl = GET_PLAYER(gPlayState);
+    return std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z) < 220.0f;
+}
+
+// A next to Lilo, Maya or the sign when the game did not already start the talk itself: open the same text box directly.
+void PressedATalk() {
+    if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
+    else if (LiloNear()) { if (StartTalk(gLiloActor, kTextLilo)) TalkToLilo(); }
+    else if (SignNear()) StartTalk(gSignActor, kTextSign);
+}
+
+// A label over the sign from a distance; up close, A reads it in the game's own text box.
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gSignActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z);
     ImVec2 at;
-    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close the board below says it
+    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close, the prompt says to read it
         const char* label = "Sign";
         const float size = std::clamp(26.0f * scale * (1800.0f / (d + 900.0f)), 14.0f * scale, 30.0f * scale);
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 12, 4, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 232, 160, 255), label);
-    }
-    if (d < 260.0f) {
-        const float wrap = ds.x * 0.62f, size = 27.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, royale::kMapSignText);
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 22.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 44.0f * scale, box.y + tsz.y + 56.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(24, 16, 8, 225), 10.0f * scale);
-        dl->AddRect(box, end, IM_COL32(222, 178, 100, 255), 10.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 18.0f * scale, ImVec2(box.x + 22.0f * scale, box.y + 8.0f * scale), IM_COL32(222, 178, 100, 255), "Sign");
-        dl->AddText(font, size, ImVec2(box.x + 22.0f * scale, box.y + 34.0f * scale), IM_COL32(255, 246, 224, 255), royale::kMapSignText, nullptr, wrap);
     }
 }
 
@@ -7397,7 +7932,6 @@ void OnGameFrameUpdate() {
     DriveStorm(hud);
     DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
-    NoticeRoyaleFile();
     SyncPauseInventory(hud);
     UpdateChickenMusic();
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
@@ -7405,6 +7939,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
     ReconcileSign(hud);
+    RegisterRoyaleMessages();
     ReconcileMaya(hud);
     ReconcileLilo(hud);
     ReconcileCatPet(hud);
@@ -7473,6 +8008,8 @@ void OnSceneInit(int16_t) {
     gMotion.clear();
     gLastFind.clear();
     gPlate.clear();
+    gEmote = EmoteState{};   // the old Link is gone with the scene
+    CloseEmoteWheel();
     gCorpses.clear();
     gCorpseOf.clear();
     gLastSeen.clear();
@@ -7489,9 +8026,15 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>(OnEmoteWheelInput);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
+    // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
+    // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {
+        if (gHealthOverridden) gSaveContext.health = gMatchHealth;
+    });
     // The game's C-button icons (top right) and D-pad item icons are hidden during a match: the hotbar does their job.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnInterfaceUpdate>([]() {
         if (gPlayState == nullptr || !gSession.Joined() || !IsLive(gSession.Hud())) return;
@@ -7653,357 +8196,6 @@ const char* CleanName(const char* name) {
     return name[0] != '\0' ? name : "Link";
 }
 
-// What the minimap shows. Players and bots are only the ones near you (the server sends the closest dozen), plus everyone while a Lens of
-// Truth or Saria's Song is active.
-void DrawMinimapOptions() {
-    struct Opt { const char* key; const char* label; bool fallback; };
-    static const Opt opts[] = {
-        { "MapPlayers", "Show other players on the minimap", true },
-        { "MapBots", "Show bots on the minimap", true },
-        { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
-        { "MapChests", "Show chests on the minimap", true },
-        { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
-        { "HeldGlowSelf", "Glow on your own weapon too", false },
-        { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background)", true },
-        { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
-        { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
-    };
-    if (!ImGui::CollapsingHeader("Minimap and game options")) return;
-    for (const Opt& o : opts) {
-        bool on = MapOption(o.key, o.fallback);
-        if (ImGui::Checkbox(o.label, &on)) {
-            char key[64];
-            std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), o.key);
-            CVarSetInteger(key, on ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
-        }
-    }
-    ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
-    ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    if (gLobbyMusic.status.empty()) ScanMusicFolder();
-    ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
-    if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
-    if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
-    ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
-    if (!gDragonModel.tried) LoadCustomDragon();
-    ImGui::TextWrapped("%s", gDragonModel.status.c_str());
-    if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
-}
-
-// Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
-void DrawCustomize(UiState& ui) {
-    ImGui::Spacing();
-    ImGui::TextColored(kGold, "Choose a skin");
-    bool changed = false;
-    for (int i = 0; i < royale::kSkinCount; i++) {
-        const royale::Skin& sk = royale::kSkins[i];
-        ImGui::PushID(i);
-        const ImVec4 col(sk.r / 255.0f, sk.g / 255.0f, sk.b / 255.0f, 1.0f);
-        if (ImGui::ColorButton("##swatch", col, ImGuiColorEditFlags_NoTooltip | (ui.skin == i ? ImGuiColorEditFlags_None : ImGuiColorEditFlags_None), ImVec2(28, 28))) { ui.skin = i; changed = true; }
-        ImGui::SameLine();
-        if (ImGui::Selectable(sk.name, ui.skin == i, 0, ImVec2(190, 28))) { ui.skin = i; changed = true; }
-        ImGui::PopID();
-    }
-    if (ImGui::Selectable("Custom colour", ui.skin == royale::kCustomSkin, 0, ImVec2(220, 24))) { ui.skin = royale::kCustomSkin; changed = true; }
-    if (ui.skin == royale::kCustomSkin) changed |= ImGui::ColorEdit3("Tunic colour", ui.customTunic, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
-    if (changed) {
-        gLocalTunic = SelectedTunic(ui);
-        gSession.SetTunic(gLocalTunic);
-        SaveUi(ui);
-        if (gSession.Joined()) ImGui::TextColored(kGrey, "Other players see the new colour from the next lobby you join.");
-    }
-    ImGui::TextColored(kGrey, "This changes the colour of Link's tunic. Each player's colour is shown on their character to everyone else.");
-    ImGui::Spacing();
-}
-
-void DrawMainMenu(UiState& ui, const royale::HudState& h) {
-    Heading("OOT ROYALE");
-    ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
-    ImGui::Spacing();
-
-    if (!InGame()) {
-        ImGui::TextColored(kRed, "Load a save file first (pick a save on the file select screen), then come back here.");
-        ImGui::Spacing();
-    }
-    if (!h.status.empty() && h.status != "Not in a match") ImGui::TextColored(kRed, "%s", h.status.c_str());
-    if (!ui.error.empty()) ImGui::TextColored(kRed, "%s", ui.error.c_str());
-
-    if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
-    if (ui.showCustomize) DrawCustomize(ui);
-    DrawMinimapOptions();
-    ImGui::Spacing();
-    ImGui::Text("Your name");
-    ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
-    ImGui::Checkbox("Wait in the Temple of Time while the lobby fills", &ui.waitingRoom);
-    {
-        bool custom = CustomSceneryOn();
-        if (ImGui::Checkbox("Custom rocks and buildings (experimental)", &custom)) {
-            CVarSetInteger(CVAR_SETTING("Royale.CustomScenery"), custom ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
-        }
-        ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
-    }
-    ImGui::Spacing();
-
-    ImGui::BeginDisabled(!InGame());
-
-    Heading("Host a lobby");
-    ImGui::Text("Port");
-    ImGui::InputInt("##royale_port", &ui.port);
-    if (ImGui::Button("Host a lobby", ImVec2(220, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
-            ui.error = "Could not host: " + ui.error;
-        } else {
-            RefreshLocalAddresses(ui, true);
-        }
-    }
-    ImGui::Spacing();
-
-    Heading("Join a lobby");
-    ImGui::Text("Host address (the numbers your friend gives you, like 192.168.1.23)");
-    ImGui::InputText("##royale_address", ui.address, sizeof(ui.address));
-    ImGui::BeginDisabled(ui.address[0] == '\0');
-    if (ImGui::Button("Join lobby", ImVec2(220, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Join(ui.address, static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
-            ui.error = "Could not join: " + ui.error;
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled(); // !InGame
-
-    ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Everyone must run the same build. Same Wi-Fi: use the host's local address. Over the internet: a VPN such as Tailscale, or forward UDP port %d.", royale::net::kDefaultPort);
-}
-
-void DrawRoster(const royale::HudState& h) {
-    if (ImGui::BeginTable("royale_roster", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-        ImGui::TableHeadersRow();
-        // Host first, then everyone else by join order.
-        std::vector<const royale::RosterRow*> rows;
-        for (const auto& r : h.roster) rows.push_back(&r);
-        std::stable_sort(rows.begin(), rows.end(), [](auto* a, auto* b) { return a->host && !b->host; });
-        for (const auto* r : rows) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%s%s", r->name.c_str(), r->self ? "  (you)" : "");
-            ImGui::TableSetColumnIndex(1);
-            if (r->host) ImGui::TextColored(kGold, "HOST");
-            else if (r->ready) ImGui::TextColored(kGreen, "READY");
-            else ImGui::TextColored(kGrey, "waiting");
-        }
-        ImGui::EndTable();
-    }
-}
-
-void DrawLobby(UiState& ui, const royale::HudState& h) {
-    Heading("LOBBY");
-    ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
-    ImGui::Spacing();
-
-    if (h.isHost) {
-        RefreshLocalAddresses(ui, false);
-        ImGui::Text("Tell your friends to join this address:");
-        if (ui.localAddresses.empty()) {
-            ImGui::TextColored(kGrey, "(no network address found. Connect to Wi-Fi, or check your VPN)");
-        }
-        for (size_t i = 0; i < ui.localAddresses.size() && i < 3; i++) {
-            std::string full = ui.localAddresses[i] + ":" + std::to_string(h.hostPort);
-            ImGui::TextColored(kGreen, "%s", full.c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton(("Copy##royale_copy" + std::to_string(i)).c_str())) ImGui::SetClipboardText(ui.localAddresses[i].c_str());
-        }
-        ImGui::TextColored(kGrey, "Friends type the numbers before the colon as the address (port %u is the default).", h.hostPort);
-        ImGui::Spacing();
-    }
-
-    // Where the match will be played: everyone sees it, the host chooses.
-    ImGui::TextColored(kGold, "Map: %s", royale::MapOf(h.mapId).name);
-    ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
-    if (h.isHost) {
-        UiState& ui = Ui();
-        ui.mapId = h.mapId;
-        ImGui::SetNextItemWidth(260);
-        if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
-                if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
-                    ui.mapId = i;
-                    gSession.SelectMap(i);
-                    SaveUi(ui);
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (ImGui::Checkbox("The map's major boss arrives halfway through the match", &ui.majorBoss)) {
-            gSession.SetMajorBoss(ui.majorBoss);
-            SaveUi(ui);
-        }
-        ImGui::TextColored(kGrey, "Its look and the mini bosses match the map: forest, water, shadow, fire or sand.");
-    }
-    ImGui::Spacing();
-
-    DrawRoster(h);
-    ImGui::Spacing();
-
-    int others = 0, readyOthers = 0;
-    for (const auto& r : h.roster) if (!r.host) { others++; readyOthers += r.ready; }
-
-    if (h.isHost) {
-        if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
-        else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
-        {
-            UiState& ui = Ui();
-            int limit = h.playerLimit;
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
-                ui.playerLimit = limit;
-                gSession.SetPlayerLimit(limit);
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
-            if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
-                gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
-                SaveUi(ui);
-            }
-        }
-        {
-            UiState& ui = Ui();
-            static const char* kLevels[] = { "Easy", "Normal", "Hard" };
-            ImGui::SetNextItemWidth(160);
-            if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
-                gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
-        }
-        {
-            UiState& ui = Ui();
-            bool changed = false;
-            static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
-            ImGui::SetNextItemWidth(160);
-            changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
-            if (changed) {
-                gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
-        }
-        ImGui::BeginDisabled(!InGame() || gPendingStart);
-        if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
-        ImGui::EndDisabled();
-        if (gPendingStart) ImGui::TextColored(kGrey, "Heading to %s and measuring the map before the countdown...", CurrentMap().name);
-        else ImGui::TextColored(kGrey, "Starting takes you to %s first, so the real map can be measured.", CurrentMap().name);
-        if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
-    } else {
-        if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
-        ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
-    }
-
-    {
-        UiState& ui = Ui();
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Checkbox("Cloth physics (hats and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
-        if (ui.clothOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
-            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames", gHatHookCalls, gHatLastSwing, gGliderClothFrames);
-        }
-        static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
-    }
-    if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
-    ImGui::Spacing();
-    Heading("Where you are");
-    int scene = InGame() ? gPlayState->sceneNum : -1;
-    ImGui::Text("%s", scene < 0 ? "Not in a game" : SceneName(scene));
-    ImGui::TextColored(kGrey, "Players in the same place can see each other. The match itself is on the chosen map (%s), and you are taken there automatically.", CurrentMap().name);
-    ImGui::BeginDisabled(!InGame());
-    if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
-    if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
-    ImGui::EndDisabled();
-
-    ImGui::Spacing();
-    if (ImGui::Button("Leave lobby", ImVec2(220, 0))) gSession.Leave();
-}
-
-void DrawCountdown(const royale::HudState& h) {
-    Heading("MATCH STARTING");
-    ImGui::TextColored(kGold, "Drop in %d", static_cast<int>(std::ceil(h.countdownLeft)));
-    ImGui::TextWrapped("%s", InField() ? (std::string("You are in ") + CurrentMap().name + ". Get ready.").c_str() : (std::string("Heading to ") + CurrentMap().name + "...").c_str());
-    DrawRoster(h);
-    if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
-}
-
-void DrawInMatch(const royale::HudState& h) {
-    Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
-    ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
-    if (h.haveSelf) {
-        char label[32];
-        std::snprintf(label, sizeof(label), "%.1f / %.1f hearts", h.selfHealth, h.maxHealth);
-        ImGui::ProgressBar(h.selfHealth / std::max(1.0f, h.maxHealth), ImVec2(-1, 0), label);
-        if (!h.selfAlive) ImGui::TextColored(kRed, "You have been eliminated.");
-        ImGui::Text("Safe zone radius: %.0f", h.safeZone.radius);
-        if (h.stormDamagePerSecond > 0) ImGui::TextColored(kRed, "You are in the storm! %.1f hearts per second", h.stormDamagePerSecond);
-        else ImGui::TextColored(kGreen, "You are inside the safe zone.");
-        ImGui::Text("Potions: %d    Heart pieces: %d / %d", h.potions, h.inv.heartPieces, royale::kHeartPiecesPerContainer);
-        if (h.inv.hasAbility) ImGui::TextColored(RarityIm(static_cast<royale::Rarity>(h.inv.ability.rarity)), "Ability: %s (%s)",
-                                                 ItemLabel(static_cast<royale::ItemId>(h.inv.ability.item), static_cast<royale::Rarity>(h.inv.ability.rarity)).c_str(),
-                                                 h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn).c_str() : "ready");
-        else ImGui::TextColored(kGrey, "Ability: none");
-        for (int slot = 0; slot < royale::kGearSlots; slot++) {
-            if (!(h.inv.gearMask & (1 << slot))) continue;
-            const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
-            ImGui::TextColored(RarityIm(gr), "Gear: %s", ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr).c_str());
-        }
-        ImGui::TextColored(RarityIm(h.weaponRarity), "Weapon: %s", ItemLabel(h.weapon, h.weaponRarity).c_str());
-        if (h.hasShield) ImGui::TextColored(RarityIm(h.shieldRarity), "Shield: %s", ItemLabel(h.shield, h.shieldRarity).c_str());
-        else ImGui::TextColored(kGrey, "Shield: none");
-    }
-    if (!gPickupLog.empty()) {
-        ImGui::Spacing();
-        ImGui::TextColored(kGold, "Recent pickups");
-        for (const auto& n : gPickupLog) ImGui::TextColored(RarityIm(n.rarity), "%s", n.text.c_str());
-    }
-    if (ImGui::CollapsingHeader("Controls")) {
-        ImGui::TextColored(kGold, "Fighting");
-        ImGui::BulletText("B: attack with what is in your hand (it fires, throws or swings by itself)");
-        ImGui::BulletText("Z: lock on to a player (hold), and dive faster while skydiving");
-        ImGui::BulletText("D-pad Right / Left: next / previous weapon");
-        ImGui::TextColored(kGold, "Staying alive");
-        ImGui::BulletText("D-pad Down: drink a health potion      C-Left: drink a shield potion");
-        ImGui::BulletText("D-pad Up: use your ability (the song, spell or hookshot in the ability slot)");
-        ImGui::TextColored(kGold, "Moving and interacting");
-        ImGui::BulletText("Stick: move      C-Up: jump (jump at a ledge to climb it)      Z + move: sidestep");
-        ImGui::BulletText("A: open a chest, take or swap an item, hire an ally, talk");
-        ImGui::BulletText("C-Right: emote (or tap EMOTE)      Walk over a better item to pick it up");
-        ImGui::TextColored(kGold, "Spectating");
-        ImGui::BulletText("D-pad Left / Right: watch the previous / next player");
-    }
-    ImGui::Spacing();
-    if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
-}
-
 // Write what the game knows about the current map (the measured field, storm circles, every chest and prop, the players) to a JSON
 // file that tools/map-viewer.html can open. Returns the file's path, or an error message starting with "Could not".
 std::string ExportMapJson() {
@@ -8073,43 +8265,6 @@ std::string ExportMapJson() {
     return path;
 }
 
-void DrawResults(const royale::HudState& h) {
-    Heading("MATCH OVER");
-    if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) ImGui::TextColored(kGold, "VICTORY ROYALE! You won!");
-    else if (!h.winnerName.empty()) ImGui::TextColored(kGold, "Winner: %s", h.winnerName.c_str());
-    else ImGui::Text("Nobody survived.");
-    ImGui::Spacing();
-    if (ImGui::BeginTable("royale_results", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
-        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        ImGui::TableSetupColumn("Kills");
-        ImGui::TableSetupColumn("Damage");
-        ImGui::TableSetupColumn("Points");
-        ImGui::TableHeadersRow();
-        int rank = 1;
-        for (const auto& r : h.results) {
-            ImGui::TableNextRow();
-            const ImVec4 col = r.self ? kGreen : ImVec4(1, 1, 1, 1);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", rank++);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s%s", r.name.c_str(), r.placement == 1 ? "  (winner)" : "");
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.kills);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%.1f", r.damage);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.score);
-        }
-        ImGui::EndTable();
-    }
-    ImGui::TextColored(kGrey, "Points: %d per heart of damage, %d per kill, %d per chest, plus a bonus for lasting longer and %d for winning.",
-                       royale::kPointsPerHeartOfDamage, royale::kPointsPerKill, royale::kPointsPerChest, royale::kPointsForWinning);
-    ImGui::Spacing();
-    if (h.isHost) {
-        if (ImGui::Button("Play again", ImVec2(220, 0))) gSession.RequestPlayAgain();
-        ImGui::TextColored(kGrey, "Starts a new match right away with everyone who is connected.");
-    } else {
-        ImGui::TextColored(kGrey, "Waiting for the host to play again...");
-    }
-    if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
-}
-
 void DrawDebug(UiState& ui) {
     if (!ImGui::CollapsingHeader("Developer tools")) return;
     ImGui::Checkbox("Show Link position (for measuring the map)", &ui.showPosition);
@@ -8123,11 +8278,12 @@ void DrawDebug(UiState& ui) {
     }
 }
 
-// Everything the "Battle Royale" menu page shows. Called every frame the page is visible.
+#include "RoyaleMenu.inc"
+
+// The Battle Royale menu is the game's own now (RoyaleMenu.inc). The port menu's "Battle Royale" page keeps a way into it, the developer tools,
+// and a way back to the game's normal file select.
 void DrawRoyaleUi() {
     UiState& ui = Ui();
-    royale::HudState h = gSession.Hud();
-
     {   // the logo at the top of the page
         ImVec2 sz;
         if (ImTextureID tex = LogoTexture(&sz)) {
@@ -8140,25 +8296,24 @@ void DrawRoyaleUi() {
         }
         ImGui::TextColored(kGrey, "Version %s", ROYALE_BUILD_VERSION);
     }
-
-    if (h.mode == royale::HudState::Mode::Idle) {
-        DrawMainMenu(ui, h);
-    } else if (!h.connected) {
-        Heading("CONNECTING");
-        ImGui::Text("Connecting to the host...");
-        if (ImGui::Button("Cancel", ImVec2(220, 0))) gSession.Leave();
-    } else {
-        switch (h.state) {
-            case royale::MatchState::Lobby: DrawLobby(ui, h); break;
-            case royale::MatchState::Countdown: DrawCountdown(h); break;
-            case royale::MatchState::Drop:
-            case royale::MatchState::InMatch: DrawInMatch(h); break;
-            case royale::MatchState::Ending: DrawResults(h); break;
-        }
+    Heading("BATTLE ROYALE");
+    ImGui::TextWrapped("Everything for Battle Royale is in the game's own menu now: press Start on the title screen or in the game.");
+    if (ImGui::Button("Open the Battle Royale menu", ImVec2(260, 0))) {
+        if (SohGui::mSohMenu && SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
+        if (InGame()) MenuOpenHome();
+        else if (OnTitleScreen()) MenuOpen(Page::Main);
     }
+    ImGui::Spacing();
+    bool classic = CVarGetInteger(CVAR_SETTING("Royale.ClassicFileSelect"), 0) != 0;
+    if (ImGui::Checkbox("Use the game's normal file select (for story saves)", &classic)) {
+        CVarSetInteger(CVAR_SETTING("Royale.ClassicFileSelect"), classic ? 1 : 0);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    ImGui::TextColored(kGrey, "Off: the game skips the file select and loads its Battle Royale save.");
     ImGui::Spacing();
     DrawDebug(ui);
 }
+
 
 // Adds a top-level "Battle Royale" entry to the port menu (opened with F1 on Windows, Back/Select on Android) through the
 // fork's own menu registration hook, so no patch to the fork's menu code is needed.

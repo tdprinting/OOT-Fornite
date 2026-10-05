@@ -8,3 +8,8 @@
 
 __pycache__/
 *.pyc
+
+# Lilo: the FBX export is large and made from the .blend (tools/lilo/build_lilo.py); the previews are rendered on demand
+assets/lilo/lilo.fbx
+assets/lilo/lilo.blend1
+assets/lilo/previews/
