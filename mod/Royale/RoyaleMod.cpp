@@ -5184,6 +5184,9 @@ LobbyMusic gLobbyMusic;
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
 void QueueOotSongs();
+// The menu is drawn on the render thread, but a scan also copies the game's soundfonts out of its audio data (CaptureOotFonts), which only the
+// game thread may touch. So the menu asks for a scan with this flag and the game thread's frame update does it.
+bool gScanRequested = false;
 void ScanMusicFolder() {
     gLobbyMusic.tracks.clear();
     std::error_code ec;
@@ -8436,6 +8439,7 @@ void OnGameFrameUpdate() {
     NoticeRoyaleFile();
     SyncPauseInventory(hud);
     UpdateChickenMusic();
+    if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
@@ -8727,10 +8731,10 @@ void DrawMinimapOptions() {
     }
     ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
     ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    if (gLobbyMusic.status.empty()) ScanMusicFolder();
+    if (gLobbyMusic.status.empty()) gScanRequested = true;
     ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
-    if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
+    if (ImGui::Button("Rescan music folder")) gScanRequested = true;
     ImGui::Spacing();
     ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
     if (!gDragonModel.tried) LoadCustomDragon();
