@@ -1249,25 +1249,31 @@ void SpawnPuppet(const royale::PuppetState& s) {
 
 // ---- falling limp: what is left of a player who was eliminated -------------------------------------------------------------------
 
-// A body that tumbles and slides to a stop with simple physics (gravity, bounces off the ground, friction, a spin that dies away), then lies
-// in Link's own knocked-down pose. It is a puppet actor that runs its own physics instead of following the network.
+// A ragdoll: the body is thrown by the blow, tumbles through the air, bounces, then rolls over and over along the ground (and down any slope)
+// with its limbs flopping loose, until it comes to rest on its back or its front. It stays there for a couple of minutes, and anyone who walks
+// into it shoves it along. It is a puppet actor that runs its own physics instead of following the network.
 constexpr uint16_t kCorpseIdBase = 0xF000;
 constexpr uint16_t kAllyIdBase = 0xE000;   // puppet ids from here up to the corpses are hireable allies (index = id - base)
+constexpr float kCorpseSeconds = 150.0f;   // how long a body lies there
+constexpr size_t kMaxCorpses = 16;         // more than this and the oldest one goes
+constexpr float kBodyRadius = 8.0f;        // half the thickness of Link lying down: how far the body's middle is off the ground
 struct Corpse {
     Actor* actor = nullptr;
     royale::Vec2 vel = {};       // horizontal speed, units per second
     float vy = 0;                // vertical speed
     float spin = 0;              // radians per second around the vertical axis
-    float roll = 0, rollVel = 0; // a floppy wobble (binary angle units)
+    float roll = 0, rollVel = 0; // rolling over around the body's long axis (radians, radians per second)
     float age = 0;
     royale::ItemId weapon = royale::ItemId::DekuStick;
     uint32_t tunic = royale::SkinRgb(0);
     bool animStarted = false;
     float pitch = 0, pitchVel = 0;        // tumbling head over heels in the air (radians)
     royale::Vec2 lastVel = {};
-    float lastVy = 0;
-    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians), see ApplyRagdollLimbs
+    float lastVy = 0, lastRollVel = 0;
+    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians)
     int bounces = 0;
+    float still = 0;             // seconds it has lain still; a body at rest skips the ground checks
+    bool dying = false;          // asked the game to remove it
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
 };
@@ -1275,10 +1281,17 @@ std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
 uint16_t gNextCorpse = kCorpseIdBase;
 std::unordered_map<uint16_t, royale::PuppetState> gLastSeen; // the last state of each living puppet, to see who just died
+std::unordered_map<uint16_t, double> gFellAt;                // player id -> when their body was made, so one elimination makes one body
 
 void ForgetCorpse(const Actor* actor) {
     auto corpse = gCorpseOf.find(actor);
     if (corpse != gCorpseOf.end()) { gCorpses.erase(corpse->second); gCorpseOf.erase(corpse); }
+}
+
+float WrapAngle(float a) {
+    while (a > 3.14159265f) a -= 6.2831853f;
+    while (a < -3.14159265f) a += 6.2831853f;
+    return a;
 }
 
 void Corpse_Update(Actor* actor, PlayState* play) {
@@ -1308,63 +1321,110 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     }
     const float dt = 1.0f / royale::kTickHz;
     c.age += dt;
-    if (c.age > 25.0f) { Actor_Kill(actor); return; }
+    if (c.age > kCorpseSeconds) { c.dying = true; Actor_Kill(actor); return; }
 
-    // Rigid-body-ish motion: gravity and a little air drag; the body tumbles head over heels in the air, bounces (losing most of its energy each time),
-    // slides with friction that is stronger the slower it goes, and the spin dies away until it lies still.
-    const bool wasAir = c.vy != 0.0f || c.bounces == 0;
-    c.vy -= 980.0f * dt;
-    c.vel.x *= 1.0f - 0.35f * dt; c.vel.z *= 1.0f - 0.35f * dt;
-    actor->world.pos.x += c.vel.x * dt;
-    actor->world.pos.z += c.vel.z * dt;
-    actor->world.pos.y += c.vy * dt;
-    const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
-    bool onGround = false;
-    if (actor->world.pos.y <= ground) {
-        actor->world.pos.y = ground;
-        onGround = true;
-        if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the spin changes, and the limbs fling
-            c.vy = -c.vy * 0.34f;
-            c.bounces++;
-            c.vel.x *= 0.72f; c.vel.z *= 0.72f;
-            c.pitchVel *= -0.45f;
-            c.rollVel += (c.vel.x > 0 ? 1.0f : -1.0f) * 2600.0f;
-            for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 9.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 9.0f; }
-        } else {
-            c.vy = 0;
-            const float speed = std::hypot(c.vel.x, c.vel.z);
-            const float drag = (speed > 60.0f ? 3.2f : 7.5f) * dt;   // sliding to a stop
-            c.vel.x *= std::max(0.0f, 1.0f - drag); c.vel.z *= std::max(0.0f, 1.0f - drag);
-            c.spin *= std::max(0.0f, 1.0f - 4.0f * dt);
+    // Walking into a body shoves it (and sets it rolling). Not while invisible: a spectator stands on their own body.
+    {
+        Player* local = GET_PLAYER(play);
+        const float dx = actor->world.pos.x - local->actor.world.pos.x, dz = actor->world.pos.z - local->actor.world.pos.z;
+        const float d = std::hypot(dx, dz);
+        if (!(local->stateFlags2 & PLAYER_STATE2_DISABLE_DRAW) && d < 30.0f && d > 0.01f && std::fabs(actor->world.pos.y - local->actor.world.pos.y) < 40.0f &&
+            local->actor.speedXZ > 1.0f) {
+            const float push = (30.0f - d) * 6.0f + local->actor.speedXZ * 12.0f;
+            c.vel.x += dx / d * push * dt * 8.0f;
+            c.vel.z += dz / d * push * dt * 8.0f;
+            c.still = 0;
         }
     }
-    (void)wasAir;
-    // Head over heels while airborne; once down, the tumble eases out and the knocked-down pose takes over.
-    if (!onGround) { c.pitch += c.pitchVel * dt; }
-    else { c.pitch *= std::max(0.0f, 1.0f - 6.0f * dt); c.pitchVel *= std::max(0.0f, 1.0f - 6.0f * dt); }
+
+    const float yaw = actor->shape.rot.y * (3.14159265f / 32768.0f);
+    const royale::Vec2 side = { std::cos(yaw), -std::sin(yaw) };   // the body's own left, which is the way it rolls
+    const royale::Vec2 fwd = { std::sin(yaw), std::cos(yaw) };     // along the body, head to feet
+    const bool resting = c.still > 2.0f;
+    bool onGround = false;
+    if (!resting) {
+        // Gravity and a little air drag in the air; bounces that lose most of the energy; on the ground it rolls freely sideways
+        // (rolling barely slows it) but drags along its length, and rolls down slopes.
+        c.vy -= 980.0f * dt;
+        c.vel.x *= 1.0f - 0.35f * dt; c.vel.z *= 1.0f - 0.35f * dt;
+        actor->world.pos.x += c.vel.x * dt;
+        actor->world.pos.z += c.vel.z * dt;
+        actor->world.pos.y += c.vy * dt;
+        const float ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1.0f);
+        const float lift = kBodyRadius * (1.0f - std::cos(c.roll));   // rolled onto its side or front, the middle of the body is higher
+        if (actor->world.pos.y <= ground + lift) {
+            actor->world.pos.y = ground + lift;
+            onGround = true;
+            if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the tumble changes, and the limbs fling
+                c.vy = -c.vy * 0.34f;
+                c.bounces++;
+                c.vel.x *= 0.72f; c.vel.z *= 0.72f;
+                c.pitchVel *= -0.45f;
+                const float kick = (c.vel.x * side.x + c.vel.z * side.z) >= 0.0f ? 1.0f : -1.0f;
+                c.vel.x += side.x * kick * 90.0f; c.vel.z += side.z * kick * 90.0f;   // landing knocks it over sideways
+                for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 9.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 9.0f; }
+            } else {
+                c.vy = 0;
+                // Down the slope.
+                const float gx = (GroundY(play, actor->world.pos.x + 10.0f, actor->world.pos.z, ground) - GroundY(play, actor->world.pos.x - 10.0f, actor->world.pos.z, ground)) / 20.0f;
+                const float gz = (GroundY(play, actor->world.pos.x, actor->world.pos.z + 10.0f, ground) - GroundY(play, actor->world.pos.x, actor->world.pos.z - 10.0f, ground)) / 20.0f;
+                if (std::hypot(gx, gz) > 0.08f && std::hypot(gx, gz) < 2.5f) {   // a real slope, not a wall or a ledge
+                    c.vel.x -= gx * 520.0f * dt;
+                    c.vel.z -= gz * 520.0f * dt;
+                }
+                float vs = c.vel.x * side.x + c.vel.z * side.z, vf = c.vel.x * fwd.x + c.vel.z * fwd.z;
+                vs *= std::max(0.0f, 1.0f - (std::fabs(vs) > 40.0f ? 0.9f : 3.5f) * dt);   // rolling
+                vf *= std::max(0.0f, 1.0f - (std::fabs(vf) > 60.0f ? 3.2f : 7.5f) * dt);   // sliding to a stop
+                c.vel = { side.x * vs + fwd.x * vf, side.z * vs + fwd.z * vf };
+                c.spin *= std::max(0.0f, 1.0f - 4.0f * dt);
+                // Rolling without slipping: moving to its left turns it over that way.
+                const float rolling = -vs / kBodyRadius;
+                if (std::fabs(vs) > 12.0f) {
+                    c.rollVel += (rolling - c.rollVel) * std::min(1.0f, 10.0f * dt);
+                } else {   // nearly stopped: it flops down onto its back or its front, whichever is nearer
+                    const float rest = std::round(c.roll / 3.14159265f) * 3.14159265f;
+                    c.rollVel += (rest - c.roll) * 40.0f * dt;
+                    c.rollVel *= std::max(0.0f, 1.0f - 6.0f * dt);
+                }
+            }
+        }
+        if (!onGround) c.rollVel *= 1.0f - 0.2f * dt;   // a sideways tumble keeps going through the air
+        c.roll += c.rollVel * dt;
+        if (c.roll > 6.2831853f || c.roll < -6.2831853f) c.roll = std::fmod(c.roll, 6.2831853f);
+
+        // Head over heels while airborne; once down, the tumble eases out to lying flat.
+        if (!onGround) { c.pitch += c.pitchVel * dt; }
+        else { c.pitch = WrapAngle(c.pitch) * std::max(0.0f, 1.0f - 6.0f * dt); c.pitchVel *= std::max(0.0f, 1.0f - 6.0f * dt); }
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
+        actor->world.rot.y = actor->shape.rot.y;
+
+        const bool moving = onGround ? (std::hypot(c.vel.x, c.vel.z) > 4.0f || std::fabs(c.rollVel) > 0.3f) : true;
+        c.still = moving ? 0.0f : c.still + dt;
+    }
+    // The last few seconds it sinks out of sight.
+    if (c.age > kCorpseSeconds - 3.0f) actor->world.pos.y -= 10.0f * dt;
     actor->shape.rot.x = static_cast<s16>(c.pitch * (32768.0f / 3.14159265f));
-    actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<int>(c.spin * dt * (32768.0f / 3.14159265f)));
-    actor->world.rot.y = actor->shape.rot.y;
-    // A loose roll that wobbles and settles.
-    c.rollVel += -c.roll * 30.0f * dt;
-    c.rollVel *= 0.93f;
-    c.roll += c.rollVel * dt;
-    actor->shape.rot.z = static_cast<s16>(std::clamp(c.roll, -2500.0f, 2500.0f));
+    actor->shape.rot.z = static_cast<s16>(c.roll * (32768.0f / 3.14159265f));
     actor->shape.shadowAlpha = 255;
 
-    // The limbs lag behind the body: every change of speed (the blow, each bounce, the stop) swings them, springs pull them back to limp.
+    // Limp limbs: they lag behind every change of speed and of roll (the blow, each bounce, each turn over), flop toward the ground when the body
+    // lies on its side, and only weak springs pull them back.
     {
         const float ax = (c.vel.x - c.lastVel.x) / dt, az = (c.vel.z - c.lastVel.z) / dt, ay = (c.vy - c.lastVy) / dt;
-        c.lastVel = c.vel; c.lastVy = c.vy;
+        const float ar = (c.rollVel - c.lastRollVel) / dt;
+        c.lastVel = c.vel; c.lastVy = c.vy; c.lastRollVel = c.rollVel;
         const float kick = std::clamp((std::fabs(ax) + std::fabs(az) + std::fabs(ay) * 0.4f) * 0.0009f, 0.0f, 1.4f);
+        const float droop = std::sin(c.roll) * 0.7f;   // gravity, sideways across the body
         for (int i = 0; i < 9; i++) {
+            const float sign = i % 2 ? -1.0f : 1.0f;
             for (int a = 0; a < 2; a++) {
-                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f)) * (i % 2 ? -1.0f : 1.0f) + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
+                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f - ar * 0.004f)) * sign + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
                 c.limbVel[i][a] += push;
-                if (!onGround) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
-                c.limbVel[i][a] += -c.limb[i][a] * 55.0f * dt;
-                c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.5f * dt);
-                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.1f, 1.1f);
+                if (!onGround && !resting) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
+                const float target = a == 1 && i > 0 ? droop : 0.0f;
+                c.limbVel[i][a] += (target - c.limb[i][a]) * 28.0f * dt;
+                c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.0f * dt);
+                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.2f, 1.2f);
             }
         }
     }
@@ -1404,7 +1464,7 @@ void Corpse_Draw(Actor* actor, PlayState* play) {
 // An emote: a copy of the local player's character stands where they are and plays the gesture, while the real one is hidden. Moving or attacking
 // ends it. Returns the actor so the caller can remove it.
 Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
-    if (gCorpses.size() >= 14 || gPlayState == nullptr) return nullptr;
+    if (gCorpses.size() >= kMaxCorpses + 2 || gPlayState == nullptr) return nullptr;
     const uint16_t id = gNextCorpse++;
     if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
     gSpawningPuppet = id;
@@ -1422,22 +1482,40 @@ Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
     return actor;
 }
 
+// The body of player `s`, thrown along (pushX, pushZ). Once per elimination: the elimination event and the puppet list can both report it.
 void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
-    if (gCorpses.size() >= 12 || gPlayState == nullptr) return;
+    if (gPlayState == nullptr) return;
+    const double now = ImGui::GetTime();
+    auto fell = gFellAt.find(s.id);
+    if (fell != gFellAt.end() && now - fell->second < 10.0) return;
+    gFellAt[s.id] = now;
+    {   // room for one more: the oldest body goes
+        size_t bodies = 0;
+        Corpse* oldest = nullptr;
+        for (auto& [cid, body] : gCorpses) {
+            if (body.pinned || body.dying) continue;
+            bodies++;
+            if (oldest == nullptr || body.age > oldest->age) oldest = &body;
+        }
+        if (bodies >= kMaxCorpses && oldest != nullptr) { oldest->dying = true; Actor_Kill(oldest->actor); }
+    }
     const uint16_t id = gNextCorpse++;
     if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
     gSpawningPuppet = id;
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
     if (actor == nullptr) return;
+    actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);   // a body can't be Z-targeted like a player
     Corpse c;
     c.actor = actor;
-    const float len = std::max(1.0f, std::hypot(pushX, pushZ));
-    c.vel = { pushX / len * 250.0f, pushZ / len * 250.0f };   // thrown back by the blow
+    const float len = std::max(0.001f, std::hypot(pushX, pushZ));
+    const float yaw = s.rot * (3.14159265f / 32768.0f);
+    const float sideways = (id & 1 ? 1.0f : -1.0f) * 110.0f;                   // and a little to one side, so it lands rolling
+    c.vel = { pushX / len * 250.0f + std::cos(yaw) * sideways, pushZ / len * 250.0f - std::sin(yaw) * sideways };
     c.vy = 330.0f;
     c.pitchVel = -7.0f - (id % 3);                            // flips over backwards
-    c.spin = (id & 1 ? 1.0f : -1.0f) * 3.2f;
-    c.rollVel = (id & 1 ? 1.0f : -1.0f) * 4000.0f;
+    c.spin = (id & 1 ? 1.0f : -1.0f) * 2.0f;
+    c.rollVel = -sideways / kBodyRadius * 0.5f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
     gCorpses[id] = c;
@@ -5070,6 +5148,8 @@ bool gSpectating = false;
 // ending, doesn't leave the player's save file with 3 hearts.
 bool gHealthOverridden = false;
 s16 gSavedCapacity = 0, gSavedHealth = 0;
+s16 gMatchHealth = 16;   // what the save's health should read this frame while the server owns it (never 0, see OnPlayerUpdate)
+u8 gMatchSeqId = 0xFF, gMatchAmbienceId = 0xFF;   // the scene's music, to put back if the game's own death ever starts (see CancelGameDeath)
 
 bool IsLive(const royale::HudState& h) {
     return h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
@@ -5490,6 +5570,26 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     }
 }
 
+// In a match only the server eliminates anyone. If the game's own death started anyway (health hit 0 inside the player's update, before
+// this hook could put it back), undo it before the game-over screen, its music or its camera take over: the player would otherwise be
+// stuck in the dying animation while spectating, then thrown to the game-over menu.
+void CancelGameDeath(Player* player) {
+    if (!(player->stateFlags1 & PLAYER_STATE1_DEAD) && gPlayState->gameOverCtx.state == GAMEOVER_INACTIVE) {
+        gMatchSeqId = gSaveContext.seqId;
+        gMatchAmbienceId = gSaveContext.natureAmbienceId;
+        return;
+    }
+    gPlayState->gameOverCtx.state = GAMEOVER_INACTIVE;
+    player->stateFlags1 &= ~PLAYER_STATE1_DEAD;
+    gPlayState->func_11D54(player, gPlayState);   // back to standing still
+    OnePointCutscene_EndCutscene(gPlayState, SUBCAM_ACTIVE);   // the death's close-up camera
+    Audio_QueueSeqCmd(0x100000FF | (SEQ_PLAYER_FANFARE << 24));   // stop the game-over tune
+    func_800F47FC();                                               // the death muted the music; bring it back up
+    gSaveContext.seqId = gMatchSeqId;
+    gSaveContext.natureAmbienceId = gMatchAmbienceId;
+    if (gMatchSeqId != 0xFF) Audio_QueueSeqCmd((SEQ_PLAYER_BGM_MAIN << 24) | gMatchSeqId);
+}
+
 void OnPlayerUpdate() {
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     if (!gSession.Joined() || !InGame()) return;
@@ -5561,13 +5661,17 @@ void OnPlayerUpdate() {
         gSaveContext.healthCapacity = static_cast<s16>(std::lround(hud.maxHealth * 16.0f));
         // An eliminated player does not die in the game (that would end in the game-over screen). They become an invisible,
         // invulnerable spectator who can still walk around and watch the rest of the match.
-        gSaveContext.health = hud.selfAlive ? static_cast<s16>(std::lround(hud.selfHealth * 16.0f)) : gSaveContext.healthCapacity;
+        // Never 0 while alive, even for a sliver of health or the tick where the server has zeroed health but not yet sent the
+        // elimination: the game starts its own death and game-over screen the moment the save's health reads 0.
+        gMatchHealth = hud.selfAlive ? static_cast<s16>(std::max(1L, std::lround(hud.selfHealth * 16.0f))) : gSaveContext.healthCapacity;
+        gSaveContext.health = gMatchHealth;
+        CancelGameDeath(player);
     }
     static bool wasDead = false;
     if (dead && !wasDead && InField()) {
         royale::PuppetState me;
         me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
-        me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
+        me.id = hud.selfId; me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
         const float a = me.rot * (3.14159265f / 32768.0f);
         SpawnCorpse(me, -std::sin(a), -std::cos(a));
     }
@@ -5811,6 +5915,24 @@ void ReportEvents(const royale::HudState& hud) {
                 if (InGame()) {   // Link's cry as he goes down
                     auto victim = gActorOf.find(e.id);
                     if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
+                }
+                // The server stops sending eliminated players, so their puppet just vanishes: leave their body here instead, thrown away
+                // from whoever got them (or backwards, for the storm). Your own body is made in OnPlayerUpdate.
+                if (!me && InField() && !royale::IsBossId(e.id) && gState.count(e.id) && gState[e.id].scene == gPlayState->sceneNum) {
+                    royale::PuppetState body = gState[e.id];
+                    auto actor = gActorOf.find(e.id);
+                    if (actor != gActorOf.end() && actor->second != nullptr) {   // where it is drawn right now, not the last network sample
+                        body.x = actor->second->world.pos.x; body.y = actor->second->world.pos.y; body.z = actor->second->world.pos.z;
+                    }
+                    const float a = body.rot * (3.14159265f / 32768.0f);
+                    float px = -std::sin(a), pz = -std::cos(a);
+                    const Player* self = GET_PLAYER(gPlayState);
+                    float kx = 0, kz = 0;
+                    bool haveKiller = false;
+                    if (mine) { kx = self->actor.world.pos.x; kz = self->actor.world.pos.z; haveKiller = true; }
+                    else if (gState.count(e.other)) { kx = gState[e.other].x; kz = gState[e.other].z; haveKiller = true; }
+                    if (haveKiller && std::hypot(body.x - kx, body.z - kz) > 1.0f) { px = body.x - kx; pz = body.z - kz; }
+                    SpawnCorpse(body, px, pz);
                 }
                 const std::string victim = me ? std::string("You") : nameOf(e.id);
                 std::string line;
@@ -7348,6 +7470,11 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
+    // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
+    // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {
+        if (gHealthOverridden) gSaveContext.health = gMatchHealth;
+    });
     // The game's C-button icons (top right) and D-pad item icons are hidden during a match: the hotbar does their job.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnInterfaceUpdate>([]() {
         if (gPlayState == nullptr || !gSession.Joined() || !IsLive(gSession.Hud())) return;
