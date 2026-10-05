@@ -2415,6 +2415,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
             if (static_cast<MeshKind>(k) == MeshKind::Puddle) CHECK(mx[1] < 2.0f && mx[0] - mn[0] > 140 && mx[0] - mn[0] < 320);   // lies flat on the ground
             if (static_cast<MeshKind>(k) == MeshKind::Ripple) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 35 && mx[0] - mn[0] < 45);
+            if (static_cast<MeshKind>(k) == MeshKind::Grenade) CHECK(mx[1] > 26 && mx[1] < 34 && mx[0] - mn[0] < 36);   // a bomb-sized ball
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
         }
     }
@@ -2971,39 +2972,39 @@ static void ChickenTune() {
 
 static void ShockwaveGrenade() {
     CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Ability && !IsSong(ItemId::ShockwaveGrenade));
-    CHECK(AbilityOf(ItemId::ShockwaveGrenade).fx[0].type == EffectType::Shockwave && AbilityOf(ItemId::ShockwaveGrenade).cooldown > 0);
+    CHECK(AbilityOf(ItemId::ShockwaveGrenade).fx[0].type == EffectType::Launch && AbilityOf(ItemId::ShockwaveGrenade).cooldown > 0);
+    // A mobility item now: a player's own game throws them up, so the server leaves everyone where they are and hurts nobody.
     Simulation sim = Duel(5, {100, 0}, {0, 0});
     Match& m = sim.match;
     PlayerState* user = m.Find(1);
     PlayerState* near = m.Find(1000);
-    // A third player well outside the blast.
-    PlayerState* far = m.Find(1001);
-    far->alive = true;
-    far->pos = {1500, 0};
     user->pos = {0, 0};
     near->pos = {200, 0};
     user->ability = {ItemId::ShockwaveGrenade, Rarity::Rare};
     user->hasAbility = true;
     user->abilityReadyAt = 0;
-    const float nearBefore = Distance(near->pos, user->pos);
     m.DrainEvents();
     CHECK(m.UseAbility(1));
-    CHECK(Distance(near->pos, user->pos) > nearBefore + 250.0f);                          // thrown away from the user
-    CHECK(near->pos.z == 0 && near->pos.x > 200.0f);                                       // straight away, not sideways
-    CHECK(m.Stunned(*near) && !m.Stunned(*user));                                           // dazed, and the user is fine
-    CHECK(Distance(far->pos, {1500, 0}) < 0.01f);                                           // out of range: untouched
-    CHECK(Distance(user->pos, {0, 0}) < 0.01f && near->health == near->maxHealth);          // no damage, and the user stays put
-    bool teleported = false;
-    for (const auto& e : m.DrainEvents()) teleported |= e.type == MatchEvent::Type::Teleported && e.a == 1000;
-    CHECK(teleported);
-    CHECK(!m.UseAbility(1));                                                                // recharging
-    // The edge of the map stops the throw, and ground that isn't there shortens it.
+    CHECK(Distance(near->pos, {200, 0}) < 0.01f && !m.Stunned(*near) && near->health == near->maxHealth);   // nobody else is touched
+    CHECK(Distance(user->pos, {0, 0}) < 0.01f && user->health == user->maxHealth);                         // the client moves its own player
+    CHECK(!m.UseAbility(1));                                                                                // recharging
+    // A bot is carried away from the nearest enemy, and never off the map.
+    Simulation hop = Duel(5, {100, 0}, {0, 0});
+    PlayerState* bot = hop.match.Find(1000);
+    hop.match.Find(1)->pos = {0, 0};
+    bot->pos = {150, 0};
+    bot->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
+    bot->hasAbility = true;
+    bot->abilityReadyAt = 0;
+    CHECK(hop.match.UseAbility(1000));
+    CHECK(bot->pos.x > 500.0f && std::fabs(bot->pos.z) < 0.01f);
     Simulation edge = Duel(5, {100, 0}, {0, 0});
-    edge.match.Find(1)->pos = {1900, 0};
+    edge.match.Find(1)->pos = {1800, 0};
     edge.match.Find(1000)->pos = {1960, 0};
-    edge.match.Find(1)->ability = {ItemId::ShockwaveGrenade, Rarity::Legendary};
-    edge.match.Find(1)->hasAbility = true;
-    CHECK(edge.match.UseAbility(1));
+    edge.match.Find(1000)->ability = {ItemId::ShockwaveGrenade, Rarity::Legendary};
+    edge.match.Find(1000)->hasAbility = true;
+    edge.match.Find(1000)->abilityReadyAt = 0;
+    CHECK(edge.match.UseAbility(1000));
     CHECK(Distance(edge.match.Find(1000)->pos, MapCircle().center) <= MapCircle().radius);
     // A bot uses it when an enemy is on top of it and it is losing.
     Simulation botFight = Duel(5, {100, 0}, {0, 0});

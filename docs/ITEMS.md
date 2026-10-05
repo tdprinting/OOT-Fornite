@@ -60,7 +60,7 @@ Generated from the source. *Model* = the game's own 3D item model (as dropped lo
 | Nocturne of Shadow | Ability | real | real | - | Vanish and reappear somewhere else |
 | Requiem of Spirit | Ability | real | real | - | Stuns and hurts everyone near you |
 | Prelude of Light | Ability | real | real | yes | Heals 1 heart and protects you briefly |
-| Shockwave Grenade | Ability | real | real | - | Blasts everyone near you away and leaves them dazed |
+| Shockwave Grenade | Ability | real | real | - | Launches you high into the air; no fall damage until you land |
 | Kokiri Tunic | Gear | real | real | - | Plain: slightly less damage taken |
 | Goron Tunic | Gear | real | real | - | Half damage from fire and explosions |
 | Zora Tunic | Gear | real | real | - | Less storm damage |

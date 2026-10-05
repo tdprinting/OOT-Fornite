@@ -944,13 +944,11 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self) {
             if (self) Environment_AddLightningBolts(play, 2);
             ring({ 255, 255, 255, 255 }, { 120, 120, 255, 255 }, 70.0f, 20, 2.4f, 90);
             break;
-        case ItemId::ShockwaveGrenade: {
-            Vec3f pos = { at.x, at.y + 20.0f, at.z };
-            Vec3f none = { 0, 0, 0 };
-            EffectSsBomb2_SpawnLayered(play, &pos, &none, &none, 60, 10);
-            shock(20.0f);
+        case ItemId::ShockwaveGrenade:   // a purple blast at the feet that throws the user up
+            ring({ 235, 190, 255, 255 }, { 160, 60, 255, 255 }, 30.0f, 16, 3.4f, 110);
+            ring({ 210, 150, 255, 255 }, { 120, 40, 230, 255 }, 65.0f, 22, 1.2f, 90);
+            shock(4.0f);
             break;
-        }
         case ItemId::MagicBeans: ring({ 180, 255, 140, 255 }, { 60, 200, 0, 255 }, 25.0f, 12, 2.0f, 80); break;
         case ItemId::LensOfTruth: ring({ 235, 190, 255, 255 }, { 150, 80, 220, 255 }, 25.0f, 12, 1.5f, 80); break;
         default: break;
@@ -2857,6 +2855,25 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
+
+// An item's model with the current matrix: the game's own (GetItem_Draw), or one of ours. Ours are built standing on y 0, so they are
+// lifted to be centred like the game's.
+void DrawItemModel(PlayState* play, int gid) {
+    if (gid != kGidGrenade) { GetItem_Draw(play, static_cast<s16>(gid)); return; }
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Grenade, 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    Matrix_Push();
+    Matrix_Translate(0.0f, -15.5f, 0.0f, MTXMODE_APPLY);
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // colours are baked into the vertices (the purple bands unshaded, so they glow)
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+    Matrix_Pop();
+}
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
 // What each other player last picked up, so it can be held up over their head while they show it off, as Link does.
@@ -2877,7 +2894,7 @@ void DrawHeldFinds(PlayState* play) {
         Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
         Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
         Matrix_Scale(k, k, k, MTXMODE_APPLY);
-        GetItem_Draw(play, static_cast<s16>(f->second.gid));
+        DrawItemModel(play, f->second.gid);
         CLOSE_DISPS(play->state.gfxCtx);
     }
 }
@@ -2902,7 +2919,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
         Matrix_RotateY(r.age * 2.4f, MTXMODE_APPLY);
         Matrix_Scale(k * 20.0f, k * 20.0f, k * 20.0f, MTXMODE_APPLY);
-        GetItem_Draw(play, static_cast<s16>(r.gid));
+        DrawItemModel(play, r.gid);
         CLOSE_DISPS(play->state.gfxCtx);
         i++;
     }
@@ -3058,7 +3075,8 @@ int GidFor(royale::ItemId id) {
         case ItemId::Slingshot: case ItemId::TripleSlingshot: return GID_SLINGSHOT;
         case ItemId::FairyBow: return GID_BOW;
         case ItemId::Boomerang: return GID_BOOMERANG;
-        case ItemId::Bombs: case ItemId::BombAmmo: case ItemId::ShockwaveGrenade: return GID_BOMB;
+        case ItemId::Bombs: case ItemId::BombAmmo: return GID_BOMB;
+        case ItemId::ShockwaveGrenade: return kGidGrenade;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
         case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
@@ -3154,7 +3172,7 @@ void Loot_Draw(Actor* actor, PlayState* play) {
     func_8002ED80(actor, play, 0);
     const float k = GidScale(la.gid);
     Matrix_Scale(k, k, k, MTXMODE_APPLY);
-    GetItem_Draw(play, static_cast<s16>(la.gid));
+    DrawItemModel(play, la.gid);
 }
 
 void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
@@ -3708,7 +3726,6 @@ const char* RealIconName(royale::ItemId id) {
         case ItemId::KokiriEmerald: return "gQuestIconKokiriEmeraldTex";
         case ItemId::GoronRuby: return "gQuestIconGoronRubyTex";
         case ItemId::ZoraSapphire: return "gQuestIconZoraSapphireTex";
-        case ItemId::ShockwaveGrenade: return "gItemIconBombTex";
         case ItemId::ZeldasLullaby: case ItemId::EponasSong: case ItemId::SariasSong: case ItemId::SunsSong: case ItemId::SongOfTime: case ItemId::SongOfStorms:
         case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::NocturneOfShadow: case ItemId::RequiemOfSpirit: case ItemId::PreludeOfLight:
             return "gSongNoteTex";   // the game's music note, tinted in each song's colour (see RealIconTint)
@@ -3978,13 +3995,18 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
         case ItemId::NocturneOfShadow: note(purple); break;
         case ItemId::RequiemOfSpirit: note(orange); break;
         case ItemId::PreludeOfLight: note(IM_COL32(255, 245, 150, 255)); break;
-        case ItemId::ShockwaveGrenade:
-            dl->AddCircleFilled(c, u * 0.38f, IM_COL32(60, 70, 90, 255), 16);
-            for (int i = 0; i < 8; i++) {
-                const float a = i * 0.7853982f;
-                dl->AddLine(ImVec2(c.x + std::cos(a) * u * 0.5f, c.y + std::sin(a) * u * 0.5f), ImVec2(c.x + std::cos(a) * u * 0.9f, c.y + std::sin(a) * u * 0.9f), cyan, th * 1.2f);
-            }
+        case ItemId::ShockwaveGrenade: {   // a grey ball with glowing purple bands, like its model
+            const ImU32 glow = IM_COL32(200, 120, 255, 255), halo = IM_COL32(170, 80, 255, 70);
+            dl->AddCircleFilled(c, u * 0.78f, halo, 24);
+            dl->AddCircleFilled(c, u * 0.62f, IM_COL32(150, 152, 162, 255), 24);
+            dl->AddCircleFilled(P(-0.18f, -0.2f), u * 0.24f, IM_COL32(190, 192, 200, 255), 14);       // the shine
+            dl->AddLine(P(-0.62f, 0), P(0.62f, 0), glow, th * 1.6f);                                    // the band round the middle
+            dl->AddBezierQuadratic(P(0, -0.62f), P(0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);       // and the ones over the top
+            dl->AddBezierQuadratic(P(0, -0.62f), P(-0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);
+            dl->AddCircleFilled(P(0, -0.62f), u * 0.12f, IM_COL32(70, 72, 82, 255), 10);              // the cap
+            dl->AddCircle(c, u * 0.62f, IM_COL32(60, 62, 72, 255), 24, th * 0.8f);
             break;
+        }
         case ItemId::KokiriTunic: tunic(green); break;
         case ItemId::GoronTunic: tunic(red); break;
         case ItemId::ZoraTunic: tunic(blue); break;
@@ -5877,7 +5899,8 @@ Color_RGBA8 AbilityColour(royale::ItemId id) {
         case ItemId::FaroresWind: case ItemId::MinuetOfForest: case ItemId::SariasSong: return { 110, 240, 130, 255 };
         case ItemId::LensOfTruth: case ItemId::NocturneOfShadow: return { 190, 110, 255, 255 };
         case ItemId::SunsSong: case ItemId::PreludeOfLight: return { 255, 240, 140, 255 };
-        case ItemId::ShockwaveGrenade: case ItemId::SongOfTime: return { 120, 225, 245, 255 };
+        case ItemId::SongOfTime: return { 120, 225, 245, 255 };
+        case ItemId::ShockwaveGrenade: return { 190, 110, 255, 255 };
         default: return { 255, 220, 150, 255 };
     }
 }
@@ -6432,6 +6455,49 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     player->fallDistance = 0;                                                     // no landing damage or hard-landing stun
 }
 
+// The Shockwave Grenade, as in Fortnite: a blast under your feet throws you high into the air, and you take no fall damage (no hard landing,
+// no stagger) until you land and for a moment after. The server only knows x and z, so this is all done here. Link is in his own jump the
+// whole way, so the stick steers him in the air as in any jump, and walls and ledges work as they always do.
+constexpr float kLaunchGraceSeconds = 1.0f;   // still safe this long after touching down (a bounce off a ledge, a slope into a drop)
+int gLaunchFrames = 0;                        // frames since the launch; 0 = no launch going
+bool gLaunchAirborne = false;                 // has left the ground
+double gLaunchSafeUntil = 0;                  // set when you touch down
+
+void LaunchSelf(Player* player, royale::Rarity rarity) {
+    if (gSkydiving || player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD)) return;
+    const float height = 260.0f * royale::RarityScale(rarity);           // Uncommon about 300 units up (six Links), Legendary about 455
+    const float g = player->actor.gravity < -0.3f ? -player->actor.gravity : 1.0f;
+    player->actor.velocity.y = std::sqrt(2.0f * g * height);
+    player->actor.world.pos.y += 2.0f;                                   // off the floor, so the game puts him in his jump next frame
+    player->actor.bgCheckFlags &= ~1;
+    player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
+    gLaunchFrames = 1;
+    gLaunchAirborne = false;
+    gLaunchSafeUntil = 0;
+}
+
+void UpdateLaunch(Player* player) {
+    if (gLaunchFrames == 0) return;
+    gLaunchFrames++;
+    const bool grounded = (player->actor.bgCheckFlags & 1) || (player->stateFlags1 & PLAYER_STATE1_IN_WATER);
+    if (!grounded) gLaunchAirborne = true;
+    // The game measures a fall from the last height it saw you standing at. Moving that up with you means every landing is a short hop.
+    player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
+    player->fallDistance = 0;
+    const double now = ImGui::GetTime();
+    if (!gLaunchAirborne) {
+        if (gLaunchFrames > 10) gLaunchFrames = 0;                       // never got off the ground (hanging on a ledge, say): nothing to protect
+        return;
+    }
+    if (!grounded && gLaunchSafeUntil == 0 && (gLaunchFrames & 1)) {     // a purple trail behind you on the way up and down
+        Vec3f pos = { player->actor.world.pos.x, player->actor.world.pos.y + 10.0f, player->actor.world.pos.z }, vel = { 0, -0.5f, 0 }, accel = { 0, 0, 0 };
+        Color_RGBA8 prim = { 235, 190, 255, 255 }, env = { 160, 60, 255, 255 };
+        EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 90, 20);
+    }
+    if (grounded && gLaunchSafeUntil == 0) gLaunchSafeUntil = now + kLaunchGraceSeconds;
+    if ((gLaunchSafeUntil > 0 && now > gLaunchSafeUntil) || gLaunchFrames > 20 * 30) gLaunchFrames = 0;   // done (or something held you in the air for ages)
+}
+
 // Where you will land if you keep doing what you are doing: a ring on the ground at that spot (and a faint one straight below you), with how
 // high you are. Steering moves the ring, holding Z pulls it closer, so you can pick a landing spot before you get there.
 void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
@@ -6635,6 +6701,7 @@ void OnPlayerUpdate() {
         player->actor.scale.x = player->actor.scale.y = player->actor.scale.z = k;
     }
     UpdateSkydive(player, hud);
+    UpdateLaunch(player);
     ReconcileLocalGlider(gSkydiving);
     if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
         LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
@@ -6933,6 +7000,8 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
                 if (e.item < royale::kItemCount) AbilityFx(e.id, static_cast<royale::ItemId>(e.item), e.id == hud.selfId, e.x, e.z);
+                if (e.id == hud.selfId && e.item == static_cast<uint8_t>(royale::ItemId::ShockwaveGrenade) && InField())
+                    LaunchSelf(GET_PLAYER(gPlayState), static_cast<royale::Rarity>(hud.inv.ability.rarity));
                 if (e.item == royale::net::kRevivedItem) {
                     if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
@@ -7860,7 +7929,7 @@ void Ally_PostLimb(PlayState* play, s32 limb, Gfx** dList, Vec3s*, void*) {
             Matrix_RotateY(1.57f, MTXMODE_APPLY);
             const float k = GidScale(gid) * 3.0f;
             Matrix_Scale(k, k, k, MTXMODE_APPLY);
-            GetItem_Draw(play, static_cast<s16>(gid));
+            DrawItemModel(play, gid);
             Matrix_Pop();
         }
     }
