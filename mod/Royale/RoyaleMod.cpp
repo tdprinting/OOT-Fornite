@@ -88,7 +88,21 @@ void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
+#include "soh/framebuffer_effects.h"             // the Pictograph Box's screen capture, for the map pictures
+void SaveManager_ThreadPoolWait(void);
+void Save_InitFile(int isDebug);   // (soh/SaveManager.h declares these for C files only)
+void Save_SaveFile(void);
+bool Save_Exist(int fileNum);
+unsigned char* stbi_load_from_memory(const unsigned char* buffer, int len, int* x, int* y, int* comp, int req_comp);   // (stb_image, linked into the game)
+void stbi_image_free(void* data);
 }
+#include "soh/SaveManager.h"                     // the Battle Royale save (made and loaded by the menu)
+#include "textures/do_action_static/do_action_static.h"   // the game's "Decide" and "Return" button words
+#include "textures/place_title_cards/g_pn_27.h"   // the place-name cards of the five maps
+#include "textures/place_title_cards/g_pn_32.h"
+#include "textures/place_title_cards/g_pn_28.h"
+#include "textures/place_title_cards/g_pn_40.h"
+#include "textures/place_title_cards/g_pn_55.h"
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
 static_assert(SCENE_TEMPLE_OF_TIME == royale::kWaitingRoomScene, "update kWaitingRoomScene in shared/map.h");
@@ -5860,33 +5874,7 @@ void DriveStart(const royale::HudState& hud) {
 // ---- Battle Royale save files, the lobby timer, and the time of day --------------------------------------------------------------
 
 bool gWasInGame = false;
-int gMenuOpenCountdown = -1;
 int gLobbyAnnounced = 1 << 30;
-
-// Open the game's own menu on the Battle Royale page.
-void OpenRoyaleMenu() {
-    CVarSetString(CVAR_SETTING("Menu.ActiveHeader"), "Battle Royale");
-    if (SohGui::mSohMenu && !SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
-}
-
-// A save made with the "Battle Royale" quest option opens the Battle Royale menu a few seconds after it loads, so the mode starts from
-// there: host a lobby or join one, with no digging through the menus. (The quest option is in the file select; see patches/0008.)
-void NoticeRoyaleFile() {
-    const bool in = InGame();
-    if (in && !gWasInGame) {
-        char key[48];
-        std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.BRFile%d"), static_cast<int>(gSaveContext.fileNum));
-        if (CVarGetInteger(key, 0) != 0 && !gSession.Joined()) gMenuOpenCountdown = 60; // about 3 seconds
-    }
-    gWasInGame = in;
-    if (gMenuOpenCountdown > 0 && --gMenuOpenCountdown == 0) {
-        if (InGame() && !gSession.Joined()) {
-            OpenRoyaleMenu();
-            Say("Battle Royale: host a lobby or join one from this menu");
-        }
-        gMenuOpenCountdown = -1;
-    }
-}
 
 // The lobby counts down on the server. At zero the host's game does what the Start button does (it has to go to the field and measure the
 // map first); the server starts the match by itself if that never happens.
@@ -7292,7 +7280,6 @@ void OnGameFrameUpdate() {
     if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
     DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
-    NoticeRoyaleFile();
     SyncPauseInventory(hud);
     UpdateChickenMusic();
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
@@ -7549,357 +7536,6 @@ const char* CleanName(const char* name) {
     return name[0] != '\0' ? name : "Link";
 }
 
-// What the minimap shows. Players and bots are only the ones near you (the server sends the closest dozen), plus everyone while a Lens of
-// Truth or Saria's Song is active.
-void DrawMinimapOptions() {
-    struct Opt { const char* key; const char* label; bool fallback; };
-    static const Opt opts[] = {
-        { "MapPlayers", "Show other players on the minimap", true },
-        { "MapBots", "Show bots on the minimap", true },
-        { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
-        { "MapChests", "Show chests on the minimap", true },
-        { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
-        { "HeldGlowSelf", "Glow on your own weapon too", false },
-        { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background)", true },
-        { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
-        { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
-    };
-    if (!ImGui::CollapsingHeader("Minimap and game options")) return;
-    for (const Opt& o : opts) {
-        bool on = MapOption(o.key, o.fallback);
-        if (ImGui::Checkbox(o.label, &on)) {
-            char key[64];
-            std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), o.key);
-            CVarSetInteger(key, on ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
-        }
-    }
-    ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
-    ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    if (gLobbyMusic.status.empty()) ScanMusicFolder();
-    ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
-    if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
-    if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
-    ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
-    if (!gDragonModel.tried) LoadCustomDragon();
-    ImGui::TextWrapped("%s", gDragonModel.status.c_str());
-    if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
-}
-
-// Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
-void DrawCustomize(UiState& ui) {
-    ImGui::Spacing();
-    ImGui::TextColored(kGold, "Choose a skin");
-    bool changed = false;
-    for (int i = 0; i < royale::kSkinCount; i++) {
-        const royale::Skin& sk = royale::kSkins[i];
-        ImGui::PushID(i);
-        const ImVec4 col(sk.r / 255.0f, sk.g / 255.0f, sk.b / 255.0f, 1.0f);
-        if (ImGui::ColorButton("##swatch", col, ImGuiColorEditFlags_NoTooltip | (ui.skin == i ? ImGuiColorEditFlags_None : ImGuiColorEditFlags_None), ImVec2(28, 28))) { ui.skin = i; changed = true; }
-        ImGui::SameLine();
-        if (ImGui::Selectable(sk.name, ui.skin == i, 0, ImVec2(190, 28))) { ui.skin = i; changed = true; }
-        ImGui::PopID();
-    }
-    if (ImGui::Selectable("Custom colour", ui.skin == royale::kCustomSkin, 0, ImVec2(220, 24))) { ui.skin = royale::kCustomSkin; changed = true; }
-    if (ui.skin == royale::kCustomSkin) changed |= ImGui::ColorEdit3("Tunic colour", ui.customTunic, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
-    if (changed) {
-        gLocalTunic = SelectedTunic(ui);
-        gSession.SetTunic(gLocalTunic);
-        SaveUi(ui);
-        if (gSession.Joined()) ImGui::TextColored(kGrey, "Other players see the new colour from the next lobby you join.");
-    }
-    ImGui::TextColored(kGrey, "This changes the colour of Link's tunic. Each player's colour is shown on their character to everyone else.");
-    ImGui::Spacing();
-}
-
-void DrawMainMenu(UiState& ui, const royale::HudState& h) {
-    Heading("OOT ROYALE");
-    ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
-    ImGui::Spacing();
-
-    if (!InGame()) {
-        ImGui::TextColored(kRed, "Load a save file first (pick a save on the file select screen), then come back here.");
-        ImGui::Spacing();
-    }
-    if (!h.status.empty() && h.status != "Not in a match") ImGui::TextColored(kRed, "%s", h.status.c_str());
-    if (!ui.error.empty()) ImGui::TextColored(kRed, "%s", ui.error.c_str());
-
-    if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
-    if (ui.showCustomize) DrawCustomize(ui);
-    DrawMinimapOptions();
-    ImGui::Spacing();
-    ImGui::Text("Your name");
-    ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
-    ImGui::Checkbox("Wait in the Temple of Time while the lobby fills", &ui.waitingRoom);
-    {
-        bool custom = CustomSceneryOn();
-        if (ImGui::Checkbox("Custom rocks and buildings (experimental)", &custom)) {
-            CVarSetInteger(CVAR_SETTING("Royale.CustomScenery"), custom ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
-        }
-        ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
-    }
-    ImGui::Spacing();
-
-    ImGui::BeginDisabled(!InGame());
-
-    Heading("Host a lobby");
-    ImGui::Text("Port");
-    ImGui::InputInt("##royale_port", &ui.port);
-    if (ImGui::Button("Host a lobby", ImVec2(220, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
-            ui.error = "Could not host: " + ui.error;
-        } else {
-            RefreshLocalAddresses(ui, true);
-        }
-    }
-    ImGui::Spacing();
-
-    Heading("Join a lobby");
-    ImGui::Text("Host address (the numbers your friend gives you, like 192.168.1.23)");
-    ImGui::InputText("##royale_address", ui.address, sizeof(ui.address));
-    ImGui::BeginDisabled(ui.address[0] == '\0');
-    if (ImGui::Button("Join lobby", ImVec2(220, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Join(ui.address, static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
-            ui.error = "Could not join: " + ui.error;
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled(); // !InGame
-
-    ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Everyone must run the same build. Same Wi-Fi: use the host's local address. Over the internet: a VPN such as Tailscale, or forward UDP port %d.", royale::net::kDefaultPort);
-}
-
-void DrawRoster(const royale::HudState& h) {
-    if (ImGui::BeginTable("royale_roster", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-        ImGui::TableHeadersRow();
-        // Host first, then everyone else by join order.
-        std::vector<const royale::RosterRow*> rows;
-        for (const auto& r : h.roster) rows.push_back(&r);
-        std::stable_sort(rows.begin(), rows.end(), [](auto* a, auto* b) { return a->host && !b->host; });
-        for (const auto* r : rows) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%s%s", r->name.c_str(), r->self ? "  (you)" : "");
-            ImGui::TableSetColumnIndex(1);
-            if (r->host) ImGui::TextColored(kGold, "HOST");
-            else if (r->ready) ImGui::TextColored(kGreen, "READY");
-            else ImGui::TextColored(kGrey, "waiting");
-        }
-        ImGui::EndTable();
-    }
-}
-
-void DrawLobby(UiState& ui, const royale::HudState& h) {
-    Heading("LOBBY");
-    ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
-    ImGui::Spacing();
-
-    if (h.isHost) {
-        RefreshLocalAddresses(ui, false);
-        ImGui::Text("Tell your friends to join this address:");
-        if (ui.localAddresses.empty()) {
-            ImGui::TextColored(kGrey, "(no network address found. Connect to Wi-Fi, or check your VPN)");
-        }
-        for (size_t i = 0; i < ui.localAddresses.size() && i < 3; i++) {
-            std::string full = ui.localAddresses[i] + ":" + std::to_string(h.hostPort);
-            ImGui::TextColored(kGreen, "%s", full.c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton(("Copy##royale_copy" + std::to_string(i)).c_str())) ImGui::SetClipboardText(ui.localAddresses[i].c_str());
-        }
-        ImGui::TextColored(kGrey, "Friends type the numbers before the colon as the address (port %u is the default).", h.hostPort);
-        ImGui::Spacing();
-    }
-
-    // Where the match will be played: everyone sees it, the host chooses.
-    ImGui::TextColored(kGold, "Map: %s", royale::MapOf(h.mapId).name);
-    ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
-    if (h.isHost) {
-        UiState& ui = Ui();
-        ui.mapId = h.mapId;
-        ImGui::SetNextItemWidth(260);
-        if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
-                if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
-                    ui.mapId = i;
-                    gSession.SelectMap(i);
-                    SaveUi(ui);
-                }
-            }
-            ImGui::EndCombo();
-        }
-        if (ImGui::Checkbox("The map's major boss arrives halfway through the match", &ui.majorBoss)) {
-            gSession.SetMajorBoss(ui.majorBoss);
-            SaveUi(ui);
-        }
-        ImGui::TextColored(kGrey, "Its look and the mini bosses match the map: forest, water, shadow, fire or sand.");
-    }
-    ImGui::Spacing();
-
-    DrawRoster(h);
-    ImGui::Spacing();
-
-    int others = 0, readyOthers = 0;
-    for (const auto& r : h.roster) if (!r.host) { others++; readyOthers += r.ready; }
-
-    if (h.isHost) {
-        if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
-        else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
-        {
-            UiState& ui = Ui();
-            int limit = h.playerLimit;
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
-                ui.playerLimit = limit;
-                gSession.SetPlayerLimit(limit);
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
-            if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
-                gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
-                SaveUi(ui);
-            }
-        }
-        {
-            UiState& ui = Ui();
-            static const char* kLevels[] = { "Easy", "Normal", "Hard" };
-            ImGui::SetNextItemWidth(160);
-            if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
-                gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
-        }
-        {
-            UiState& ui = Ui();
-            bool changed = false;
-            static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
-            ImGui::SetNextItemWidth(160);
-            changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
-            if (changed) {
-                gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
-        }
-        ImGui::BeginDisabled(!InGame() || gPendingStart);
-        if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
-        ImGui::EndDisabled();
-        if (gPendingStart) ImGui::TextColored(kGrey, "Heading to %s and measuring the map before the countdown...", CurrentMap().name);
-        else ImGui::TextColored(kGrey, "Starting takes you to %s first, so the real map can be measured.", CurrentMap().name);
-        if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
-    } else {
-        if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
-        ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
-    }
-
-    {
-        UiState& ui = Ui();
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Checkbox("Cloth physics (hats and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
-        if (ui.clothOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
-            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames", gHatHookCalls, gHatLastSwing, gGliderClothFrames);
-        }
-        static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
-    }
-    if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
-    ImGui::Spacing();
-    Heading("Where you are");
-    int scene = InGame() ? gPlayState->sceneNum : -1;
-    ImGui::Text("%s", scene < 0 ? "Not in a game" : SceneName(scene));
-    ImGui::TextColored(kGrey, "Players in the same place can see each other. The match itself is on the chosen map (%s), and you are taken there automatically.", CurrentMap().name);
-    ImGui::BeginDisabled(!InGame());
-    if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
-    if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
-    ImGui::EndDisabled();
-
-    ImGui::Spacing();
-    if (ImGui::Button("Leave lobby", ImVec2(220, 0))) gSession.Leave();
-}
-
-void DrawCountdown(const royale::HudState& h) {
-    Heading("MATCH STARTING");
-    ImGui::TextColored(kGold, "Drop in %d", static_cast<int>(std::ceil(h.countdownLeft)));
-    ImGui::TextWrapped("%s", InField() ? (std::string("You are in ") + CurrentMap().name + ". Get ready.").c_str() : (std::string("Heading to ") + CurrentMap().name + "...").c_str());
-    DrawRoster(h);
-    if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
-}
-
-void DrawInMatch(const royale::HudState& h) {
-    Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
-    ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
-    if (h.haveSelf) {
-        char label[32];
-        std::snprintf(label, sizeof(label), "%.1f / %.1f hearts", h.selfHealth, h.maxHealth);
-        ImGui::ProgressBar(h.selfHealth / std::max(1.0f, h.maxHealth), ImVec2(-1, 0), label);
-        if (!h.selfAlive) ImGui::TextColored(kRed, "You have been eliminated.");
-        ImGui::Text("Safe zone radius: %.0f", h.safeZone.radius);
-        if (h.stormDamagePerSecond > 0) ImGui::TextColored(kRed, "You are in the storm! %.1f hearts per second", h.stormDamagePerSecond);
-        else ImGui::TextColored(kGreen, "You are inside the safe zone.");
-        ImGui::Text("Potions: %d    Heart pieces: %d / %d", h.potions, h.inv.heartPieces, royale::kHeartPiecesPerContainer);
-        if (h.inv.hasAbility) ImGui::TextColored(RarityIm(static_cast<royale::Rarity>(h.inv.ability.rarity)), "Ability: %s (%s)",
-                                                 ItemLabel(static_cast<royale::ItemId>(h.inv.ability.item), static_cast<royale::Rarity>(h.inv.ability.rarity)).c_str(),
-                                                 h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn).c_str() : "ready");
-        else ImGui::TextColored(kGrey, "Ability: none");
-        for (int slot = 0; slot < royale::kGearSlots; slot++) {
-            if (!(h.inv.gearMask & (1 << slot))) continue;
-            const royale::Rarity gr = static_cast<royale::Rarity>(h.inv.gear[slot].rarity);
-            ImGui::TextColored(RarityIm(gr), "Gear: %s", ItemLabel(static_cast<royale::ItemId>(h.inv.gear[slot].item), gr).c_str());
-        }
-        ImGui::TextColored(RarityIm(h.weaponRarity), "Weapon: %s", ItemLabel(h.weapon, h.weaponRarity).c_str());
-        if (h.hasShield) ImGui::TextColored(RarityIm(h.shieldRarity), "Shield: %s", ItemLabel(h.shield, h.shieldRarity).c_str());
-        else ImGui::TextColored(kGrey, "Shield: none");
-    }
-    if (!gPickupLog.empty()) {
-        ImGui::Spacing();
-        ImGui::TextColored(kGold, "Recent pickups");
-        for (const auto& n : gPickupLog) ImGui::TextColored(RarityIm(n.rarity), "%s", n.text.c_str());
-    }
-    if (ImGui::CollapsingHeader("Controls")) {
-        ImGui::TextColored(kGold, "Fighting");
-        ImGui::BulletText("B: attack with what is in your hand (it fires, throws or swings by itself)");
-        ImGui::BulletText("Z: lock on to a player (hold), and dive faster while skydiving");
-        ImGui::BulletText("D-pad Right / Left: next / previous weapon");
-        ImGui::TextColored(kGold, "Staying alive");
-        ImGui::BulletText("D-pad Down: drink a health potion      C-Left: drink a shield potion");
-        ImGui::BulletText("D-pad Up: use your ability (the song, spell or hookshot in the ability slot)");
-        ImGui::TextColored(kGold, "Moving and interacting");
-        ImGui::BulletText("Stick: move      C-Up: jump (jump at a ledge to climb it)      Z + move: sidestep");
-        ImGui::BulletText("A: open a chest, take or swap an item, hire an ally, talk");
-        ImGui::BulletText("C-Right: emote (or tap EMOTE)      Walk over a better item to pick it up");
-        ImGui::TextColored(kGold, "Spectating");
-        ImGui::BulletText("D-pad Left / Right: watch the previous / next player");
-    }
-    ImGui::Spacing();
-    if (ImGui::Button("Leave match", ImVec2(220, 0))) gSession.Leave();
-}
-
 // Write what the game knows about the current map (the measured field, storm circles, every chest and prop, the players) to a JSON
 // file that tools/map-viewer.html can open. Returns the file's path, or an error message starting with "Could not".
 std::string ExportMapJson() {
@@ -7969,43 +7605,6 @@ std::string ExportMapJson() {
     return path;
 }
 
-void DrawResults(const royale::HudState& h) {
-    Heading("MATCH OVER");
-    if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) ImGui::TextColored(kGold, "VICTORY ROYALE! You won!");
-    else if (!h.winnerName.empty()) ImGui::TextColored(kGold, "Winner: %s", h.winnerName.c_str());
-    else ImGui::Text("Nobody survived.");
-    ImGui::Spacing();
-    if (ImGui::BeginTable("royale_results", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
-        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
-        ImGui::TableSetupColumn("Kills");
-        ImGui::TableSetupColumn("Damage");
-        ImGui::TableSetupColumn("Points");
-        ImGui::TableHeadersRow();
-        int rank = 1;
-        for (const auto& r : h.results) {
-            ImGui::TableNextRow();
-            const ImVec4 col = r.self ? kGreen : ImVec4(1, 1, 1, 1);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", rank++);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s%s", r.name.c_str(), r.placement == 1 ? "  (winner)" : "");
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.kills);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%.1f", r.damage);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.score);
-        }
-        ImGui::EndTable();
-    }
-    ImGui::TextColored(kGrey, "Points: %d per heart of damage, %d per kill, %d per chest, plus a bonus for lasting longer and %d for winning.",
-                       royale::kPointsPerHeartOfDamage, royale::kPointsPerKill, royale::kPointsPerChest, royale::kPointsForWinning);
-    ImGui::Spacing();
-    if (h.isHost) {
-        if (ImGui::Button("Play again", ImVec2(220, 0))) gSession.RequestPlayAgain();
-        ImGui::TextColored(kGrey, "Starts a new match right away with everyone who is connected.");
-    } else {
-        ImGui::TextColored(kGrey, "Waiting for the host to play again...");
-    }
-    if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
-}
-
 void DrawDebug(UiState& ui) {
     if (!ImGui::CollapsingHeader("Developer tools")) return;
     ImGui::Checkbox("Show Link position (for measuring the map)", &ui.showPosition);
@@ -8019,11 +7618,12 @@ void DrawDebug(UiState& ui) {
     }
 }
 
-// Everything the "Battle Royale" menu page shows. Called every frame the page is visible.
+#include "RoyaleMenu.inc"
+
+// The Battle Royale menu is the game's own now (RoyaleMenu.inc). The port menu's "Battle Royale" page keeps a way into it, the developer tools,
+// and a way back to the game's normal file select.
 void DrawRoyaleUi() {
     UiState& ui = Ui();
-    royale::HudState h = gSession.Hud();
-
     {   // the logo at the top of the page
         ImVec2 sz;
         if (ImTextureID tex = LogoTexture(&sz)) {
@@ -8036,25 +7636,24 @@ void DrawRoyaleUi() {
         }
         ImGui::TextColored(kGrey, "Version %s", ROYALE_BUILD_VERSION);
     }
-
-    if (h.mode == royale::HudState::Mode::Idle) {
-        DrawMainMenu(ui, h);
-    } else if (!h.connected) {
-        Heading("CONNECTING");
-        ImGui::Text("Connecting to the host...");
-        if (ImGui::Button("Cancel", ImVec2(220, 0))) gSession.Leave();
-    } else {
-        switch (h.state) {
-            case royale::MatchState::Lobby: DrawLobby(ui, h); break;
-            case royale::MatchState::Countdown: DrawCountdown(h); break;
-            case royale::MatchState::Drop:
-            case royale::MatchState::InMatch: DrawInMatch(h); break;
-            case royale::MatchState::Ending: DrawResults(h); break;
-        }
+    Heading("BATTLE ROYALE");
+    ImGui::TextWrapped("Everything for Battle Royale is in the game's own menu now: press Start on the title screen or in the game.");
+    if (ImGui::Button("Open the Battle Royale menu", ImVec2(260, 0))) {
+        if (SohGui::mSohMenu && SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
+        if (InGame()) MenuOpenHome();
+        else if (OnTitleScreen()) MenuOpen(Page::Main);
     }
+    ImGui::Spacing();
+    bool classic = CVarGetInteger(CVAR_SETTING("Royale.ClassicFileSelect"), 0) != 0;
+    if (ImGui::Checkbox("Use the game's normal file select (for story saves)", &classic)) {
+        CVarSetInteger(CVAR_SETTING("Royale.ClassicFileSelect"), classic ? 1 : 0);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    ImGui::TextColored(kGrey, "Off: the game skips the file select and loads its Battle Royale save.");
     ImGui::Spacing();
     DrawDebug(ui);
 }
+
 
 // Adds a top-level "Battle Royale" entry to the port menu (opened with F1 on Windows, Back/Select on Android) through the
 // fork's own menu registration hook, so no patch to the fork's menu code is needed.
