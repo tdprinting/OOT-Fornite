@@ -5266,7 +5266,8 @@ OotMusic gOot;
 constexpr int kOotSeqPlayer = SEQ_PLAYER_BGM_SUB;
 constexpr uint32_t kOotCacheVersion = 1;   // bump when the conversion changes, so old conversions are made again
 
-bool OotInstrumentsOn() { return MapOption("OotInstruments", true); }
+// Off unless the player turns it on: the conversion copies every soundfont out of the game and runs a background worker, which is heavy for a phone.
+bool OotInstrumentsOn() { return MapOption("OotInstruments", false); }
 
 // The game's music soundfonts (the ones its songs use, not the sound effects), copied out for the worker: every instrument and drum
 // kit, with its samples still packed as the game keeps them. Runs once, on the game thread.
@@ -8711,7 +8712,7 @@ void DrawMinimapOptions() {
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background)", true },
+        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
         { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
