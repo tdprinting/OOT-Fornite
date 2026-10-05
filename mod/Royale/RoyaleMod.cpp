@@ -78,6 +78,7 @@ extern "C" {
 #include "objects/object_sst/object_sst.h"         // Bongo Bongo (Kakariko's major boss)
 #include "objects/object_tw/object_tw.h"           // Twinrova (Desert Colossus's major boss)
 #include "regs.h"                                // WREG, for the game's own minimap switch
+#include "textures/map_grand_static/map_grand_static.h"   // the game's own overworld minimaps
 extern PlayState* gPlayState;
 // the game's font loader (audio_load.c; it returns the font's data, used here only as "did it load"), for playing the music folder's songs
 void* AudioLoad_SyncLoadFont(u32 fontId);
@@ -3446,65 +3447,134 @@ bool MapOption(const char* name, bool fallback = true) {
     return CVarGetInteger(key, fallback ? 1 : 0) != 0;
 }
 
-// Bottom-left map of the whole field: the storm in purple, the safe zone, chests by rarity, other players and you.
+// The game's own overworld minimap for the scene (the light-blue map that sits in the corner in Ocarina of Time), read from the player's ROM
+// like the rest of the game's art. Its 4-bit grey and alpha pixels are turned into white for ImGui and tinted when drawn; drawn smooth rather
+// than in blocky pixels, since the minimap below shows it close up.
+struct GameMinimap { bool tried = false, ok = false; int texId = -1; ImTextureID tex = nullptr; int w = 0, h = 0; };
+
+const char* OverworldMinimapName(int index) {
+    static const char* const kNames[] = { dgHyruleFieldMinimapTex, dgKakarikoVillageMinimapTex, dgGraveyardMinimapTex, dgZorasRiverMinimapTex,
+                                          dgKokiriForestMinimapTex, dgSacredMeadowMinimapTex, dgLakeHyliaMinimapTex, dgZorasDomainMinimapTex,
+                                          dgZorasFountainMinimapTex, dgGerudoValleyMinimapTex, dgHauntedWastelandMinimapTex, dgDesertColossusMinimapTex,
+                                          dgGerudosFortessMinimapTex, dgLostWoodsMinimapTex, dgHyruleCastleAreaMinimapTex, dgDeathMountainTrailMinimapTex,
+                                          dgDeathMountainCraterMinimapTex, dgGoronCityMinimapTex, dgLonLonRanchMinimapTex, dgOutsideGanonsCastleMinimapTex };
+    return index >= 0 && index < static_cast<int>(sizeof(kNames) / sizeof(kNames[0])) ? kNames[index] : nullptr;
+}
+
+ImTextureID UploadRgba(const uint8_t* rgba, int w, int h, int* idInOut) {
+    GfxRenderingAPI* api = gfx_get_current_rendering_api();
+    if (api == nullptr) return nullptr;
+    if (*idInOut < 0) *idInOut = static_cast<int>(api->new_texture());
+    api->select_texture(0, *idInOut);
+    api->set_sampler_parameters(0, true, 0, 0);
+    api->upload_texture(rgba, w, h);
+    return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(*idInOut));
+}
+
+const GameMinimap* GameMinimapFor(int sceneNum) {
+    static GameMinimap maps[20];
+    const int index = sceneNum - SCENE_HYRULE_FIELD;
+    const char* name = OverworldMinimapName(index);
+    if (name == nullptr) return nullptr;
+    GameMinimap& m = maps[index];
+    if (!m.tried) {
+        m.tried = true;
+        try {
+            auto res = std::static_pointer_cast<Fast::Texture>(Ship::Context::GetInstance()->GetResourceManager()->LoadResource(name, true));
+            if (res != nullptr && res->ImageData != nullptr && res->Type == Fast::TextureType::GrayscaleAlpha4bpp && res->Width > 0 && res->Height > 0 &&
+                res->ImageDataSize >= static_cast<uint32_t>(res->Width * res->Height / 2)) {
+                std::vector<uint8_t> rgba(static_cast<size_t>(res->Width) * res->Height * 4);
+                for (int i = 0; i < res->Width * res->Height; i++) {
+                    const uint8_t nib = (i & 1) ? (res->ImageData[i / 2] & 0xF) : (res->ImageData[i / 2] >> 4);
+                    const uint8_t grey = static_cast<uint8_t>(((nib >> 1) & 7) * 255 / 7);
+                    rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = grey;
+                    rgba[i * 4 + 3] = (nib & 1) ? 255 : 0;
+                }
+                m.tex = UploadRgba(rgba.data(), res->Width, res->Height, &m.texId);
+                m.w = res->Width;
+                m.h = res->Height;
+                m.ok = m.tex != nullptr;
+            }
+        } catch (...) {}
+    }
+    return m.ok ? &m : nullptr;
+}
+
+// Bottom left: a minimap that follows you. It shows the area around you on the game's own minimap for the scene, north up, with you in the
+// middle as the game's yellow arrow: the storm in purple, the safe zone's edge, supply drops, mini bosses and other players. While you skydive
+// it zooms out to show the whole map, so you can pick where to land.
 void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.map.radius <= 0 || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
-    const float R = 92.0f * scale;
-    const ImVec2 c(R + 20.0f * scale, ds.y - R - 28.0f * scale);
-    const float k = R / h.map.radius;
-    auto toMap = [&](float x, float z) { return ImVec2(c.x + (x - h.map.center.x) * k, c.y - (z - h.map.center.z) * k); };
-    auto inside = [&](ImVec2 p) { return (p.x - c.x) * (p.x - c.x) + (p.y - c.y) * (p.y - c.y) < R * R; };
+    const float half = 86.0f * scale;
+    const ImVec2 c(half + 22.0f * scale, ds.y - half - 30.0f * scale);
+    const ImVec2 a(c.x - half, c.y - half), b(c.x + half, c.y + half);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
 
-    dl->AddCircleFilled(c, R + 5.0f * scale, IM_COL32(0, 0, 0, 175), 72);
-    dl->AddCircleFilled(c, R, IM_COL32(104, 48, 170, 190), 72);                       // everything is storm...
+    // How much of the world fits across (half of it, in world units): close around you on foot, the whole map while skydiving.
+    static float viewHalf = 4200.0f;
+    const float want = gSkydiving ? std::max(4200.0f, h.map.radius * 1.15f) : 4200.0f;
+    viewHalf += (want - viewHalf) * std::min(1.0f, ImGui::GetIO().DeltaTime * 3.0f);
+    const float k = half / viewHalf;
+    // North (the game's -Z) is up, as on the game's own minimap.
+    auto toMap = [&](float x, float z) { return ImVec2(c.x + (x - px) * k, c.y + (z - pz) * k); };
+    auto inside = [&](ImVec2 p) { return p.x > a.x && p.x < b.x && p.y > a.y && p.y < b.y; };
+    auto pinned = [&](ImVec2 p) {   // something off the edge: pinned to the rim, on the line towards it
+        const float m = 5.0f * scale, dx = p.x - c.x, dy = p.y - c.y, far = std::max(std::fabs(dx), std::fabs(dy));
+        if (far <= half - m) return p;
+        const float t = (half - m) / far;
+        return ImVec2(c.x + dx * t, c.y + dy * t);
+    };
+
+    const float round = 12.0f * scale;
+    dl->AddRectFilled(ImVec2(a.x + 3 * scale, a.y + 4 * scale), ImVec2(b.x + 3 * scale, b.y + 4 * scale), IM_COL32(0, 0, 0, 90), round);
+    dl->AddRectFilled(a, b, IM_COL32(10, 16, 22, 170), round);
+    dl->PushClipRect(ImVec2(a.x + 2 * scale, a.y + 2 * scale), ImVec2(b.x - 2 * scale, b.y - 2 * scale), true);
+
+    // The game's minimap, placed with the game's own numbers for where it sits and how world positions land on it (z_map_exp.c's compass
+    // icons): pixel u = (offsetX + x / scaleX) / 10 + 160 - minimapX, pixel v = 120 - (offsetY - z / scaleY) / 10 - minimapY.
+    const int owIndex = gPlayState->sceneNum - SCENE_HYRULE_FIELD;
+    const GameMinimap* gm = GameMinimapFor(gPlayState->sceneNum);
+    if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
+        const float sx = gMapData->owCompassInfo[owIndex][0], sz = gMapData->owCompassInfo[owIndex][1];
+        const float ox = gMapData->owCompassInfo[owIndex][2], oy = gMapData->owCompassInfo[owIndex][3];
+        const float mx = gMapData->owMinimapPosX[owIndex], my = gMapData->owMinimapPosY[owIndex];
+        if (sx > 0 && sz > 0) {
+            const float x0 = ((mx - 160.0f) * 10.0f - ox) * sx, x1 = x0 + gm->w * 10.0f * sx;
+            const float z0 = (oy - (120.0f - my) * 10.0f) * sz, z1 = z0 + gm->h * 10.0f * sz;
+            dl->AddImage(gm->tex, toMap(x0, z0), toMap(x1, z1), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(0, 255, 255, 190));   // the game's minimap colour
+        }
+    }
+
+    // The storm: everything outside the safe zone, as a thick purple ring around it (clipped to the map), then the zone's white edge.
     const ImVec2 zc = toMap(h.safeZone.center.x, h.safeZone.center.z);
-    dl->AddCircleFilled(zc, h.safeZone.radius * k, IM_COL32(28, 62, 42, 255), 72);      // ...except the safe zone
-    dl->AddCircle(zc, h.safeZone.radius * k, IM_COL32(255, 255, 255, 235), 72, 2.0f * scale);
-    dl->AddCircle(c, R, IM_COL32(255, 210, 70, 255), 72, 2.0f * scale);
-    dl->AddCircle(c, R + 5.0f * scale, IM_COL32(150, 108, 30, 255), 72, 1.5f * scale);
-    dl->AddText(ImGui::GetFont(), 12.0f * scale, ImVec2(c.x - 4.0f * scale, c.y - R - 17.0f * scale), IM_COL32(255, 222, 110, 255), "N");
+    const float zr = h.safeZone.radius * k;
+    const float reach = std::sqrt((std::fabs(zc.x - c.x) + half) * (std::fabs(zc.x - c.x) + half) + (std::fabs(zc.y - c.y) + half) * (std::fabs(zc.y - c.y) + half));
+    if (reach > zr) {
+        const float thick = reach - zr + 4.0f * scale;
+        dl->AddCircle(zc, zr + thick * 0.5f, IM_COL32(120, 50, 190, 120), 96, thick);
+    }
+    dl->AddCircle(zc, zr, IM_COL32(255, 255, 255, 235), 96, 2.0f * scale);
 
-    {   // supply drops: a pulsing star on the announced spot, and on the crate once it has landed
-        const double now = ImGui::GetTime();
+    const double now = ImGui::GetTime();
+    {   // supply drops and helpers to hire: a pulsing star, pinned to the rim when off the map
         const float pulse = 0.75f + 0.25f * static_cast<float>(std::sin(now * 5.0));
         auto star = [&](float wx, float wz, ImU32 col) {
-            ImVec2 p = toMap(wx, wz);
-            const float dx = p.x - c.x, dy = p.y - c.y, d = std::sqrt(dx * dx + dy * dy);
-            if (d > R - 4.0f * scale) { p = ImVec2(c.x + dx / d * (R - 4.0f * scale), c.y + dy / d * (R - 4.0f * scale)); }   // off the map's edge: pinned to the rim
+            const ImVec2 p = pinned(toMap(wx, wz));
             const float u = 7.0f * scale * pulse;
             dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u * 0.4f, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u * 0.4f, p.y), col);
             dl->AddQuadFilled(ImVec2(p.x - u, p.y), ImVec2(p.x, p.y - u * 0.4f), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u * 0.4f), col);
         };
         gSupplyMarks.erase(std::remove_if(gSupplyMarks.begin(), gSupplyMarks.end(), [&](const SupplyMark& m) { return now > m.until; }), gSupplyMarks.end());
         for (const SupplyMark& m : gSupplyMarks) star(m.x, m.z, IM_COL32(255, 160, 60, 255));
-        for (const auto& [aid, al] : gAllies) star(al.x, al.z, al.owner == royale::net::kNoPlayer16 ? IM_COL32(255, 222, 110, 255) : al.owner == h.selfId ? IM_COL32(120, 255, 150, 255) : IM_COL32(170, 180, 210, 255));
+        for (const auto& [aid, al] : gAllies) if (al.owner == h.selfId) star(al.x, al.z, IM_COL32(120, 255, 150, 255));   // only your own helpers
         if (gSession.Client()) for (const auto& l : gSession.Client()->Loot()) if (l.supply && l.chest && !l.taken) star(l.x, l.z, IM_COL32(255, 220, 90, 255));
     }
-    if (gSession.Client() && MapOption("MapChests")) {
-        for (const auto& l : gSession.Client()->Loot()) {
-            if (l.taken || !l.chest) continue;
-            const float dx = l.x - pl->actor.world.pos.x, dz = l.z - pl->actor.world.pos.z;
-            if (dx * dx + dz * dz > 2800.0f * 2800.0f) continue;
-            const ImVec2 p = toMap(l.x, l.z);
-            if (!inside(p)) continue;
-            dl->AddRectFilled(ImVec2(p.x - 2.0f * scale, p.y - 2.0f * scale), ImVec2(p.x + 2.0f * scale, p.y + 2.0f * scale), RarityU32(static_cast<royale::Rarity>(l.rarity)));
-        }
-    }
-    if (gSession.Client()) {
-        for (const royale::Poi& poi : gSession.Client()->Pois()) {
-            const ImVec2 p = toMap(poi.center.x, poi.center.z);
-            if (!inside(p)) continue;
-            const float u = 4.0f * scale;
-            dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(255, 222, 110, 255));
-            dl->AddText(ImGui::GetFont(), 10.5f * scale, ImVec2(p.x + u + 2.0f, p.y - 6.0f * scale), IM_COL32(255, 240, 190, 235), royale::kPoiNames[poi.name]);
-        }
-    }
     if (gSession.Client() && MapOption("MapEnemies")) {
-        for (const auto& bn : gSession.Client()->Bosses()) { // mini bosses: a big purple diamond
+        for (const auto& bn : gSession.Client()->Bosses()) {   // mini bosses: a purple diamond
             const ImVec2 p = toMap(bn.x, bn.z);
             if (!inside(p)) continue;
-            const float u = 6.0f * scale;
+            const float u = 5.0f * scale;
             dl->AddQuadFilled(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(190, 60, 255, 255));
             dl->AddQuad(ImVec2(p.x, p.y - u), ImVec2(p.x + u, p.y), ImVec2(p.x, p.y + u), ImVec2(p.x - u, p.y), IM_COL32(255, 255, 255, 230), 1.5f);
         }
@@ -3512,15 +3582,28 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     for (const auto& st : gSession.Puppets()) {
         if (!st.alive || !MapOption(st.isBot ? "MapBots" : "MapPlayers")) continue;
         const ImVec2 p = toMap(st.x, st.z);
-        if (inside(p)) dl->AddCircleFilled(p, 3.2f * scale, st.isBot ? IM_COL32(255, 100, 100, 255) : IM_COL32(255, 170, 60, 255));
+        if (!inside(p)) continue;
+        dl->AddCircleFilled(p, 3.4f * scale, IM_COL32(0, 0, 0, 200));
+        dl->AddCircleFilled(p, 2.6f * scale, st.isBot ? IM_COL32(255, 100, 100, 255) : IM_COL32(255, 170, 60, 255));
     }
-    // You: a triangle pointing the way Link faces.
-    const ImVec2 me = toMap(pl->actor.world.pos.x, pl->actor.world.pos.z);
+    dl->PopClipRect();
+
+    // You, in the middle: the game's own minimap arrow (yellow-green, as Minimap_DrawCompassIcons colours it), pointing the way Link faces.
     const float th = pl->actor.shape.rot.y * (3.14159265f / 32768.0f);
-    const ImVec2 fwd(std::sin(th), -std::cos(th)), side(-fwd.y, fwd.x);
-    const float u = 6.0f * scale;
-    dl->AddTriangleFilled(ImVec2(me.x + fwd.x * u * 1.3f, me.y + fwd.y * u * 1.3f), ImVec2(me.x - fwd.x * u + side.x * u * 0.8f, me.y - fwd.y * u + side.y * u * 0.8f),
-                          ImVec2(me.x - fwd.x * u - side.x * u * 0.8f, me.y - fwd.y * u - side.y * u * 0.8f), IM_COL32(120, 255, 140, 255));
+    const ImVec2 fwd(std::sin(th), std::cos(th)), side(-fwd.y, fwd.x);
+    const float u = 7.0f * scale;
+    const ImVec2 tip(c.x + fwd.x * u * 1.3f, c.y + fwd.y * u * 1.3f), l(c.x - fwd.x * u + side.x * u * 0.8f, c.y - fwd.y * u + side.y * u * 0.8f),
+                 r(c.x - fwd.x * u - side.x * u * 0.8f, c.y - fwd.y * u - side.y * u * 0.8f);
+    dl->AddTriangleFilled(tip, l, r, IM_COL32(200, 255, 0, 255));
+    dl->AddTriangle(tip, l, r, IM_COL32(0, 0, 0, 220), 1.5f * scale);
+
+    // The frame: the menus' gold rule, and N at the top.
+    dl->AddRect(a, b, IM_COL32(176, 118, 24, 255), round, 0, 2.0f * scale);
+    dl->AddRect(ImVec2(a.x + 4 * scale, a.y + 4 * scale), ImVec2(b.x - 4 * scale, b.y - 4 * scale), IM_COL32(255, 214, 90, 120), round * 0.7f, 0, 1.0f * scale);
+    const ImVec2 nsz = ImGui::GetFont()->CalcTextSizeA(14.0f * scale, FLT_MAX, 0.0f, "N");
+    const ImVec2 np(c.x - nsz.x * 0.5f, a.y - nsz.y * 0.5f);
+    dl->AddCircleFilled(ImVec2(c.x, a.y), nsz.y * 0.7f, IM_COL32(16, 12, 8, 230));
+    dl->AddText(ImGui::GetFont(), 14.0f * scale, np, IM_COL32(255, 222, 110, 255), "N");
 }
 
 // The game's own item art (the 32x32 icons from its resource archive) is used wherever the game has one for the item; the hand-drawn
@@ -8219,7 +8302,6 @@ void DrawMinimapOptions() {
         { "MapPlayers", "Show other players on the minimap", true },
         { "MapBots", "Show bots on the minimap", true },
         { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
-        { "MapChests", "Show chests on the minimap", true },
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
@@ -8248,6 +8330,40 @@ void DrawMinimapOptions() {
     if (!gDragonModel.tried) LoadCustomDragon();
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
     if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
+}
+
+// What every item and power does, read from the item table (shared/items.h) so it follows the items as they change. Grouped by kind, with the
+// game's own icon where it has one, the rarities the item is found at, and its one-line effect.
+void DrawItemGuide() {
+    if (!ImGui::CollapsingHeader("Items and powers: what each one does")) return;
+    static const char* kKindTitle[royale::kItemKindCount] = { "Weapons", "Shields", "Potions and bottles", "Pickups", "Powers: spells, songs and tools", "Gear" };
+    static const char* kKindHow[royale::kItemKindCount] = {
+        "Held in your hand. B attacks; picking up another weapon drops this one.",
+        "Takes a share of the damage you would take.",
+        "Kept in your bag (3 slots). D-pad Down drinks one. A Fairy is never drunk: it saves you once.",
+        "Used the moment you pick it up. Left on the ground if it would do nothing.",
+        "One power at a time. D-pad Up uses it, then it needs time and magic to recharge.",
+        "Always on while you wear it. One of each kind: tunic, boots, gauntlets, mask, scale, pack and charm.",
+    };
+    ImGui::TextColored(kGrey, "Rarer finds are stronger: a Legendary item is %.2f times as strong as a Common one.",
+                       royale::kRarityMultiplier[royale::kRarityCount - 1] / royale::kRarityMultiplier[0]);
+    for (int k = 0; k < royale::kItemKindCount; k++) {
+        if (!ImGui::TreeNode(kKindTitle[k])) continue;
+        ImGui::TextColored(kGrey, "%s", kKindHow[k]);
+        for (int i = 0; i < royale::kItemCount; i++) {
+            const royale::ItemDef& d = royale::kItems[i];
+            if (static_cast<int>(d.kind) != k || !royale::InPool(d.id)) continue;
+            ImGui::PushID(i);
+            if (void* icon = RealIcon(d.id)) { ImGui::Image(reinterpret_cast<ImTextureID>(icon), ImVec2(24, 24)); ImGui::SameLine(); }
+            ImGui::TextColored(RarityIm(d.maxRarity), "%s", d.name);
+            ImGui::SameLine();
+            ImGui::TextColored(kGrey, "(%s)", d.minRarity == d.maxRarity ? RarityName(d.minRarity)
+                                                                         : (std::string(RarityName(d.minRarity)) + " to " + RarityName(d.maxRarity)).c_str());
+            ImGui::TextWrapped("    %s", d.effect);
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
 }
 
 // Pick the colour other players see you in. Takes effect the next time you host or join (your colour is sent when you connect).
@@ -8291,6 +8407,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
     if (ui.showCustomize) DrawCustomize(ui);
     DrawMinimapOptions();
+    DrawItemGuide();
     ImGui::Spacing();
     ImGui::Text("Your name");
     ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
@@ -8515,6 +8632,7 @@ void DrawCountdown(const royale::HudState& h) {
 
 void DrawInMatch(const royale::HudState& h) {
     Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
+    DrawItemGuide();
     ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
     if (h.haveSelf) {
         char label[32];
