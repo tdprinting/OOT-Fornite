@@ -321,8 +321,13 @@ std::string LootLabel(const royale::net::LootNet& l) {
 // Is there floor under (x, z)? Used to measure the map and to keep loot, spawns and storm centres on ground.
 s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "solid scenery" below), -1 when there is none
 
+// On the Fortnite map the scene's ground is the island's own triangles (shared/fortnite_map.h), so its height, slope and water are worked out
+// directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
+bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
+    if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
     Vec3f pos = { x, 4000.0f, z };
     for (int tries = 0; tries < 6; tries++) {
         CollisionPoly poly;
@@ -340,7 +345,7 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
 // spawns or finds a chest where the exit seal (SealExits) would shove them back. The ROM extractor's numbers (docs/MAPS.md) show how many
 // of these each map has: Kakariko alone has nine loading zones and fourteen exit surfaces.
 bool OnExitFloor(float x, float z) {
-    if (!InField()) return false;
+    if (!InField() || OnIsland()) return false;   // the island has no exits
     CollisionPoly poly;
     Vec3f pos = { x, 4000.0f, z };
     const float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
@@ -416,6 +421,7 @@ float gMeasuredRadius = 0;
 
 // Water is no place for a chest or a spawn: the surface is above the floor under it.
 bool UnderWater(float x, float z, float floorY) {
+    if (OnIsland()) return std::fabs(x) < royale::fortnite::kHalfX && std::fabs(z) < royale::fortnite::kHalfZ && floorY + 15.0f < royale::fortnite::kWaterY;   // one sheet over it all
     float surface = 0;
     WaterBox* box = nullptr;
     return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
@@ -425,6 +431,7 @@ bool UnderWater(float x, float z, float floorY) {
 // stand on. (The floor property numbers are the game's own, see FUNC_80041EA4_*.) Looks at the scene's own floor only: our blocks are always fine.
 bool HazardFloorAt(float x, float z) {
     if (!InField()) return false;
+    if (OnIsland()) return royale::fortnite::GroundUp(x, z) < 0.8f;   // off the island, or too steep to stand on
     CollisionPoly poly;
     s32 bgId = BGCHECK_SCENE;
     Vec3f pos = { x, 4000.0f, z };
@@ -480,6 +487,8 @@ bool MeasureField(royale::Circle* out) {
     for (const auto& p : kept) dist.push_back(royale::Distance(p, centre));
     std::sort(dist.begin(), dist.end());
     float radius = dist[static_cast<size_t>(dist.size() * 0.95f)] * 0.95f; // ignore stragglers, keep a margin
+    // The Fortnite map is played on the whole island, coast to coast: its towns run right out to the cliffs (Junk Junction, Lucky Landing).
+    if (gMapId == royale::fortnite::kMapId) radius = dist[std::min(dist.size() - 1, static_cast<size_t>(dist.size() * 0.99f))];
     radius = std::clamp(radius, 1500.0f, royale::MapOf(gMapId).maxRadius); // a smaller arena keeps the fights close and the storm in sight (Hyrule Field may be bigger)
     *out = { centre, radius };
     gMapMeasured = true;
@@ -2408,6 +2417,10 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
 }
 
 constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
+// The Fortnite Map's trees stand where its texture has them painted (fortnite::CoverAt): thick in the woods, a lone one here and there on the
+// meadows, none on the roads or in the towns. Its cells are smaller, so the woods can be dense.
+constexpr float kIslandTreeCell = 200.0f;
+float TreeCell() { return OnIsland() ? kIslandTreeCell : kTreeCell; }
 
 // Each map's plants: Hyrule Field, Lake Hylia and Kakariko keep the leafy trees and green grass (Kakariko's trees sparser), the desert has
 // golden dry grass and palms gathered in oases, and Death Mountain has no grass, only a few dead, burnt trees.
@@ -2415,6 +2428,16 @@ int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
 
 struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
+    if (OnIsland()) {
+        const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kIslandTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kIslandTreeCell;
+        const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
+        const float roll = Flora01(cx, cz, 22), dense = std::min(1.0f, gFoliage);
+        if (cover == royale::fortnite::Cover::Woods ? roll > 0.35f + 0.5f * dense : cover != royale::fortnite::Cover::Meadow || roll > 0.03f * dense) return false;
+        const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
+        if (spot == nullptr || !spot->ok) return false;
+        *out = { x, spot->y, z, 0.85f + 0.55f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+        return true;
+    }
     const int theme = FloraTheme();
     const float grove = theme == 4 ? 0.82f : theme == 3 ? 0.7f : theme == 2 ? 0.55f : 0.45f;   // the desert's oases and the mountain's few trees are rare
     if (Flora01(cx / 2, cz / 2, 21) < grove - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
@@ -2523,6 +2546,14 @@ void DrawFlora(PlayState* play) {
         CLOSE_DISPS(play->state.gfxCtx);
     }
     auto fade = [](float dist, float reach) { const float f = std::clamp((reach - dist) / (reach * 0.25f), 0.0f, 1.0f); return f * f * (3.0f - 2.0f * f); };
+    // Nothing behind the camera is drawn: about half of everything near the player. `size` is how far the thing reaches from its spot.
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;   // not when looking steeply down (the skydive): then all round is in view
+    if (cull) { vx /= vl; vz /= vl; }
+    auto inView = [&](float x, float z, float size) { return !cull || (x - eye.x) * vx + (z - eye.z) * vz > -size; };
+    const bool island = OnIsland();
 
     if (snowOn) {   // mounds of snow, thicker the longer it has snowed
         const float reach = 1000.0f;
@@ -2533,7 +2564,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 31) > gSnowCover * 0.92f) continue;
                 const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 32)) * kSnowCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 33)) * kSnowCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 70.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(2, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, FloraHash(cx, cz, 34) % 4);
@@ -2551,7 +2582,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 71) > deep * 0.9f) continue;
                 const float x = (static_cast<float>(cx) + 0.25f + 0.5f * Flora01(cx, cz, 72)) * kBlanketCell, z = (static_cast<float>(cz) + 0.25f + 0.5f * Flora01(cx, cz, 73)) * kBlanketCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 120.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(4, cx, cz, x, z);   // any ground, like the mounds, in cells of its own
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, 4u + FloraHash(cx, cz, 74) % 4);
@@ -2572,11 +2603,15 @@ void DrawFlora(PlayState* play) {
         const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
         for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < grassy) continue;                                 // not a grassy patch
+                if (Flora01(cx / 6, cz / 6, 41) < (island ? 0.3f : grassy)) continue;               // not a grassy patch
                 if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 40.0f)) continue;
+                if (island) {   // the island's grass grows on its meadows and under its trees, not on the roads, the paving or the fields
+                    const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
+                    if (cover != royale::fortnite::Cover::Meadow && cover != royale::fortnite::Cover::Woods) continue;
+                }
                 const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
@@ -2588,16 +2623,17 @@ void DrawFlora(PlayState* play) {
             }
 
         // trees
-        const float treeReach = 1800.0f + 1800.0f * std::min(1.5f, gFoliage);
-        const int t0x = static_cast<int>(std::floor((px - treeReach) / kTreeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / kTreeCell));
-        const int t0z = static_cast<int>(std::floor((pz - treeReach) / kTreeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / kTreeCell));
+        const float treeReach = (island ? 1500.0f : 1800.0f) + (island ? 1300.0f : 1800.0f) * std::min(1.5f, gFoliage);   // the island's woods are dense: not quite as far
+        const float treeCell = TreeCell();
+        const int t0x = static_cast<int>(std::floor((px - treeReach) / treeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / treeCell));
+        const int t0z = static_cast<int>(std::floor((pz - treeReach) / treeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / treeCell));
         const float tamp = 0.008f + 0.03f * wind;
         for (int cz = t0z; cz <= t1z; cz++)
             for (int cx = t0x; cx <= t1x; cx++) {
                 TreeSpot tr;
                 if (!TreeIn(cx, cz, season, &tr)) continue;
                 const float d = std::hypot(tr.x - px, tr.z - pz);
-                if (d > treeReach) continue;
+                if (d > treeReach || !inView(tr.x, tr.z, 260.0f * tr.scale)) continue;
                 const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
@@ -2618,7 +2654,8 @@ void DrawFlora(PlayState* play) {
                 if (item < 0) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 84)) * kDecorCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 85)) * kDecorCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 80.0f)) continue;
+                if (island && royale::fortnite::CoverAt(x, z) != royale::fortnite::Cover::Meadow && royale::fortnite::CoverAt(x, z) != royale::fortnite::Cover::Woods) continue;
                 const FloraSpot* spot = FloraSpotAt(5, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Decor, static_cast<uint32_t>(item + 6 * theme));
@@ -2638,7 +2675,7 @@ void DrawFlora(PlayState* play) {
                 for (size_t k = 0; k < pieces.size(); k++) {
                     const ClutterPiece& c = pieces[k];
                     const float d = std::hypot(c.x - px, c.z - pz);
-                    if (d > townReach) continue;
+                    if (d > townReach || !inView(c.x, c.z, 80.0f)) continue;
                     const FloraSpot* spot = FloraSpotAt(6, static_cast<int>(pi), static_cast<int>(k), c.x, c.z);
                     if (spot == nullptr || !spot->ok) continue;
                     const GpuMesh* m = GpuMeshFor(royale::MeshKind::Clutter, c.variant);
@@ -2647,6 +2684,38 @@ void DrawFlora(PlayState* play) {
                 }
             }
         }
+    }
+
+    // The island's gusts: when the wind gets up (a storm blowing in, the storm itself, or any breezy autumn day) leaves are torn off its woods and
+    // tumble past the player along the wind, red and gold in autumn, green the rest of the year. Each leaf lives a few seconds, then starts again
+    // somewhere upwind; where they are comes from the time alone, so nothing is stored.
+    const float gust = !island ? 0.0f : std::clamp(std::max({ (wind - 0.25f) * 1.6f, season == 2 ? 0.35f + wind : 0.0f, gStormWeather * 0.8f }), 0.0f, 1.0f);
+    if (gust > 0.05f && gFoliage > 0.01f) {
+        // Each leaf belongs to a square of ground near the player (so it stays put in the world as you run past), starting at a spot in it and
+        // carried downwind for its few seconds.
+        const float cellSize = 700.0f, life = 5.0f, speed = 120.0f + 320.0f * wind;
+        const int perCell = static_cast<int>(7.0f * gust * std::min(1.3f, gFoliage));
+        const int pcx = static_cast<int>(std::floor(px / cellSize)), pcz = static_cast<int>(std::floor(pz / cellSize));
+        for (int ccz = pcz - 1; ccz <= pcz + 1; ccz++)
+            for (int ccx = pcx - 1; ccx <= pcx + 1; ccx++)
+                for (int j = 0; j < perCell; j++) {
+                    const int id = (ccx * 31 + ccz) * 16 + j;
+                    const float clock = t / life + Flora01(ccx * 16 + j, ccz, 101);
+                    const int round = static_cast<int>(std::floor(clock));
+                    const float age = clock - static_cast<float>(round);
+                    const float sx = (static_cast<float>(ccx) + Flora01(id, round, 102)) * cellSize - dx * speed * life * 0.5f;
+                    const float sz = (static_cast<float>(ccz) + Flora01(id, round, 103)) * cellSize - dz * speed * life * 0.5f;
+                    const float flutter = std::sin(t * 3.1f + j) * 30.0f;
+                    const float x = sx + dx * speed * age * life - dz * flutter, z = sz + dz * speed * age * life + dx * flutter;
+                    if (std::hypot(x - px, z - pz) > 1000.0f || !inView(x, z, 20.0f)) continue;
+                    float gy = 0;
+                    if (!RawFloorAt(x, z, &gy)) continue;
+                    const float y = std::max(gy, static_cast<float>(royale::fortnite::kWaterY)) + 25.0f + 140.0f * Flora01(id, round, 104) * (1.0f - age) + std::sin(t * 2.3f + j * 1.7f) * 18.0f;
+                    const GpuMesh* m = GpuMeshFor(royale::MeshKind::LeafPile, season == 2 ? FloraHash(id, round, 105) % 2 : 3u);   // autumn's reds and golds, or a mix with green in it
+                    if (m == nullptr || m->dl.empty()) continue;
+                    const float k = 0.13f * std::min(1.0f, std::min(age, 1.0f - age) * 6.0f);
+                    if (k > 0.004f) DrawFloraMesh(play, m, x, y, z, t * (1.3f + Flora01(id, 3, 106)) + j, std::sin(t * 4.0f + j) * 1.2f, std::cos(t * 3.3f + j * 0.7f) * 1.2f, k);
+                }
     }
 
     if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
@@ -2666,7 +2735,7 @@ void DrawFlora(PlayState* play) {
                 if (Flora01(cx, cz, 51) > 0.15f + 0.45f * gPuddleCover) continue;   // the first puddles show early, more join as it soaks in
                 const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 52)) * kPuddleCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 53)) * kPuddleCell;
                 const float d = std::hypot(x - px, z - pz);
-                if (d > reach) continue;
+                if (d > reach || !inView(x, z, 90.0f)) continue;
                 const FloraSpot* spot = FloraSpotAt(3, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4 + (season == 3 ? 4u : 0u));   // frozen over in winter
@@ -2697,8 +2766,9 @@ void ApplyTrees(Player* player) {
     const int season = FloraSeason();
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
     gFloraBudget = 6;
-    for (int cz = static_cast<int>(std::floor((pz - 160.0f) / kTreeCell)); cz <= static_cast<int>(std::floor((pz + 160.0f) / kTreeCell)); cz++)
-        for (int cx = static_cast<int>(std::floor((px - 160.0f) / kTreeCell)); cx <= static_cast<int>(std::floor((px + 160.0f) / kTreeCell)); cx++) {
+    const float cell = TreeCell();
+    for (int cz = static_cast<int>(std::floor((pz - 160.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 160.0f) / cell)); cz++)
+        for (int cx = static_cast<int>(std::floor((px - 160.0f) / cell)); cx <= static_cast<int>(std::floor((px + 160.0f) / cell)); cx++) {
             TreeSpot tr;
             if (!TreeIn(cx, cz, season, &tr)) continue;
             const float r = 20.0f * tr.scale + 14.0f, ddx = px - tr.x, ddz = pz - tr.z, d = std::hypot(ddx, ddz);
@@ -6437,8 +6507,10 @@ void EnsureSolidScenery() {
 //   * and this actor draws the island in their place, with the texture baked into vertex colours (the game draws our meshes that way).
 // Water is one big water box at the water level: lakes, rivers and the sea are the ground below it, and Link swims there.
 struct FortniteGpu {
-    std::vector<Vtx> vtx[2];                                                  // [0] the fine blocks, [1] the coarse ones
-    std::vector<Gfx> dl[2][(royale::fortnite::kCells / 8) * (royale::fortnite::kCells / 8)];   // one display list per chunk of 8 x 8 blocks
+    static constexpr int kChunk = 4, kChunks = royale::fortnite::kCells / kChunk;   // blocks per chunk side; chunks per map side
+    std::vector<Vtx> vtx[royale::fortnite::kLods];                            // [lod]: every block's vertices at that level of detail
+    std::vector<Gfx> dl[royale::fortnite::kLods][kChunks * kChunks];          // one display list per chunk and level of detail
+    float lo[kChunks * kChunks] = {}, hi[kChunks * kChunks] = {};             // each chunk's lowest and highest point, for culling
     bool built = false;
 };
 FortniteGpu gFortniteGpu;
@@ -6447,49 +6519,49 @@ bool gFortniteArrived = false;   // the local player has been put on the island 
 
 void BuildFortniteGpu() {
     namespace fn = royale::fortnite;
-    constexpr int kChunk = 8, kChunks = fn::kCells / kChunk;
+    constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;
     FortniteGpu& g = gFortniteGpu;
-    const int perBlock[2] = { fn::kBlockVerts, 4 };
-    for (int lod = 0; lod < 2; lod++) g.vtx[lod].assign(static_cast<size_t>(fn::kCells) * fn::kCells * perBlock[lod], Vtx{});   // never resized again: the lists point into them
+    for (int lod = 0; lod < fn::kLods; lod++) g.vtx[lod].assign(static_cast<size_t>(fn::kCells) * fn::kCells * fn::LodVerts(lod), Vtx{});   // never resized again: the lists point into them
+    std::fill(std::begin(g.lo), std::end(g.lo), 1.0e9f);
+    std::fill(std::begin(g.hi), std::end(g.hi), -1.0e9f);
     std::vector<fn::DrawVert> tmp;
     for (int bj = 0; bj < fn::kCells; bj++) {
         for (int bi = 0; bi < fn::kCells; bi++) {
-            for (int lod = 0; lod < 2; lod++) {
+            for (int lod = 0; lod < fn::kLods; lod++) {
                 tmp.clear();
-                fn::BlockVertices(bi, bj, lod == 0, tmp);
-                Vtx* out = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * perBlock[lod]];
+                fn::BlockVertices(bi, bj, lod, tmp);
+                Vtx* out = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(lod)];
                 for (size_t k = 0; k < tmp.size(); k++) {
                     out[k].v.ob[0] = tmp[k].x; out[k].v.ob[1] = tmp[k].y; out[k].v.ob[2] = tmp[k].z;
                     out[k].v.flag = 0;
                     out[k].v.tc[0] = out[k].v.tc[1] = 0;
                     out[k].v.cn[0] = tmp[k].r; out[k].v.cn[1] = tmp[k].g; out[k].v.cn[2] = tmp[k].b; out[k].v.cn[3] = 255;
                 }
+                if (lod == 0) {
+                    const int c = (bj / kChunk) * kChunks + bi / kChunk;
+                    for (const fn::DrawVert& v : tmp) { g.lo[c] = std::min<float>(g.lo[c], v.y); g.hi[c] = std::max<float>(g.hi[c], v.y); }
+                }
             }
         }
     }
     for (int cj = 0; cj < kChunks; cj++) {
         for (int ci = 0; ci < kChunks; ci++) {
-            for (int lod = 0; lod < 2; lod++) {
-                const size_t perBlockCmds = lod == 0 ? 1 + fn::kSub * fn::kSub * 2 : 3;
+            for (int lod = 0; lod < fn::kLods; lod++) {
                 std::vector<Gfx>& dl = g.dl[lod][cj * kChunks + ci];
-                dl.assign(kChunk * kChunk * perBlockCmds + 1, Gfx{});
+                dl.assign(kChunk * kChunk * (1 + fn::kSub * fn::kSub * 2) + 1, Gfx{});
                 Gfx* p = dl.data();
                 for (int bj = cj * kChunk; bj < (cj + 1) * kChunk; bj++) {
                     for (int bi = ci * kChunk; bi < (ci + 1) * kChunk; bi++) {
-                        const Vtx* base = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * perBlock[lod]];
-                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), perBlock[lod], 0);
-                        if (lod == 0) {
-                            const int row = fn::kSub + 1;
-                            for (int b = 0; b < fn::kSub; b++) {
-                                for (int a = 0; a < fn::kSub; a++) {
-                                    const int v = b * row + a;
-                                    gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
-                                    gSP1Triangle(p++, v, v + row + 1, v + row, 0);
-                                }
+                        const int use = fn::BlockIsOpenWater(bi, bj) ? fn::kLods - 1 : lod;   // open water is a flat square at any distance
+                        const int n = fn::LodSquares(use), row = n + 1;
+                        const Vtx* base = &g.vtx[use][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(use)];
+                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), fn::LodVerts(use), 0);
+                        for (int b = 0; b < n; b++) {
+                            for (int a = 0; a < n; a++) {
+                                const int v = b * row + a;
+                                gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
+                                gSP1Triangle(p++, v, v + row + 1, v + row, 0);
                             }
-                        } else {
-                            gSP1Triangle(p++, 0, 1, 3, 0);
-                            gSP1Triangle(p++, 0, 3, 2, 0);
                         }
                     }
                 }
@@ -6508,11 +6580,18 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
 void FortniteTerrain_Update(Actor*, PlayState*) {}
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
+// Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
+// per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
     namespace fn = royale::fortnite;
     if (!gFortniteGpu.built) BuildFortniteGpu();
-    constexpr int kChunk = 8, kChunks = fn::kCells / kChunk;
-    const Vec3f eye = play->view.eye;
+    constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;
+    const Vec3f eye = play->view.eye, at = play->view.lookAt;
+    float fx = at.x - eye.x, fy = at.y - eye.y, fz = at.z - eye.z;
+    const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl > 1.0f) { fx /= fl; fy /= fl; fz /= fl; } else { fx = 0; fy = -1; fz = 0; }
+    const float flat = std::hypot(fx, fz);
+    const float halfX = 0.5f * kChunk * fn::kCellX, halfZ = 0.5f * kChunk * fn::kCellZ;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(0.0f, 0.0f, 0.0f, MTXMODE_NEW);
@@ -6521,9 +6600,20 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
     for (int cj = 0; cj < kChunks; cj++) {
         for (int ci = 0; ci < kChunks; ci++) {
+            const int c = cj * kChunks + ci;
             const float cx = -fn::kHalfX + (ci + 0.5f) * kChunk * fn::kCellX, cz = -fn::kHalfZ + (cj + 0.5f) * kChunk * fn::kCellZ;
-            const int lod = std::hypot(eye.x - cx, eye.z - cz) < 3300.0f ? 0 : 1;   // fine up close, two triangles per square far away
-            gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][cj * kChunks + ci].data()));
+            const float cy = 0.5f * (gFortniteGpu.lo[c] + gFortniteGpu.hi[c]), halfY = 0.5f * (gFortniteGpu.hi[c] - gFortniteGpu.lo[c]);
+            const float dx = cx - eye.x, dy = cy - eye.y, dz = cz - eye.z;
+            const float r = std::sqrt(halfX * halfX + halfZ * halfZ + halfY * halfY) + 60.0f;   // the chunk's bounding sphere, with a margin
+            const float along = dx * fx + dy * fy + dz * fz;
+            if (along < -r) continue;                                                           // wholly behind the camera
+            if (flat > 0.6f) {                                                                  // looking out rather than down: also skip what is far off to the side
+                const float hx = fx / flat, hz = fz / flat, ahead = dx * hx + dz * hz, side = std::fabs(dx * hz - dz * hx);
+                if (side - r > std::max(0.0f, ahead + r) * 2.4f) continue;
+            }
+            const float dist = std::hypot(dx, dz);
+            const int lod = dist < 2600.0f ? 0 : dist < 5200.0f ? 1 : 2;
+            gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][c].data()));
         }
     }
     CLOSE_DISPS(play->state.gfxCtx);

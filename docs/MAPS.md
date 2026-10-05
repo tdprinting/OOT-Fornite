@@ -61,10 +61,13 @@ storm, loot, spawns, skydive and bots as the other maps.
 
 | What | How |
 |---|---|
-| Size | The island's inland holds a circle of radius about 5600 (the host's game still measures the live ground when a match starts, up to 7400); the whole plane is 14800 x 15400 |
+| Size | The match circle holds the whole island, coast to coast (the host's game measures the live ground when a match starts: nearly all the land, up to 7400); the whole plane is 14800 x 15400 |
 | Ground | 64 x 64 squares, two triangles each (8192 triangles, 4225 vertices). Heights from the heightmap, y = 0 is the typical land, hills reach about +340, the sea bed is about -520 |
 | Water | One water box at y = -227 over the whole map: lakes, rivers and the sea are the ground below it. Spawns, chests and the storm centre keep off it (`UnderWater`), and Link swims in it |
-| Looks | The texture is baked into vertex colours (the game draws our meshes that way), with a little hill shading: a fine mesh (4 x 4 per square) within 3300 units, two triangles per square beyond. The minimap shows the texture itself |
+| Looks | The texture is baked into vertex colours (the game draws our meshes that way), with a little hill shading: a fine mesh (4 x 4 per square) within 2600 units, 2 x 2 to 5200, two triangles per square beyond. Open sea is always two triangles a square, and chunks behind the camera are not drawn. The minimap shows the texture itself |
+| Places | 24 named places, each built on the town painted on the texture (`GenerateIslandPois`, `kIslandSpots` in `shared/poi.h`): Tilted Towers, Pleasant Park, Dusty Depot, Loot Lake, Wailing Woods and the rest, with houses, sheds, a lodge and lookout, a factory yard, a graveyard, junk piles, a swamp, farms and a drive-in. Nine of them have a mini boss standing guard, and the island gets three more mini bosses than the other maps. A small match gets the first (most famous) few |
+| Foliage | `scripts/make_fortnite_map.py` also reads what covers the ground from the texture's colours (`shared/fortnite_cover_data.h`: water, meadow, woods, paving, dirt). Trees grow where the woods are painted (dense in Wailing Woods, a lone one here and there on the meadows), grass and flowers on the meadows, nothing on the roads, the towns' paving or the fields |
+| Weather | Its own table (`SkyWeights`): more storms and sea fog than the field, real snow in winter. When the wind gets up (a storm coming, the storm itself, any autumn day) leaves blow across the island |
 | Lobby spawn | Flat inland ground near the island's middle (`kSpawnX`, `kSpawnZ`), with a little scatter |
 | Storm | The usual: a circle fitted to the measured ground, shrinking to centres on dry land |
 
@@ -76,10 +79,11 @@ How it plugs into the game (`patches/0013-royale-custom-collision.patch`, `Royal
 * if the host switches between Hyrule Field and the Fortnite Map, the scene is loaded again, since the ground is chosen when it loads.
 
 To change the island: edit `XZ_SCALE`, `Y_SCALE`, `WATER_H` at the top of `scripts/make_fortnite_map.py`, run it (needs numpy and pillow) and commit
-`shared/fortnite_map_data.h`. To use a different heightmap or texture, replace `assets/fortnite/heightmap.png` (16 bit, heights between -0.964 and 0.964)
+`shared/fortnite_map_data.h` and `shared/fortnite_cover_data.h`. On the island the mod answers "how high is the ground here" from the triangles
+themselves (`OnIsland` in `RawFloorAt`, `UnderWater`, `HazardFloorAt`), not with the game's raycasts, which makes laying out a match much cheaper. To use a different heightmap or texture, replace `assets/fortnite/heightmap.png` (16 bit, heights between -0.964 and 0.964)
 and `texture.jpg`, or start again from a Blender plane with `--from-obj`.
 
-**Status:** the island data, collision mesh and the maths are unit tested (`FortniteMapIsSound`); the engine patch and the drawing compile in CI but, like
+**Status:** the island data, collision mesh, levels of detail, places, ground cover and weather are unit tested (`FortniteMapIsSound`, `FortniteIslandPlaces`); the engine patch and the drawing compile in CI but, like
 the rest of the mod, none of it has been run in the game yet.
 
 **Solo test button:** the Battle Royale menu has "Fortnite Map: solo test" under "Host a lobby". It hosts a lobby on the Fortnite Map with no bots and no lobby timer,
