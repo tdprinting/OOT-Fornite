@@ -2267,6 +2267,27 @@ static void FortniteMapIsSound() {
     CHECK(fine.front().y == coarse[0].y && fine.back().y == coarse[3].y);
 }
 
+static void SoloTestHasNoBotsAndKeepsGoing() {
+    const Circle map = {{0, 0}, 3000.0f};
+    // A normal match with one human is filled with bots, and ends the moment one player is left.
+    Match normal(5, map, 10);
+    normal.AddHuman(1);
+    normal.Start();
+    CHECK(normal.Players().size() > 1);
+    // Test mode: just the human, and the match goes on with one player alive, with its storm and everything else running.
+    Match solo(5, map, 10);
+    CHECK(solo.SetSoloTest(true));
+    solo.AddHuman(1);
+    solo.Start();
+    CHECK(solo.Players().size() == 1 && solo.SoloTest());
+    for (int i = 0; i < 20 * 120 && solo.State() != MatchState::InMatch; i++) solo.Tick(0.05f);
+    CHECK(solo.State() == MatchState::InMatch);
+    for (int i = 0; i < 20 * 20; i++) solo.Tick(0.05f);
+    CHECK(solo.State() == MatchState::InMatch && solo.Alive() == 1);
+    CHECK(!solo.SetSoloTest(false));   // only in the lobby
+    CHECK(kFortniteMapIndex == royale::fortnite::kMapId);
+}
+
 static void CustomObjModels() {
     // A little winged thing: a body box, two wings and a tail, with a material colour and a quad that must be cut into two triangles.
     const std::string obj =
@@ -3192,7 +3213,7 @@ static void LiloTheCatModel() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

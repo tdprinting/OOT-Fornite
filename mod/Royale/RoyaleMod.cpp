@@ -5746,6 +5746,7 @@ bool gWasJoined = false;
 int gLastCountdownShown = -1;
 int gAttackCooldown = 0;     // game frames until B may attack again
 bool gPendingStart = false;  // the host pressed Start; waiting to be in Hyrule Field, measure the map, then begin
+bool gSoloStartWanted = false;   // "Fortnite Map solo test" was pressed: start the match as soon as the host is in its own lobby
 int gInFieldFrames = 0;      // frames spent in the field without a transition, so the scene's collision is ready
 bool gSpectating = false;
 
@@ -7259,6 +7260,10 @@ void ReportEvents(const royale::HudState& hud) {
 // The host's Start does three things in order: get to Hyrule Field, measure the real playable area and rebuild the world on it
 // (loot, spawns and storm on ground that exists), then begin.
 void DriveStart(const royale::HudState& hud) {
+    if (gSoloStartWanted) {   // the solo test needs no one else: press Start for the host as soon as they are in the lobby
+        if (!gSession.Joined() || !gSession.SoloTest()) gSoloStartWanted = false;
+        else if (hud.isHost && hud.state == royale::MatchState::Lobby && hud.haveSelf && InGame() && !gPendingStart) { gPendingStart = true; gSoloStartWanted = false; }
+    }
     if (!gPendingStart) return;
     if (!gSession.Joined() || !hud.isHost || hud.state != royale::MatchState::Lobby) { gPendingStart = false; return; }
     if (!InGame()) return;
@@ -9135,6 +9140,21 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
             Trace("host: addresses listed");
         }
     }
+    ImGui::Spacing();
+
+    if (ImGui::Button("Fortnite Map: solo test", ImVec2(220, 0))) {
+        ui.port = std::clamp(ui.port, 1024, 65535);
+        ui.error.clear();
+        SaveUi(ui);
+        gSession.ClearLastEnded();
+        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true)) {
+            ui.error = "Could not host: " + ui.error;
+        } else {
+            gSoloStartWanted = true;
+            RefreshLocalAddresses(ui, true);
+        }
+    }
+    ImGui::TextColored(kGrey, "Just you on the Fortnite Map, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
 
     Heading("Join a lobby");

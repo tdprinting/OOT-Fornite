@@ -240,6 +240,10 @@ class Match {
         return true;
     }
     int PlayerLimit() const { return playerLimit; }
+    // Test mode: Start() adds no bots, and the match does not end just because one player is left (it ends when nobody is). Everything else
+    // (storm, loot, bosses, supply drops, allies, weather) runs as in a real match. Lobby only.
+    bool SetSoloTest(bool on) { if (state != MatchState::Lobby) return false; soloTest = on; return true; }
+    bool SoloTest() const { return soloTest; }
 
     bool AddHuman(uint32_t id) {
         if (state != MatchState::Lobby || static_cast<int>(players.size()) >= playerLimit) return false;
@@ -252,7 +256,7 @@ class Match {
         if (state != MatchState::Lobby || players.empty()) return false;
         humans = static_cast<int>(players.size());
         uint32_t nextId = 1000;
-        while (static_cast<int>(players.size()) < playerLimit) {
+        while (!soloTest && static_cast<int>(players.size()) < playerLimit) {
             players.push_back(MakePlayer(nextId++, true));
             players.back().scene = static_cast<uint8_t>(MapOf(mapId).scene);
         }
@@ -296,7 +300,7 @@ class Match {
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
-                if (Alive() <= 1) Enter(MatchState::Ending);
+                if (Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
             case MatchState::Lobby:
@@ -2217,6 +2221,7 @@ class Match {
     MatchState state = MatchState::Lobby;
     float stateTime = 0, stormTime = 0, clock = 0;
     int humans = 0;
+    bool soloTest = false;
     std::vector<PlayerState> players;
     std::vector<LootEntry> loot;
     std::vector<MatchEvent> events;

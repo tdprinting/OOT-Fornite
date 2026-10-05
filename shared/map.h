@@ -109,6 +109,8 @@ inline constexpr const char* kLiloPetLines[kLiloPetLineCount] = {
 };
 
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
+constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
+static_assert(kFortniteMapIndex < kMapCount, "the Fortnite Map is the sixth place");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
 
