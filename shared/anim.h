@@ -20,6 +20,7 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         ItemGet = 28,     // holds a new find up over his head
                         OpenChest = 29,   // kicks a chest open
                         Jump = 30,        // a jump (C-Up)
+                        Emote6 = 31, Emote7 = 32, Emote8 = 33,   // the emote wheel's newer gestures (older clients draw them as Idle)
                         Count };
 
 // The moves that dodge like a roll does: the server gives them the same moment of safety.
@@ -33,11 +34,26 @@ constexpr bool IsStrike(uint8_t a) {
 }
 
 // Emotes: a player stands still and does a gesture the others can see. They travel as the player's anim value like everything else.
-constexpr int kEmoteCount = 5;
-inline constexpr const char* kEmoteNames[kEmoteCount] = { "Wow!", "Admire your hands", "Look to the sky", "Admire your sword", "Chicken dance" };
+// They are picked on the emote wheel (hold C-Right), so the order is the wheel's, clockwise from the top.
+constexpr int kEmoteCount = 8;
+inline constexpr const char* kEmoteNames[kEmoteCount] = { "Wow!", "Admire your hands", "Look to the sky", "Admire your sword", "Chicken dance",
+                                                          "Victory!", "I give up", "Look around" };
 constexpr int kChickenDanceEmote = 4; // a custom pose rather than one of the game's animations
 constexpr float kChickenDanceSeconds = 8.0f;
-constexpr bool IsEmote(uint8_t a) { return a >= static_cast<uint8_t>(Anim::Emote1) && a <= static_cast<uint8_t>(Anim::Emote5); }
-constexpr uint8_t EmoteAnim(int index) { return static_cast<uint8_t>(static_cast<int>(Anim::Emote1) + (index < 0 ? 0 : index >= kEmoteCount ? kEmoteCount - 1 : index)); }
+constexpr bool IsEmote(uint8_t a) {
+    return (a >= static_cast<uint8_t>(Anim::Emote1) && a <= static_cast<uint8_t>(Anim::Emote5)) ||
+           (a >= static_cast<uint8_t>(Anim::Emote6) && a <= static_cast<uint8_t>(Anim::Emote8));
+}
+// The first five emotes sit together after Dead; the later ones were added at the end of the list so older builds still understand everything else.
+constexpr uint8_t EmoteAnim(int index) {
+    const int i = index < 0 ? 0 : index >= kEmoteCount ? kEmoteCount - 1 : index;
+    return static_cast<uint8_t>(i < 5 ? static_cast<int>(Anim::Emote1) + i : static_cast<int>(Anim::Emote6) + (i - 5));
+}
+// Which emote an anim value is (the inverse of EmoteAnim), or -1.
+constexpr int EmoteIndex(uint8_t a) {
+    if (a >= static_cast<uint8_t>(Anim::Emote1) && a <= static_cast<uint8_t>(Anim::Emote5)) return a - static_cast<uint8_t>(Anim::Emote1);
+    if (a >= static_cast<uint8_t>(Anim::Emote6) && a <= static_cast<uint8_t>(Anim::Emote8)) return 5 + (a - static_cast<uint8_t>(Anim::Emote6));
+    return -1;
+}
 
 } // namespace royale

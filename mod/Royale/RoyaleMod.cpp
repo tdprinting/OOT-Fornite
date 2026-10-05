@@ -3727,28 +3727,136 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     }
 }
 
-bool gEmotePanelOpen = false;
+// ---- the emote wheel ---------------------------------------------------------------------------------------------------------------
+// Hold C-Right and the wheel comes up in the middle of the screen: point the stick at an emote and let go of C-Right to do it (or press A).
+// A quick tap of C-Right does the last one again; B closes it. By touch or mouse, tap EMOTE (bottom right), then tap an emote.
+// While it is up the stick picks an emote instead of moving Link. It is drawn in the look of the game's pause menu: the text-box black,
+// gold rules and the pulsing corner cursor.
+struct EmoteWheel {
+    bool open = false;
+    bool byTouch = false;   // opened with the EMOTE button: stays up until an emote (or anywhere else) is tapped
+    double openedAt = 0;
+    int hover = -1;         // the emote pointed at, -1 for none yet
+};
+EmoteWheel gWheel;
+int gLastEmote = 0;         // what a quick tap of C-Right does again
 void StartEmote(int index, const royale::HudState& hud); // below, with the emote logic
+bool CanEmote(const royale::HudState& hud);
 
-// The emote button (bottom right): tap it to open the list, tap an emote to play it. C-Right plays them in turn.
+void OpenEmoteWheel(bool byTouch) {
+    gWheel = EmoteWheel{};
+    gWheel.open = true;
+    gWheel.byTouch = byTouch;
+    gWheel.openedAt = ImGui::GetTime();
+    Audio_PlaySoundGeneral(NA_SE_SY_DECIDE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+void CloseEmoteWheel() { gWheel = EmoteWheel{}; }
+
+// Which emote a direction points at: x to the right, y up. The emotes go clockwise from the top.
+int WheelSliceAt(float x, float y) {
+    float turns = std::atan2(x, y) / 6.2831853f;
+    if (turns < 0.0f) turns += 1.0f;
+    return static_cast<int>(turns * royale::kEmoteCount + 0.5f) % royale::kEmoteCount;
+}
+
+void WheelText(ImDrawList* dl, ImFont* font, float size, ImVec2 centre, ImU32 col, const char* text) {
+    const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0, text);
+    const ImVec2 at(centre.x - sz.x * 0.5f, centre.y - sz.y * 0.5f);
+    const float o = std::max(1.5f, size * 0.06f);
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) if (dx || dy) dl->AddText(font, size, ImVec2(at.x + dx * o, at.y + dy * o), IM_COL32(20, 10, 0, 235), text);
+    dl->AddText(font, size, at, col, text);
+}
+
 void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    if (!h.selfAlive || !InField()) return;
+    if (!h.selfAlive || !InField()) { if (gWheel.open) CloseEmoteWheel(); return; }
     ImGuiIO& io = ImGui::GetIO();
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
-    const float w = 128.0f * scale, hgt = 40.0f * scale;
-    const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
-    auto inside = [&](ImVec2 p0, ImVec2 p1) { return io.MousePos.x >= p0.x && io.MousePos.x <= p1.x && io.MousePos.y >= p0.y && io.MousePos.y <= p1.y; };
-    dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
-    dl->AddRect(a, b, gEmotePanelOpen ? IM_COL32(255, 236, 120, 255) : IM_COL32(190, 190, 200, 255), 6.0f * scale, 0, 2.5f * scale);
-    dl->AddText(font, 16.0f * scale, ImVec2(a.x + 12 * scale, a.y + 10 * scale), IM_COL32(255, 255, 255, 255), "EMOTE");
-    if (tap && inside(a, b)) gEmotePanelOpen = !gEmotePanelOpen;
-    if (!gEmotePanelOpen) return;
-    for (int i = 0; i < royale::kEmoteCount; i++) {
-        const ImVec2 ea(a.x - 40.0f * scale, a.y - (i + 1) * (hgt + 6.0f * scale)), eb(b.x, ea.y + hgt);
-        dl->AddRectFilled(ea, eb, OotPanel(215), 6.0f * scale);
-        dl->AddRect(ea, eb, IM_COL32(120, 200, 255, 255), 6.0f * scale, 0, 2.0f * scale);
-        dl->AddText(font, 15.0f * scale, ImVec2(ea.x + 10 * scale, ea.y + 11 * scale), IM_COL32(255, 255, 255, 255), royale::kEmoteNames[i]);
-        if (tap && inside(ea, eb)) StartEmote(i, h);
+    const ImU32 gold = IM_COL32(255, 214, 90, 255), goldDark = IM_COL32(176, 118, 24, 255);
+    const ImU32 lit = IM_COL32(255, 236, 120, 255);
+    bool used = false;   // a tap the wheel has dealt with
+
+    // The EMOTE button, bottom right.
+    {
+        const float w = 128.0f * scale, hgt = 40.0f * scale;
+        const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
+        dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
+        dl->AddRect(a, b, gWheel.open ? lit : goldDark, 6.0f * scale, 0, 2.5f * scale);
+        WheelText(dl, font, 16.0f * scale, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), IM_COL32(255, 255, 255, 255), "EMOTE");
+        if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
+            used = true;
+            if (gWheel.open) CloseEmoteWheel();
+            else if (CanEmote(h)) OpenEmoteWheel(true);
+        }
+    }
+    if (!gWheel.open) return;
+
+    const ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+    const float outer = 168.0f * scale, inner = 58.0f * scale, mid = (outer + inner) * 0.5f;
+    const int n = royale::kEmoteCount;
+    const float t = static_cast<float>(ImGui::GetTime() - gWheel.openedAt);
+    const float grow = std::min(1.0f, t / 0.12f);   // pops open
+    const float R = outer * (0.85f + 0.15f * grow), r = inner;
+
+    // The mouse or a finger points at an emote too.
+    const float mx = io.MousePos.x - c.x, my = io.MousePos.y - c.y, md = std::sqrt(mx * mx + my * my);
+    if (gWheel.byTouch && md > r && md < R + 30.0f * scale) gWheel.hover = WheelSliceAt(mx, -my);
+
+    // The ring: the text-box black, a gold rule round each edge, and spokes between the emotes.
+    dl->AddCircleFilled(ImVec2(c.x + 5 * scale, c.y + 6 * scale), R, IM_COL32(0, 0, 0, 70), 64);
+    for (int i = 0; i < n; i++) {
+        const float a0 = (i - 0.5f) / n * 6.2831853f - 1.5707963f, a1 = (i + 0.5f) / n * 6.2831853f - 1.5707963f;
+        dl->PathClear();
+        dl->PathArcTo(c, R, a0, a1, 24);
+        dl->PathArcTo(c, r, a1, a0, 12);
+        dl->PathFillConvex(i == gWheel.hover ? IM_COL32(70, 52, 20, 235) : OotPanel(215));
+    }
+    dl->AddCircle(c, R, goldDark, 64, 2.0f * scale);
+    dl->AddCircle(c, R - 5 * scale, (gold & 0x00FFFFFF) | 0x8C000000, 64, 1.0f * scale);
+    dl->AddCircle(c, r, goldDark, 48, 2.0f * scale);
+    for (int i = 0; i < n; i++) {
+        const float a = (i + 0.5f) / n * 6.2831853f - 1.5707963f;
+        dl->AddLine(ImVec2(c.x + std::cos(a) * r, c.y + std::sin(a) * r), ImVec2(c.x + std::cos(a) * (R - 5 * scale), c.y + std::sin(a) * (R - 5 * scale)),
+                    (goldDark & 0x00FFFFFF) | 0xB4000000, 1.5f * scale);
+    }
+    // The names, and the pulsing corner cursor round the one pointed at.
+    for (int i = 0; i < n; i++) {
+        const float a = static_cast<float>(i) / n * 6.2831853f - 1.5707963f;
+        const ImVec2 p(c.x + std::cos(a) * mid, c.y + std::sin(a) * mid);
+        const bool sel = i == gWheel.hover;
+        // Two short lines at most: the names are split at the first space when they are long.
+        std::string name = royale::kEmoteNames[i];
+        const size_t space = name.find(' ');
+        const float size = 15.0f * scale;
+        if (name.size() > 9 && space != std::string::npos) {
+            WheelText(dl, font, size, ImVec2(p.x, p.y - size * 0.55f), sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.substr(0, space).c_str());
+            WheelText(dl, font, size, ImVec2(p.x, p.y + size * 0.55f), sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.substr(space + 1).c_str());
+        } else {
+            WheelText(dl, font, size, p, sel ? IM_COL32(255, 255, 150, 255) : IM_COL32(236, 228, 190, 255), name.c_str());
+        }
+        if (sel) {
+            const float pulse = 0.5f + 0.5f * std::sin(t * 6.0f);
+            const float hw = 44.0f * scale + 3.0f * scale * pulse, hh = 24.0f * scale + 3.0f * scale * pulse, len = 10.0f * scale, w = 3.0f * scale;
+            const ImU32 col = (lit & 0x00FFFFFF) | (static_cast<ImU32>(255 * (0.75f + 0.25f * pulse)) << 24);
+            const ImVec2 q0(p.x - hw, p.y - hh), q1(p.x + hw, p.y + hh);
+            dl->AddLine(q0, ImVec2(q0.x + len, q0.y), col, w); dl->AddLine(q0, ImVec2(q0.x, q0.y + len), col, w);
+            dl->AddLine(ImVec2(q1.x, q0.y), ImVec2(q1.x - len, q0.y), col, w); dl->AddLine(ImVec2(q1.x, q0.y), ImVec2(q1.x, q0.y + len), col, w);
+            dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q0.x + len, q1.y), col, w); dl->AddLine(ImVec2(q0.x, q1.y), ImVec2(q0.x, q1.y - len), col, w);
+            dl->AddLine(q1, ImVec2(q1.x - len, q1.y), col, w); dl->AddLine(q1, ImVec2(q1.x, q1.y - len), col, w);
+        }
+    }
+    // The middle: what will happen, and how.
+    dl->AddCircleFilled(c, r - 3 * scale, OotPanel(230), 48);
+    WheelText(dl, font, 17.0f * scale, ImVec2(c.x, c.y - 9 * scale), gold, "EMOTE");
+    WheelText(dl, font, 12.0f * scale, ImVec2(c.x, c.y + 11 * scale), IM_COL32(236, 228, 190, 255), gWheel.byTouch ? "tap one" : "B: close");
+
+    if (tap && !used) {
+        if (md > r && md < R + 30.0f * scale) {
+            const int pick = WheelSliceAt(mx, -my);
+            CloseEmoteWheel();
+            StartEmote(pick, h);
+        } else {
+            CloseEmoteWheel();   // a tap anywhere else puts it away
+        }
     }
 }
 
