@@ -6,6 +6,7 @@
 #include "../../shared/tune.h"
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
+#include "../../shared/fortnite_map.h"
 #include <set>
 #include "cloth.h"
 #include <string>
@@ -2220,6 +2221,52 @@ static void MapsHaveTheirOwnNamesAndBosses() {
     }
 }
 
+static void FortniteMapIsSound() {
+    namespace fn = royale::fortnite;
+    CHECK(fn::kMapId < kMapCount && std::string(MapOf(fn::kMapId).name) == "Fortnite Map" && MapOf(fn::kMapId).scene == kHyruleFieldScene);
+    const fn::Mesh m = fn::BuildCollision();
+    CHECK(m.verts.size() == static_cast<size_t>(fn::kVerts * fn::kVerts) && m.polys.size() == static_cast<size_t>(fn::kCells * fn::kCells * 2));
+    CHECK(m.verts.size() < 8192 && m.polys.size() < 32767);   // the game's vertex numbers have 13 bits, its triangle numbers 15
+    // Every triangle points up, has a unit normal and sits on its plane; and the ground height query agrees with the triangles.
+    bool sound = true;
+    float steep = 0;
+    for (const fn::Poly& p : m.polys) {
+        const double nx = p.nx / 32767.0, ny = p.ny / 32767.0, nz = p.nz / 32767.0;
+        sound &= p.ny > 0 && std::fabs(nx * nx + ny * ny + nz * nz - 1.0) < 0.01;
+        for (uint16_t v : { p.a, p.b, p.c }) {
+            sound &= v < m.verts.size();
+            const fn::Vert& q = m.verts[v];
+            sound &= std::fabs(nx * q.x + ny * q.y + nz * q.z + p.dist) < 2.0;
+        }
+        if (ny < 0.8) steep += 1;
+    }
+    CHECK(sound);
+    CHECK(steep / m.polys.size() < 0.25f);                          // mostly walkable: cliffs are the minority
+    for (int k = 0; k < 400; k++) {                                 // a spread of points: the height lies between its neighbours' and the plane agrees
+        const float x = -fn::kHalfX + 1.0f + (2 * fn::kHalfX - 2.0f) * ((k * 37) % 400) / 400.0f, z = -fn::kHalfZ + 1.0f + (2 * fn::kHalfZ - 2.0f) * ((k * 91) % 400) / 400.0f;
+        float y = 0;
+        CHECK(fn::GroundHeight(x, z, &y));
+        CHECK(y >= m.lo.y - 1 && y <= m.hi.y + 1);
+    }
+    float y;
+    CHECK(!fn::GroundHeight(fn::kHalfX + 10.0f, 0, &y) && !fn::GroundHeight(0, -fn::kHalfZ - 10.0f, &y));
+    // The lobby spawn is dry, the island's centre is land and the far corner is sea; the circle in the map table holds the spawn.
+    CHECK(fn::GroundHeight(fn::kSpawnX, fn::kSpawnZ, &y) && y > fn::kWaterY + 50);
+    CHECK(fn::IsWaterAt(-fn::kHalfX + 100.0f, -fn::kHalfZ + 100.0f));
+    CHECK(Distance({ fn::kSpawnX, fn::kSpawnZ }, MapOf(fn::kMapId).fallback.center) < MapOf(fn::kMapId).fallback.radius);
+    CHECK(MapOf(fn::kMapId).maxRadius <= 7400.0f && MapOf(fn::kMapId).fallback.radius <= MapOf(fn::kMapId).maxRadius);
+    // The drawn blocks tile the ground, never dip under the water sheet, and the fine version passes through the collision's corners.
+    std::vector<fn::DrawVert> fine, coarse;
+    fn::BlockVertices(10, 20, true, fine);
+    fn::BlockVertices(10, 20, false, coarse);
+    CHECK(fine.size() == static_cast<size_t>(fn::kBlockVerts) && coarse.size() == 4);
+    bool dry = true;
+    for (const fn::DrawVert& v : fine) dry &= v.y >= fn::kWaterY - 1;
+    CHECK(dry);
+    CHECK(fine.front().x == coarse[0].x && fine.front().z == coarse[0].z && fine.back().x == coarse[3].x && fine.back().z == coarse[3].z);
+    CHECK(fine.front().y == coarse[0].y && fine.back().y == coarse[3].y);
+}
+
 static void CustomObjModels() {
     // A little winged thing: a body box, two wings and a tail, with a material colour and a quad that must be cut into two triangles.
     const std::string obj =
@@ -3145,7 +3192,7 @@ static void LiloTheCatModel() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

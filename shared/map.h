@@ -48,7 +48,14 @@ inline const char* const kPoiNames[] = {
     "Haunted Daunted Dune",    "Sunbaked Naked Rock",   "Scarab Carb Cab",         "Vulture Culture Perch",
     "Dust Rust Trust",         "Pharaoh Narrow Arrow",  "Sphinx Winks Jinx",       "Camel Mammal Trail",
     "Dune Tune Prune",         "Mesa Pizza Visa",        "Wadi Shady Lady",           "Tomb Zoom Room",
-    "Caravan Divan Pan",       "Sand Band Grand",        "Palm Calm Psalm",           "Ruin Doing Brewing",};
+    "Caravan Divan Pan",       "Sand Band Grand",        "Palm Calm Psalm",           "Ruin Doing Brewing",
+    // Fortnite Map
+    "Tilted Towers Hours",     "Pleasant Park Lark",    "Retail Row Show",         "Salty Springs Things",
+    "Loot Lake Quake",         "Dusty Depot Slot",      "Greasy Grove Stove",      "Lonely Lodge Dodge",
+    "Snobby Shores Doors",     "Shifty Shafts Crafts",  "Flush Factory Trick-tory", "Fatal Fields Yields",
+    "Lucky Landing Standing",  "Haunted Hills Chills",  "Junk Junction Function",  "Moisty Mire Choir",
+    "Anarchy Acres Makers",    "Wailing Woods Goods",   "Tomato Town Crown",       "Paradise Palms Calms",
+    "Risky Reels Wheels",      "Lazy Links Drinks",     "Frosty Flights Heights",  "Sweaty Sands Bands",};
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
 // the centre of the walkable ground and a radius that holds most of it. The host's game still measures the live scene when a match starts.
@@ -74,6 +81,10 @@ constexpr MapDef kMaps[] = {
      {BossKind::Lava, BossKind::Stone}, BossKind::DragonFire},
     {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{2648.0f, 85.0f}, 4200.0f}, 5200.0f, Theme::Desert,
      {BossKind::Dune, BossKind::Stone}, BossKind::DragonSand},
+    // The Fortnite Map is played inside Hyrule Field's scene, with the scene's collision swapped for the island (shared/fortnite_map.h). Its circle is
+    // the island's inland (scripts/make_fortnite_map.py prints the numbers); the host's game measures the live ground when a match starts.
+    {"Fortnite Map", "A big island of hills, lakes and towns: drop in, loot up and be the last one standing", 0x51, {{89.0f, -609.0f}, 5600.0f}, 7400.0f, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
