@@ -1,0 +1,19 @@
+diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
+index 7203065..09162db 100644
+--- a/soh/soh/OTRGlobals.cpp
++++ b/soh/soh/OTRGlobals.cpp
+@@ -2476,6 +2476,14 @@ extern "C" int CustomMessage_RetrieveIfExists(PlayState* play) {
+         messageEntry =
+             CustomMessageManager::Instance->RetrieveMessage(customMessageTableID, TEXT_FISHERMAN_LEAVE, MF_FORMATTED);
+     }
++    // OOT Royale: text ids 0x7F00 to 0x7FFF are the Royale mod's own lines (Lilo, Maya, the sign), in the "RoyaleMod" table,
++    // wrapped to the text box automatically.
++    if (textId >= 0x7F00 && textId <= 0x7FFF) {
++        try {
++            messageEntry = CustomMessageManager::Instance->RetrieveMessage("RoyaleMod", textId, MF_AUTO_FORMAT);
++        } catch (const MessageNotFoundException&) {
++        }
++    }
+     font->charTexBuf[0] = (messageEntry.GetTextBoxType() << 4) | messageEntry.GetTextBoxPosition();
+     switch (gSaveContext.language) {
+         case LANGUAGE_FRA:
