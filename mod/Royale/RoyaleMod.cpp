@@ -9,6 +9,7 @@
 #include "anim.h"
 #include "cloth.h"
 #include "build_version.h"
+#include "lilo_anim.h"
 #include "logo_data.h"
 #include "map.h"
 #include "meshes.h"
@@ -42,6 +43,7 @@
 #include "soh/ShipInit.hpp"
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/Enhancements/nametag.h"
+#include "soh/Enhancements/custom-message/CustomMessageManager.h"
 #include "soh/Notification/Notification.h"
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/SohGui/SohMenu.h"
@@ -1547,6 +1549,9 @@ void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 bool MayaNear();
 void TalkToMaya();
+bool SignNear();
+bool MessageBoxUp();
+void PressedATalk();   // A next to Lilo, Maya or the sign: the game's own text box (see "talking")
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);
@@ -4349,10 +4354,14 @@ void DrawOverlay() {
             const royale::AllyDef& def = royale::kAllyDefs[ally];
             const bool afford = h.rupees >= def.price;
             prompt(afford ? IM_COL32(255, 222, 110, 255) : IM_COL32(255, 130, 120, 255), "Hire " + std::string(def.name) + " (" + std::to_string(def.price) + " rupees)");
+        } else if (MessageBoxUp()) {
+            // reading: the text box has the screen
         } else if (MayaNear()) {
             prompt(IM_COL32(255, 170, 215, 255), "Talk to Maya");
         } else if (LiloNear()) {
-            prompt(IM_COL32(235, 235, 230, 255), "Pet Lilo");
+            prompt(IM_COL32(235, 235, 230, 255), "Talk to Lilo");
+        } else if (SignNear()) {
+            prompt(IM_COL32(255, 232, 160, 255), "Read the sign");
         }
     }
     if (ImGui::GetTime() < gBannerUntil) {
@@ -5344,7 +5353,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
-    if (in.press.button & BTN_A) {
+    // While a text box is up, A belongs to it.
+    if ((in.press.button & BTN_A) && !MessageBoxUp()) {
         const size_t target = NearestLootIndex();
         if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
         else {   // nothing to open or take: maybe somebody to hire
@@ -5353,10 +5363,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 const royale::AllyDef& def = royale::kAllyDefs[ally];
                 if (hud.inv.rupees < def.price) Say(std::string("The ") + def.name + " wants " + std::to_string(def.price) + " rupees (you have " + std::to_string(hud.inv.rupees) + ")");
                 else gSession.HireAlly(ally);
-            } else if (MayaNear()) {
-                TalkToMaya();
-            } else if (LiloNear()) {
-                TalkToLilo();
+            } else {
+                PressedATalk();
             }
         }
     }
@@ -6018,14 +6026,58 @@ void DriveStormAlerts(const royale::HudState& hud) {
     }
 }
 
+// ---- talking: the game's own text box --------------------------------------------------------------------------------------------
+// Lilo, Maya and the sign speak through the game's real message system: the same text box, font, letter-by-letter typing and sounds as every
+// NPC. Their lines are custom messages in a "RoyaleMod" table (text ids from 0x7F00, which patches/0012 looks up), and they offer to talk the
+// way the game's own NPCs do, so the A button says "Speak", Link turns to face them and the box opens, waits for A and closes as usual.
+constexpr u16 kTextLilo = 0x7F00;       // Lilo sitting on the map
+constexpr u16 kTextLiloPet = 0x7F01;    // Lilo the pet: 0x7F01 onwards, one per line in royale::kLiloPetLines
+constexpr u16 kTextMaya = 0x7F10;
+constexpr u16 kTextSign = 0x7F20;
+static_assert(kTextLiloPet + royale::kLiloPetLineCount <= kTextMaya, "Lilo's pet lines run into Maya's text id");
+bool gRoyaleMessagesMade = false;
+
+void RegisterRoyaleMessages() {
+    if (gRoyaleMessagesMade || CustomMessageManager::Instance == nullptr) return;
+    CustomMessageManager* cm = CustomMessageManager::Instance;
+    cm->AddCustomMessageTable("RoyaleMod");
+    cm->CreateMessage("RoyaleMod", kTextLilo, CustomMessage(royale::kLiloLine));
+    for (int i = 0; i < royale::kLiloPetLineCount; i++)
+        cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextLiloPet + i), CustomMessage(royale::kLiloPetLines[i]));
+    cm->CreateMessage("RoyaleMod", kTextMaya, CustomMessage(royale::kMayaGreeting));
+    cm->CreateMessage("RoyaleMod", kTextSign, CustomMessage(royale::kMapSignText, TEXTBOX_TYPE_WOODEN));
+    gRoyaleMessagesMade = true;
+}
+
+// True while the text box is open for this actor.
+bool TalkingTo(const Actor* actor) {
+    return actor != nullptr && gPlayState != nullptr && gPlayState->msgCtx.msgMode != MSGMODE_NONE && gPlayState->msgCtx.talkActor == actor;
+}
+
+// Called from an actor's update: offers Link a talk within `range` (he takes it with A, like with any NPC). True on the frame the talk starts.
+bool OfferTalk(Actor* actor, PlayState* play, u16 textId, float range) {
+    actor->textId = textId;
+    if (Actor_ProcessTalkRequest(actor, play)) return true;
+    func_8002F2CC(actor, play, range);   // the game's "offer to talk" (Actor_OfferTalk in the decompilation)
+    return false;
+}
+
+bool MessageBoxUp() { return gPlayState != nullptr && gPlayState->msgCtx.msgMode != MSGMODE_NONE; }
+
+// Opens the box directly, for an A press the game did not take as a talk (Link facing the other way, say). Does nothing if a box is already up.
+bool StartTalk(Actor* actor, u16 textId) {
+    if (actor == nullptr || MessageBoxUp()) return false;
+    Message_StartTextbox(gPlayState, textId, actor);
+    return true;
+}
+
 // ---- Maya ---------------------------------------------------------------------------------------------------------------------
 // A little Kokiri called Maya stands in a random spot on every map (the same spot for everyone in the match). Walk up and press A to talk to her.
 Actor* gMayaActor = nullptr;
 royale::Vec2 gMayaPos = {};
 bool gMayaKnown = false;
-double gMayaTalkStart = -100.0;
-constexpr double kMayaTalkSeconds = 5.0;
 
+void TalkToMaya();
 void Maya_Update(Actor* actor, PlayState* play) {
     Player* pl = GET_PLAYER(play);
     const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
@@ -6034,12 +6086,14 @@ void Maya_Update(Actor* actor, PlayState* play) {
         actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.12f);
     }
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 60.0f;
+    if (OfferTalk(actor, play, kTextMaya, royale::kHireRange)) TalkToMaya();
 }
 void Maya_Draw(Actor* actor, PlayState* play) {
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Ally, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
     const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    const bool talking = ImGui::GetTime() - gMayaTalkStart < kMayaTalkSeconds;
+    const bool talking = TalkingTo(actor);
     const float hop = talking ? std::fabs(std::sin(t * 9.0f)) * 16.0f : std::fabs(std::sin(t * 2.2f)) * 3.0f;   // she bounces when she talks
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
@@ -6108,15 +6162,15 @@ bool MayaNear() {
     return std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z) < royale::kHireRange;
 }
 
+// The talk itself is the game's text box; this is the sparkle that goes with it.
 void TalkToMaya() {
-    gMayaTalkStart = ImGui::GetTime();
     if (gPlayState != nullptr && gMayaActor != nullptr)
         SparkBurst(gPlayState, gMayaPos.x, gMayaActor->world.pos.y + 90.0f, gMayaPos.z, { 255, 190, 220, 255 }, 16, 3.0f);
-    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 
-// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+// Her name over her head (what she says is in the game's own text box).
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gMayaActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gMayaPos.x, pl->actor.world.pos.z - gMayaPos.z);
@@ -6128,115 +6182,98 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(40, 10, 30, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 170, 215, 255), label);
     }
-    const double since = ImGui::GetTime() - gMayaTalkStart;
-    if (since >= 0.0 && since < kMayaTalkSeconds) {
-        const std::string full = royale::kMayaGreeting;
-        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 28.0));
-        const std::string text = full.substr(0, shown);
-        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(40, 18, 40, 228), 12.0f * scale);
-        dl->AddRect(box, end, IM_COL32(255, 170, 215, 255), 12.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(255, 170, 215, 255), royale::kMayaName);
-        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 248, 252, 255), text.c_str(), nullptr, wrap);
+}
+
+// ---- Lilo's model -------------------------------------------------------------------------------------------------------------------
+// Lilo is a low poly model made in Blender (tools/lilo/, assets/lilo/lilo.blend) in the N64 style: about 650 triangles, a 64x32 fur texture and a
+// 32x32 face in three versions (eyes open, half shut, shut), a skeleton of 25 bones and eleven animation clips: idle, walk, run, jump, sit, talk,
+// groom, sleep, stretch, pounce and happy (shared/lilo_model.h). She is skinned on the CPU every frame (the way the game itself skins Epona), lit by
+// a fixed sun baked into the vertex colours, and drawn with her own two textures.
+constexpr float kLiloPetScale = 0.8f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52); Link is about 60
+constexpr float kLiloMapScale = 1.0f;
+
+void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
+    namespace L = royale::lilo;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * L::kVertCount));
+    if (vtx == nullptr) return;
+    // The sun: high, a little in front and to one side, turned into the model's own axes (the inverse of Matrix_RotateY(yaw)).
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < L::kVertCount; i++) {
+        const L::Vert& v = L::kVerts[i];
+        float p[3], n[3];
+        L::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.52f + 0.58f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(242.0f * lit);
+        o.v.cn[3] = 255;
     }
-}
-
-// ---- the cat, drawn in parts and animated (Lilo on the map, and Lilo as a pet that follows you) ----------------------------------------------------
-// A body, a head, four legs and a chain of tail segments (shared/meshes.h), posed from a CatPose. The pose is only ever eased towards a target, so every
-// change of mood (walking, sitting, grooming, curling up to sleep) blends instead of snapping.
-struct CatPose {
-    float bodyPitch = 0, bodyDrop = 0, bodyYaw = 0;       // nose up (radians), how far the body sinks, a wiggle of the hindquarters
-    float swing[4] = {0, 0, 0, 0};                        // front left, front right, hind left, hind right: forward is negative
-    float legScale[4] = {1, 1, 1, 1};                     // tucked-up legs are short
-    float headPitch = 0, headYaw = 0;                     // down (radians), turn
-    float tailUp = 1.0f, tailCurl = 0.1f, tailSway = 0;   // the tail's angle from straight up, how much each segment curls, side to side
-    int eyes = 0;                                         // CatHead variant: 0 open, 1 shut, 2 mewing, 3 half shut
-};
-void ApproachPose(CatPose& c, const CatPose& t, float k) {
-    auto a = [&](float& x, float y) { x += (y - x) * k; };
-    a(c.bodyPitch, t.bodyPitch); a(c.bodyDrop, t.bodyDrop); a(c.bodyYaw, t.bodyYaw);
-    for (int i = 0; i < 4; i++) { a(c.swing[i], t.swing[i]); a(c.legScale[i], t.legScale[i]); }
-    a(c.headPitch, t.headPitch); a(c.headYaw, t.headYaw); a(c.tailUp, t.tailUp); a(c.tailCurl, t.tailCurl); a(c.tailSway, t.tailSway);
-    c.eyes = t.eyes;
-}
-
-void DrawCatPart(PlayState* play, royale::MeshKind kind, uint32_t variant) {
-    const GpuMesh* m = GpuMeshFor(kind, variant);
-    if (m == nullptr || m->dl.empty()) return;
-    OPEN_DISPS(play->state.gfxCtx);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(m->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void DrawCat(PlayState* play, float x, float y, float z, float yaw, float scale, const CatPose& p) {
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    CLOSE_DISPS(play->state.gfxCtx);
-    constexpr float kLeg = 24.0f;
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // her texture times the vertex colour
     Matrix_Translate(x, y, z, MTXMODE_NEW);
     Matrix_RotateY(yaw, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    // legs: front left/right, hind left/right; each swings about its hip and is squashed if tucked
-    static const float kHip[4][3] = { {8, 24, 14}, {-8, 24, 14}, {10, 24, -16}, {-10, 24, -16} };
-    for (int i = 0; i < 4; i++) {
-        Matrix_Push();
-        Matrix_Translate(kHip[i][0], kHip[i][1] + p.bodyDrop, kHip[i][2], MTXMODE_APPLY);
-        Matrix_RotateX(p.swing[i], MTXMODE_APPLY);
-        Matrix_Scale(1.0f, p.legScale[i], 1.0f, MTXMODE_APPLY);
-        Matrix_Translate(0, -kLeg, 0, MTXMODE_APPLY);
-        DrawCatPart(play, royale::MeshKind::CatLeg, i < 2 ? 0u : 1u);
-        Matrix_Pop();
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const int face = std::clamp(eyes, 0, 2);
+    int loaded = -1;
+    for (int b = 0; b < L::kBatchCount; b++) {
+        const L::Batch& bt = L::kBatches[b];
+        const int tex = bt.texture == L::kFace ? 1 + face : 0;
+        if (tex != loaded) {
+            if (tex == 0)
+                gDPLoadTextureBlock(POLY_OPA_DISP++, L::kFurTex, G_IM_FMT_RGBA, G_IM_SIZ_16b, L::kFurW, L::kFurH, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                    G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            else
+                gDPLoadTextureBlock(POLY_OPA_DISP++, L::kFaceTex[tex - 1], G_IM_FMT_RGBA, G_IM_SIZ_16b, L::kFaceW, L::kFaceH, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                    G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, L::kTris[t][0], L::kTris[t][1], L::kTris[t][2], 0, L::kTris[t + 1][0], L::kTris[t + 1][1], L::kTris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, L::kTris[t][0], L::kTris[t][1], L::kTris[t][2], 0);
     }
-    // body, pitched about the hips (so sitting up lifts the chest and keeps the rump down)
-    Matrix_Push();
-    Matrix_Translate(0, p.bodyDrop, 0, MTXMODE_APPLY);
-    Matrix_Translate(0, 24, -18, MTXMODE_APPLY);
-    Matrix_RotateY(p.bodyYaw, MTXMODE_APPLY);
-    Matrix_RotateX(-p.bodyPitch, MTXMODE_APPLY);
-    Matrix_Translate(0, -24, 18, MTXMODE_APPLY);
-    DrawCatPart(play, royale::MeshKind::CatBody, 0);
-    // head on its neck (a child of the body, so it is levelled by headPitch)
-    Matrix_Push();
-    Matrix_Translate(0, 36, 22, MTXMODE_APPLY);
-    Matrix_RotateX(p.headPitch - 0.0f, MTXMODE_APPLY);
-    Matrix_RotateY(p.headYaw, MTXMODE_APPLY);
-    DrawCatPart(play, royale::MeshKind::CatHead, static_cast<uint32_t>(p.eyes));
-    Matrix_Pop();
-    // the tail: five segments, each bent a little further than the one before, swaying
-    Matrix_Push();
-    Matrix_Translate(0, 30, -28, MTXMODE_APPLY);
-    Matrix_RotateX(-p.tailUp, MTXMODE_APPLY);   // 0 is straight up, about 1.5 is level, pointing back
-    Matrix_RotateZ(p.tailSway * 0.4f, MTXMODE_APPLY);
-    for (int seg = 0; seg < 5; seg++) {
-        DrawCatPart(play, royale::MeshKind::CatTailSeg, seg == 4 ? 2u : static_cast<uint32_t>(seg & 1));
-        Matrix_Translate(0, 11.5f, 0, MTXMODE_APPLY);
-        Matrix_RotateX(p.tailCurl, MTXMODE_APPLY);
-        Matrix_RotateZ(p.tailSway * 0.22f, MTXMODE_APPLY);
-    }
-    Matrix_Pop();
-    Matrix_Pop();
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Her eyes: what the mood wants, with a quick blink every few seconds while they are open.
+int LiloEyes(float seconds, int wanted) {
+    if (wanted != royale::lilo::kEyesOpen) return wanted;
+    return std::fmod(seconds, 3.7f) < 0.13f ? royale::lilo::kEyesShut : royale::lilo::kEyesOpen;
 }
 
 // -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
-enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy };
+// Her moods pick her animation clip; the clips cross-fade, so walking, sitting, grooming and curling up to sleep blend instead of snapping. Stand
+// still facing her and press A to talk: she sits and mews her line in the game's own text box.
+enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy, Jump, Talk };
 struct CatBrain {
     Actor* actor = nullptr;
     CatMood mood = CatMood::Follow;
-    float moodT = 0, phase = 0, idle = 0, sitT = 0;
+    float moodT = 0, idle = 0, sitT = 0;
     float x = 0, z = 0, y = 0, yaw = 0, speed = 0;
-    float nextAt = 6.0f, blink = 0;
+    float nextAt = 6.0f;
     float leapX = 0, leapZ = 0;
     size_t pickups = 0;
     bool placed = false;
-    CatPose pose;
+    int line = 0;    // what she says next (royale::kLiloPetLines)
+    int eyes = 0;
+    royale::lilo::Animator anim;
 };
 CatBrain gCat;
+
+void SetMood(CatBrain& c, CatMood m) { c.mood = m; c.moodT = 0; }
 
 void CatPoof(PlayState* play, float x, float y, float z) {
     for (int i = 0; i < 7; i++) {
@@ -6248,6 +6285,7 @@ void CatPoof(PlayState* play, float x, float y, float z) {
 }
 
 void Cat_Update(Actor* actor, PlayState* play) {
+    namespace L = royale::lilo;
     CatBrain& c = gCat;
     const float dt = 1.0f / royale::kTickHz;
     Player* pl = GET_PLAYER(play);
@@ -6263,142 +6301,141 @@ void Cat_Update(Actor* actor, PlayState* play) {
         c.x = wantX; c.z = wantZ; c.y = py; c.placed = true;
         CatPoof(play, c.x, c.y, c.z);
         dx = dz = 0; d = 0;
-        c.mood = CatMood::Stand; c.moodT = 0;
+        SetMood(c, CatMood::Stand);
     }
     c.moodT += dt;
     if (playerStill) c.idle += dt; else c.idle = 0;
-    if (gPickupLog.size() != c.pickups) { if (gPickupLog.size() > c.pickups && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; } c.pickups = gPickupLog.size(); }
-    if (gEmote.id >= 0 && c.mood != CatMood::Happy) { c.mood = CatMood::Happy; c.moodT = 0; }
+    const bool talking = TalkingTo(actor);
+    if (talking && c.mood != CatMood::Talk) SetMood(c, CatMood::Talk);
+    if (!talking && c.mood == CatMood::Talk) {   // done talking: she stays sitting a while, and has something new to say next time
+        SetMood(c, CatMood::Sit);
+        c.sitT = 0; c.nextAt = 4.0f;
+        c.line = (c.line + 1) % royale::kLiloPetLineCount;
+    }
+    if (c.mood != CatMood::Talk) {
+        if (gPickupLog.size() != c.pickups) { if (gPickupLog.size() > c.pickups && c.mood != CatMood::Happy) SetMood(c, CatMood::Happy); c.pickups = gPickupLog.size(); }
+        if (gEmote.id >= 0 && c.mood != CatMood::Happy) SetMood(c, CatMood::Happy);
+        // you jump, she jumps
+        if ((c.mood == CatMood::Follow || c.mood == CatMood::Stand) && !(pl->actor.bgCheckFlags & 1) && pl->actor.velocity.y > 4.0f && d < 400.0f)
+            SetMood(c, CatMood::Jump);
+    }
 
-    CatPose t;   // the pose she is easing towards
-    t.tailUp = 0.9f; t.tailCurl = 0.07f;
-    float blinkNow = 0.0f;
-    c.blink -= dt;
-    if (c.blink < -3.5f) c.blink = 0.14f;
-    blinkNow = c.blink > 0.0f ? 1.0f : 0.0f;
-    const float tm = static_cast<float>(ImGui::GetTime());
+    const float tm = static_cast<float>(play->gameplayFrames) * dt;
     bool moving = false;
     float heading = c.yaw;
+    int clip = L::kIdle, eyes = L::kEyesOpen;
+    float rate = 1.0f;
+    auto follow = [&](float minSpeed) {   // go to her place: a walk when it is near, a run when you have gone on ahead
+        c.speed += (std::clamp((d - 40.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
+        heading = std::atan2(dx, dz);
+        c.x += std::sin(heading) * c.speed * dt;
+        c.z += std::cos(heading) * c.speed * dt;
+        moving = true;
+    };
 
     switch (c.mood) {
         case CatMood::Follow: case CatMood::Stand: {
-            if (d > 58.0f) {   // go to her place: a walk when it is near, a trot when you have run on
-                c.speed += (std::clamp((d - 40.0f) * 2.8f, 45.0f, 290.0f) - c.speed) * 0.2f;
-                heading = std::atan2(dx, dz);
-                c.x += std::sin(heading) * c.speed * dt;
-                c.z += std::cos(heading) * c.speed * dt;
-                moving = true;
+            if (d > 58.0f) {
+                follow(45.0f);
                 c.mood = CatMood::Follow;
             } else {
                 c.speed *= 0.7f;
-                if (c.mood == CatMood::Follow) { c.mood = CatMood::Stand; c.moodT = 0; }
-                if (c.idle > 1.6f) { c.mood = CatMood::Sit; c.moodT = 0; c.sitT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f; }
+                if (c.mood == CatMood::Follow) SetMood(c, CatMood::Stand);
+                if (c.idle > 1.6f) { SetMood(c, CatMood::Sit); c.sitT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f; }
             }
-            if (c.mood == CatMood::Stand) {   // standing about: looks around, tail swishing slowly
-                t.tailSway = std::sin(tm * 1.7f) * 0.5f; t.headYaw = std::sin(tm * 0.6f) * 0.5f;
-            }
+            if (moving && c.speed > 150.0f) { clip = L::kRun; rate = std::clamp(c.speed / 230.0f, 0.8f, 1.4f); }
+            else if (moving) { clip = L::kWalk; rate = std::clamp(c.speed / 75.0f, 0.6f, 1.8f); }
             break;
         }
         case CatMood::Sit: case CatMood::Groom: {
             c.sitT += dt;
-            t.bodyPitch = 0.95f; t.bodyDrop = -9.0f;
-            t.swing[0] = t.swing[1] = 0.12f; t.swing[2] = t.swing[3] = -1.5f; t.legScale[2] = t.legScale[3] = 0.7f;
-            t.headPitch = -0.7f; t.tailUp = 1.55f; t.tailCurl = 0.34f; t.tailSway = std::sin(tm * 1.2f) * 0.6f;
-            t.headYaw = std::sin(tm * 0.45f) * 0.35f;
+            clip = c.mood == CatMood::Groom ? L::kGroom : L::kSit;
             if (c.mood == CatMood::Groom) {   // a front paw to the mouth and a lick
-                t.swing[0] = -2.1f + std::sin(tm * 11.0f) * 0.12f;
-                t.headPitch = -0.1f + std::sin(tm * 11.0f) * 0.06f; t.headYaw = 0.35f; t.eyes = 3;
-                if (c.moodT > 3.0f) { c.mood = CatMood::Sit; c.moodT = 0; }
+                eyes = L::kEyesHalf;
+                if (c.moodT > 3.0f) SetMood(c, CatMood::Sit);
             } else if (c.moodT > c.nextAt) {
                 const float r = Rand_ZeroOne();
-                c.moodT = 0; c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f;
-                if (r < 0.45f) c.mood = CatMood::Groom;
-                else if (r < 0.7f) c.mood = CatMood::Stretch;
-                else c.mood = CatMood::Pounce;
+                c.nextAt = 5.0f + Rand_ZeroOne() * 4.0f;
+                SetMood(c, r < 0.45f ? CatMood::Groom : r < 0.7f ? CatMood::Stretch : CatMood::Pounce);
             }
-            if (c.sitT > 16.0f && c.mood == CatMood::Sit) { c.mood = CatMood::Loaf; c.moodT = 0; }
-            if (!playerStill || d > 150.0f) { c.mood = CatMood::Follow; c.moodT = 0; }
+            if (c.sitT > 16.0f && c.mood == CatMood::Sit) SetMood(c, CatMood::Loaf);
+            if (!playerStill || d > 150.0f) SetMood(c, CatMood::Follow);
             break;
         }
-        case CatMood::Loaf: {   // curled up asleep: the paws tucked under, head down, eyes shut, little 'z's
-            t.bodyDrop = -16.0f; t.bodyPitch = 0.0f;
-            for (int i = 0; i < 4; i++) { t.legScale[i] = 0.4f; t.swing[i] = i < 2 ? -0.5f : 0.5f; }
-            t.headPitch = 0.4f; t.eyes = 1; t.tailUp = 1.6f; t.tailCurl = 0.5f; t.tailSway = std::sin(tm * 0.8f) * 0.2f;
-            t.bodyPitch = std::sin(tm * 1.4f) * 0.015f;   // breathing
+        case CatMood::Loaf: {   // curled up asleep: paws tucked under, eyes shut, little 'z's
+            clip = L::kSleep;
+            eyes = L::kEyesShut;
             if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
                 Vec3f pos = { c.x + std::sin(c.yaw) * 20.0f, c.y + 40.0f, c.z + std::cos(c.yaw) * 20.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
                 Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
                 EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
             }
-            if (!playerStill || d > 150.0f) { c.mood = CatMood::Stretch; c.moodT = 0; }
+            if (!playerStill || d > 150.0f) SetMood(c, CatMood::Stretch);
             break;
         }
-        case CatMood::Stretch: {   // front legs forward, chest down, rump up
-            t.bodyPitch = -0.42f; t.bodyDrop = -4.0f;
-            t.swing[0] = t.swing[1] = -1.0f; t.headPitch = 0.7f; t.tailUp = 0.15f; t.tailCurl = 0.05f; t.eyes = 3;
-            t.swing[2] = t.swing[3] = 0.15f;
-            if (c.moodT > 2.2f) { c.mood = playerStill ? CatMood::Sit : CatMood::Follow; c.moodT = 0; }
+        case CatMood::Stretch: {   // front legs forward, chest down, rump up, and a yawn
+            clip = L::kStretch;
+            eyes = L::kEyesHalf;
+            if (c.moodT > 2.0f) SetMood(c, playerStill ? CatMood::Sit : CatMood::Follow);
             break;
         }
         case CatMood::Pounce: {   // crouch and wiggle, then a leap at nothing
+            clip = L::kPounce;
             if (c.moodT < 0.9f) {
-                t.bodyDrop = -12.0f; t.bodyPitch = -0.12f; t.headPitch = 0.3f;
-                t.bodyYaw = std::sin(c.moodT * 30.0f) * 0.14f; t.tailUp = 0.9f; t.tailSway = std::sin(c.moodT * 25.0f) * 1.2f;
-                for (int i = 0; i < 4; i++) t.swing[i] = i < 2 ? -0.3f : 0.4f;
-                heading = c.yaw;
                 c.leapX = std::sin(c.yaw) * 75.0f; c.leapZ = std::cos(c.yaw) * 75.0f;
             } else if (c.moodT < 1.35f) {
-                const float u = (c.moodT - 0.9f) / 0.45f;
                 c.x += c.leapX * dt / 0.45f; c.z += c.leapZ * dt / 0.45f;
-                c.y = py;   // (the height is added below)
-                t.bodyPitch = 0.3f - u * 0.6f; t.swing[0] = t.swing[1] = -1.1f; t.swing[2] = t.swing[3] = 0.9f; t.tailUp = 0.2f;
-            } else { c.mood = CatMood::Stand; c.moodT = 0; }
+            } else if (c.moodT > 1.5f) {
+                SetMood(c, CatMood::Stand);
+            }
             break;
         }
-        case CatMood::Happy: {   // hops and the tail goes straight up
-            t.tailUp = 0.05f; t.tailSway = std::sin(tm * 22.0f) * 0.25f; t.eyes = 1;
-            t.bodyDrop = std::fabs(std::sin(c.moodT * 9.0f)) * 9.0f;
-            for (int i = 0; i < 4; i++) t.swing[i] = std::sin(c.moodT * 9.0f + i) * 0.2f;
-            if (c.moodT > 1.5f) { c.mood = CatMood::Stand; c.moodT = 0; }
+        case CatMood::Happy: {   // hops with her tail straight up
+            clip = L::kHappy;
+            eyes = L::kEyesShut;
+            if (c.moodT > 1.5f) SetMood(c, CatMood::Stand);
+            break;
+        }
+        case CatMood::Jump: {   // up after you, still heading for her place
+            clip = L::kJump;
+            if (d > 20.0f) follow(std::min(c.speed, 290.0f));
+            if (c.moodT > L::ClipSeconds(L::kJump)) SetMood(c, CatMood::Follow);
+            break;
+        }
+        case CatMood::Talk: {   // sitting, facing you, mewing
+            clip = L::kTalk;
+            c.speed = 0;
+            heading = std::atan2(px - c.x, pz - c.z);
             break;
         }
     }
-    if (moving) {   // the gait: diagonal pairs of legs, quicker and wider as she speeds up
-        c.phase += c.speed * dt * 0.052f;
-        const float amp = std::clamp(0.45f + c.speed * 0.0016f, 0.45f, 0.95f), s = std::sin(c.phase);
-        t.swing[0] = t.swing[3] = amp * s;
-        t.swing[1] = t.swing[2] = -amp * s;
-        t.bodyDrop = -std::fabs(std::sin(c.phase)) * 2.2f;
-        t.tailUp = c.speed > 160.0f ? 0.6f : 0.95f; t.tailSway = std::sin(c.phase * 0.5f) * 0.4f;
-        t.headYaw = 0; t.headPitch = c.speed > 160.0f ? 0.1f : 0.0f;
-    }
+    // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
+    if (!talking && c.mood != CatMood::Jump && c.mood != CatMood::Pounce && pspeed < 3.0f &&
+        OfferTalk(actor, play, static_cast<u16>(kTextLiloPet + c.line), 120.0f))
+        SetMood(c, CatMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)
-    if (!moving && c.mood != CatMood::Pounce) {
-        if (d < 400.0f) heading = std::atan2(px - c.x, pz - c.z);
-    }
+    if (!moving && c.mood != CatMood::Pounce && c.mood != CatMood::Talk && d < 400.0f) heading = std::atan2(px - c.x, pz - c.z);
     {
         float diff = heading - c.yaw;
         while (diff > 3.14159265f) diff -= 6.2831853f;
         while (diff < -3.14159265f) diff += 6.2831853f;
-        c.yaw += diff * (moving ? 0.25f : 0.08f);
+        c.yaw += diff * (moving ? 0.25f : c.mood == CatMood::Talk ? 0.3f : 0.08f);
     }
-    if (blinkNow > 0.5f && t.eyes == 0) t.eyes = 1;
-    ApproachPose(c.pose, t, moving ? 0.35f : 0.18f);
-    c.pose.eyes = t.eyes;
+    c.anim.Play(clip, 0.25f);
+    c.anim.Update(dt, rate);
+    c.eyes = LiloEyes(tm, eyes);
 
-    float floorY = c.y;
-    floorY = GroundY(play, c.x, c.z, c.y);
-    float hop = 0.0f;
-    if (c.mood == CatMood::Pounce && c.moodT >= 0.9f && c.moodT < 1.35f) hop = std::sin((c.moodT - 0.9f) / 0.45f * 3.14159f) * 32.0f;
-    if (c.mood == CatMood::Happy) hop = std::fabs(std::sin(c.moodT * 9.0f)) * 10.0f;
-    c.y = floorY;
-    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y + hop;
+    c.y = GroundY(play, c.x, c.z, c.y);   // her clips carry their own hops and leaps
+    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y;
     actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 30.0f;
 }
 
 void Cat_Draw(Actor* actor, PlayState* play) {
-    DrawCat(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gCat.yaw, 0.8f, gCat.pose);
+    royale::lilo::Pose pose;
+    gCat.anim.Evaluate(pose);
+    DrawLiloModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gCat.yaw, kLiloPetScale, pose, gCat.eyes);
 }
 void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
 
@@ -6419,46 +6456,47 @@ void ReconcileCatPet(const royale::HudState& hud) {
     a->destroy = Cat_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 22.0f;
+    a->shape.shadowScale = 18.0f;
     gCat.actor = a;
     gCat.placed = false;
     gCat.pickups = gPickupLog.size();
-    gCat.pose = CatPose{};
+    gCat.mood = CatMood::Follow;
+    gCat.anim = royale::lilo::Animator{};
 }
 
-// ---- Lilo -------------------------------------------------------------------------------------------------------------------------
-// An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): a grey and white cat called Lilo sits at a random spot on the
-// map. Talk to her with A: she says her line, and a moment later there is a noise and a greenish cloud.
+// ---- Lilo ---------------------------------------------------------------------------------------------------------------------------
+// An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): Lilo sits at a random spot on the map. Talk to her with A: she
+// says her line in the game's text box, and when you close it there is a noise and a greenish cloud.
 Actor* gLiloActor = nullptr;
 royale::Vec2 gLiloPos = {};
 bool gLiloKnown = false;
 double gLiloTalkStart = -100.0;
-bool gLiloFarted = true;
+bool gLiloFarted = true, gLiloHeard = false;
 double gFartCloudUntil = 0;
-constexpr double kLiloTalkSeconds = 5.0, kLiloFartAt = 1.7;
+royale::lilo::Animator gLiloAnim;
+int gLiloEyes = 0;
 
+void TalkToLilo();
 void Lilo_Update(Actor* actor, PlayState* play) {
+    namespace L = royale::lilo;
     Player* pl = GET_PLAYER(play);
+    const bool talking = TalkingTo(actor);
     const float dx = pl->actor.world.pos.x - actor->world.pos.x, dz = pl->actor.world.pos.z - actor->world.pos.z;
     if (dx * dx + dz * dz < 600.0f * 600.0f) {   // she watches you come
         const s16 want = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * 0.1f);
+        actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * (talking ? 0.25f : 0.1f));
     }
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 40.0f;
+    if (OfferTalk(actor, play, kTextLilo, royale::kHireRange)) TalkToLilo();
+    gLiloAnim.Play(talking ? L::kTalk : L::kSit, 0.3f);
+    gLiloAnim.Update(1.0f / royale::kTickHz);
+    gLiloEyes = LiloEyes(static_cast<float>(play->gameplayFrames) / royale::kTickHz, L::kEyesOpen);
 }
 void Lilo_Draw(Actor* actor, PlayState* play) {
-    const float t = static_cast<float>(ImGui::GetTime());
-    const double since = ImGui::GetTime() - gLiloTalkStart;
-    const bool talking = since >= 0.0 && since < kLiloTalkSeconds;
-    CatPose p;   // sitting up, watching, tail curled; when "speaking" she mews and sways
-    p.bodyPitch = 0.95f; p.bodyDrop = -9.0f;
-    p.swing[0] = p.swing[1] = 0.12f; p.swing[2] = p.swing[3] = -1.5f; p.legScale[2] = p.legScale[3] = 0.7f;
-    p.headPitch = -0.7f; p.tailUp = 1.55f; p.tailCurl = 0.34f;
-    p.tailSway = talking ? std::sin(t * 9.0f) * 1.0f : std::sin(t * 1.3f) * 0.6f;
-    p.headYaw = talking ? std::sin(t * 12.0f) * 0.12f : std::sin(t * 0.5f) * 0.3f;
-    p.eyes = talking ? ((static_cast<int>(t * 6.0f) & 1) ? 2 : 0) : (std::fmod(t, 4.3f) < 0.13f ? 1 : 0);
-    const float lift = talking && since < kLiloFartAt ? 6.0f * std::fabs(std::sin(t * 8.0f)) : 0.0f;
-    DrawCat(play, actor->world.pos.x, actor->world.pos.y + lift, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), 1.0f, p);
+    royale::lilo::Pose pose;
+    gLiloAnim.Evaluate(pose);
+    DrawLiloModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), kLiloMapScale, pose, gLiloEyes);
 }
 void Lilo_Destroy(Actor* actor, PlayState*) { if (gLiloActor == actor) gLiloActor = nullptr; }
 
@@ -6503,8 +6541,10 @@ void ReconcileLilo(const royale::HudState& hud) {
     a->destroy = Lilo_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 28.0f;
+    a->shape.shadowScale = 22.0f;
     gLiloActor = a;
+    gLiloAnim = royale::lilo::Animator{};
+    gLiloAnim.Play(royale::lilo::kSit, 0.0f);
 }
 
 bool LiloNear() {
@@ -6513,20 +6553,24 @@ bool LiloNear() {
     return std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z) < royale::kHireRange;
 }
 
+// The talk itself is the game's text box (Lilo_Update); this arms the accident for when it closes.
 void TalkToLilo() {
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
-    Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    gLiloHeard = false;
 }
 
-// The accident: the noise, and a cloud of greenish-brown puffs behind the cat that drifts up and thins out.
+// The accident: once her text box has closed, the noise, and a cloud of greenish-brown puffs behind the cat that drifts up and thins out.
 void UpdateLiloFx() {
     if (gLiloActor == nullptr || gPlayState == nullptr || !InField()) return;
     const double now = ImGui::GetTime();
-    if (!gLiloFarted && now - gLiloTalkStart >= kLiloFartAt) {
-        gLiloFarted = true;
-        gFartCloudUntil = now + 2.6;
-        PlayOneShot(2);
+    if (!gLiloFarted) {
+        if (TalkingTo(gLiloActor)) gLiloHeard = true;
+        else if (gLiloHeard || now - gLiloTalkStart > 4.0) {
+            gLiloFarted = true;
+            gFartCloudUntil = now + 2.6;
+            PlayOneShot(2);
+        }
     }
     if (now < gFartCloudUntil) {
         const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
@@ -6542,32 +6586,19 @@ void UpdateLiloFx() {
     }
 }
 
-// Her name over her head, and what she says in a box at the bottom of the screen, typed out a letter at a time.
+// Her name over her head (what she says is in the game's own text box).
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gLiloActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z);
     ImVec2 at;
-    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 125.0f, gLiloPos.z, &at)) {
+    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 78.0f, gLiloPos.z, &at)) {
         const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
         const char* label = royale::kLiloName;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 20, 20, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(235, 235, 230, 255), label);
-    }
-    const double since = ImGui::GetTime() - gLiloTalkStart;
-    if (since >= 0.0 && since < kLiloTalkSeconds) {
-        const std::string full = royale::kLiloLine;
-        const size_t shown = std::min(full.size(), static_cast<size_t>(since * 22.0));
-        const std::string text = full.substr(0, shown);
-        const float wrap = ds.x * 0.6f, size = 30.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, full.c_str());
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 24.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 48.0f * scale, box.y + tsz.y + 60.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(30, 30, 36, 228), 12.0f * scale);
-        dl->AddRect(box, end, IM_COL32(220, 220, 225, 255), 12.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 19.0f * scale, ImVec2(box.x + 24.0f * scale, box.y + 8.0f * scale), IM_COL32(200, 200, 210, 255), royale::kLiloName);
-        dl->AddText(font, size, ImVec2(box.x + 24.0f * scale, box.y + 36.0f * scale), IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
     }
 }
 
@@ -6945,7 +6976,11 @@ void ForgetOldHats() {
 Actor* gSignActor = nullptr;
 double gSignReadAt = -100.0;
 
-void Sign_Update(Actor* actor, PlayState*) { actor->focus.pos = actor->world.pos; }
+void Sign_Update(Actor* actor, PlayState* play) {
+    actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 120.0f;
+    OfferTalk(actor, play, kTextSign, 220.0f);   // read it with A, in the game's wooden sign box
+}
 void Sign_Draw(Actor* actor, PlayState* play) {
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Sign, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
@@ -7008,28 +7043,32 @@ void ReconcileSign(const royale::HudState& hud) {
     gSignActor = a;
 }
 
-// A label over the sign from a distance, and the message in a box at the bottom of the screen when you stand in front of it.
+bool SignNear() {
+    if (gSignActor == nullptr || !InField()) return false;
+    Player* pl = GET_PLAYER(gPlayState);
+    return std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z) < 220.0f;
+}
+
+// A next to Lilo, Maya or the sign when the game did not already start the talk itself: open the same text box directly.
+void PressedATalk() {
+    if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
+    else if (LiloNear()) { if (StartTalk(gLiloActor, kTextLilo)) TalkToLilo(); }
+    else if (SignNear()) StartTalk(gSignActor, kTextSign);
+}
+
+// A label over the sign from a distance; up close, A reads it in the game's own text box.
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    (void)ds;
     if (gSignActor == nullptr || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z);
     ImVec2 at;
-    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close the board below says it
+    if (d >= 260.0f && d < 1500.0f && WorldToScreen(gSignPos.x, gSignActor->world.pos.y + 240.0f, gSignPos.z, &at)) {   // up close, the prompt says to read it
         const char* label = "Sign";
         const float size = std::clamp(26.0f * scale * (1800.0f / (d + 900.0f)), 14.0f * scale, 30.0f * scale);
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 12, 4, 230), label);
         dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(255, 232, 160, 255), label);
-    }
-    if (d < 260.0f) {
-        const float wrap = ds.x * 0.62f, size = 27.0f * scale;
-        const ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, wrap, royale::kMapSignText);
-        const ImVec2 box(ds.x * 0.5f - tsz.x * 0.5f - 22.0f * scale, ds.y * 0.70f - 12.0f * scale);
-        const ImVec2 end(box.x + tsz.x + 44.0f * scale, box.y + tsz.y + 56.0f * scale);
-        dl->AddRectFilled(box, end, IM_COL32(24, 16, 8, 225), 10.0f * scale);
-        dl->AddRect(box, end, IM_COL32(222, 178, 100, 255), 10.0f * scale, 0, 3.0f * scale);
-        dl->AddText(font, 18.0f * scale, ImVec2(box.x + 22.0f * scale, box.y + 8.0f * scale), IM_COL32(222, 178, 100, 255), "Sign");
-        dl->AddText(font, size, ImVec2(box.x + 22.0f * scale, box.y + 34.0f * scale), IM_COL32(255, 246, 224, 255), royale::kMapSignText, nullptr, wrap);
     }
 }
 
@@ -7248,6 +7287,7 @@ void OnGameFrameUpdate() {
     DriveTimeOfDay(hud);
     UpdateBossWorldFx();
     ReconcileSign(hud);
+    RegisterRoyaleMessages();
     ReconcileMaya(hud);
     ReconcileLilo(hud);
     ReconcileCatPet(hud);
