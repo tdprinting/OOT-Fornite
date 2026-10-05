@@ -295,7 +295,8 @@ void DrivePictures() {
 
 // ---- menu state ----------------------------------------------------------------------------------------------------------------
 
-enum class Page { Main, Play, Setup, Join, Maps, Locker, Options, Controls, Lobby, Invite, Match, Results, Keyboard, ConfirmLeave };
+enum class Page { Main, Play, Setup, Join, Maps, Locker, Options, OptGraphics, OptSound, OptMinimap, OptExtras, OptPictures, Controls, Items, Lobby, Invite,
+                  Match, Results, Keyboard, ConfirmLeave };
 enum class Launch { None, Solo, Host, Join };
 
 struct PageState { Page page; int cursor = 0; float scroll = 0.0f; };
@@ -335,8 +336,11 @@ struct MenuState {
     bool mouseMoved = false;
     ImVec2 lastMouse = ImVec2(-1, -1);
     bool touchBack = false;
+    royale::ItemId infoItem = royale::ItemId::DekuStick;   // the item the Items page's cursor is on (shown large on the card)
 };
 MenuState gMenu;
+
+bool RoyaleMenuOpen() { return gMenu.open; }
 
 void ShowNote(const std::string& text, ImU32 colour = IM_COL32(255, 120, 100, 255), float seconds = 4.0f) {
     gMenu.note = text;
@@ -731,7 +735,16 @@ RowResult BeginRow(Ctx& c, float height) {
     return r;
 }
 
-void RowLabel(Ctx& c, const RowResult& r, const char* label, royale::ItemId icon, ImU32 colour = 0) {
+// A text size that fits `maxWidth`: the size asked for, or smaller (down to 70% of it) for long text, so labels never run into what is
+// on the right of the row. Past that the text is clipped by the caller.
+float FitSize(ImFont* font, float size, const char* text, float maxWidth) {
+    const float w = font->CalcTextSizeA(size, FLT_MAX, 0, text).x;
+    if (w <= maxWidth || w <= 0.0f) return size;
+    return std::max(size * 0.7f, size * maxWidth / w);
+}
+
+// The row's label, kept clear of the `reserveRight` pixels on its right (where a value, lever or slider is drawn).
+void RowLabel(Ctx& c, const RowResult& r, const char* label, royale::ItemId icon, ImU32 colour = 0, float reserveRight = 0.0f) {
     if (!r.visible) return;
     float x = r.a.x + 10 * c.s;
     const float midY = (r.a.y + r.b.y) * 0.5f;
@@ -740,9 +753,18 @@ void RowLabel(Ctx& c, const RowResult& r, const char* label, royale::ItemId icon
         DrawItemIcon(c.dl, icon, ImVec2(x + is * 0.5f, midY), is, IM_COL32(255, 214, 90, 255));
         x += is + 12 * c.s;
     }
-    const float size = 23 * c.s;
+    const float right = r.b.x - 12 * c.s - (reserveRight > 0.0f ? reserveRight + 12 * c.s : 0.0f);
+    const float size = FitSize(c.font, 23 * c.s, label, right - x);
     const ImVec2 sz = c.font->CalcTextSizeA(size, FLT_MAX, 0, label);
+    c.dl->PushClipRect(ImVec2(r.a.x, r.a.y), ImVec2(std::max(x, right) + 3 * c.s, r.b.y), true);
     Lettered(c.dl, c.font, size, ImVec2(x, midY - sz.y * 0.5f), colour ? colour : (r.selected ? kMenuSelText : kMenuWhite), label);
+    c.dl->PopClipRect();
+}
+
+// How wide RowValue draws `value` (so the label can keep clear of it).
+float ValueWidth(const Ctx& c, const char* value, bool arrows) {
+    const float w = c.font->CalcTextSizeA(21 * c.s, FLT_MAX, 0, value).x;
+    return arrows ? w + 2 * (8 * c.s + 10 * c.s) : w;
 }
 
 void RowValue(Ctx& c, const RowResult& r, const std::string& value, ImU32 colour, bool arrows) {
@@ -763,7 +785,7 @@ void RowValue(Ctx& c, const RowResult& r, const std::string& value, ImU32 colour
 
 bool Button(Ctx& c, const char* label, royale::ItemId icon = kNoIcon, const char* value = nullptr, bool enabled = true) {
     RowResult r = BeginRow(c, RowHeight(c));
-    RowLabel(c, r, label, icon, enabled ? 0 : kMenuGrey);
+    RowLabel(c, r, label, icon, enabled ? 0 : kMenuGrey, value ? ValueWidth(c, value, false) : 0.0f);
     if (value) RowValue(c, r, value, kMenuCream, false);
     if (r.activated && !enabled) { MenuSfx(NA_SE_SY_ERROR); return false; }
     return r.activated && enabled;
@@ -777,7 +799,7 @@ int TouchSide(const Ctx& c, const RowResult& r) {
 
 bool Toggle(Ctx& c, const char* label, bool* v, royale::ItemId icon = kNoIcon) {
     RowResult r = BeginRow(c, RowHeight(c));
-    RowLabel(c, r, label, icon);
+    RowLabel(c, r, label, icon, 0, 64 * c.s);
     bool changed = false;
     if (r.activated || r.nudge == -1 || r.nudge == 1) { *v = r.nudge == 1 ? true : r.nudge == -1 ? false : !*v; changed = true; }
     if (r.visible) {   // a little lever: green and ON, or dark and OFF
@@ -796,13 +818,13 @@ bool Toggle(Ctx& c, const char* label, bool* v, royale::ItemId icon = kNoIcon) {
 
 bool Slider(Ctx& c, const char* label, int* v, int lo, int hi, int step, const char* suffix = "") {
     RowResult r = BeginRow(c, RowHeight(c));
-    RowLabel(c, r, label, kNoIcon);
+    RowLabel(c, r, label, kNoIcon, 0, (140 + 58) * c.s);
     int dir = r.nudge;
     if (const int side = TouchSide(c, r)) dir = side;
     const int before = *v;
     if (dir) *v = std::clamp(*v + dir * step, lo, hi);
     if (r.visible) {
-        const float w = 170 * c.s, h = 9 * c.s, midY = (r.a.y + r.b.y) * 0.5f, x1 = r.b.x - 70 * c.s, x0 = x1 - w;
+        const float w = 140 * c.s, h = 9 * c.s, midY = (r.a.y + r.b.y) * 0.5f, x1 = r.b.x - 70 * c.s, x0 = x1 - w;
         const float f = hi > lo ? static_cast<float>(*v - lo) / static_cast<float>(hi - lo) : 0.0f;
         c.dl->AddRectFilled(ImVec2(x0, midY - h * 0.5f), ImVec2(x1, midY + h * 0.5f), IM_COL32(40, 32, 24, 255), h * 0.5f);
         c.dl->AddRectFilled(ImVec2(x0, midY - h * 0.5f), ImVec2(x0 + w * f, midY + h * 0.5f), IM_COL32(62, 142, 58, 255), h * 0.5f);
@@ -818,7 +840,7 @@ bool Slider(Ctx& c, const char* label, int* v, int lo, int hi, int step, const c
 
 bool Choice(Ctx& c, const char* label, int* v, const char* const* names, int count, royale::ItemId icon = kNoIcon) {
     RowResult r = BeginRow(c, RowHeight(c));
-    RowLabel(c, r, label, icon);
+    RowLabel(c, r, label, icon, 0, ValueWidth(c, names[std::clamp(*v, 0, count - 1)], true));
     int dir = r.nudge;
     if (const int side = TouchSide(c, r)) dir = side;
     else if (r.activated && dir == 0) dir = 1;
@@ -833,24 +855,28 @@ bool Choice(Ctx& c, const char* label, int* v, const char* const* names, int cou
 void Info(Ctx& c, const char* label, const char* value = nullptr, ImU32 colour = 0) {
     RowResult r = BeginRow(c, 36 * c.s);
     if (!r.visible) return;
-    const float size = 19 * c.s, midY = (r.a.y + r.b.y) * 0.5f;
+    const float midY = (r.a.y + r.b.y) * 0.5f;
+    const float vw = value ? c.font->CalcTextSizeA(19 * c.s, FLT_MAX, 0, value).x + 24 * c.s : 0.0f;
+    const float size = FitSize(c.font, 19 * c.s, label, r.b.x - r.a.x - 24 * c.s - vw);
     const ImVec2 sz = c.font->CalcTextSizeA(size, FLT_MAX, 0, label);
     Lettered(c.dl, c.font, size, ImVec2(r.a.x + 12 * c.s, midY - sz.y * 0.5f), colour ? colour : kMenuCream, label);
     if (value) {
-        const ImVec2 vs = c.font->CalcTextSizeA(size, FLT_MAX, 0, value);
-        Lettered(c.dl, c.font, size, ImVec2(r.b.x - 12 * c.s - vs.x, midY - vs.y * 0.5f), kMenuGold, value);
+        const ImVec2 vs = c.font->CalcTextSizeA(19 * c.s, FLT_MAX, 0, value);
+        Lettered(c.dl, c.font, 19 * c.s, ImVec2(r.b.x - 12 * c.s - vs.x, midY - vs.y * 0.5f), kMenuGold, value);
     }
 }
 
 // A label and a value that can't be selected (match facts at the top of a page).
 void Line(Ctx& c, const char* label, const char* value = nullptr, ImU32 colour = 0) {
-    const float size = 21 * c.s, h = 38 * c.s, midY = c.y + h * 0.5f;
+    const float h = 38 * c.s, midY = c.y + h * 0.5f;
+    const float vw = value ? c.font->CalcTextSizeA(21 * c.s, FLT_MAX, 0, value).x + 24 * c.s : 0.0f;
+    const float size = FitSize(c.font, 21 * c.s, label, c.x1 - c.x0 - 24 * c.s - vw);
     if (c.y + h > c.clipTop && c.y < c.clipBottom) {
         const ImVec2 sz = c.font->CalcTextSizeA(size, FLT_MAX, 0, label);
         Lettered(c.dl, c.font, size, ImVec2(c.x0 + 12 * c.s, midY - sz.y * 0.5f), colour ? colour : kMenuCream, label);
         if (value) {
-            const ImVec2 vs = c.font->CalcTextSizeA(size, FLT_MAX, 0, value);
-            Lettered(c.dl, c.font, size, ImVec2(c.x1 - 12 * c.s - vs.x, midY - vs.y * 0.5f), kMenuGold, value);
+            const ImVec2 vs = c.font->CalcTextSizeA(21 * c.s, FLT_MAX, 0, value);
+            Lettered(c.dl, c.font, 21 * c.s, ImVec2(c.x1 - 12 * c.s - vs.x, midY - vs.y * 0.5f), kMenuGold, value);
         }
     }
     c.y += h;
@@ -986,7 +1012,13 @@ const char* PageTitle(Page p) {
         case Page::Maps: return "CHOOSE THE MAP";
         case Page::Locker: return "LOCKER";
         case Page::Options: return "OPTIONS";
+        case Page::OptGraphics: return "GRAPHICS";
+        case Page::OptSound: return "SOUND";
+        case Page::OptMinimap: return "MINIMAP";
+        case Page::OptExtras: return "EXTRAS";
+        case Page::OptPictures: return "MAP PICTURES";
         case Page::Controls: return "CONTROLS";
+        case Page::Items: return "ITEMS";
         case Page::Lobby: return "LOBBY";
         case Page::Invite: return "INVITE FRIENDS";
         case Page::Match: return "MATCH";
@@ -1003,6 +1035,7 @@ void PageMain(Ctx& c) {
     if (Button(c, "Locker", royale::ItemId::KokiriTunic)) Push(Page::Locker);
     if (Button(c, "Options", royale::ItemId::OcarinaOfTime)) Push(Page::Options);
     if (Button(c, "Controls", royale::ItemId::HylianShield)) Push(Page::Controls);
+    if (Button(c, "Items and powers", royale::ItemId::DinsFire)) Push(Page::Items);
     if (InGame()) {
         if (Button(c, "Walk around the Temple", royale::ItemId::KokiriBoots)) MenuClose();
     } else {
@@ -1137,12 +1170,26 @@ void OptionToggle(Ctx& c, const char* key, const char* label, bool fallback) {
     }
 }
 
+// Options: one short list of sections, each its own page, so no page is long enough to need scrolling past rows of sliders and notes.
 void PageOptions(Ctx& c) {
+    if (Button(c, "Graphics", royale::ItemId::LensOfTruth)) Push(Page::OptGraphics);
+    if (Button(c, "Sound", royale::ItemId::OcarinaOfTime)) Push(Page::OptSound);
+    if (Button(c, "Minimap", royale::ItemId::Boomerang)) Push(Page::OptMinimap);
+    if (Button(c, "Extras", royale::ItemId::MagicBeans)) Push(Page::OptExtras);
+    if (Button(c, "Map pictures", royale::ItemId::FairyBow)) Push(Page::OptPictures);
+    if (Button(c, "Screen, sound and controller setup", royale::ItemId::HylianShield)) {
+        MenuClose();
+        CVarSetString(CVAR_SETTING("Menu.ActiveHeader"), "Settings");
+        if (SohGui::mSohMenu && !SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
+    }
+    Note(c, "The last one opens the Ship of Harkinian settings: resolution, button mapping and the like.");
+}
+
+void PageOptGraphics(Ctx& c) {
     UiState& ui = Ui();
-    Header(c, "GRAPHICS");
     if (Slider(c, "Weather effects", &ui.weatherDensity, 0, 200, 10, "%")) { gWeatherDensity = ui.weatherDensity / 100.0f; Saved(); }
     if (Slider(c, "Grass and trees", &ui.foliage, 0, 200, 10, "%")) { gFoliage = ui.foliage / 100.0f; Saved(); }
-    if (Toggle(c, "Cloth physics (caps and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; Saved(); }
+    if (Toggle(c, "Cloth physics", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; Saved(); }
     if (ui.clothOn && Slider(c, "Cloth strength", &ui.clothPhysics, 0, 200, 10, "%")) { gClothScale = ui.clothPhysics / 100.0f; Saved(); }
     {
         bool custom = CustomSceneryOn();
@@ -1151,48 +1198,144 @@ void PageOptions(Ctx& c) {
             Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         }
     }
-    Header(c, "SOUND");
+    OptionToggle(c, "HeldGlow", "Glow on others' weapons", true);
+    OptionToggle(c, "HeldGlowSelf", "Glow on your weapon", false);
+    Note(c, "Cloth physics moves caps and gliders in the wind.");
+}
+
+void PageOptSound(Ctx& c) {
+    UiState& ui = Ui();
     static const char* kMusic[] = { "The game's own", "Music folder", "None" };
     if (Choice(c, "Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; Saved(); }
-    OptionToggle(c, "LobbyMusic", "Lobby songs from the music folder", true);
+    OptionToggle(c, "LobbyMusic", "Lobby songs from the folder", true);
+    OptionToggle(c, "OotInstruments", "Use OoT's own instruments", true);
     if (Button(c, "Look for new songs")) ScanMusicFolder();
     if (gLobbyMusic.status.empty()) ScanMusicFolder();
     Note(c, gLobbyMusic.status + " (16-bit PCM .wav files)");
-    OptionToggle(c, "OotInstruments", "Play them with OoT's own instruments", true);
     if (OotInstrumentsOn()) Note(c, OotStatus());
-    Header(c, "MINIMAP");
-    OptionToggle(c, "MapPlayers", "Other players", true);
-    OptionToggle(c, "MapBots", "Bots", true);
-    OptionToggle(c, "MapEnemies", "Mini bosses", true);
-    OptionToggle(c, "MapChests", "Chests", true);
-    Header(c, "EFFECTS");
-    OptionToggle(c, "HeldGlow", "Glow on other players' weapons", true);
-    OptionToggle(c, "HeldGlowSelf", "Glow on your own weapon", false);
-    Header(c, "EXTRAS");
-    if (Toggle(c, "Wait in the Temple of Time in lobbies", &ui.waitingRoom)) Saved();
+}
+
+void PageOptMinimap(Ctx& c) {
+    OptionToggle(c, "MapPlayers", "Show other players", true);
+    OptionToggle(c, "MapBots", "Show bots", true);
+    OptionToggle(c, "MapEnemies", "Show mini bosses", true);
+    Note(c, "The minimap always shows the storm, the safe zone and supply drops. It zooms out to the whole map while you skydive.");
+}
+
+void PageOptExtras(Ctx& c) {
+    UiState& ui = Ui();
+    if (Toggle(c, "Wait in the Temple of Time", &ui.waitingRoom)) Saved();
     OptionToggle(c, "LiloCat", "Lilo the cat hides on the map", true);
     OptionToggle(c, "LiloPet", "Lilo follows me as a pet", false);
-    if (Button(c, "Reload the custom dragon (replaces Volvagia)")) LoadCustomDragon();
+    if (Button(c, "Reload the custom dragon")) LoadCustomDragon();
     if (!gDragonModel.tried) LoadCustomDragon();
-    Note(c, gDragonModel.status);
-    Header(c, "MAP PICTURES");
-    {
-        bool autoPics = AutoPictures();
-        if (Toggle(c, "Take map pictures by themselves", &autoPics)) {
-            CVarSetInteger(CVAR_SETTING("Royale.AutoMapPictures"), autoPics ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    Note(c, "The custom dragon replaces Volvagia. " + gDragonModel.status);
+}
+
+void PageOptPictures(Ctx& c) {
+    bool autoPics = AutoPictures();
+    if (Toggle(c, "Take map pictures by themselves", &autoPics)) {
+        CVarSetInteger(CVAR_SETTING("Royale.AutoMapPictures"), autoPics ? 1 : 0);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    const bool canTour = InGame() && !gSession.Joined() && !gTour.on;
+    if (Button(c, gTour.on ? "Taking pictures..." : "Take map pictures now", royale::ItemId::LensOfTruth, nullptr, canTour)) { StartTour(); MenuClose(); }
+    Note(c, canTour ? "Visits every map and takes its picture for the map chooser, then brings you back." : "Available outside a lobby, once the game has started.");
+}
+
+// ---- items and powerups ------------------------------------------------------------------------------------------------------
+// Every item in the game's item table (shared/items.h), read from the table itself so new or changed items show up here on their own: grouped
+// by kind, with the game's icon, the name and what it does. The card on the right shows the chosen one large, with how to use it.
+
+const char* KindTitle(royale::ItemKind k) {
+    switch (k) {
+        case royale::ItemKind::Weapon: return "WEAPONS";
+        case royale::ItemKind::Shield: return "SHIELDS";
+        case royale::ItemKind::Consumable: return "POTIONS AND BOTTLES";
+        case royale::ItemKind::Instant: return "PICKUPS";
+        case royale::ItemKind::Ability: return "POWERS: SPELLS, SONGS AND TOOLS";
+        case royale::ItemKind::Gear: return "GEAR";
+    }
+    return "";
+}
+
+const char* KindHowTo(royale::ItemKind k) {
+    switch (k) {
+        case royale::ItemKind::Weapon: return "Held in your hand. B attacks; picking up another weapon drops this one.";
+        case royale::ItemKind::Shield: return "Worn on your back. Takes a share of the damage you would take.";
+        case royale::ItemKind::Consumable: return "Kept in your bag (3 slots). D-pad Down drinks one. A Fairy is never drunk: it saves you once.";
+        case royale::ItemKind::Instant: return "Used the moment you pick it up. Left on the ground if it would do nothing.";
+        case royale::ItemKind::Ability: return "One power at a time. D-pad Up uses it, then it needs time and magic to recharge.";
+        case royale::ItemKind::Gear: return "Always on while you wear it. One of each kind: tunic, boots, gauntlets, mask, scale, pack and charm.";
+    }
+    return "";
+}
+
+std::string RarityRange(const royale::ItemDef& d) {
+    if (d.minRarity == d.maxRarity) return RarityName(d.minRarity);
+    return std::string(RarityName(d.minRarity)) + " to " + RarityName(d.maxRarity);
+}
+
+void ItemRow(Ctx& c, const royale::ItemDef& d) {
+    const float s = c.s, is = 34 * s;
+    const float textX = c.x0 + 10 * s + is + 12 * s, wrap = c.x1 - 12 * s - textX;
+    const float nameSize = 21 * s, effectSize = 16 * s;
+    const ImVec2 es = c.font->CalcTextSizeA(effectSize, FLT_MAX, wrap, d.effect);
+    const float height = std::max(RowHeight(c), 10 * s + nameSize + 4 * s + es.y + 10 * s);
+    RowResult r = BeginRow(c, height);
+    if (r.selected) gMenu.infoItem = d.id;
+    if (!r.visible) return;
+    DrawItemIcon(c.dl, d.id, ImVec2(c.x0 + 10 * s + is * 0.5f, r.a.y + 10 * s + is * 0.5f), is, RarityU32(d.maxRarity));
+    const float y = r.a.y + 9 * s;
+    Lettered(c.dl, c.font, nameSize, ImVec2(textX, y), r.selected ? kMenuSelText : kMenuWhite, d.name);
+    const std::string range = RarityRange(d);
+    const ImVec2 rs = c.font->CalcTextSizeA(15 * s, FLT_MAX, 0, range.c_str());
+    const float nameW = c.font->CalcTextSizeA(nameSize, FLT_MAX, 0, d.name).x;
+    if (textX + nameW + 16 * s + rs.x < c.x1 - 12 * s)   // the rarities it is found at, on the right when there is room
+        c.dl->AddText(c.font, 15 * s, ImVec2(c.x1 - 12 * s - rs.x, y + (nameSize - rs.y) * 0.5f), RarityU32(d.maxRarity), range.c_str());
+    c.dl->AddText(c.font, effectSize, ImVec2(textX, y + nameSize + 4 * s), kMenuCream, d.effect, nullptr, wrap);
+}
+
+void PageItems(Ctx& c) {
+    char strong[32];
+    std::snprintf(strong, sizeof(strong), "%.2g", royale::kRarityMultiplier[royale::kRarityCount - 1] / royale::kRarityMultiplier[0]);
+    Note(c, std::string("Everything you can find in a match and what it does. Rarer finds are stronger: a Legendary item is ") + strong + " times as strong as a Common one.");
+    for (int k = 0; k < royale::kItemKindCount; k++) {
+        const royale::ItemKind kind = static_cast<royale::ItemKind>(k);
+        bool any = false;
+        for (int i = 0; i < royale::kItemCount; i++) {
+            const royale::ItemDef& d = royale::kItems[i];
+            if (d.kind != kind) continue;
+            if (!royale::InPool(d.id) && d.id != royale::ItemId::BasicSword && d.id != royale::ItemId::Rupees) continue;   // (ammo is not worth a row)
+            if (!any) { Header(c, KindTitle(kind)); Note(c, KindHowTo(kind)); any = true; }
+            ItemRow(c, d);
         }
-        const bool canTour = InGame() && !gSession.Joined() && !gTour.on;
-        if (Button(c, gTour.on ? "Taking pictures..." : "Take map pictures now", royale::ItemId::LensOfTruth, nullptr, canTour)) { StartTour(); MenuClose(); }
-        Note(c, canTour ? "Visits every map and takes its picture for the map chooser, then brings you back." : "Available outside a lobby, once the game has started.");
     }
-    Header(c, "MORE");
-    if (Button(c, "Graphics, sound and controller settings")) {
-        MenuClose();
-        CVarSetString(CVAR_SETTING("Menu.ActiveHeader"), "Settings");
-        if (SohGui::mSohMenu && !SohGui::mSohMenu->IsVisible()) SohGui::mSohMenu->ToggleVisibility();
-    }
-    Note(c, "Opens the Ship of Harkinian settings (resolution, button mapping and the like).");
+}
+
+// The card beside the Items page: the chosen item, large.
+void DrawItemCard(const Ctx& c, ImVec2 a, ImVec2 b) {
+    const float s = c.s;
+    const royale::ItemDef& d = royale::DefOf(gMenu.infoItem);
+    OotPanelBox(c.dl, a, b, s, 230);
+    const float cx = (a.x + b.x) * 0.5f, wrap = b.x - a.x - 48 * s;
+    float y = a.y + 26 * s;
+    c.dl->AddCircleFilled(ImVec2(cx, y + 56 * s), 60 * s, IM_COL32(0, 0, 0, 120));
+    c.dl->AddCircle(ImVec2(cx, y + 56 * s), 60 * s, RarityU32(d.maxRarity), 0, 3 * s);
+    DrawItemIcon(c.dl, d.id, ImVec2(cx, y + 56 * s), 84 * s, RarityU32(d.maxRarity));
+    y += 132 * s;
+    const ImVec2 ns = c.font->CalcTextSizeA(30 * s, FLT_MAX, 0, d.name);
+    Lettered(c.dl, c.font, FitSize(c.font, 30 * s, d.name, wrap), ImVec2(cx - std::min(ns.x, wrap) * 0.5f, y), kMenuGold, d.name);
+    y += ns.y + 8 * s;
+    const std::string sub = std::string(KindTitle(d.kind)) + "   " + RarityRange(d);
+    const ImVec2 ss = c.font->CalcTextSizeA(16 * s, FLT_MAX, 0, sub.c_str());
+    c.dl->AddText(c.font, 16 * s, ImVec2(cx - ss.x * 0.5f, y), RarityU32(d.maxRarity), sub.c_str());
+    y += ss.y + 18 * s;
+    c.dl->AddText(c.font, 21 * s, ImVec2(a.x + 24 * s, y), kMenuWhite, d.effect, nullptr, wrap);
+    y += c.font->CalcTextSizeA(21 * s, FLT_MAX, wrap, d.effect).y + 18 * s;
+    c.dl->AddLine(ImVec2(a.x + 24 * s, y), ImVec2(b.x - 24 * s, y), Alpha(kMenuGoldDark, 0.8f), 1.5f * s);
+    y += 12 * s;
+    c.dl->AddText(c.font, 17 * s, ImVec2(a.x + 24 * s, y), kMenuCream, KindHowTo(d.kind), nullptr, wrap);
 }
 
 void PageControls(Ctx& c) {
@@ -1244,6 +1387,7 @@ void PageLobby(Ctx& c) {
     if (Button(c, "Locker", royale::ItemId::KokiriTunic)) Push(Page::Locker);
     if (Button(c, "Options", royale::ItemId::OcarinaOfTime)) Push(Page::Options);
     if (Button(c, "Controls", royale::ItemId::HylianShield)) Push(Page::Controls);
+    if (Button(c, "Items and powers", royale::ItemId::DinsFire)) Push(Page::Items);
     if (Button(c, "Leave the lobby", kNoIcon)) Push(Page::ConfirmLeave);
 }
 
@@ -1270,6 +1414,7 @@ void PageMatch(Ctx& c) {
     if (InField() && Button(c, "Item screen", royale::ItemId::FairyBow)) { MenuClose(); gMenu.swallow = 0; gMenu.passStart = true; }
     if (Button(c, "Options", royale::ItemId::OcarinaOfTime)) Push(Page::Options);
     if (Button(c, "Controls", royale::ItemId::HylianShield)) Push(Page::Controls);
+    if (Button(c, "Items and powers", royale::ItemId::DinsFire)) Push(Page::Items);
     if (Button(c, "Leave the match", kNoIcon)) Push(Page::ConfirmLeave);
     Note(c, "The match keeps going while this menu is open.");
     if (!gPickupLog.empty()) {
@@ -1458,8 +1603,10 @@ void DrawMenu() {
         top = ry + 20 * s;
     }
 
-    // The panel with the rows.
-    const float panelW = std::min(wide ? ds.x * 0.46f : ds.x - 2 * left, 640 * s);
+    // The panel with the rows: beside a card on the pages that have one, otherwise as wide as reads well (so long rows don't crowd).
+    const bool hasCard = wide && (page == Page::Setup || page == Page::Maps || page == Page::Lobby || page == Page::Results || page == Page::Locker ||
+                                  page == Page::Items);
+    const float panelW = hasCard ? std::min(ds.x * 0.46f, 640 * s) : std::min(ds.x - 2 * left, 760 * s);
     const ImVec2 pa(left, top), pb(left + panelW, ds.y - 86 * s);
     OotPanelBox(dl, pa, pb, s, static_cast<int>(215 * fade));
     c.x0 = pa.x + 18 * s;
@@ -1485,7 +1632,13 @@ void DrawMenu() {
             case Page::Maps: PageMaps(c); break;
             case Page::Locker: PageLocker(c); break;
             case Page::Options: PageOptions(c); break;
+            case Page::OptGraphics: PageOptGraphics(c); break;
+            case Page::OptSound: PageOptSound(c); break;
+            case Page::OptMinimap: PageOptMinimap(c); break;
+            case Page::OptExtras: PageOptExtras(c); break;
+            case Page::OptPictures: PageOptPictures(c); break;
             case Page::Controls: PageControls(c); break;
+            case Page::Items: PageItems(c); break;
             case Page::Lobby: PageLobby(c); break;
             case Page::Invite: PageInvite(c); break;
             case Page::Match: PageMatch(c); break;
@@ -1520,7 +1673,7 @@ void DrawMenu() {
     }
 
     // The card on the right: what this page is about.
-    if (gMenu.open && wide && !gMenu.stack.empty()) {
+    if (gMenu.open && hasCard && !gMenu.stack.empty()) {
         const ImVec2 ca(pb.x + 30 * s, top), cb(std::min(ds.x - left, pb.x + 30 * s + 560 * s), pb.y);
         const royale::HudState h = gSession.Hud();
         const Page p = Top().page;
@@ -1535,6 +1688,8 @@ void DrawMenu() {
             }
         } else if (p == Page::Results) {
             DrawResultsCard(c, h, ca, cb);
+        } else if (p == Page::Items) {
+            DrawItemCard(c, ca, cb);
         } else if (p == Page::Locker) {
             OotPanelBox(dl, ca, ImVec2(cb.x, ca.y + 260 * s), s, 230);
             const uint32_t rgb = SelectedTunic(Ui());
