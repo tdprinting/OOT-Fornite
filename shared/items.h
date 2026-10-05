@@ -138,7 +138,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
-    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rU, rL, "Blasts everyone near you away and leaves them dazed"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rU, rL, "Launches you high into the air; no fall damage until you land"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
@@ -377,7 +377,8 @@ enum class EffectType : uint8_t {
     Regen,         // amount = hearts per second, seconds
     Cleanse,
     RandomSong,    // radius: 0 = simple songs only, 1 = any song
-    Shockwave,     // radius, amount = how far everyone in range is thrown from you, seconds = how long they are dazed
+    Launch,        // a mobility blast: throws the user high into the air (the game does that; see LaunchSelf in the mod), with no fall damage until
+                   // they land and for `seconds` after. amount = how far a bot is carried (bots move on flat ground, so the server moves them).
 };
 
 struct Effect {
@@ -416,7 +417,7 @@ constexpr AbilityDef AbilityOf(ItemId id) {
         case ItemId::NocturneOfShadow: return {30, {{{T::RandomTeleport}}}};
         case ItemId::RequiemOfSpirit:  return {26, {{{T::StunNearby, 700, 0, 1.0f}, {T::AoeDamage, 700, 0.6f, 0}}}};
         case ItemId::PreludeOfLight:   return {26, {{{T::Heal, 0, 1.0f, 0}, {T::Invulnerable, 0, 0, 1.5f}}}};
-        case ItemId::ShockwaveGrenade: return {16, {{{T::Shockwave, 450, 380, 0.8f}}}};
+        case ItemId::ShockwaveGrenade: return {12, {{{T::Launch, 0, 520, 1.0f}}}};
         default:                       return {};
     }
 }
@@ -431,7 +432,7 @@ constexpr float AbilityMagic(ItemId id) {
         case ItemId::SunsSong: return 25;        case ItemId::SongOfTime: return 45;      case ItemId::SongOfStorms: return 30;
         case ItemId::MinuetOfForest: return 20;  case ItemId::BoleroOfFire: return 25;    case ItemId::SerenadeOfWater: return 25;
         case ItemId::NocturneOfShadow: return 20; case ItemId::RequiemOfSpirit: return 35; case ItemId::PreludeOfLight: return 30;
-        case ItemId::ShockwaveGrenade: return 25;
+        case ItemId::ShockwaveGrenade: return 20;
         default: return 0;
     }
 }
