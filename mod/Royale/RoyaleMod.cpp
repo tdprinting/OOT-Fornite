@@ -17,7 +17,15 @@
 #include "objmodel.h"
 #include "skins.h"
 #include "tune.h"
+#include "basic_pitch.h"
+#include "oot_arrange.h"
 #include <algorithm>
+#include <condition_variable>
+#include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <thread>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -40,6 +48,7 @@
 #include "soh/SohGui/SohGui.hpp"
 #include "soh/SohGui/SohMenu.h"
 #include "soh/cvar_prefixes.h"
+#include "soh/ResourceManagerHelpers.h"
 #include <SDL2/SDL.h>
 #include <imgui.h>
 #include <libultraship/libultraship.h>
@@ -60,9 +69,19 @@ extern "C" {
 #include "objects/object_ik/object_ik.h"           // the Iron Knuckle (a mini boss)
 #include "objects/object_wf/object_wf.h"           // the Wolfos (a mini boss)
 #include "objects/object_sk2/object_sk2.h"         // the Stalfos (a mini boss)
-#include "objects/object_fd2/object_fd2.h"         // Volvagia (the dragons)
+#include "objects/object_fd2/object_fd2.h"         // Volvagia (Death Mountain Crater's major boss)
+#include "objects/object_zf/object_zf.h"           // the Lizalfos (a mini boss)
+#include "objects/object_bigokuta/object_bigokuta.h" // the Big Octo (a mini boss)
+#include "objects/object_dh/object_dh.h"           // the Dead Hand and its hands (a mini boss)
+#include "objects/object_mo/object_mo.h"           // Morpha (Lake Hylia's major boss)
+#include "objects/object_gnd/object_gnd.h"         // Phantom Ganon (Hyrule Field's major boss)
+#include "objects/object_sst/object_sst.h"         // Bongo Bongo (Kakariko's major boss)
+#include "objects/object_tw/object_tw.h"           // Twinrova (Desert Colossus's major boss)
 #include "regs.h"                                // WREG, for the game's own minimap switch
 extern PlayState* gPlayState;
+// the game's font loader (audio_load.c; it returns the font's data, used here only as "did it load"), for playing the music folder's songs
+void* AudioLoad_SyncLoadFont(u32 fontId);
+extern char** sequenceMap;
 
 void Player_UseItem(PlayState* play, Player* player, s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
@@ -546,10 +565,46 @@ void ApplyChickenDance(Player* p, float t) {
 }
 
 std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
+std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a flinch left (set when they are seen getting hurt)
+std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
+std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
 
+// ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
+
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
+
+// How a weapon is held decides which of Link's move sets it uses (one-handed sword, two-handed sword, hammer, bow...).
+enum class Grip : uint8_t { OneHand, TwoHand, Hammer, Bow, Hook, Boomerang, Explosive, Ocarina, Bare };
+Grip GripOf(royale::ItemId w) {
+    using royale::ItemId;
+    switch (w) {
+        case ItemId::BiggoronSword: return Grip::TwoHand;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return Grip::Hammer;
+        case ItemId::FairyBow: case ItemId::Slingshot: case ItemId::TripleSlingshot: case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows: return Grip::Bow;
+        case ItemId::Hookshot: case ItemId::Longshot: return Grip::Hook;
+        case ItemId::Boomerang: return Grip::Boomerang;
+        case ItemId::Bombs: case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::DekuNuts: return Grip::Explosive;
+        default: break;
+    }
+    const Look look = LookFor(w);
+    if (look.modelGroup == PLAYER_MODELGROUP_OCARINA || look.modelGroup == PLAYER_MODELGROUP_OOT) return Grip::Ocarina;
+    if (look.modelGroup == PLAYER_MODELGROUP_SWORD_AND_SHIELD || look.modelGroup == PLAYER_MODELGROUP_10) return Grip::OneHand;
+    return Grip::Bare;
+}
+
+// An action is up to three of the game's animations in a row: a slash and its recovery, a potion opened, drunk and finished, a spell
+// gathered, loosed and ended. The last one loops (walking, holding a stance) or holds its final pose until the player does something else.
+struct AnimStep { LinkAnimationHeader* anim; bool loop; };
+struct AnimSeq {
+    AnimStep step[3] = {};
+    int count = 0;
+    AnimSeq() = default;
+    AnimSeq(LinkAnimationHeader* a, bool loop) { Add(a, loop); }
+    AnimSeq& Add(LinkAnimationHeader* a, bool loop = false) { if (count < 3 && a != nullptr) step[count++] = { a, loop }; return *this; }
+};
+
 // Sprinting, seen on anyone: the run cycle sped up (Link's own follows his real speed) and small puffs of dust from the heels.
 constexpr float kSprintAnimSpeed = 1.45f;
 void SprintDust(PlayState* play, Actor* actor, u32 frame) {
@@ -560,55 +615,325 @@ void SprintDust(PlayState* play, Actor* actor, u32 frame) {
     at.z -= std::cos(back) * 12.0f;
     Actor_SpawnFloorDustRing(play, actor, &at, 8.0f, 1, 4.0f, 70, 15, true);
 }
-// Actions are played once, from their first frame, each time one begins (see Puppet_Update); `combo` varies a sword's slash.
+// Actions are played once, from their first frame, each time one begins (see Puppet_Update).
 bool OneShotAnim(uint8_t anim) {
-    switch (static_cast<royale::Anim>(anim)) {
-        case royale::Anim::Attack: case royale::Anim::Shoot: case royale::Anim::Throw: case royale::Anim::Drink:
-        case royale::Anim::Play: case royale::Anim::Cast: case royale::Anim::Roll: return true;
+    using royale::Anim;
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Attack: case Anim::Shoot: case Anim::Throw: case Anim::Drink: case Anim::Play: case Anim::Cast: case Anim::Roll:
+        case Anim::JumpSlash: case Anim::SpinAttack: case Anim::HopL: case Anim::HopR: case Anim::Backflip: case Anim::ItemGet:
+        case Anim::OpenChest: case Anim::Jump: case Anim::Hurt: case Anim::Dead: case Anim::Guard: return true;
         default: return false;
     }
 }
-LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword, int combo = 0) {
-    using royale::ItemId;
-    const bool hammer = weapon == ItemId::MegatonHammer || weapon == ItemId::GiantsHammer;
-    switch (static_cast<royale::Anim>(anim)) {
-        case royale::Anim::Attack: {
-            if (hammer) return RA(hammer_hit);
-            static LinkAnimationHeader* const slashes[4] = { RA(fighter_Lnormal_kiru), RA(fighter_LLside_kiru), RA(fighter_LRside_kiru), RA(fighter_Lpierce_kiru) };
-            if (weapon == ItemId::DekuStick) return RA(fighter_normal_kiru);
-            return slashes[combo & 3];
+
+// The game's sword swings in the order a player strings them together: a slash, a slash from the other side, then a finishing blow
+// (sometimes a stab). One-handed swords, the two-handed Biggoron's Sword and the hammer each have their own set.
+AnimSeq SwingFor(Grip grip, int combo) {
+    const int n = combo % 4;
+    switch (grip) {
+        case Grip::Hammer:
+            return n % 2 == 0 ? AnimSeq(RA(hammer_hit), false).Add(RA(hammer_hit_end)) : AnimSeq(RA(hammer_side_hit), false).Add(RA(hammer_side_hit_end));
+        case Grip::TwoHand: {
+            static LinkAnimationHeader* const hit[4] = { RA(fighter_Lnormal_kiru), RA(fighter_LLside_kiru), RA(fighter_LRside_kiru_finsh), RA(fighter_Lpierce_kiru) };
+            static LinkAnimationHeader* const end[4] = { RA(fighter_Lnormal_kiru_end), RA(fighter_LLside_kiru_end), RA(fighter_LRside_kiru_finsh_end), RA(fighter_Lpierce_kiru_end) };
+            return AnimSeq(hit[n], false).Add(end[n]);
         }
-        case royale::Anim::Shoot:
-            if (weapon == ItemId::Hookshot || weapon == ItemId::Longshot) return RA(hook_shot_ready);
-            return RA(bow_bow_shoot);
-        case royale::Anim::Throw:
-            if (weapon == ItemId::Boomerang) return RA(boom_throwR);
-            if (weapon == ItemId::Bombs || weapon == ItemId::Bombchus || weapon == ItemId::HomingBombchus) return RA(normal_throw);
-            return RA(boom_throwL);
-        case royale::Anim::Drink: return RA(bottle_drink_demo_start);
-        case royale::Anim::Play: return RA(normal_okarina_start);
-        case royale::Anim::Cast:
-            if (weapon == ItemId::DinsFire) return RA(magic_honoo1);
-            if (weapon == ItemId::FaroresWind) return RA(magic_kaze1);
-            return RA(magic_tamashii1);
-        case royale::Anim::Roll: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_landing_roll;           // a dodge roll
-        case royale::Anim::SideL: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkL;            // the lock-on footwork
-        case royale::Anim::SideR: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_side_walkR;
-        case royale::Anim::Back: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_back_walk;
-        case royale::Anim::Stance: return (LinkAnimationHeader*)&gPlayerAnim_link_anchor_waitR;
-        case royale::Anim::Emote1: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_bikkuri;     // startled: "Wow!"
-        case royale::Anim::Emote2: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_jibunmiru;   // looks at his own hands
-        case royale::Anim::Emote3: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kaoage;      // looks up
-        case royale::Anim::Emote4: return (LinkAnimationHeader*)&gPlayerAnim_link_demo_kenmiru1;    // admires a sword
-        case royale::Anim::Emote5: return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;      // the chicken dance poses the limbs itself (ApplyChickenDance)
-        case royale::Anim::Walk:
-        case royale::Anim::Run:
-        case royale::Anim::Sprint:   // the same run, played faster (see Puppet_Update)
-            return (LinkAnimationHeader*)&gPlayerAnim_link_normal_run;
-        default: // Idle, Attack, Hurt, Dead and anything newer than this build: stand still for now
-            return (LinkAnimationHeader*)&gPlayerAnim_link_normal_wait;
+        default: {
+            static LinkAnimationHeader* const hit[4] = { RA(fighter_normal_kiru), RA(fighter_Lside_kiru), RA(fighter_Rside_kiru_finsh), RA(fighter_pierce_kiru) };
+            static LinkAnimationHeader* const end[4] = { RA(fighter_normal_kiru_end), RA(fighter_Lside_kiru_end), RA(fighter_Rside_kiru_finsh_end), RA(fighter_pierce_kiru_end) };
+            return AnimSeq(hit[n], false).Add(end[n]);
+        }
     }
 }
+
+// Standing ready with what is in hand, and the lock-on footwork, both as the game shows them for that weapon.
+LinkAnimationHeader* StanceFor(Grip grip) {
+    switch (grip) {
+        case Grip::Bow: return RA(bow_bow_wait);
+        case Grip::Hook: return RA(hook_wait);
+        case Grip::Boomerang: return RA(boom_throw_waitR);
+        case Grip::TwoHand: case Grip::Hammer: return RA(fighter_waitR_long);
+        default: return RA(anchor_waitR);
+    }
+}
+LinkAnimationHeader* SideStepFor(Grip grip, bool left) {
+    switch (grip) {
+        case Grip::Bow: return RA(bow_side_walk);
+        case Grip::Hook: return RA(hook_side_walk);
+        case Grip::Boomerang: return left ? RA(boom_throw_side_walkL) : RA(boom_throw_side_walkR);
+        case Grip::Explosive: return left ? RA(anchor_bom_side_walkL) : RA(anchor_bom_side_walkR);
+        case Grip::TwoHand: case Grip::Hammer: return left ? RA(fighter_side_walkL_long) : RA(fighter_side_walkR_long);
+        default: return left ? RA(anchor_side_walkL) : RA(anchor_side_walkR);
+    }
+}
+
+// The spells and songs: which magic pose (fire, wind or soul) a spell is cast with.
+AnimSeq CastFor(royale::ItemId ability) {
+    using royale::ItemId;
+    switch (ability) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return AnimSeq(RA(magic_honoo1), false).Add(RA(magic_honoo2)).Add(RA(magic_honoo3));
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: case ItemId::EponasSong: case ItemId::MinuetOfForest:
+            return AnimSeq(RA(magic_kaze1), false).Add(RA(magic_kaze2)).Add(RA(magic_kaze3));
+        case ItemId::LensOfTruth: return AnimSeq(RA(normal_okarina_start), false);   // held up to the eye
+        case ItemId::MagicBeans: return AnimSeq(RA(normal_put), false);               // planted at his feet
+        default: return AnimSeq(RA(magic_tamashii1), false).Add(RA(magic_tamashii2)).Add(RA(magic_tamashii3));
+    }
+}
+
+AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ability, Player* player) {
+    using royale::Anim;
+    using royale::ItemId;
+    const Grip grip = GripOf(weapon);
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Walk: return AnimSeq(RA(normal_walk), true);
+        case Anim::Run: case Anim::Sprint: return AnimSeq(RA(normal_run), true);   // a sprint is the same run, played faster
+        case Anim::Attack:
+            if (grip == Grip::Bow || grip == Grip::Explosive || grip == Grip::Boomerang || grip == Grip::Hook || grip == Grip::Ocarina || grip == Grip::Bare)
+                return AnimSeq(RA(fighter_normal_kiru), false).Add(RA(fighter_normal_kiru_end));   // bashing with whatever is in hand
+            return SwingFor(grip, combo);
+        case Anim::JumpSlash:
+            if (grip == Grip::Hammer) return AnimSeq(RA(hammer_hit), false).Add(RA(hammer_hit_end));
+            return AnimSeq(RA(fighter_Lpower_jump_kiru), false).Add(RA(fighter_Lpower_jump_kiru_hit)).Add(RA(fighter_Lpower_jump_kiru_end));
+        case Anim::SpinAttack:
+            if (grip == Grip::TwoHand || grip == Grip::Hammer) return AnimSeq(RA(fighter_Lrolling_kiru), false).Add(RA(fighter_Lrolling_kiru_end));
+            return AnimSeq(RA(fighter_rolling_kiru), false).Add(RA(fighter_rolling_kiru_end));
+        case Anim::Shoot:
+            if (grip == Grip::Hook) return AnimSeq(RA(hook_shot_ready), false).Add(RA(hook_wait), true);
+            return AnimSeq(RA(bow_bow_shoot), false).Add(RA(bow_bow_shoot_end)).Add(RA(bow_bow_wait), true);
+        case Anim::Throw:
+            if (ability == ItemId::Hookshot || ability == ItemId::Longshot) return AnimSeq(RA(hook_shot_ready), false).Add(RA(hook_wait), true);
+            if (weapon == ItemId::Boomerang) return AnimSeq(RA(boom_throwR), false).Add(RA(boom_throw_wait2waitR)).Add(RA(boom_throw_waitR), true);
+            return AnimSeq(RA(normal_throw), false);
+        case Anim::Drink: return AnimSeq(RA(bottle_drink_demo_start), false).Add(RA(bottle_drink_demo_wait)).Add(RA(bottle_drink_demo_end));
+        case Anim::Play: return AnimSeq(RA(normal_okarina_start), false).Add(RA(normal_okarina_swing), true);
+        case Anim::Cast: return CastFor(ability);
+        case Anim::Roll: return AnimSeq(RA(normal_landing_roll), false);
+        case Anim::HopL: return AnimSeq(RA(fighter_Lside_jump), false).Add(RA(fighter_Lside_jump_end));
+        case Anim::HopR: return AnimSeq(RA(fighter_Rside_jump), false).Add(RA(fighter_Rside_jump_end));
+        case Anim::Backflip: return AnimSeq(RA(fighter_backturn_jump), false).Add(RA(fighter_backturn_jump_end));
+        case Anim::Guard:
+            if (grip == Grip::TwoHand || grip == Grip::Hammer) return AnimSeq(RA(fighter_defense_long), false).Add(RA(fighter_defense_long_wait), true);
+            return AnimSeq(RA(anchor_waitR2defense), false).Add(RA(anchor_waitR_defense_wait), true);
+        case Anim::ItemGet: return AnimSeq(RA(demo_get_itemB), false);
+        case Anim::OpenChest: return AnimSeq(player != nullptr && player->ageProperties != nullptr ? player->ageProperties->unk_98 : RA(demo_Tbox_open), false);
+        case Anim::Jump: return AnimSeq(RA(normal_run_jump), false).Add(RA(normal_landing));
+        case Anim::Hurt: return AnimSeq(RA(normal_front_shit), false);
+        case Anim::Dead: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));
+        case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
+        case Anim::SideR: return AnimSeq(SideStepFor(grip, false), true);
+        case Anim::Back: return AnimSeq(grip == Grip::Bow || grip == Grip::Hook ? SideStepFor(grip, false) : RA(anchor_back_walk), true);
+        case Anim::Stance: return AnimSeq(StanceFor(grip), true);
+        case Anim::Emote1: return AnimSeq(RA(demo_bikkuri), false);     // startled: "Wow!"
+        case Anim::Emote2: return AnimSeq(RA(demo_jibunmiru), false);   // looks at his own hands
+        case Anim::Emote3: return AnimSeq(RA(demo_kaoage), false).Add(RA(demo_kaoage_wait), true);   // looks up
+        case Anim::Emote4: return AnimSeq(RA(demo_kenmiru1), false).Add(RA(demo_kenmiru1_wait), true);   // admires a sword
+        case Anim::Emote5: return AnimSeq(RA(normal_wait), true);       // the chicken dance poses the limbs itself (ApplyChickenDance)
+        default: return AnimSeq(RA(normal_wait), true);                 // Idle and anything newer than this build
+    }
+}
+// The first animation of an action (the corpses' emote doubles use it).
+LinkAnimationHeader* AnimFor(uint8_t anim, royale::ItemId weapon = royale::ItemId::BasicSword, int combo = 0) {
+    return SeqFor(anim, weapon, combo, royale::ItemId::DinsFire, nullptr).step[0].anim;
+}
+
+// ---- how other players sound: the game's own effects and Link's voice, from where they stand -----------------------------------
+
+constexpr float kPuppetHearing = 1600.0f;   // sounds further off than this are not played at all (the game fades them with distance anyway)
+int gPuppetSfxThisFrame = 0;               // a cap, so 31 players at once don't use up every sound channel
+u32 gPuppetSfxFrame = 0;
+
+bool PuppetAudible(const Actor* actor) {
+    if (gPlayState == nullptr) return false;
+    if (gPuppetSfxFrame != gPlayState->gameplayFrames) { gPuppetSfxFrame = gPlayState->gameplayFrames; gPuppetSfxThisFrame = 0; }
+    if (gPuppetSfxThisFrame >= 6) return false;
+    const Player* me = GET_PLAYER(gPlayState);
+    const float dx = actor->world.pos.x - me->actor.world.pos.x, dz = actor->world.pos.z - me->actor.world.pos.z;
+    return dx * dx + dz * dz < kPuppetHearing * kPuppetHearing;
+}
+void PuppetSfx(Actor* actor, u16 sfx) {
+    if (!PuppetAudible(actor)) return;
+    gPuppetSfxThisFrame++;
+    Audio_PlaySoundGeneral(sfx, &actor->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+// Link's voice: the child and adult voices are separate sounds, as in the game.
+void PuppetVoice(Player* player, u16 sfx) { PuppetSfx(&player->actor, static_cast<u16>(sfx + player->ageProperties->unk_92)); }
+// Footsteps, jumps and landings sound like the ground they are on (grass, dirt, stone, water...).
+u16 PuppetFloorSfx(Player* player, u16 sfx) { return static_cast<u16>(sfx + player->floorSfxOffset + player->ageProperties->unk_94); }
+
+void PuppetStep(Player* player, float speedPerFrame) {
+    if (!PuppetAudible(&player->actor)) return;
+    gPuppetSfxThisFrame++;
+    func_800F4010(&player->actor.projectedPos, PuppetFloorSfx(player, NA_SE_PL_WALK_GROUND), speedPerFrame);
+}
+
+// A spell or a song's own sound when somebody uses it (the tune itself is played by PlaySongMelody).
+u16 AbilitySfx(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return NA_SE_PL_MAGIC_FIRE;
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: return NA_SE_PL_MAGIC_WIND_WARP;
+        case ItemId::NayrusLove: case ItemId::PreludeOfLight: return NA_SE_PL_MAGIC_SOUL_NORMAL;
+        case ItemId::Hookshot: case ItemId::Longshot: return NA_SE_IT_HOOKSHOT_CHAIN;
+        case ItemId::ShockwaveGrenade: return NA_SE_IT_BOMB_EXPLOSION;
+        case ItemId::MagicBeans: return NA_SE_PL_PLANT_GROW_UP;
+        case ItemId::LensOfTruth: return NA_SE_PL_MAGIC_SOUL_FLASH;
+        default: return NA_SE_PL_MAGIC_SOUL_BALL;
+    }
+}
+u16 AbilityVoice(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: return NA_SE_VO_LI_MAGIC_ATTACK;
+        case ItemId::FaroresWind: case ItemId::NocturneOfShadow: return NA_SE_VO_LI_MAGIC_FROL;
+        case ItemId::NayrusLove: case ItemId::PreludeOfLight: return NA_SE_VO_LI_MAGIC_NALE;
+        default: return 0;
+    }
+}
+
+// The sound of an action starting: the swish of the swing and Link's shout, the bow string, the bottle, the roll...
+void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo) {
+    using royale::Anim;
+    using royale::ItemId;
+    const Grip grip = GripOf(weapon);
+    switch (static_cast<Anim>(anim)) {
+        case Anim::Attack:
+            if (grip == Grip::Hammer) PuppetSfx(&player->actor, NA_SE_IT_HAMMER_SWING);
+            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
+            PuppetVoice(player, combo % 4 == 2 || grip == Grip::Hammer || grip == Grip::TwoHand ? NA_SE_VO_LI_SWORD_L : NA_SE_VO_LI_SWORD_N);
+            break;
+        case Anim::JumpSlash:
+            PuppetVoice(player, NA_SE_VO_LI_SWORD_L);
+            PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
+            break;
+        case Anim::SpinAttack:
+            PuppetSfx(&player->actor, NA_SE_IT_ROLLING_CUT);
+            PuppetVoice(player, NA_SE_VO_LI_SWORD_L);
+            break;
+        case Anim::Shoot:
+            PuppetSfx(&player->actor, grip == Grip::Hook ? NA_SE_IT_HOOKSHOT_READY : weapon == ItemId::Slingshot || weapon == ItemId::TripleSlingshot ? NA_SE_IT_SLING_DRAW : NA_SE_IT_BOW_DRAW);
+            break;
+        case Anim::Throw: PuppetVoice(player, NA_SE_VO_LI_SWORD_N); PuppetSfx(&player->actor, NA_SE_PL_THROW); break;
+        case Anim::Drink: PuppetSfx(&player->actor, NA_SE_PL_PUT_OUT_ITEM); break;
+        case Anim::Roll: PuppetSfx(&player->actor, NA_SE_PL_ROLL); break;
+        case Anim::HopL: case Anim::HopR: case Anim::Backflip: case Anim::Jump:
+            PuppetVoice(player, NA_SE_VO_LI_AUTO_JUMP);
+            PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
+            break;
+        case Anim::Guard: PuppetSfx(&player->actor, NA_SE_IT_SHIELD_POSTURE); break;
+        case Anim::OpenChest: PuppetSfx(&player->actor, NA_SE_EV_TBOX_OPEN); break;
+        case Anim::ItemGet: PuppetSfx(&player->actor, NA_SE_SY_GET_ITEM); break;
+        case Anim::Emote1: PuppetVoice(player, NA_SE_VO_LI_SURPRISE); break;
+        case Anim::Hurt: PuppetVoice(player, NA_SE_VO_LI_DAMAGE_S); break;
+        case Anim::Dead: PuppetVoice(player, NA_SE_VO_LI_DOWN); break;
+        default: break;
+    }
+}
+
+// Songs: when somebody near you plays one, you hear the real tune on the ocarina, one at a time.
+int OcarinaSongOf(royale::ItemId id) {
+    using royale::ItemId;
+    switch (id) {
+        case ItemId::ZeldasLullaby: return OCARINA_SONG_LULLABY;
+        case ItemId::EponasSong: return OCARINA_SONG_EPONAS;
+        case ItemId::SariasSong: return OCARINA_SONG_SARIAS;
+        case ItemId::SunsSong: return OCARINA_SONG_SUNS;
+        case ItemId::SongOfTime: return OCARINA_SONG_TIME;
+        case ItemId::SongOfStorms: return OCARINA_SONG_STORMS;
+        case ItemId::MinuetOfForest: return OCARINA_SONG_MINUET;
+        case ItemId::BoleroOfFire: return OCARINA_SONG_BOLERO;
+        case ItemId::SerenadeOfWater: return OCARINA_SONG_SERENADE;
+        case ItemId::NocturneOfShadow: return OCARINA_SONG_NOCTURNE;
+        case ItemId::RequiemOfSpirit: return OCARINA_SONG_REQUIEM;
+        case ItemId::PreludeOfLight: return OCARINA_SONG_PRELUDE;
+        case ItemId::FairyOcarina: { static const int simple[] = { OCARINA_SONG_LULLABY, OCARINA_SONG_EPONAS, OCARINA_SONG_SARIAS, OCARINA_SONG_SUNS, OCARINA_SONG_TIME, OCARINA_SONG_STORMS }; return simple[static_cast<int>(Rand_ZeroOne() * 5.99f)]; }
+        case ItemId::OcarinaOfTime: return static_cast<int>(Rand_ZeroOne() * 11.99f);   // any of the twelve
+        default: return -1;
+    }
+}
+struct SongPlayback { bool on = false; double started = 0; };
+SongPlayback gSongPlayback;
+bool SongBlocked() {
+    if (gPlayState == nullptr || gPlayState->pauseCtx.state != 0) return true;
+    return (GET_PLAYER(gPlayState)->stateFlags2 & PLAYER_STATE2_OCARINA_PLAYING) != 0;   // you are playing the real ocarina yourself
+}
+void PlaySongMelody(int song) {
+    if (song < 0 || gSongPlayback.on || SongBlocked()) return;
+    Audio_OcaSetInstrument(1);
+    Audio_OcaSetSongPlayback(static_cast<s8>(song + 1), 1);
+    gSongPlayback = { true, ImGui::GetTime() };
+}
+void UpdateSongMelody() {
+    if (!gSongPlayback.on) return;
+    const double age = ImGui::GetTime() - gSongPlayback.started;
+    const OcarinaStaff* staff = Audio_OcaGetDisplayingStaff();
+    if ((age > 0.5 && staff != nullptr && staff->state == 0) || age > 8.0 || (gPlayState != nullptr && gPlayState->pauseCtx.state != 0)) {
+        Audio_OcaSetSongPlayback(0, 0);
+        Audio_OcaSetInstrument(0);
+        gSongPlayback.on = false;
+    }
+}
+
+// Someone used an ability: the spell's sound and Link's shout from where they stand, and the tune if it was a song and they are close.
+void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
+    gLastAbility[who] = item;
+    gLastAbilityAt[who] = ImGui::GetTime();
+    if (!InGame()) return;
+    const bool song = royale::IsSong(item) || item == royale::ItemId::FairyOcarina || item == royale::ItemId::OcarinaOfTime;
+    Player* me = GET_PLAYER(gPlayState);
+    const float d = std::hypot(x - me->actor.world.pos.x, z - me->actor.world.pos.z);
+    if (song && (self || d < 900.0f)) PlaySongMelody(OcarinaSongOf(item));
+    if (self) return;   // your own spell already made its sound when you used it
+    auto a = gActorOf.find(who);
+    if (a == gActorOf.end() || a->second == nullptr) return;
+    Player* p = (Player*)a->second;
+    if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
+    if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
+}
+
+// ---- the puppet itself ------------------------------------------------------------------------------------------------------------
+
+// Each puppet's place in its current action, how fast it is really moving (to match its legs to it), and when it last made a sound.
+struct PuppetMotion {
+    uint8_t anim = 255;         // the action being shown
+    AnimSeq seq;
+    int step = 0;
+    int combo = 0;
+    royale::ItemId seqAbility = royale::ItemId::Count;
+    float lastX = 0, lastZ = 0;
+    bool havePos = false;
+    float speed = 0;            // units per game frame, smoothed
+    float prevFrame = 0;        // for footsteps
+    int idleFrames = 0;         // standing about: now and then a look round
+    float jumpT = -1;           // a bot's jump arc, 0..1 (bots move on flat ground, so the jump is drawn here)
+    int floorCheck = 0;
+    royale::ItemId heldWeapon = royale::ItemId::Count;
+    int flinch = 0;
+};
+std::unordered_map<const Actor*, PuppetMotion> gMotion;
+
+void StartStep(PlayState* play, Player* player, PuppetMotion& m, int step, float morph) {
+    m.step = step;
+    const AnimStep& st = m.seq.step[step];
+    LinkAnimation_Change(play, &player->skelAnime, st.anim, 1.0f, 0.0f, Animation_GetLastFrame(st.anim), st.loop ? ANIMMODE_LOOP : ANIMMODE_ONCE, morph);
+    m.prevFrame = 0;
+}
+void StartSeq(PlayState* play, Player* player, PuppetMotion& m, const AnimSeq& seq, float morph) {
+    m.seq = seq;
+    if (m.seq.count == 0) m.seq = AnimSeq(RA(normal_wait), true);
+    StartStep(play, player, m, 0, morph);
+}
+
+// Which ground the puppet stands on, for its footsteps (checked a few times a second).
+void UpdatePuppetFloor(PlayState* play, Player* player, PuppetMotion& m) {
+    if (m.floorCheck-- > 0) return;
+    m.floorCheck = 8;
+    CollisionPoly poly;
+    s32 bgId = BGCHECK_SCENE;
+    Vec3f pos = { player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z };
+    const float y = BgCheck_AnyRaycastFloor2(&play->colCtx, &poly, &bgId, &pos);
+    player->floorSfxOffset = y > BGCHECK_Y_MIN + 1.0f ? SurfaceType_GetSfx(&play->colCtx, &poly, bgId) : 0;
+}
+
 
 void Puppet_Init(Actor* actor, PlayState* play) {
     Player* player = (Player*)actor;
@@ -707,6 +1032,20 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         }
     }
 
+    PuppetMotion& m = gMotion[actor];
+    {   // how fast they really move (snapshots arrive in steps, so smoothed): the legs are matched to it
+        if (m.havePos) {
+            const float moved = std::hypot(s.x - m.lastX, s.z - m.lastZ);
+            if (moved < 80.0f) m.speed = m.speed * 0.7f + moved * 0.3f;
+        }
+        m.lastX = s.x; m.lastZ = s.z; m.havePos = true;
+    }
+    UpdatePuppetFloor(play, player, m);
+    if (m.heldWeapon != s.weapon) {   // a weapon swapped in: the game's draw sound
+        if (m.heldWeapon != royale::ItemId::Count && s.alive) PuppetSfx(actor, NA_SE_PL_CHANGE_ARMS);
+        m.heldWeapon = s.weapon;
+    }
+
     {   // somebody has just loosed an arrow or thrown something: show it in flight
         static std::unordered_map<uint16_t, uint8_t> previous;
         uint8_t& before = previous[s.id];
@@ -714,56 +1053,110 @@ void Puppet_Update(Actor* actor, PlayState* play) {
             SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot);
         before = s.anim;
     }
-    // Actions play once, from their first frame, every time they begin, and hold their last pose until the player does something else:
-    // that is what makes a slash, a shot or a throw read as a movement instead of a looping wiggle. Sword slashes cycle through the
-    // game's four different swings.
-    static std::unordered_map<const Actor*, uint8_t> lastAnim;
-    static std::unordered_map<uint16_t, int> combo;
-    bool restart = false;
-    LinkAnimationHeader* want = nullptr;
-    const bool hanging = HangingFromGlider(&s, actor, play);
-    if (hanging) {   // both hands up on the glider's bar (the game's ledge-hang pose)
-        want = RA(normal_jump_climb_wait);
-        auto cur = gPlaying.find(actor);
-        if (cur == gPlaying.end() || cur->second != (const void*)want) { LinkAnimation_PlayLoop(play, &player->skelAnime, want); gPlaying[actor] = (const void*)want; }
+    if (HangingFromGlider(&s, actor, play)) {   // both hands up on the glider's bar (the game's ledge-hang pose)
+        if (m.anim != 254) { StartSeq(play, player, m, AnimSeq(RA(normal_jump_climb_wait), true), -6.0f); m.anim = 254; }
         LinkAnimation_Update(play, &player->skelAnime);
         Vec3f ignored;
         SkelAnime_UpdateTranslation(&player->skelAnime, &ignored, actor->shape.rot.y);
-        lastAnim[actor] = 255;
         return;
     }
+
+    // What to show. Mostly the player's own state; but when they are seen landing a blow (or taking one) and their state doesn't say so
+    // yet, the swing (or the flinch) is shown anyway, so a fight always reads as one.
+    using royale::Anim;
+    uint8_t want = s.anim;
+    bool forced = false;
     {
         auto sw = gSwingFrames.find(s.id);
-        const bool hitting = sw != gSwingFrames.end() && sw->second > 0;
-        const bool swingStart = hitting && sw->second == 10;
-        if (hitting) sw->second--;
-        uint8_t& before = lastAnim[actor];
-        const bool attackStart = s.anim == static_cast<uint8_t>(royale::Anim::Attack) && before != s.anim;
-        if (swingStart || attackStart) {
-            want = AnimFor(static_cast<uint8_t>(royale::Anim::Attack), s.weapon, combo[s.id]++);
-            restart = true;
-        } else if (hitting) {
-            auto cur = gPlaying.find(actor);
-            want = cur != gPlaying.end() ? (LinkAnimationHeader*)cur->second : AnimFor(s.anim, s.weapon);
-        } else {
-            want = AnimFor(s.anim, s.weapon, combo[s.id]);
-            restart = OneShotAnim(s.anim) && before != s.anim;
+        auto fl = gFlinchFrames.find(s.id);
+        const bool busy = royale::IsStrike(s.anim) || royale::IsDodge(s.anim) || OneShotAnim(s.anim);
+        if (sw != gSwingFrames.end() && sw->second > 0) {
+            if (!busy) { want = static_cast<uint8_t>(Anim::Attack); forced = sw->second == 10; }
+            sw->second--;
+        } else if (fl != gFlinchFrames.end() && fl->second > 0) {
+            if (!busy && s.alive) { want = static_cast<uint8_t>(Anim::Hurt); forced = fl->second == 8; }
+            fl->second--;
         }
-        before = s.anim;
     }
-    auto playing = gPlaying.find(actor);
-    if (restart || playing == gPlaying.end() || playing->second != (const void*)want) {
-        if (OneShotAnim(s.anim) || restart) LinkAnimation_PlayOnce(play, &player->skelAnime, want);
-        else LinkAnimation_PlayLoop(play, &player->skelAnime, want);
-        gPlaying[actor] = (const void*)want;
+    const auto ab = gLastAbility.find(s.id);
+    royale::ItemId ability = ab != gLastAbility.end() ? ab->second : royale::ItemId::NayrusLove;
+    {   // a throw is the hookshot only if they have just used one; otherwise it is whatever is in their hand
+        auto at = gLastAbilityAt.find(s.id);
+        if (want == static_cast<uint8_t>(royale::Anim::Throw) && (at == gLastAbilityAt.end() || ImGui::GetTime() - at->second > 1.2)) ability = royale::ItemId::Count;
     }
-    if (s.anim == static_cast<uint8_t>(royale::Anim::Sprint)) {   // legs pump faster and dust kicks up, like the local player's sprint
-        player->skelAnime.playSpeed = kSprintAnimSpeed;
+    // A spell's pose depends on which spell: if word of it arrives just after the pose began, start again with the right one.
+    const bool respell = (want == static_cast<uint8_t>(Anim::Cast) || want == static_cast<uint8_t>(Anim::Throw)) && m.anim == want && m.seqAbility != ability && m.step == 0 &&
+                         player->skelAnime.curFrame < 6.0f;
+    // Standing about for a while: a look round, a stretch, as Link does when you leave the stick alone.
+    bool fidget = false;
+    if (want == static_cast<uint8_t>(Anim::Idle)) {
+        if (++m.idleFrames > 110 + static_cast<int>(s.id % 7) * 20 && s.health > 1.0f) { fidget = true; m.idleFrames = 0; }
+    } else {
+        m.idleFrames = 0;
+    }
+    if (want != m.anim || forced || respell || fidget) {
+        const bool strike = royale::IsStrike(want);
+        if (strike && !respell) m.combo++;
+        AnimSeq seq = SeqFor(want, s.weapon, m.combo, ability, player);
+        if (fidget) {   // the game's own idle fidgets: a look round, a stretch, a practice swing, tugging the tunic, tapping a foot, the shield
+            const Grip grip = GripOf(s.weapon);
+            LinkAnimationHeader* const looks[6] = { RA(normal_wait_typeA_20f), RA(wait_typeD_20f), grip == Grip::TwoHand || grip == Grip::Hammer ? RA(wait_itemD2_20f) : RA(wait_itemD1_20f),
+                                                    RA(wait_itemA_20f), RA(wait_itemB_20f), RA(wait_itemC_20f) };
+            seq = AnimSeq(looks[(play->gameplayFrames / 7 + s.id) % 6], false).Add(RA(normal_wait), true);
+        }
+        if (want == static_cast<uint8_t>(Anim::Idle) && s.alive && s.health <= 1.0f) seq = AnimSeq(RA(wait_heat1_20f), false).Add(RA(wait_heat2_20f), true);   // nearly dead: doubled over, panting
+        // Moving between walking, running and standing blends over a few frames; an action snaps in quickly, as the game does.
+        const float morph = OneShotAnim(want) ? -3.0f : -6.0f;
+        StartSeq(play, player, m, seq, morph);
+        m.seqAbility = ability;
+        if (!respell && !fidget && s.alive) ActionSounds(player, want, s.weapon, m.combo);
+        m.jumpT = -1.0f;
+        if (s.isBot && (want == static_cast<uint8_t>(Anim::Jump) || want == static_cast<uint8_t>(Anim::JumpSlash) || (royale::IsDodge(want) && want != static_cast<uint8_t>(Anim::Roll)))) m.jumpT = 0.0f;
+        m.anim = want;
+    }
+
+    // Walking and running at the speed they really go, so the feet don't slide.
+    const bool sprinting = want == static_cast<uint8_t>(Anim::Sprint);
+    const bool walking = want == static_cast<uint8_t>(Anim::Walk) || want == static_cast<uint8_t>(Anim::Run) || want == static_cast<uint8_t>(Anim::SideL) ||
+                         want == static_cast<uint8_t>(Anim::SideR) || want == static_cast<uint8_t>(Anim::Back) || sprinting;
+    if (sprinting) {   // legs pump faster and dust kicks up, like the local player's sprint
+        player->skelAnime.playSpeed = std::max(kSprintAnimSpeed, std::min(2.0f, m.speed / 5.5f));
         if (actor->bgCheckFlags & 1) SprintDust(play, actor, play->gameplayFrames);
-    } else if (s.anim == static_cast<uint8_t>(royale::Anim::Run) || s.anim == static_cast<uint8_t>(royale::Anim::Walk)) {
-        player->skelAnime.playSpeed = 1.0f;
+    } else if (walking) {
+        const float stride = want == static_cast<uint8_t>(Anim::Run) ? 5.5f : want == static_cast<uint8_t>(Anim::Walk) ? 2.4f : 3.0f;   // units per frame at normal speed
+        player->skelAnime.playSpeed = std::clamp(m.speed / stride, 0.55f, 1.8f);
     }
-    LinkAnimation_Update(play, &player->skelAnime);
+    const bool finished = LinkAnimation_Update(play, &player->skelAnime);
+    if (finished && !m.seq.step[m.step].loop && m.step + 1 < m.seq.count) {
+        StartStep(play, player, m, m.step + 1, 0.0f);
+        // Feet back on the ground after a hop, a flip or a jump; the jump slash coming down.
+        if (s.alive && (royale::IsDodge(m.anim) || m.anim == static_cast<uint8_t>(Anim::Jump)) && m.anim != static_cast<uint8_t>(Anim::Roll) && m.step == 1)
+            PuppetSfx(actor, PuppetFloorSfx(player, NA_SE_PL_LAND));
+        if (s.alive && m.anim == static_cast<uint8_t>(Anim::JumpSlash) && m.step == 1) PuppetSfx(actor, NA_SE_IT_SWORD_SWING_HARD);
+        if (s.alive && m.anim == static_cast<uint8_t>(Anim::Drink) && m.step == 1) PuppetVoice(player, NA_SE_VO_LI_DRINK);
+    }
+    // Footsteps: twice a stride, where the game puts them, sounding like the ground underfoot.
+    if (walking && m.jumpT < 0.0f) {
+        const float cycle = static_cast<float>(Animation_GetLastFrame(m.seq.step[m.step].anim)) + 1.0f;
+        const float cur = player->skelAnime.curFrame;
+        for (float at : { cycle * 10.0f / 29.0f, cycle * 24.0f / 29.0f }) {
+            const bool crossed = cur >= m.prevFrame ? (m.prevFrame < at && cur >= at) : (at > m.prevFrame || at <= cur);
+            if (crossed) PuppetStep(player, m.speed);
+        }
+        m.prevFrame = cur;
+    }
+    // Bots move on flat ground: their jumps, hops and jump slashes are lifted into the air here.
+    if (m.jumpT >= 0.0f) {
+        const bool big = m.anim == static_cast<uint8_t>(Anim::Jump);
+        const float seconds = big ? 0.55f : 0.4f, height = big ? 48.0f : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
+        m.jumpT += 1.0f / (seconds * royale::kTickHz);
+        if (m.jumpT >= 1.0f) {
+            m.jumpT = -1.0f;
+            if (big && s.alive) PuppetSfx(actor, PuppetFloorSfx(player, NA_SE_PL_LAND));
+        } else {
+            actor->world.pos.y += 4.0f * height * m.jumpT * (1.0f - m.jumpT);
+        }
+    }
     if (s.anim == static_cast<uint8_t>(royale::Anim::Emote5)) {
         const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
         ApplyChickenDance(player, t);
@@ -844,6 +1237,7 @@ void Puppet_Destroy(Actor* actor, PlayState* play) {
         gPuppetOf.erase(it);
     }
     gPlaying.erase(actor);
+    gMotion.erase(actor);
     gPlate.erase(actor);
     ForgetCorpse(actor);
 }
@@ -1340,12 +1734,14 @@ struct PropActor {
     ActorFunc origDestroy = nullptr;
     int meshKind = -1;     // royale::MeshKind drawn in place of the game's model, or -1 to leave the game's own
     uint32_t variant = 0;
+    float scale = 1.0f;    // boulders come in sizes (royale::BoulderScale)
 };
 std::unordered_map<size_t, PropActor> gProps;        // prop index -> its actor
 std::unordered_map<const Actor*, size_t> gPropOf;
 std::unordered_set<size_t> gBrokenProps;              // rocks and bushes players smashed; they stay gone
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
+constexpr float kTownSpawnRadius = 3400.0f;   // the pieces of a town (and the climbing blocks) show from further off, so you see a place before you reach it
 constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
 
 void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
@@ -1361,6 +1757,7 @@ void Prop_DrawCustom(Actor* actor, PlayState* play) {
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
     Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    if (pa->second.scale != 1.0f) Matrix_Scale(pa->second.scale, pa->second.scale, pa->second.scale, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK); // colours are baked into the vertices; draw both sides of every face
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
@@ -1421,13 +1818,19 @@ void SpawnProp(size_t index, const royale::Prop& p, float groundY) {
     pa.origDestroy = actor->destroy;
     pa.meshKind = meshKind;
     pa.variant = royale::IsPlatform(p.kind) ? static_cast<uint32_t>(p.kind) - static_cast<uint32_t>(royale::PropKind::PlatformLow) : static_cast<uint32_t>(p.rot >> 4);
+    if (royale::IsPlatform(p.kind)) pa.variant += 3u * static_cast<uint32_t>(CurrentMap().theme);   // blocks, posts and roofs in this map's stone and colours too
+    if (p.kind == royale::PropKind::Pillar || p.kind == royale::PropKind::Roof) pa.variant = static_cast<uint32_t>(CurrentMap().theme);
+    if (p.kind == royale::PropKind::Rock || p.kind == royale::PropKind::Boulder) {   // its shape, in this map's stone (meshes.h, StoneLook)
+        pa.variant = static_cast<uint32_t>(royale::BoulderShape(p.rot) + royale::kBoulderShapes * static_cast<int>(CurrentMap().theme));
+        if (p.kind == royale::PropKind::Boulder) pa.scale = royale::BoulderScale(p.rot);
+    }
     gProps[index] = pa;
     gPropOf[actor] = index;
     actor->destroy = Prop_Destroy;
     if (meshKind >= 0) actor->draw = Prop_DrawCustom; // the game's rock stays as the solid part, unseen; our model is what you see
     switch (p.kind) { // a blob shadow under each, sized to the model
         case royale::PropKind::Rock: actor->shape.shadowScale = 26.0f; break;
-        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f; break;
+        case royale::PropKind::Boulder: actor->shape.shadowScale = 75.0f * pa.scale; break;
         case royale::PropKind::Pillar: actor->shape.shadowScale = 40.0f; break;
         case royale::PropKind::Roof: actor->shape.shadowScale = 0.0f; break;
         default: if (royale::IsPlatform(p.kind)) actor->shape.shadowScale = 0.0f; break;
@@ -1443,199 +1846,7 @@ void ClearProps() {
     for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
 }
 
-// ---- mini bosses ---------------------------------------------------------------------------------------------------------------
-
-// Each boss is drawn by a stand-in actor (the game's small rock with its logic switched off) using our golem model. The server decides
-// everything about it; here we only smooth what the snapshots say and animate it.
-struct BossActor {
-    Actor* actor = nullptr;
-    ActorFunc origDestroy = nullptr;
-    int kind = 0;
-    float x = 0, z = 0;          // smoothed position
-    float tx = 0, tz = 0;        // latest from the server
-    int16_t rot = 0, trot = 0;
-    float hp = 1.0f;
-    float smashAge = 10.0f;      // seconds since it last swung
-    float moved = 0;             // distance covered lately, for the walking bob
-    float alt = 0, talt = 0;     // height above the ground, smoothed / latest (the dragon flies)
-    int mode = 0;                // royale::DragonMode
-    bool initialised = false;
-    // the game's own enemy model for the mini bosses (see BossModelOf)
-    SkelAnime sk;
-    Vec3s joint[64] = {};
-    Vec3s morph[64] = {};
-    bool skReady = false;
-    const void* playing = nullptr;
-    float hurtAge = 10.0f;       // seconds since it was last hurt
-    float lastHp = 1.0f;
-    int swings = 0;              // which of its two attacks comes next
-    float walkBlend = 0.0f;
-};
-std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
-std::unordered_map<const Actor*, uint32_t> gBossOf;
-std::unordered_map<uint32_t, int> gBossKindSeen;      // remembered after it is gone, for the messages
-
-// The seven mini bosses are the game's own enemies, each with its real skeleton and animations: a Dodongo, two Iron Knuckles, a Wolfos and a white
-// Wolfos, and a Stalfos. They are drawn just as the game draws them (same skeleton, same colour tricks); the server decides where they go and what they
-// hit, and tells us when a blow starts so the right swing plays (the blow lands about half a second in).
-struct BossModel {
-    const char* skeleton;
-    int limbs;
-    bool flex;
-    const char* idle; const char* walk; const char* attack[2]; const char* hurt;
-    float scale;            // the game's own actor scale
-    float idleSpeed;        // 0 holds the first frame (the Iron Knuckle's stance)
-    int look;               // 0 plain, 1 Iron Knuckle gold, 2 Iron Knuckle green, 3 Wolfos, 4 white Wolfos, 5 Stalfos
-};
-BossModel BossModelOf(int kind) {
-    switch (kind) {
-        case 0: case 6: return { gDodongoSkel, 31, false, gDodongoWaitAnim, gDodongoWalkAnim, { gDodongoSweepTailRightAnim, gDodongoSweepTailLeftAnim }, gDodongoDamageAnim, 0.01875f, 1.0f, 0 };
-        case 1: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleVerticalAttackAnim, gIronKnuckleHorizontalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 1 };
-        case 5: return { gIronKnuckleSkel, 30, true, gIronKnuckleWalkAnim, gIronKnuckleWalkAnim, { gIronKnuckleHorizontalAttackAnim, gIronKnuckleVerticalAttackAnim }, gIronKnuckleFrontHitAnim, 0.012f, 0.0f, 2 };
-        case 2: return { gWolfosWhiteSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.01f, 1.0f, 4 };
-        case 3: return { gWolfosNormalSkel, 22, true, gWolfosWaitingAnim, gWolfosRunningAnim, { gWolfosSlashingAnim, gWolfosSlashingAnim }, gWolfosDamagedAnim, 0.0075f, 1.0f, 3 };
-        default: return { gStalfosSkel, 61, false, gStalfosMiddleGuardAnim, gStalfosSlowAdvanceAnim, { gStalfosDownSlashAnim, gStalfosUpSlashAnim }, gStalfosFlinchFromHitFrontAnim, 0.015f, 1.0f, 5 };
-    }
-}
-
-Gfx* BossEnvDl(PlayState* play, u8 pr, u8 pg, u8 pb, u8 er, u8 eg, u8 eb) {
-    Gfx* dl = static_cast<Gfx*>(Graph_Alloc(play->state.gfxCtx, 4 * sizeof(Gfx)));
-    Gfx* h = dl;
-    gDPPipeSync(h++);
-    gDPSetPrimColor(h++, 0, 0, pr, pg, pb, 255);
-    gDPSetEnvColor(h++, er, eg, eb, 255);
-    gSPEndDisplayList(h++);
-    return dl;
-}
-
-int gBossLook = 0;
-s32 Boss_OverrideLimb(PlayState* play, s32 limb, Gfx** dList, Vec3f*, Vec3s*, void*) {
-    if (gBossLook == 1 || gBossLook == 2) {   // Iron Knuckle: only the whole-armour pieces are drawn (the broken-armour limbs are not)
-        if (limb == 28 || limb == 29) *dList = nullptr;
-    } else if (gBossLook == 5 && limb == 11) {   // the Stalfos' eyes glow, pulsing
-        OPEN_DISPS(play->state.gfxCtx);
-        gDPPipeSync(POLY_OPA_DISP++);
-        gDPSetEnvColor(POLY_OPA_DISP++, 80 + std::abs(static_cast<int>(std::sin(play->gameplayFrames * 0.1f) * 175.0f)), 0, 0, 255);
-        CLOSE_DISPS(play->state.gfxCtx);
-    }
-    return 0;
-}
-
-void Boss_PostLimb(PlayState* play, s32 limb, Gfx**, Vec3s*, void*) {
-    if (gBossLook != 1 && gBossLook != 2) return;
-    OPEN_DISPS(play->state.gfxCtx);
-    auto xlu = [&](const char* dl) {
-        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-        gSPDisplayList(POLY_XLU_DISP++, (Gfx*)dl);
-    };
-    switch (limb) {   // the armour's see-through decals, as the game's Iron Knuckle draws them
-        case 12: xlu(object_ik_DL_016D88); break;
-        case 22: xlu(object_ik_DL_016F88); break;
-        case 24: xlu(object_ik_DL_016EE8); break;
-        case 26: xlu(gIronKnuckleArmorRivetAndSymbolDL); break;
-        case 27: xlu(object_ik_DL_016CD8); break;
-        default: break;
-    }
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void MiniBoss_Update(Actor* actor, PlayState* play, BossActor& b) {
-    const BossModel m = BossModelOf(b.kind);
-    if (!b.skReady) {
-        if (m.flex) SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
-        else SkelAnime_Init(play, &b.sk, (SkeletonHeader*)m.skeleton, nullptr, b.joint, b.morph, m.limbs);
-        b.skReady = true;
-        b.lastHp = b.hp;
-    }
-    const float dt = 1.0f / royale::kTickHz;
-    b.hurtAge += dt;
-    if (b.hp < b.lastHp - 0.02f) b.hurtAge = 0.0f;
-    b.lastHp = b.hp;
-    static std::unordered_map<const Actor*, float> lastSmash;
-    float& before = lastSmash[actor];
-    const bool newSwing = b.smashAge < 0.05f && before >= 0.05f;
-    before = b.smashAge;
-    const bool swinging = b.smashAge < 1.1f;
-    const char* want;
-    float speed = 1.0f;
-    bool loop = true;
-    if (newSwing) b.swings++;
-    if (swinging) { want = m.attack[(b.swings & 1)]; loop = false; }
-    else if (b.hurtAge < 0.45f) { want = m.hurt; loop = false; }
-    else if (b.moved > 0.5f) want = m.walk;
-    else { want = m.idle; speed = m.idleSpeed; }
-    if (b.playing != (const void*)want || newSwing) {
-        Animation_Change(&b.sk, (AnimationHeader*)want, speed, 0.0f, Animation_GetLastFrame((void*)want), loop ? ANIMMODE_LOOP : ANIMMODE_ONCE, -4.0f);
-        b.playing = want;
-    }
-    SkelAnime_Update(&b.sk);
-}
-
-void MiniBoss_Draw(Actor* actor, PlayState* play, const BossActor& b) {
-    if (!b.skReady) return;
-    const BossModel m = BossModelOf(b.kind);
-    const float scale = m.scale * 1.55f * royale::kBossDefs[b.kind].scale;   // mini bosses are bigger than the game's own
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-    switch (m.look) {
-        case 1:
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 245, 225, 155, 30, 30, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 255, 40, 0, 40, 0, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 255, 255, 255, 20, 40, 30));
-            break;
-        case 2:
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)BossEnvDl(play, 55, 65, 55, 0, 0, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
-            gSPSegment(POLY_OPA_DISP++, 0x0A, (uintptr_t)BossEnvDl(play, 205, 165, 75, 25, 20, 0));
-            break;
-        case 3: case 4: {
-            static const char* normal[4] = { gWolfosNormalEyeOpenTex, gWolfosNormalEyeHalfTex, gWolfosNormalEyeNarrowTex, gWolfosNormalEyeHalfTex };
-            static const char* white[4] = { gWolfosWhiteEyeOpenTex, gWolfosWhiteEyeHalfTex, gWolfosWhiteEyeNarrowTex, gWolfosWhiteEyeHalfTex };
-            const int eye = (play->gameplayFrames / 6) % 40 == 0 ? 2 : 0;
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)(m.look == 3 ? normal : white)[eye]);
-            break;
-        }
-        default: break;
-    }
-    // Damage flash: white for a moment after a hit
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gBossLook = m.look;
-    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Boss_OverrideLimb, Boss_PostLimb, actor);
-    gBossLook = 0;
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b);
-
-void Boss_Update(Actor* actor, PlayState* play) {
-    auto of = gBossOf.find(actor);
-    if (of == gBossOf.end()) { Actor_Kill(actor); return; }
-    BossActor& b = gBosses[of->second];
-    const float dt = 1.0f / royale::kTickHz;
-    if (!b.initialised) { b.x = b.tx; b.z = b.tz; b.rot = b.trot; b.initialised = true; }
-    const float nx = b.x + (b.tx - b.x) * 0.4f, nz = b.z + (b.tz - b.z) * 0.4f;
-    b.moved = b.moved * 0.8f + std::hypot(nx - b.x, nz - b.z);
-    b.x = nx; b.z = nz;
-    const s16 diff = static_cast<s16>(b.trot - b.rot);
-    b.rot = static_cast<s16>(b.rot + diff * 0.35f);
-    b.smashAge += dt;
-    actor->world.pos.x = b.x;
-    actor->world.pos.z = b.z;
-    b.alt += (b.talt - b.alt) * 0.25f;
-    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) {
-        const float ground = GroundY(play, b.x, b.z, GET_PLAYER(play)->actor.world.pos.y);
-        actor->world.pos.y = ground + b.alt;
-    } else {
-        actor->world.pos.y = GroundY(play, b.x, b.z, actor->world.pos.y);
-    }
-    actor->shape.rot.y = b.rot;
-    actor->world.rot.y = b.rot;
-    if (!royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) MiniBoss_Update(actor, play, b);
-    else Dragon_UpdateModel(actor, play, b);
-}
+#include "RoyaleBosses.h"   // the bosses: mini bosses, the major boss of each map, their effects
 
 // ---- the glider ---------------------------------------------------------------------------------------------------------------
 // Everyone skydives under a striped glider. Other players' gliders are drawn along with them (Puppet_Draw); yours is a stand-in actor that
@@ -1740,248 +1951,6 @@ void ReconcileLocalGlider(bool want) {
     }
 }
 
-constexpr float kDragonDrawScale = 0.55f; // the mesh is 1200 across with its wings out
-
-void Dragon_DrawBlocks(Actor* actor, PlayState* play, const BossActor& b) {
-    const royale::BossKind kind = static_cast<royale::BossKind>(b.kind);
-    const uint32_t theme = static_cast<uint32_t>(kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    // Wings: a steady beat while it flies (up, level, down, level), folded down when it has landed.
-    static const uint32_t kBeat[4] = { 0, 1, 2, 1 };
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const float rate = b.mode == static_cast<int>(royale::DragonMode::Swoop) ? 9.0f : 4.5f;
-    const uint32_t pose = landed ? 2u : kBeat[static_cast<int>(t * rate) & 3];
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Dragon, pose + 4u * theme);
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
-    float pitch = 0.0f;                                                  // nose down in a dive, up as it climbs
-    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.35f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Breath)) pitch = 0.18f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-
-// The major bosses are Volvagia, the game's own dragon boss (the Fire Temple's), with its real skeleton, eyes, scrolling-lava skin and animations: its
-// idle sway, its fire-breathing, its claw swipe, and the vulnerable pose when it comes down. Each map's dragon is tinted for its place.
-const char* DragonAnim(int mode) {
-    switch (static_cast<royale::DragonMode>(mode)) {
-        case royale::DragonMode::Breath: return gHoleVolvagiaBreatheFireAnim;
-        case royale::DragonMode::Cast: return gHoleVolvagiaClawSwipeAnim;
-        case royale::DragonMode::Swoop: return gHoleVolvagiaHitAnim;
-        case royale::DragonMode::Landed: return gHoleVolvagiaVulnerableAnim;
-        case royale::DragonMode::Climb: return gHoleVolvagiaTurnAnim;
-        default: return gHoleVolvagiaIdleAnim;
-    }
-}
-
-void Dragon_UpdateModel(Actor*, PlayState* play, BossActor& b) {
-    if (!b.skReady) {
-        SkelAnime_InitFlex(play, &b.sk, (FlexSkeletonHeader*)gHoleVolvagiaSkel, nullptr, b.joint, b.morph, 37);
-        b.skReady = true;
-        b.lastHp = b.hp;
-    }
-    b.hurtAge += 1.0f / royale::kTickHz;
-    if (b.hp < b.lastHp - 0.01f) b.hurtAge = 0.0f;
-    b.lastHp = b.hp;
-    const char* want = b.hurtAge < 0.5f && b.mode != static_cast<int>(royale::DragonMode::Breath) ? gHoleVolvagiaDamagedAnim : DragonAnim(b.mode);
-    if (b.playing != (const void*)want) {
-        const bool loopIt = want == gHoleVolvagiaIdleAnim || want == gHoleVolvagiaVulnerableAnim;
-        Animation_Change(&b.sk, (AnimationHeader*)want, 1.0f, 0.0f, Animation_GetLastFrame((void*)want), loopIt ? ANIMMODE_LOOP : ANIMMODE_ONCE, -6.0f);
-        b.playing = want;
-    }
-    SkelAnime_Update(&b.sk);
-}
-
-float gDragonJaw = 0.0f;
-s32 Dragon_OverrideLimb(PlayState* play, s32 limb, Gfx**, Vec3f*, Vec3s* rot, void*) {
-    switch (limb) {
-        case 35: case 36: rot->z = static_cast<s16>(rot->z - gDragonJaw * 0.1f); break;
-        case 32: rot->z = static_cast<s16>(rot->z + gDragonJaw); break;
-        default: break;
-    }
-    if (limb == 32 || limb == 35 || limb == 36) {
-        OPEN_DISPS(play->state.gfxCtx);
-        gDPPipeSync(POLY_OPA_DISP++);
-        gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 0);
-        CLOSE_DISPS(play->state.gfxCtx);
-    }
-    return 0;
-}
-
-// ---- custom model files (the dragon) -----------------------------------------------------------------------------------------------------------
-// Put dragon.obj (and its dragon.mtl) in the "models" folder inside the game's data folder and it replaces the dragon. Parts are animated by their names
-// in the file: "wing" (flaps; left or right comes from which side of the body it is on), "jaw" (opens when it breathes fire), "tail" (sways) and "head"
-// (nods); everything else is the body. A model that is one piece still bobs, banks and tilts. An optional dragon.cfg changes how it is fitted:
-//   scale=1.0   size multiplier      yaw=0   degrees to turn it so its nose points along the flight direction (try 180 or 90)
-//   lift=0      raise it             flap=35 how far the wings beat, in degrees
-// The game draws these with vertex colours and its own lighting, so colours come from the .mtl (Kd) or from per-vertex colours; textures are not used.
-struct CustomPart {
-    std::unique_ptr<GpuMesh> gpu;
-    royale::ObjRole role = royale::ObjRole::Body;
-    float centre[3] = {0, 0, 0}, mn[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
-    float side = 1.0f;   // wings: +1 on the +x side, -1 on the other
-};
-struct CustomModel {
-    bool tried = false, ok = false;
-    std::string status = "No custom dragon: put dragon.obj in the models folder";
-    std::vector<CustomPart> parts;
-    float flapDegrees = 35.0f;
-    size_t triangles = 0;
-};
-CustomModel gDragonModel;
-
-std::filesystem::path ModelsFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("models")); }
-
-bool ReadWholeFile(const std::filesystem::path& file, std::string* out) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) return false;
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    *out = ss.str();
-    return true;
-}
-
-void LoadCustomDragon() {
-    CustomModel& cm = gDragonModel;
-    cm = CustomModel{};
-    cm.tried = true;
-    std::error_code ec;
-    std::filesystem::create_directories(ModelsFolder(), ec);
-    std::string obj, mtl, cfg;
-    if (!ReadWholeFile(ModelsFolder() / "dragon.obj", &obj)) { cm.status = "No custom dragon: put dragon.obj in " + ModelsFolder().string(); return; }
-    ReadWholeFile(ModelsFolder() / "dragon.mtl", &mtl);
-    ReadWholeFile(ModelsFolder() / "dragon.cfg", &cfg);
-    float extra = 1.0f, yaw = 0.0f, lift = 0.0f;
-    {
-        std::istringstream in(cfg);
-        std::string line;
-        while (std::getline(in, line)) {
-            const size_t eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            const std::string key = line.substr(0, eq);
-            const float val = static_cast<float>(std::atof(line.c_str() + eq + 1));
-            if (key == "scale") extra = std::clamp(val, 0.1f, 10.0f);
-            else if (key == "yaw") yaw = val;
-            else if (key == "lift") lift = val;
-            else if (key == "flap") cm.flapDegrees = std::clamp(val, 0.0f, 80.0f);
-        }
-    }
-    royale::ObjModel model = royale::ParseObj(obj, mtl);
-    if (!model.ok) { cm.status = "dragon.obj could not be used: " + model.error; return; }
-    royale::FitObjModel(model, 1200.0f, extra, yaw, lift);
-    for (auto& part : model.parts) {
-        CustomPart cp;
-        cp.gpu = std::make_unique<GpuMesh>();
-        if (!BuildGpuMesh(part.mesh, *cp.gpu)) continue;
-        cp.role = royale::RoleOf(part.name);
-        for (int i = 0; i < 3; i++) { cp.centre[i] = part.centre[i]; cp.mn[i] = part.mn[i]; cp.mx[i] = part.mx[i]; }
-        cp.side = part.centre[0] >= 0 ? 1.0f : -1.0f;
-        cm.parts.push_back(std::move(cp));
-    }
-    cm.triangles = model.triangles;
-    cm.ok = !cm.parts.empty();
-    int wings = 0, jaws = 0, tails = 0, heads = 0;
-    for (const auto& p : cm.parts) { wings += p.role == royale::ObjRole::Wing; jaws += p.role == royale::ObjRole::Jaw; tails += p.role == royale::ObjRole::Tail; heads += p.role == royale::ObjRole::Head; }
-    cm.status = "Custom dragon loaded: " + std::to_string(cm.triangles) + " triangles, " + std::to_string(cm.parts.size()) + " parts (" + std::to_string(wings) + " wing, " +
-                std::to_string(jaws) + " jaw, " + std::to_string(tails) + " tail, " + std::to_string(heads) + " head)";
-}
-
-void DrawCustomDragon(Actor* actor, PlayState* play, const BossActor& b) {
-    const CustomModel& cm = gDragonModel;
-    const float t = static_cast<float>(ImGui::GetTime());
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const bool breathing = b.mode == static_cast<int>(royale::DragonMode::Breath);
-    const bool swoop = b.mode == static_cast<int>(royale::DragonMode::Swoop);
-    const float rate = swoop ? 9.0f : 4.5f;
-    const float flap = landed ? -0.5f : std::sin(t * rate) * cm.flapDegrees * 0.0174533f;
-    float pitch = 0.0f;
-    if (swoop) pitch = 0.5f; else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f; else if (breathing) pitch = 0.18f;
-    const float bob = landed ? 0.0f : std::sin(t * 2.2f) * 14.0f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    CLOSE_DISPS(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_RotateZ(landed ? 0.0f : std::sin(t * 1.3f) * 0.06f, MTXMODE_APPLY);   // a slow bank
-    Matrix_Scale(kDragonDrawScale, kDragonDrawScale, kDragonDrawScale, MTXMODE_APPLY);
-    for (const CustomPart& p : cm.parts) {
-        Matrix_Push();
-        switch (p.role) {
-            case royale::ObjRole::Wing:   // flaps about the root, the edge nearest the body
-                Matrix_Translate(p.side > 0 ? p.mn[0] : p.mx[0], p.centre[1], p.centre[2], MTXMODE_APPLY);
-                Matrix_RotateZ(p.side * flap, MTXMODE_APPLY);
-                Matrix_Translate(-(p.side > 0 ? p.mn[0] : p.mx[0]), -p.centre[1], -p.centre[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Jaw:    // opens about its back edge
-                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
-                Matrix_RotateX(breathing ? 0.55f + std::sin(t * 9.0f) * 0.08f : 0.05f + std::sin(t * 1.5f) * 0.04f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Tail:   // sways from where it joins the body
-                Matrix_Translate(p.centre[0], p.centre[1], p.mx[2], MTXMODE_APPLY);
-                Matrix_RotateY(std::sin(t * 2.0f) * 0.3f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mx[2], MTXMODE_APPLY);
-                break;
-            case royale::ObjRole::Head:   // nods
-                Matrix_Translate(p.centre[0], p.centre[1], p.mn[2], MTXMODE_APPLY);
-                Matrix_RotateX((breathing ? 0.2f : 0.0f) + std::sin(t * 1.1f) * 0.06f, MTXMODE_APPLY);
-                Matrix_Translate(-p.centre[0], -p.centre[1], -p.mn[2], MTXMODE_APPLY);
-                break;
-            default: break;
-        }
-        OPEN_DISPS(play->state.gfxCtx);
-        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(p.gpu->dl.data()));
-        CLOSE_DISPS(play->state.gfxCtx);
-        Matrix_Pop();
-    }
-}
-
-void Dragon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
-    if (!gDragonModel.tried) LoadCustomDragon();
-    if (gDragonModel.ok) { DrawCustomDragon(actor, play, b); return; }
-    if (!b.skReady) { Dragon_DrawBlocks(actor, play, b); return; }
-    const uint32_t theme = static_cast<uint32_t>(b.kind) - static_cast<uint32_t>(royale::BossKind::DragonFire);
-    static const u8 tint[5][3] = { {255, 255, 255}, {130, 190, 255}, {170, 255, 150}, {195, 150, 255}, {255, 228, 165} };
-    static const char* eyes[3] = { gHoleVolvagiaEyeOpenTex, gHoleVolvagiaEyeHalfTex, gHoleVolvagiaEyeClosedTex };
-    const float t = static_cast<float>(play->gameplayFrames);
-    const bool landed = b.mode == static_cast<int>(royale::DragonMode::Landed);
-    const float bob = landed ? 0.0f : std::sin(t * 0.11f) * 14.0f;
-    float pitch = 0.0f;
-    if (b.mode == static_cast<int>(royale::DragonMode::Swoop)) pitch = 0.5f;
-    else if (b.mode == static_cast<int>(royale::DragonMode::Climb)) pitch = -0.3f;
-    gDragonJaw = b.mode == static_cast<int>(royale::DragonMode::Breath) ? 2600.0f + std::sin(t * 0.7f) * 500.0f : (std::sin(t * 0.05f) + 1.0f) * 150.0f;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)eyes[(play->gameplayFrames / 7) % 60 == 0 ? 2 : 0]);
-    gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)Gfx_TwoTexScroll(play->state.gfxCtx, 0, static_cast<u32>(play->gameplayFrames * 1) % 0x80, static_cast<u32>(play->gameplayFrames * 2) % 0x80, 0x20, 0x20, 1,
-                                                                    static_cast<u32>(play->gameplayFrames * 3) % 0x80, static_cast<u32>(play->gameplayFrames * -2) % 0x80, 0x20, 0x20));
-    gDPSetPrimColor(POLY_OPA_DISP++, 0, 0, tint[theme % 5][0], tint[theme % 5][1], tint[theme % 5][2], 255);
-    gDPSetEnvColor(POLY_OPA_DISP++, 255, 255, 255, 128);
-    const float scale = 0.014f;
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f) + 3.14159265f, MTXMODE_APPLY);   // it faces the way the dragon goes
-    Matrix_RotateX(pitch, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Dragon_OverrideLimb, nullptr, actor);
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-
 // ---- foliage, snow and puddles on the ground and the weather the game itself draws ------------------------------------------
 // Patches of swaying grass, trees (a different set of leaves for each season) and, when it snows, mounds of snow that build up on the ground and
 // slowly melt away afterwards are scattered around the player. Rain leaves puddles on level ground that grow while it pours, ripple with
@@ -2005,7 +1974,8 @@ std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
 int gFloraScene = -1;
 int gFloraBudget = 0;
 
-// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket.
+// Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket, 5 small scenery
+// (Decor), 6 a town's clutter (cell = the town and the piece).
 // nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
@@ -2024,7 +1994,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
                       std::fabs(y2 - y4) < 14.0f && std::fabs(y3 - y5) < 14.0f && std::fabs(y2 + y4 - 2.0f * y) < 3.0f && std::fabs(y3 + y5 - 2.0f * y) < 3.0f;
             spot.sx = (y2 - y4) / 90.0f;
             spot.sz = (y3 - y5) / 90.0f;
-        } else if (kind == 0 || kind == 1) {   // grass and trees stay off steep ground (and cliff edges)
+        } else if (kind == 0 || kind == 1 || kind == 5 || kind == 6) {   // grass, trees and the small things stay off steep ground (and cliff edges)
             spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
         }
         if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
@@ -2033,21 +2003,60 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
             for (const royale::Poi& poi : gSession.Client()->Pois())
                 if (std::hypot(poi.center.x - x, poi.center.z - z) < poi.radius * 0.7f + 140.0f) { spot.ok = false; break; }
         }
+        if (spot.ok && kind == 6 && gSession.Client()) {   // a town's clutter stands clear of its walls, rocks and climbing blocks
+            for (const royale::Prop& p : gSession.Client()->Props()) {
+                const float clear = royale::IsPlatform(p.kind) ? 120.0f : royale::PropRadius(p.kind) + 35.0f;
+                if (royale::PropRadius(p.kind) > 0 && std::fabs(p.pos.x - x) < clear && std::fabs(p.pos.z - z) < clear) { spot.ok = false; break; }
+            }
+        }
     }
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
-constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f;
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
 
-struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; };
+// Each map's plants: Hyrule Field, Lake Hylia and Kakariko keep the leafy trees and green grass (Kakariko's trees sparser), the desert has
+// golden dry grass and palms gathered in oases, and Death Mountain has no grass, only a few dead, burnt trees.
+int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
+
+struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
-    if (Flora01(cx / 2, cz / 2, 21) < 0.45f - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
-    if (Flora01(cx, cz, 22) > 0.62f) return false;
+    const int theme = FloraTheme();
+    const float grove = theme == 4 ? 0.82f : theme == 3 ? 0.7f : theme == 2 ? 0.55f : 0.45f;   // the desert's oases and the mountain's few trees are rare
+    if (Flora01(cx / 2, cz / 2, 21) < grove - 0.2f * std::min(1.0f, gFoliage)) return false;   // groves: whole blocks of cells are empty
+    if (Flora01(cx, cz, 22) > (theme == 3 ? 0.35f : 0.62f)) return false;
     const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kTreeCell;
     const FloraSpot* spot = FloraSpotAt(1, cx, cz, x, z);
     if (spot == nullptr || !spot->ok) return false;
     *out = { x, spot->y, z, 0.8f + 0.5f * Flora01(cx, cz, 25), Flora01(cx, cz, 26) * 6.2831853f, (FloraHash(cx, cz, 27) % 4) + 4u * static_cast<uint32_t>(season) };
+    if (theme == 4) { out->kind = royale::MeshKind::ThemeTree; out->variant = FloraHash(cx, cz, 27) % 4; }          // palms
+    if (theme == 3) { out->kind = royale::MeshKind::ThemeTree; out->variant = 4u + FloraHash(cx, cz, 27) % 4; }     // dead trees
     return true;
+}
+
+// The small things on the ground between the towns (meshes.h, Decor): which of the map's six is in a cell, or -1 for none. The first two of
+// each map are the common ones; the rest turn up now and then, and each kind gathers in drifts (blocks of cells) rather than evenly.
+int DecorIn(int cx, int cz) {
+    if (Flora01(cx, cz, 81) > 0.34f * std::min(1.3f, gFoliage)) return -1;
+    const float r = Flora01(cx / 3, cz / 3, 82) * 0.6f + Flora01(cx, cz, 83) * 0.4f;
+    return r < 0.3f ? 0 : r < 0.55f ? 1 : r < 0.68f ? 2 : r < 0.8f ? 3 : r < 0.9f ? 4 : 5;
+}
+
+// The lived-in clutter round a town (meshes.h, Clutter): a few groups (a cart with hay, crates and barrels, pots by a lantern, a fire pit
+// with its logs, a signpost at the edge), placed from the town's name so everyone sees the same.
+struct ClutterPiece { float x, z, yaw; uint32_t variant; };
+void TownClutter(const royale::Poi& poi, std::vector<ClutterPiece>& out) {
+    static const uint32_t groups[5][3] = {{4, 3, 3}, {0, 1, 0}, {2, 5, 2}, {6, 0, 1}, {7, 1, 2}};
+    const int n = 6;
+    for (int g = 0; g < n; g++) {
+        const float a = (g + 0.6f * Flora01(poi.name, g, 91)) * 6.2831853f / n, d = poi.radius * (0.35f + 0.5f * Flora01(poi.name, g, 92));
+        const float gx = poi.center.x + std::cos(a) * d, gz = poi.center.z + std::sin(a) * d;
+        const uint32_t* set = groups[FloraHash(poi.name, g, 93) % 5];
+        for (int k = 0; k < 3; k++) {
+            const float b = a + k * 2.1f + Flora01(g, k, 94), r = k == 0 ? 0.0f : 46.0f + 14.0f * Flora01(poi.name + k, g, 95);
+            out.push_back({gx + std::cos(b) * r, gz + std::sin(b) * r, Flora01(poi.name, g * 3 + k, 96) * 6.2831853f, set[k]});
+        }
+    }
 }
 
 void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
@@ -2081,6 +2090,15 @@ int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.s
 void DrawFlora(PlayState* play) {
     if (!InField() || gPlayState == nullptr) return;
     if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
+    {   // a new world from the host (new towns and scenery): forget which ground was clear of them
+        static float lastSig = 0.0f;
+        float sig = 0.0f;
+        if (gSession.Client()) {
+            const auto& pois = gSession.Client()->Pois();
+            sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
+        }
+        if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); }
+    }
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     const int season = FloraSeason();
     const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
@@ -2155,16 +2173,19 @@ void DrawFlora(PlayState* play) {
         const int c0x = static_cast<int>(std::floor((px - reach) / kGrassCell)), c1x = static_cast<int>(std::floor((px + reach) / kGrassCell));
         const int c0z = static_cast<int>(std::floor((pz - reach) / kGrassCell)), c1z = static_cast<int>(std::floor((pz + reach) / kGrassCell));
         const float amp = 0.07f + 0.2f * wind, lean = 0.05f + 0.3f * wind;
-        for (int cz = c0z; cz <= c1z; cz++)
+        const int theme = FloraTheme();
+        const uint32_t grassSeason = theme == 4 ? 2u : static_cast<uint32_t>(season);   // the desert's grass is dry and golden whatever the season
+        const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
+        for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < 0.5f) continue;                                   // not a grassy patch
+                if (Flora01(cx / 6, cz / 6, 41) < grassy) continue;                                 // not a grassy patch
                 if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
                 if (d > reach) continue;
                 const FloraSpot* spot = FloraSpotAt(0, cx, cz, x, z);
                 if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * static_cast<uint32_t>(season));
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float phase = t * (1.6f + 2.4f * wind) + x * 0.011f + z * 0.009f;
                 const float a = lean + std::sin(phase) * amp + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
@@ -2183,11 +2204,55 @@ void DrawFlora(PlayState* play) {
                 if (!TreeIn(cx, cz, season, &tr)) continue;
                 const float d = std::hypot(tr.x - px, tr.z - pz);
                 if (d > treeReach) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Tree, tr.variant);
+                const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
                 DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
             }
+    }
+
+    if (gFoliage > 0.01f) {
+        // the small things on the ground: flowers, ferns and logs in the field, reeds and driftwood by the lake, gourds and old fences in
+        // Kakariko, Bomb Flowers and embers on the mountain, cacti and bones in the desert
+        const int theme = FloraTheme();
+        const float reach = 900.0f + 700.0f * std::min(1.5f, gFoliage);
+        const int c0x = static_cast<int>(std::floor((px - reach) / kDecorCell)), c1x = static_cast<int>(std::floor((px + reach) / kDecorCell));
+        const int c0z = static_cast<int>(std::floor((pz - reach) / kDecorCell)), c1z = static_cast<int>(std::floor((pz + reach) / kDecorCell));
+        for (int cz = c0z; cz <= c1z; cz++)
+            for (int cx = c0x; cx <= c1x; cx++) {
+                const int item = DecorIn(cx, cz);
+                if (item < 0) continue;
+                const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 84)) * kDecorCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 85)) * kDecorCell;
+                const float d = std::hypot(x - px, z - pz);
+                if (d > reach) continue;
+                const FloraSpot* spot = FloraSpotAt(5, cx, cz, x, z);
+                if (spot == nullptr || !spot->ok) continue;
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Decor, static_cast<uint32_t>(item + 6 * theme));
+                if (m == nullptr || m->dl.empty()) continue;
+                const float k = (0.85f + 0.4f * Flora01(cx, cz, 86)) * fade(d, reach);
+                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 87) * 6.2831853f, 0, 0, k);
+            }
+        // the clutter of the people who live in the towns
+        if (gSession.Client()) {
+            const float townReach = 2200.0f;
+            static std::vector<ClutterPiece> pieces;
+            const auto& pois = gSession.Client()->Pois();
+            for (size_t pi = 0; pi < pois.size(); pi++) {
+                if (std::hypot(pois[pi].center.x - px, pois[pi].center.z - pz) > townReach + pois[pi].radius) continue;
+                pieces.clear();
+                TownClutter(pois[pi], pieces);
+                for (size_t k = 0; k < pieces.size(); k++) {
+                    const ClutterPiece& c = pieces[k];
+                    const float d = std::hypot(c.x - px, c.z - pz);
+                    if (d > townReach) continue;
+                    const FloraSpot* spot = FloraSpotAt(6, static_cast<int>(pi), static_cast<int>(k), c.x, c.z);
+                    if (spot == nullptr || !spot->ok) continue;
+                    const GpuMesh* m = GpuMeshFor(royale::MeshKind::Clutter, c.variant);
+                    if (m == nullptr || m->dl.empty()) continue;
+                    DrawFloraMesh(play, m, c.x, spot->y - 1.0f, c.z, c.yaw, 0, 0, std::max(0.01f, fade(d, townReach)));
+                }
+            }
+        }
     }
 
     if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
@@ -2417,9 +2482,33 @@ int GidFor(royale::ItemId id);
 float GidScale(int gid);
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
+// What each other player last picked up, so it can be held up over their head while they show it off, as Link does.
+struct HeldFind { int gid; double at; };
+std::unordered_map<uint16_t, HeldFind> gLastFind;
+constexpr double kHeldFindSeconds = 4.0;   // a find is only shown if the pose comes this soon after taking it
+
+void DrawHeldFinds(PlayState* play) {
+    const double now = ImGui::GetTime();
+    for (const auto& [id, actor] : gActorOf) {
+        auto f = gLastFind.find(id);
+        auto st = gState.find(id);
+        if (f == gLastFind.end() || st == gState.end() || actor == nullptr || f->second.gid < 0) continue;
+        if (st->second.anim != static_cast<uint8_t>(royale::Anim::ItemGet) || now - f->second.at > kHeldFindSeconds) continue;
+        const float size = actor->scale.y / 0.01f;   // grown players hold it higher
+        const float k = GidScale(f->second.gid) * 0.032f * size;   // the size the chest reveal settles at
+        OPEN_DISPS(play->state.gfxCtx);
+        Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
+        Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
+        Matrix_Scale(k, k, k, MTXMODE_APPLY);
+        GetItem_Draw(play, static_cast<s16>(f->second.gid));
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+}
+
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     DrawFlora(play);
+    DrawHeldFinds(play);
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -2500,112 +2589,27 @@ void ReconcileProjectileActor() {
     }
 }
 
-void Boss_Draw(Actor* actor, PlayState* play) {
-    auto of = gBossOf.find(actor);
-    if (of == gBossOf.end()) return;
-    const BossActor& b = gBosses[of->second];
-    if (royale::IsDragonKind(static_cast<royale::BossKind>(b.kind))) { Dragon_Draw(actor, play, b); return; }
-    if (b.skReady) { MiniBoss_Draw(actor, play, b); return; }
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Golem, static_cast<uint32_t>(b.kind));
-    if (mesh == nullptr || mesh->dl.empty()) return;
-    const float t = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
-    const float bob = b.moved > 0.5f ? std::fabs(std::sin(t * 6.0f)) * 9.0f : std::sin(t * 1.5f) * 2.0f;
-    const float lean = b.smashAge < 0.45f ? 0.55f * std::sin(b.smashAge / 0.45f * 3.14159f) : 0.0f; // a swing: it pitches forward
-    const float scale = royale::kBossDefs[b.kind].scale;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateX(lean, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void Boss_Destroy(Actor* actor, PlayState* play) {
-    ActorFunc orig = nullptr;
-    auto of = gBossOf.find(actor);
-    if (of != gBossOf.end()) {
-        auto b = gBosses.find(of->second);
-        if (b != gBosses.end()) { orig = b->second.origDestroy; gBosses.erase(b); }
-        gBossOf.erase(of);
-    }
-    if (orig) orig(actor, play);
-}
-
-void ReconcileBosses(const royale::HudState& hud) {
-    const bool show = gSession.Joined() && InField() && gSession.Client() &&
-                      (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch || hud.state == royale::MatchState::Ending);
-    std::unordered_map<uint32_t, bool> wanted;
-    if (show) {
-        for (const royale::net::BossNet& n : gSession.Client()->Bosses()) {
-            const uint32_t id = n.Id();
-            wanted[id] = true;
-            gBossKindSeen[id] = n.kind;
-            auto it = gBosses.find(id);
-            if (it == gBosses.end()) {
-                float y = 0;
-                if (!FloorAt(n.x, n.z, &y)) {
-                    if (!royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) continue;
-                    y = GET_PLAYER(gPlayState)->actor.world.pos.y; // it flies: over a gap or the lava there may be no floor
-                }
-                Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, n.x, y, n.z, 0, n.rot, 0, 0, false);
-                if (actor == nullptr) continue;
-                BossActor b;
-                b.actor = actor; b.origDestroy = actor->destroy; b.kind = n.kind; b.alt = b.talt = n.y; b.mode = n.mode;
-                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.rot = n.rot; b.x = n.x; b.z = n.z; b.initialised = true;
-                gBosses[id] = b;
-                gBossOf[actor] = id;
-                actor->update = Boss_Update;
-                actor->draw = Boss_Draw;
-                actor->destroy = Boss_Destroy;
-                actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
-                actor->uncullZoneForward = 5000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
-                if (royale::IsDragonKind(static_cast<royale::BossKind>(n.kind))) {
-                    actor->flags |= ACTOR_FLAG_DRAW_CULLING_DISABLED;
-                    actor->uncullZoneForward = 12000.0f; actor->uncullZoneScale = 4000.0f; actor->uncullZoneDownward = 4000.0f;
-                    actor->shape.shadowScale = 0.0f;
-                } else {
-                    actor->shape.shadowScale = 70.0f * royale::kBossDefs[n.kind].scale;
-                }
-            } else {
-                BossActor& b = it->second;
-                b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f; b.talt = n.y; b.mode = n.mode;
-                if (n.smashing && b.smashAge > 0.3f) b.smashAge = 0.0f;
-            }
-        }
-    }
-    for (auto& [id, b] : gBosses) if (!wanted.count(id) && b.actor) Actor_Kill(b.actor);
-}
-
-// Name and health bar over each boss.
-void DrawBossBars(ImDrawList* dl, ImFont* font, float scale) {
-    if (!InField()) return;
-    Player* pl = GET_PLAYER(gPlayState);
-    for (const auto& [id, b] : gBosses) {
-        if (!b.actor) continue;
-        const float dx = b.x - pl->actor.world.pos.x, dz = b.z - pl->actor.world.pos.z;
-        const float d = std::sqrt(dx * dx + dz * dz);
-        const bool dragon = royale::IsDragonKind(static_cast<royale::BossKind>(b.kind));
-        if (d > (dragon ? 9000.0f : 3800.0f)) continue;
-        ImVec2 at;
-        if (!WorldToScreen(b.x, b.actor->world.pos.y + (dragon ? 300.0f : 330.0f * royale::kBossDefs[b.kind].scale), b.z, &at)) continue;
-        const float w = 130.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.55f, 1.4f), h = 11.0f * scale;
-        const char* name = royale::kBossDefs[b.kind].name;
-        const float ts = 17.0f * scale * std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f);
-        const ImVec2 sz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, name);
-        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f + 1.5f, at.y - h - sz.y + 1.5f), IM_COL32(0, 0, 0, 230), name);
-        dl->AddText(font, ts, ImVec2(at.x - sz.x * 0.5f, at.y - h - sz.y), IM_COL32(255, 120, 90, 255), name);
-        dl->AddRectFilled(ImVec2(at.x - w * 0.5f - 2, at.y - h - 2), ImVec2(at.x + w * 0.5f + 2, at.y + 2), IM_COL32(0, 0, 0, 200));
-        const ImU32 col = b.hp > 0.5f ? IM_COL32(120, 220, 90, 255) : b.hp > 0.25f ? IM_COL32(240, 200, 60, 255) : IM_COL32(230, 70, 60, 255);
-        dl->AddRectFilled(ImVec2(at.x - w * 0.5f, at.y - h), ImVec2(at.x - w * 0.5f + w * std::clamp(b.hp, 0.0f, 1.0f), at.y), col);
+// Which props are part of a place (inside a town's radius): they are spawned ahead of loose scenery and from further away.
+std::vector<uint8_t> gPropInTown;
+const royale::Prop* gTownSrc = nullptr;
+size_t gTownSrcCount = 0, gTownPoiCount = 0;
+void RefreshPropTowns(const std::vector<royale::Prop>& props) {
+    const auto& pois = gSession.Client()->Pois();
+    if (props.data() == gTownSrc && props.size() == gTownSrcCount && pois.size() == gTownPoiCount && gPropInTown.size() == props.size()) return;
+    gTownSrc = props.data(); gTownSrcCount = props.size(); gTownPoiCount = pois.size();
+    gPropInTown.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (royale::IsPlatform(props[i].kind) || props[i].kind == royale::PropKind::Roof) { gPropInTown[i] = 1; continue; }
+        for (const royale::Poi& poi : pois)
+            if (std::hypot(props[i].pos.x - poi.center.x, props[i].pos.z - poi.center.z) < poi.radius + 160.0f) { gPropInTown[i] = 1; break; }
     }
 }
 
-// Keep a ring of scenery alive around the player, the same for everyone because the list comes from the host.
+// Keep the nearest scenery alive around the player, the same for everyone because the list comes from the host. The game can only hold so
+// many of our actors (kMaxPropActors), so they go to the props that matter most: the pieces of a town count as much nearer than they are, so a
+// place is always whole (walls, roofs, climbs) before the loose rocks and bushes round it, and when the budget is full the farthest loose
+// prop is put away to make room for a nearer one. (Before, props were taken in list order, and on the smaller maps the loose scenery used up
+// the whole budget, so the towns never appeared at all.)
 void ReconcileProps(const royale::HudState& hud) {
     const bool show = gSession.Joined() && InField() && hud.state != royale::MatchState::Lobby;
     if (!show) { ClearProps(); return; }
@@ -2622,23 +2626,44 @@ void ReconcileProps(const royale::HudState& hud) {
         auto it = gProps.find(broken);
         if (it != gProps.end() && gCulledProps.insert(broken).second) Actor_Kill(it->second.actor);
     }
-    for (auto& [i, pa] : gProps) {
-        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
-        if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius * 1.4f && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    RefreshPropTowns(props);
+    // Rank everything in reach: distance squared, a town's pieces counted at about half their distance.
+    struct Want { float key; size_t i; };
+    static std::vector<Want> wants;
+    static std::vector<uint8_t> wanted;
+    wants.clear();
+    wanted.assign(props.size(), 0);
+    for (size_t i = 0; i < props.size(); i++) {
+        if (gBrokenProps.count(i)) continue;
+        const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz, d2 = dx * dx + dz * dz;
+        const bool town = gPropInTown[i] != 0;
+        const float reach = town ? kTownSpawnRadius : kPropSpawnRadius;
+        if (d2 > reach * reach) continue;
+        wants.push_back({town ? d2 * 0.25f : d2, i});
     }
-    if (gProps.size() >= kMaxPropActors) return;
+    const bool full = wants.size() > kMaxPropActors;
+    if (full) {
+        std::nth_element(wants.begin(), wants.begin() + kMaxPropActors, wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
+        wants.resize(kMaxPropActors);
+    }
+    for (const Want& w : wants) wanted[w.i] = 1;
+    // Put away what is out of reach, and, when there are more wanted than the budget holds, whatever didn't make the cut.
+    for (auto& [i, pa] : gProps) {
+        if (i < wanted.size() && wanted[i]) continue;
+        const float dx = i < props.size() ? props[i].pos.x - px : 1e9f, dz = i < props.size() ? props[i].pos.z - pz : 1e9f;
+        const float reach = (i < gPropInTown.size() && gPropInTown[i]) ? kTownSpawnRadius : kPropSpawnRadius;
+        if ((full || dx * dx + dz * dz > reach * reach * 1.4f) && gCulledProps.insert(i).second) Actor_Kill(pa.actor);
+    }
+    // Spawn the missing ones, nearest (by rank) first, a few a frame.
+    std::sort(wants.begin(), wants.end(), [](const Want& a, const Want& b) { return a.key < b.key; });
     int spawned = 0;
-    for (int pass = 0; pass < 2; pass++) {              // the climbing blocks first: without them the climbs are just chests in the air
-        for (size_t i = 0; i < props.size() && spawned < 6 && gProps.size() < kMaxPropActors; i++) {
-            if (royale::IsPlatform(props[i].kind) != (pass == 0)) continue;
-            if (gProps.find(i) != gProps.end() || gBrokenProps.count(i)) continue;
-            const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz;
-            if (dx * dx + dz * dz > kPropSpawnRadius * kPropSpawnRadius) continue;
-            float y;
-            if (!RawFloorAt(props[i].pos.x, props[i].pos.z, &y)) continue;
-            SpawnProp(i, props[i], y);
-            spawned++;
-        }
+    for (const Want& w : wants) {
+        if (spawned >= 6 || gProps.size() >= kMaxPropActors) break;
+        if (gProps.find(w.i) != gProps.end()) continue;
+        float y;
+        if (!RawFloorAt(props[w.i].pos.x, props[w.i].pos.z, &y)) continue;
+        SpawnProp(w.i, props[w.i], y);
+        spawned++;
     }
 }
 
@@ -4045,8 +4070,8 @@ void DrawQuestLabel() {
 }
 
 // ---- banners, chest-opening and boss effects --------------------------------------------------------------------------------
-// A big line of text across the top for the moments that matter (the dragon arriving, what a chest gave you), an item that floats up out of
-// a chest you open, and the world-space effects of the dragon: warning rings on the ground, the blast, and its breath.
+// A big line of text across the top for the moments that matter (a major boss arriving, what a chest gave you), and an item that floats up out of
+// a chest you open. (The bosses' own effects are in RoyaleBosses.h.)
 struct Banner { std::string text; ImU32 colour; double until; double start; };
 std::vector<Banner> gBanners;
 void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
@@ -4106,8 +4131,6 @@ void DrawGains(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 struct PickupFx { royale::ItemId item; royale::Rarity rarity; float x, y, z; double at; };
 std::vector<PickupFx> gPickupFx;
 
-struct StrikeFx { float x, z, radius; double land; bool boomed; bool bolt; };   // bolt: lightning from a thunderstorm
-std::vector<StrikeFx> gStrikeFx;
 
 void DrawBanners(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
@@ -4151,82 +4174,6 @@ void DrawPickupFx(ImDrawList* dl, ImVec2 ds, float scale) {
         DrawItemIcon(dl, f.item, at, R * 1.25f, IM_COL32(c.r, c.g, c.b, 255));
     }
     gPickupFx.erase(std::remove_if(gPickupFx.begin(), gPickupFx.end(), [&](const PickupFx& f) { return now - f.at > 1.7; }), gPickupFx.end());
-}
-
-Color_RGBA8 BossThemeColour(int kind) {
-    switch (static_cast<royale::BossKind>(kind)) {
-        case royale::BossKind::DragonWater: return { 90, 200, 255, 255 };
-        case royale::BossKind::DragonForest: return { 120, 235, 90, 255 };
-        case royale::BossKind::DragonShadow: return { 210, 90, 255, 255 };
-        case royale::BossKind::DragonSand: return { 255, 205, 90, 255 };
-        default: return { 255, 120, 40, 255 };
-    }
-}
-
-void SparkBurst(PlayState* play, float x, float y, float z, Color_RGBA8 prim, int count, float speed) {
-    Color_RGBA8 env = { 255, 255, 255, 255 };
-    for (int i = 0; i < count; i++) {
-        const float a = Rand_ZeroOne() * 6.2831853f, up = 0.3f + Rand_ZeroOne() * 0.9f;
-        Vec3f pos = { x, y, z };
-        Vec3f vel = { std::cos(a) * speed * (0.4f + Rand_ZeroOne()), speed * up, std::sin(a) * speed * (0.4f + Rand_ZeroOne()) };
-        Vec3f accel = { 0.0f, -0.35f, 0.0f };
-        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
-    }
-}
-
-// Every game frame: strike rings and blasts, the dragon's breath.
-void UpdateBossWorldFx() {
-    if (!InField() || gPlayState == nullptr) { gStrikeFx.clear(); return; }
-    const double now = ImGui::GetTime();
-    Player* pl = GET_PLAYER(gPlayState);
-    for (StrikeFx& s : gStrikeFx) {
-        const float ground = GroundY(gPlayState, s.x, s.z, pl->actor.world.pos.y);
-        if (now < s.land) {
-            const float danger = static_cast<float>(1.0 - (s.land - now) / 1.4);   // sparks come faster as the blast gets close
-            const int n = 5 + static_cast<int>(danger * 9.0f);
-            Color_RGBA8 prim = { 255, static_cast<u8>(210 - danger * 150.0f), 40, 255 }, env = { 255, 60, 20, 255 };
-            if (s.bolt) { prim = { 210, 225, 255, 255 }; env = { 90, 120, 255, 255 }; }   // lightning crackles blue-white
-            for (int i = 0; i < n; i++) {
-                const float a = Rand_ZeroOne() * 6.2831853f;
-                Vec3f pos = { s.x + std::cos(a) * s.radius, ground + 6.0f, s.z + std::sin(a) * s.radius };
-                Vec3f vel = { 0.0f, 1.2f + Rand_ZeroOne() * 1.5f, 0.0f };
-                Vec3f accel = { 0.0f, 0.0f, 0.0f };
-                EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 25, 32);
-            }
-        } else if (!s.boomed) {
-            s.boomed = true;
-            Vec3f pos = { s.x, ground + 20.0f, s.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
-            if (s.bolt) {
-                gBoltFlashUntil = now + 0.35;
-                for (int k = 0; k < 14; k++) {   // the bolt itself: a column of white sparks from the sky
-                    Vec3f col = { s.x + (Rand_ZeroOne() - 0.5f) * 16.0f, ground + 40.0f + k * 55.0f, s.z + (Rand_ZeroOne() - 0.5f) * 16.0f };
-                    Vec3f v = { 0, 0, 0 }, a = { 0, 0, 0 };
-                    Color_RGBA8 p = { 240, 245, 255, 255 }, e2 = { 120, 150, 255, 255 };
-                    EffectSsKiraKira_SpawnDispersed(gPlayState, &col, &v, &a, &p, &e2, 260, 10);
-                }
-                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 190, 210, 255, 255 }, 30, 8.0f);
-            } else {
-                EffectSsBomb2_SpawnLayered(gPlayState, &pos, &vel, &accel, 90, 14);
-                SparkBurst(gPlayState, s.x, ground + 20.0f, s.z, { 255, 190, 60, 255 }, 26, 7.0f);
-            }
-            Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-        }
-    }
-    gStrikeFx.erase(std::remove_if(gStrikeFx.begin(), gStrikeFx.end(), [&](const StrikeFx& s) { return now > s.land + 0.8; }), gStrikeFx.end());
-    // Breath: a stream of sparks out of its mouth along the way it faces.
-    for (const auto& [id, b] : gBosses) {
-        if (!b.actor || !royale::IsDragonKind(static_cast<royale::BossKind>(b.kind)) || b.mode != static_cast<int>(royale::DragonMode::Breath)) continue;
-        const float ang = b.rot * (3.14159265f / 32768.0f), fx = std::sin(ang), fz = std::cos(ang);
-        Color_RGBA8 prim = BossThemeColour(b.kind), env = { 255, 255, 255, 255 };
-        for (int i = 0; i < 14; i++) {
-            const float spread = (Rand_ZeroOne() - 0.5f) * 0.45f, sp = 20.0f + Rand_ZeroOne() * 18.0f;
-            const float dx = fx * std::cos(spread) - fz * std::sin(spread), dz = fz * std::cos(spread) + fx * std::sin(spread);
-            Vec3f pos = { b.x + fx * 190.0f, b.actor->world.pos.y + 120.0f, b.z + fz * 190.0f };
-            Vec3f vel = { dx * sp, -sp * 0.28f, dz * sp };
-            Vec3f accel = { 0.0f, -0.4f, 0.0f };
-            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 30, 70);
-        }
-    }
 }
 
 // ---- hit effects -------------------------------------------------------------------------------------------------------------
@@ -4636,6 +4583,7 @@ LobbyMusic gLobbyMusic;
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
+void QueueOotSongs();
 void ScanMusicFolder() {
     gLobbyMusic.tracks.clear();
     std::error_code ec;
@@ -4652,6 +4600,7 @@ void ScanMusicFolder() {
     gLobbyMusic.scanned = true;
     gLobbyMusic.failed = false;
     gLobbyMusic.status = std::to_string(gLobbyMusic.tracks.size()) + " .wav song(s) found in " + MusicFolder().string();
+    QueueOotSongs();
 }
 
 bool LoadNextTrack() {
@@ -4683,6 +4632,327 @@ bool LoadNextTrack() {
     return false;
 }
 
+// ---- the music folder's songs, played with Ocarina of Time's own instruments ---------------------------------------------------------
+// With the "OoT instruments" option on, each .wav in the music folder is turned into real OoT music in the background: Basic Pitch
+// finds its notes, the drum finder its drums, and the game's own soundfonts are searched for the instruments that sound most like each
+// part (the same steps as tools/song-to-oot.html). The result is a sequence in the game's own format, which the game's sound engine
+// plays on its second music player, exactly like its own songs. Each song is converted once and kept in music/.oot (it holds only notes
+// and the numbers of the game's soundfonts and instruments, nothing from the game's data). Until a song is ready, the original plays.
+struct OotRawSample {
+    std::vector<uint8_t> data;
+    int codec = 0, order = 0, npred = 0, loopStart = -1, loopEnd = -1;
+    std::vector<int16_t> book;
+};
+struct OotSong {
+    enum State { Waiting, Working, Ready, Failed } state = Waiting;
+    std::filesystem::path wav;
+    royale::seq::Sequence seq;
+    std::string why;                    // for Failed
+};
+struct OotMusic {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::thread worker;
+    bool quit = false;
+    bool captured = false;              // the soundfonts were copied out of the game (on the game thread)
+    royale::music::Bank bank;           // owned by the worker once captured
+    std::vector<OotRawSample> raw;
+    std::vector<std::shared_ptr<OotSong>> songs;
+    std::string status;                 // shown in the menu
+    std::shared_ptr<OotSong> playing;   // on the game's second music player now
+    float lastVolume = -1;
+};
+OotMusic gOot;
+constexpr int kOotSeqPlayer = SEQ_PLAYER_BGM_SUB;
+constexpr uint32_t kOotCacheVersion = 1;   // bump when the conversion changes, so old conversions are made again
+
+bool OotInstrumentsOn() { return MapOption("OotInstruments", true); }
+
+// The game's music soundfonts (the ones its songs use, not the sound effects), copied out for the worker: every instrument and drum
+// kit, with its samples still packed as the game keeps them. Runs once, on the game thread.
+void CaptureOotFonts() {
+    if (gOot.captured) return;
+    std::set<int> fonts;
+    for (size_t id = 2; id <= 108 && id < sequenceMapSize; id++) {
+        if (!sequenceMap[id]) continue;
+        const SequenceData sd = ResourceMgr_LoadSeqByName(sequenceMap[id]);
+        for (int i = 0; i < sd.numFonts && i < 16; i++) fonts.insert(sd.fonts[i]);
+    }
+    royale::music::Bank bank;
+    std::vector<OotRawSample> raw;
+    std::unordered_map<const SoundFontSample*, int> seen;
+    auto sampleOf = [&](const SoundFontSample* s) -> int {
+        if (!s || !s->sampleAddr || s->size == 0) return -1;
+        auto it = seen.find(s);
+        if (it != seen.end()) return it->second;
+        OotRawSample r;
+        r.codec = s->codec;
+        if (r.codec != CODEC_ADPCM && r.codec != CODEC_SMALL_ADPCM && r.codec != CODEC_S16 && r.codec != CODEC_S16_INMEMORY) return seen[s] = -1;
+        if (r.codec == CODEC_ADPCM || r.codec == CODEC_SMALL_ADPCM) {
+            if (!s->book || !s->book->book || s->book->order < 1 || s->book->order > 8 || s->book->npredictors < 1 || s->book->npredictors > 16) return seen[s] = -1;
+            r.order = s->book->order; r.npred = s->book->npredictors;
+            r.book.assign(s->book->book, s->book->book + 8 * r.order * r.npred);
+        }
+        r.data.assign(s->sampleAddr, s->sampleAddr + s->size);
+        if (s->loop && s->loop->count != 0 && s->loop->end > s->loop->start + 8) { r.loopStart = static_cast<int>(s->loop->start); r.loopEnd = static_cast<int>(s->loop->end); }
+        raw.push_back(std::move(r));
+        return seen[s] = static_cast<int>(raw.size()) - 1;
+    };
+    auto envelope = [](royale::music::Zone& z, const AdsrEnvelope* e) {
+        int16_t pairs[64] = {};
+        int n = 0;
+        if (e) for (; n < 32; n++) { pairs[2 * n] = e[n].delay; pairs[2 * n + 1] = e[n].arg; if (e[n].delay <= 0) { n++; break; } }
+        royale::music::SetEnvelope(z, e ? pairs : nullptr, n);
+    };
+    for (int f : fonts) {
+        if (f < 0 || f >= 256 || !fontMap[f]) continue;
+        const SoundFont* sf = ResourceMgr_LoadAudioSoundFont(fontMap[f]);
+        if (!sf) continue;
+        for (int i = 0; i < sf->numInstruments && sf->instruments; i++) {
+            const Instrument* ins = sf->instruments[i];
+            if (!ins) continue;
+            royale::music::Preset p;
+            p.font = f; p.program = i;
+            const int lo = ins->normalRangeLo, hi = ins->normalRangeHi, mo = royale::music::kMidiOffset;
+            const int ranges[3][2] = {{lo > 0 ? 0 : -1, lo + mo - 1}, {lo + mo, hi + mo}, {hi < 127 ? hi + mo + 1 : -1, 127}};
+            const SoundFontSound* sounds[3] = {&ins->lowNotesSound, &ins->normalNotesSound, &ins->highNotesSound};
+            for (int slot = 0; slot < 3; slot++) {
+                if (ranges[slot][0] < 0 || !sounds[slot]->sample) continue;
+                royale::music::Zone z;
+                z.lo = std::max(0, ranges[slot][0]); z.hi = std::min(127, ranges[slot][1]);
+                if (z.lo > z.hi) continue;
+                z.sample = sampleOf(sounds[slot]->sample);
+                if (z.sample < 0) continue;
+                z.tuning = sounds[slot]->tuning;
+                envelope(z, ins->envelope);
+                z.release = royale::music::ReleaseSeconds(ins->releaseRate);
+                p.zones.push_back(z);
+            }
+            if (!p.zones.empty()) bank.presets.push_back(std::move(p));
+        }
+        royale::music::Preset kit;
+        kit.font = f; kit.drums = true;
+        for (int d = 0; d < sf->numDrums && sf->drums; d++) {
+            const Drum* dr = sf->drums[d];
+            const int key = d + royale::music::kMidiOffset;
+            if (key > 127) break;
+            if (!dr) continue;
+            royale::music::Zone z;
+            z.lo = z.hi = z.fixedKey = key;
+            z.sample = sampleOf(dr->sound.sample);
+            if (z.sample < 0) continue;
+            z.tuning = dr->sound.tuning;
+            envelope(z, dr->envelope);
+            z.release = royale::music::ReleaseSeconds(dr->releaseRate);
+            z.pan = (dr->pan - 64) / 64.0;
+            kit.zones.push_back(z);
+        }
+        if (!kit.zones.empty()) bank.presets.push_back(std::move(kit));
+    }
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    gOot.bank = std::move(bank);
+    gOot.raw = std::move(raw);
+    gOot.captured = true;
+    gOot.wake.notify_all();
+}
+
+std::filesystem::path OotCachePath(const std::filesystem::path& wav) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(wav, ec);
+    return MusicFolder() / ".oot" / (wav.stem().string() + "-" + std::to_string(ec ? 0 : size) + ".ootseq");
+}
+bool ReadOotCache(const std::filesystem::path& file, royale::seq::Sequence& s) {
+    std::ifstream in(file, std::ios::binary);
+    char magic[8] = {};
+    uint32_t version = 0, nFonts = 0, size = 0;
+    if (!in.read(magic, 8) || std::memcmp(magic, "OOTSEQ\0\0", 8) != 0) return false;
+    if (!in.read(reinterpret_cast<char*>(&version), 4) || version != kOotCacheVersion) return false;
+    if (!in.read(reinterpret_cast<char*>(&nFonts), 4) || nFonts > 16) return false;
+    s.fonts.resize(nFonts);
+    if (!in.read(reinterpret_cast<char*>(s.fonts.data()), nFonts) || !in.read(reinterpret_cast<char*>(&s.seconds), 8)) return false;
+    if (!in.read(reinterpret_cast<char*>(&size), 4) || size == 0 || size > royale::seq::kMaxBytes) return false;
+    s.data.resize(size);
+    return static_cast<bool>(in.read(reinterpret_cast<char*>(s.data.data()), size)) && royale::seq::ParseSequence(s.data).ok;
+}
+void WriteOotCache(const std::filesystem::path& file, const royale::seq::Sequence& s) {
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary);
+    const uint32_t version = kOotCacheVersion, nFonts = static_cast<uint32_t>(s.fonts.size()), size = static_cast<uint32_t>(s.data.size());
+    out.write("OOTSEQ\0\0", 8);
+    out.write(reinterpret_cast<const char*>(&version), 4);
+    out.write(reinterpret_cast<const char*>(&nFonts), 4);
+    out.write(reinterpret_cast<const char*>(s.fonts.data()), nFonts);
+    out.write(reinterpret_cast<const char*>(&s.seconds), 8);
+    out.write(reinterpret_cast<const char*>(&size), 4);
+    out.write(reinterpret_cast<const char*>(s.data.data()), size);
+}
+
+// A .wav as mono 22050 Hz floats (what the note finder hears).
+bool LoadWavMono22k(const std::filesystem::path& file, std::vector<float>& out, std::string& why) {
+    SDL_AudioSpec spec = {};
+    Uint8* buf = nullptr;
+    Uint32 len = 0;
+    if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
+    SDL_AudioCVT cvt;
+    if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_F32SYS, 1, 22050) < 0) { SDL_FreeWAV(buf); why = SDL_GetError(); return false; }
+    std::vector<Uint8> work(static_cast<size_t>(len) * static_cast<size_t>(cvt.len_mult > 0 ? cvt.len_mult : 1) + 16);
+    std::memcpy(work.data(), buf, len);
+    SDL_FreeWAV(buf);
+    cvt.len = static_cast<int>(len);
+    cvt.buf = work.data();
+    if (cvt.needed && SDL_ConvertAudio(&cvt) < 0) { why = SDL_GetError(); return false; }
+    const size_t bytes = cvt.needed ? static_cast<size_t>(cvt.len_cvt) : len;
+    out.assign(bytes / sizeof(float), 0.0f);
+    std::memcpy(out.data(), work.data(), out.size() * sizeof(float));
+    return !out.empty();
+}
+
+// The worker: unpacks the samples once, then converts the songs one at a time, newest wishes first.
+void OotWorker() {
+    bool bankReady = false;
+    for (;;) {
+        std::shared_ptr<OotSong> song;
+        {
+            std::unique_lock<std::mutex> lock(gOot.mutex);
+            gOot.wake.wait(lock, [] {
+                if (gOot.quit) return true;
+                if (!gOot.captured) return false;
+                for (auto& s : gOot.songs) if (s->state == OotSong::Waiting) return true;
+                return false;
+            });
+            if (gOot.quit) return;
+            for (auto& s : gOot.songs) if (s->state == OotSong::Waiting) { song = s; break; }
+            song->state = OotSong::Working;
+        }
+        auto say = [&](const std::string& text) { std::lock_guard<std::mutex> lock(gOot.mutex); gOot.status = text; };
+        if (!bankReady) {
+            say("Reading the game's instruments...");
+            gOot.bank.samples.resize(gOot.raw.size());
+            for (size_t i = 0; i < gOot.raw.size(); i++) {
+                const OotRawSample& r = gOot.raw[i];
+                royale::music::Sample& s = gOot.bank.samples[i];
+                if (r.codec == CODEC_ADPCM || r.codec == CODEC_SMALL_ADPCM)
+                    s.pcm = royale::music::DecodeVadpcm(r.data.data(), r.data.size(), r.book.data(), r.order, r.npred, r.codec == CODEC_SMALL_ADPCM);
+                else { s.pcm.resize(r.data.size() / 2); std::memcpy(s.pcm.data(), r.data.data(), s.pcm.size() * 2); }
+                if (r.loopStart >= 0 && r.loopStart < static_cast<int>(s.pcm.size())) { s.loopStart = r.loopStart; s.loopEnd = std::min(r.loopEnd, static_cast<int>(s.pcm.size())); }
+                if (s.loopEnd <= s.loopStart + 8) s.loopStart = s.loopEnd = -1;
+            }
+            gOot.raw.clear();
+            for (royale::music::Preset& p : gOot.bank.presets) royale::music::Analyze(gOot.bank, p);
+            bankReady = true;
+        }
+        const std::string name = song->wav.stem().string();
+        royale::seq::Sequence seq;
+        std::string why;
+        const std::filesystem::path cache = OotCachePath(song->wav);
+        bool ok = ReadOotCache(cache, seq);
+        if (!ok) {
+            std::vector<float> y;
+            if (!LoadWavMono22k(song->wav, y, why)) why = "could not read it (" + why + ")";
+            else {
+                bool quit = false;
+                const royale::bp::Output o = royale::bp::Run(y.data(), y.size(), [&](float f) {
+                    say("Turning " + name + " into OoT music: finding the notes " + std::to_string(static_cast<int>(f * 100)) + "%");
+                    std::lock_guard<std::mutex> lock(gOot.mutex);
+                    quit = gOot.quit;
+                    return !quit;
+                });
+                if (quit) return;
+                say("Turning " + name + " into OoT music: picking instruments");
+                const std::vector<royale::music::DrumHit> hits = royale::music::TranscribeDrums(y.data(), y.size(), 22050);
+                const std::vector<royale::music::Note> notes = royale::music::CleanNotes(royale::music::ToNotes(o.frames, o.onsets, 0.5, 0.3, 11, 11), hits);
+                if (notes.empty()) why = "no notes were found in it";
+                else {
+                    const royale::music::Heard heard = royale::music::HearSong(y.data(), y.size(), 22050, notes, hits);
+                    const royale::music::Arrangement a = royale::music::Arrange(gOot.bank, notes, hits, &heard, y.size() / 22050.0);
+                    if (a.channels.empty()) why = "no instrument fits it";
+                    else {
+                        seq = royale::music::WriteArrangement(a);
+                        ok = !seq.tooBig;
+                        if (ok) WriteOotCache(cache, seq);
+                        else why = "it is too long for the game";
+                    }
+                }
+            }
+        }
+        std::lock_guard<std::mutex> lock(gOot.mutex);
+        if (ok) { song->seq = std::move(seq); song->state = OotSong::Ready; gOot.status = name + " is ready to play with OoT instruments."; }
+        else { song->state = OotSong::Failed; song->why = why; gOot.status = name + ": " + why + "; the original plays instead."; }
+    }
+}
+
+// Queue every song in the folder (called after a scan). Starts the worker the first time.
+void QueueOotSongs() {
+    if (!OotInstrumentsOn()) return;
+    CaptureOotFonts();
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    for (const auto& t : gLobbyMusic.tracks) {
+        bool have = false;
+        for (auto& s : gOot.songs) if (s->wav == t) { have = true; break; }
+        if (!have) { auto s = std::make_shared<OotSong>(); s->wav = t; gOot.songs.push_back(s); }
+    }
+    if (!gOot.worker.joinable()) {
+        gOot.worker = std::thread(OotWorker);
+        std::atexit([] {
+            { std::lock_guard<std::mutex> lock(gOot.mutex); gOot.quit = true; }
+            gOot.wake.notify_all();
+            if (gOot.worker.joinable()) gOot.worker.join();
+        });
+    }
+    gOot.wake.notify_all();
+}
+std::shared_ptr<OotSong> ReadyOotSong(const std::filesystem::path& wav) {
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    for (auto& s : gOot.songs) if (s->wav == wav && s->state == OotSong::Ready) return s;
+    return nullptr;
+}
+
+// Is our song still on the second music player? (The game may have stopped it, or put its own music there.)
+bool OotSongPlaying() {
+    if (!gOot.playing) return false;
+    const SequencePlayer& sp = gAudioContext.seqPlayers[kOotSeqPlayer];
+    return sp.enabled && sp.seqData == gOot.playing->seq.data.data();
+}
+void StopOotSong() {
+    if (OotSongPlaying()) AudioSeq_SequencePlayerDisable(&gAudioContext.seqPlayers[kOotSeqPlayer]);
+    gOot.playing = nullptr;
+}
+// Start a converted song on the game's second music player, the way the game starts its own (audio_load.c,
+// AudioLoad_SyncInitSeqPlayerInternal), with no font list: the song names each soundfont itself. Runs on the game thread,
+// between the sound engine's updates.
+bool StartOotSong(const std::shared_ptr<OotSong>& song) {
+    StopOotSong();
+    for (uint8_t f : song->seq.fonts) if (!fontMap[f] || !AudioLoad_SyncLoadFont(f)) return false;
+    SequencePlayer* sp = &gAudioContext.seqPlayers[kOotSeqPlayer];
+    AudioSeq_SequencePlayerDisable(sp);
+    AudioSeq_ResetSequencePlayer(sp);
+    sp->seqId = NA_BGM_STAFF_4;
+    sp->defaultFont = 0xFF;
+    sp->seqData = song->seq.data.data();
+    sp->scriptState.pc = sp->seqData;
+    sp->scriptState.depth = 0;
+    sp->delay = 0;
+    sp->finished = 0;
+    sp->playerIdx = kOotSeqPlayer;
+    sp->enabled = 1;
+    gOot.playing = song;
+    gOot.lastVolume = -1;
+    return true;
+}
+// The song follows the player's main music volume.
+void KeepOotSongVolume() {
+    if (!OotSongPlaying()) return;
+    const float v = static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
+    if (v != gOot.lastVolume) { Audio_SetGameVolume(kOotSeqPlayer, v); gOot.lastVolume = v; }
+}
+std::string OotStatus() {
+    std::lock_guard<std::mutex> lock(gOot.mutex);
+    int ready = 0;
+    for (auto& s : gOot.songs) ready += s->state == OotSong::Ready;
+    return std::to_string(ready) + " of " + std::to_string(gOot.songs.size()) + " songs ready with OoT instruments. " + gOot.status;
+}
+
 // The music folder's songs play in the lobby (if that option is on) and, when "Match music" is set to Random, through the match too.
 void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     LobbyMusic& m = gLobbyMusic;
@@ -4690,11 +4960,31 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     if (!want) {
         if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
         m.playing = false;
+        StopOotSong();
         if (!inLobby && !inMatchRandom) m.scanned = false; // pick up newly added songs next time
         return;
     }
     if (!m.scanned) ScanMusicFolder();
     if (m.tracks.empty()) return;
+    // A song already turned into OoT music plays on the game's own sound engine; the others play as they are until they are ready.
+    if (OotSongPlaying()) { if (OotInstrumentsOn()) { KeepOotSongVolume(); return; } StopOotSong(); }
+    gOot.playing = nullptr;
+    if (OotInstrumentsOn() && (m.pcm.empty() || m.pos >= m.pcm.size())) {
+        for (size_t i = 0; i < m.tracks.size(); i++) {
+            const size_t k = (m.next + i) % m.tracks.size();
+            std::shared_ptr<OotSong> song = ReadyOotSong(m.tracks[k]);
+            if (!song || !StartOotSong(song)) continue;
+            m.next = k + 1;
+            m.pcm.clear();
+            m.pos = 0;
+            m.nowPlaying = m.tracks[k].stem().string();
+            if (m.device != 0) SDL_ClearQueuedAudio(m.device);
+            m.playing = true;
+            KeepOotSongVolume();
+            Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying + " (OoT instruments)");
+            return;
+        }
+    }
     if (m.device == 0) {
         SDL_AudioSpec want2 = {}, have = {};
         want2.freq = 44100; want2.format = AUDIO_S16SYS; want2.channels = 2; want2.samples = 2048; want2.callback = nullptr;
@@ -4727,16 +5017,53 @@ royale::Anim PoseForWeapon(royale::ItemId weapon) {
     return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
 }
 
+// Whether Link is playing a particular animation of the game's. The animation names are compared, not their addresses: every source file
+// has its own copy of each name.
+bool AnimIs(const void* playing, const char* name) {
+    if (playing == nullptr) return false;
+    const char* p = static_cast<const char*>(playing);
+    return std::strncmp(p, "__OTR__", 7) == 0 && std::strcmp(p, name) == 0;
+}
+
+// What everybody else should see you doing. Your own Link runs the real game, so its moves are read straight off it: the Z-target side hops,
+// back flips, jump slashes and spin attacks, the shield, the sword, jumps and the lock-on footwork.
 uint8_t ClassifyAnim(Player* player) {
+    using royale::Anim;
+    static float lastX = 0, lastZ = 0;
+    const float dx = player->actor.world.pos.x - lastX, dz = player->actor.world.pos.z - lastZ;
+    lastX = player->actor.world.pos.x; lastZ = player->actor.world.pos.z;
     if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
+    if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(Anim::Dead);
+    const void* a = player->skelAnime.animation;
+    auto is = [&](const char* name) { return AnimIs(a, name); };
+    if (is(gPlayerAnim_link_fighter_Lside_jump) || is(gPlayerAnim_link_fighter_Lside_jump_end)) return static_cast<uint8_t>(Anim::HopL);
+    if (is(gPlayerAnim_link_fighter_Rside_jump) || is(gPlayerAnim_link_fighter_Rside_jump_end)) return static_cast<uint8_t>(Anim::HopR);
+    if (is(gPlayerAnim_link_fighter_backturn_jump) || is(gPlayerAnim_link_fighter_backturn_jump_end)) return static_cast<uint8_t>(Anim::Backflip);
+    if (is(gPlayerAnim_link_fighter_Lpower_jump_kiru) || is(gPlayerAnim_link_fighter_Lpower_jump_kiru_hit) || is(gPlayerAnim_link_fighter_jump_rollkiru) ||
+        is(gPlayerAnim_link_fighter_jump_kiru_finsh))
+        return static_cast<uint8_t>(Anim::JumpSlash);
+    if (is(gPlayerAnim_link_fighter_rolling_kiru) || is(gPlayerAnim_link_fighter_Lrolling_kiru) || is(gPlayerAnim_link_fighter_Wrolling_kiru))
+        return static_cast<uint8_t>(Anim::SpinAttack);
     if (gActionFrames > 0) return static_cast<uint8_t>(gActionAnim);
-    if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(royale::Anim::Dead);
-    float v = std::fabs(player->linearVelocity);
+    if (player->stateFlags1 & PLAYER_STATE1_SHIELDING) return static_cast<uint8_t>(Anim::Guard);
+    if (player->meleeWeaponState != 0) return static_cast<uint8_t>(Anim::Attack);   // swinging the real sword
+    const bool ground = (player->actor.bgCheckFlags & 1) != 0;
+    if (!ground && !gSkydiving && !(player->stateFlags1 & (PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER | PLAYER_STATE1_IN_WATER | PLAYER_STATE1_CLIMBING_LEDGE)))
+        return static_cast<uint8_t>(Anim::Jump);
+    const float v = std::fabs(player->linearVelocity);
     const float runTop = gSprinting ? 7.5f * kSprintMult : 7.5f;
-    if (v > runTop && (player->actor.bgCheckFlags & 1)) return static_cast<uint8_t>(royale::Anim::Roll);   // a roll is faster than any run
-    if (v < 0.5f) return static_cast<uint8_t>(royale::Anim::Idle);
-    if (gSprinting && v >= 4.0f) return static_cast<uint8_t>(royale::Anim::Sprint);
-    return static_cast<uint8_t>(v < 4.0f ? royale::Anim::Walk : royale::Anim::Run);
+    if (is(gPlayerAnim_link_normal_landing_roll) || is(gPlayerAnim_link_normal_landing_roll_free) || (v > runTop && ground)) return static_cast<uint8_t>(Anim::Roll);   // a roll is faster than any run
+    if (player->stateFlags1 & (PLAYER_STATE1_HOSTILE_LOCK_ON | PLAYER_STATE1_PARALLEL)) {
+        // Z-targeting: the footwork depends on which way you move relative to where you face.
+        if (dx * dx + dz * dz < 0.25f) return static_cast<uint8_t>(Anim::Stance);
+        const float yaw = player->actor.shape.rot.y * (3.14159265f / 32768.0f);
+        const float fwd = dx * std::sin(yaw) + dz * std::cos(yaw), right = -dx * std::cos(yaw) + dz * std::sin(yaw);
+        if (std::fabs(fwd) >= std::fabs(right)) return static_cast<uint8_t>(fwd > 0 ? Anim::Run : Anim::Back);
+        return static_cast<uint8_t>(right > 0 ? Anim::SideR : Anim::SideL);
+    }
+    if (v < 0.5f) return static_cast<uint8_t>(Anim::Idle);
+    if (gSprinting && v >= 4.0f) return static_cast<uint8_t>(Anim::Sprint);
+    return static_cast<uint8_t>(v < 4.0f ? Anim::Walk : Anim::Run);
 }
 
 uint8_t gLastEpoch = 0;
@@ -4886,12 +5213,13 @@ void ApplyRocks(Player* player) {
         const royale::Prop& p = props[i];
         if (p.kind != royale::PropKind::Rock && p.kind != royale::PropKind::Boulder && p.kind != royale::PropKind::Pillar) continue;
         const float dx = px - p.pos.x, dz = pz - p.pos.z;
-        const float radius = royale::PropRadius(p.kind);
+        const bool boulder = p.kind == royale::PropKind::Boulder;
+        const float radius = royale::PropRadius(p.kind) * (boulder ? royale::BoulderScale(p.rot) : 1.0f);
         if (std::fabs(dx) > radius + 40.0f || std::fabs(dz) > radius + 40.0f) continue;
         const float d = std::hypot(dx, dz);
         const float base = PlatformBase(i);
         if (base < -1.0e8f) continue;
-        const float height = p.kind == royale::PropKind::Rock ? 24.0f : p.kind == royale::PropKind::Boulder ? 60.0f : 200.0f;
+        const float height = p.kind == royale::PropKind::Rock ? 24.0f : boulder ? royale::BoulderTop(royale::BoulderShape(p.rot)) * royale::BoulderScale(p.rot) : 200.0f;
         const float top = base + height;
         const float standR = radius * 0.62f;
         if (p.kind != royale::PropKind::Pillar && d <= standR && py >= top - reach && player->actor.velocity.y <= 0.5f) {   // on top
@@ -4905,6 +5233,57 @@ void ApplyRocks(Player* player) {
             player->actor.world.pos.z += dz / d * push;
         }
     }
+}
+
+// What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
+// Returns 0 with *outDist left at 1e9 when there is none.
+static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
+    uint16_t best = 0;
+    float bestDist = 1e9f;
+    for (const auto& [id, actor] : gActorOf) {
+        auto st = gState.find(id);
+        if (st == gState.end() || !st->second.alive) continue;
+        float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
+        float d = std::sqrt(dx * dx + dz * dz);
+        if (d > range * 1.05f) continue;
+        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
+        if (d < bestDist) { bestDist = d; best = id; }
+    }
+    // The mini bosses are big: they count from their edge, not their middle.
+    if (gSession.Client()) {
+        for (const auto& bn : gSession.Client()->Bosses()) {
+            const float dx = bn.x - player->actor.world.pos.x, dz = bn.z - player->actor.world.pos.z;
+            const float d = std::sqrt(dx * dx + dz * dz) - royale::kBossBodyRadius;
+            if (d > range * 1.05f) continue;
+            s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+            s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
+            if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
+            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
+        }
+    }
+    *outDist = bestDist;
+    return best;
+}
+
+// The game's own big sword moves (a jump slash: A while Z-targeting; a spin attack: hold and release B) count for their
+// real worth: a jump slash hits harder and a spin catches everyone around you. Reported once, as each one starts.
+static uint8_t gLastStrikeAnim = 0;
+static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8_t anim) {
+    const uint8_t last = gLastStrikeAnim;
+    gLastStrikeAnim = anim;
+    if (anim == last) return;
+    const bool jump = anim == static_cast<uint8_t>(royale::Anim::JumpSlash), spin = anim == static_cast<uint8_t>(royale::Anim::SpinAttack);
+    if (!jump && !spin) return;
+    const royale::WeaponStats w = royale::WeaponOf(hud.weapon);
+    if (w.damage <= 0 || w.ranged) return;
+    float dist = 1e9f;
+    const uint16_t target = PickStrikeTarget(player, w.range, &dist);
+    if (dist < 1e8f) gSession.ReportAttack(target, true, static_cast<uint8_t>(jump ? royale::AttackStyle::JumpSlash : royale::AttackStyle::Spin));
+    else SmashPropInFront(player, w);
+    gAttackCooldown = std::max(gAttackCooldown, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 }
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
@@ -5002,7 +5381,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             const royale::ItemId ab = static_cast<royale::ItemId>(hud.inv.ability.item);
             StartAction(royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? royale::Anim::Play
                         : ab == royale::ItemId::ShockwaveGrenade || ab == royale::ItemId::Hookshot || ab == royale::ItemId::Longshot ? royale::Anim::Throw : royale::Anim::Cast, 0.9f);
-            UseBurst(player, AbilityColour(ab), NA_SE_PL_MAGIC_SOUL_NORMAL);
+            UseBurst(player, AbilityColour(ab), royale::IsSong(ab) || ab == royale::ItemId::FairyOcarina || ab == royale::ItemId::OcarinaOfTime ? NA_SE_PL_MAGIC_SOUL_BALL : AbilitySfx(ab));
+            if (const u16 v = AbilityVoice(ab)) Player_PlaySfx(&player->actor, static_cast<u16>(v + player->ageProperties->unk_92));
         }
     }
 
@@ -5014,32 +5394,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
-    uint16_t best = 0;
     float bestDist = 1e9f;
-    for (const auto& [id, actor] : gActorOf) {
-        auto st = gState.find(id);
-        if (st == gState.end() || !st->second.alive) continue;
-        float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
-        float d = std::sqrt(dx * dx + dz * dz);
-        if (d > w.range * 1.05f) continue;
-        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
-        s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-        s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
-        if (d < bestDist) { bestDist = d; best = id; }
-    }
-    // The mini bosses are big: they count from their edge, not their middle.
-    if (gSession.Client()) {
-        for (const auto& bn : gSession.Client()->Bosses()) {
-            const float dx = bn.x - player->actor.world.pos.x, dz = bn.z - player->actor.world.pos.z;
-            const float d = std::sqrt(dx * dx + dz * dz) - royale::kBossBodyRadius;
-            if (d > w.range * 1.05f) continue;
-            s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
-            s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-            if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
-            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
-        }
-    }
+    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist);
     // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
     s16 aim = player->actor.shape.rot.y;
     if (bestDist < 1e8f) {
@@ -5169,8 +5525,10 @@ void OnPlayerUpdate() {
     // would drag their spawn point toward their old coordinates.
     bool allowed = hud.state == royale::MatchState::Lobby ? InPlayableScene(hud.state) : InField();
     if (allowed) {
+        const uint8_t anim = ClassifyAnim(player);
+        if (hud.state == royale::MatchState::InMatch) ReportStrikeMoves(player, hud, anim);
         gSession.SendLocalPose(player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z,
-                               player->actor.shape.rot.y, ClassifyAnim(player), static_cast<uint8_t>(gPlayState->sceneNum));
+                               player->actor.shape.rot.y, anim, static_cast<uint8_t>(gPlayState->sceneNum));
     }
 
     {   // Adult Power: you grow, and shrink back when it runs out
@@ -5287,7 +5645,29 @@ void ReportEvents(const royale::HudState& hud) {
                         }
                     }
                 }
-                if (e.id == hud.selfId) {
+                // Whether the blow landed on a raised shield facing it: the server took most of it, and it rings off the shield.
+                auto onShield = [&](bool shieldUp, int16_t rot, float tx, float tz) {
+                    if (!shieldUp || e.other == royale::net::kNoPlayer16) return false;
+                    float ax = 0, az = 0;
+                    if (e.other == hud.selfId) { ax = me->actor.world.pos.x; az = me->actor.world.pos.z; }
+                    else if (!KnownPosition(e.other, &ax, &az)) return false;
+                    const s16 off = static_cast<s16>(static_cast<s16>(std::atan2(ax - tx, az - tz) * (32768.0f / 3.14159265f)) - rot);
+                    return std::abs(static_cast<int>(off)) * (3.14159265f / 32768.0f) <= royale::kGuardHalfAngle;
+                };
+                if (e.id == hud.selfId && onShield((me->stateFlags1 & PLAYER_STATE1_SHIELDING) != 0, me->actor.shape.rot.y, me->actor.world.pos.x, me->actor.world.pos.z)) {
+                    Audio_PlaySoundGeneral(NA_SE_IT_SHIELD_REFLECT_SW, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    SparkBurst(gPlayState, me->actor.world.pos.x + Math_SinS(me->actor.shape.rot.y) * 20.0f, me->actor.world.pos.y + 35.0f,
+                               me->actor.world.pos.z + Math_CosS(me->actor.shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                    gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
+                    if (e.other != royale::net::kNoPlayer16) { gIncomingHits.push_back({ e.other, now }); swing(e.other); }
+                } else if (e.id != hud.selfId && gState.count(e.id) && gActorOf.count(e.id) &&
+                           onShield(gState[e.id].anim == static_cast<uint8_t>(royale::Anim::Guard), gState[e.id].rot, gActorOf[e.id]->world.pos.x, gActorOf[e.id]->world.pos.z)) {
+                    Actor* t = gActorOf[e.id];
+                    if (e.other == hud.selfId) { gHitMarkerAt = now; gHitMarkerKill = e.health <= 0.001f; gFloatingNumbers.push_back({ t->world.pos.x, t->world.pos.y, t->world.pos.z, e.amount, now, false }); }
+                    else swing(e.other);
+                    if (std::hypot(t->world.pos.x - me->actor.world.pos.x, t->world.pos.z - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SHIELD_REFLECT_SW);
+                    SparkBurst(gPlayState, t->world.pos.x + Math_SinS(t->shape.rot.y) * 20.0f, t->world.pos.y + 35.0f, t->world.pos.z + Math_CosS(t->shape.rot.y) * 20.0f, { 255, 240, 200, 255 }, 6, 2.5f);
+                } else if (e.id == hud.selfId) {
                     // you were hit: flash, shake, a grunt, the sound of the blow, and an arrow towards the attacker
                     Actor_SetColorFilter(&me->actor, 0x4000, 0xFF, 0, 12);
                     Player_PlaySfx(&me->actor, NA_SE_VO_LI_DAMAGE_S);
@@ -5311,12 +5691,14 @@ void ReportEvents(const royale::HudState& hud) {
                         gHitMarkerKill = e.health <= 0.001f;
                         if (known || target != gActorOf.end()) gFloatingNumbers.push_back({ tx, ty, tz, e.amount, now, false });
                         if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
                         Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
                         swing(e.other);
                         if (target != gActorOf.end()) {
                             Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
+                            if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
                             if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
                         }
                     }
@@ -5324,6 +5706,8 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
+                    gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
@@ -5335,6 +5719,7 @@ void ReportEvents(const royale::HudState& hud) {
                     gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
+                        StartAction(royale::Anim::ItemGet, 0.9f);   // everyone else sees you hold it up
                         Vec3f at = { l.x, py + 30.0f, l.z };
                         Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     }
@@ -5357,6 +5742,18 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::PropBroken: {
+                if (e.id != hud.selfId && InGame() && gSession.Client() && e.index < gSession.Client()->Props().size()) {
+                    // somebody else cut a bush or broke a rock near you: you see and hear it go
+                    const auto& pr = gSession.Client()->Props()[e.index];
+                    Player* me = GET_PLAYER(gPlayState);
+                    float py = me->actor.world.pos.y;
+                    if (std::hypot(pr.pos.x - me->actor.world.pos.x, pr.pos.z - me->actor.world.pos.z) < kPuppetHearing && FloorAt(pr.pos.x, pr.pos.z, &py)) {
+                        const bool bush = pr.kind == royale::PropKind::Bush;
+                        SparkBurst(gPlayState, pr.pos.x, py + 20.0f, pr.pos.z, bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
+                        Vec3f at = { pr.pos.x, py + 20.0f, pr.pos.z };
+                        Audio_PlaySoundGeneral(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    }
+                }
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
                 const auto& props = gSession.Client()->Props();
                 float py = GET_PLAYER(gPlayState)->actor.world.pos.y, px = GET_PLAYER(gPlayState)->actor.world.pos.x, pz = GET_PLAYER(gPlayState)->actor.world.pos.z;
@@ -5373,11 +5770,11 @@ void ReportEvents(const royale::HudState& hud) {
             case royale::ClientEvent::Type::BossSpawned: {
                 const char* name = royale::kBossDefs[std::min<int>(e.item, royale::kBossKindCount - 1)].name;
                 ShowBanner(std::string(name) + " has arrived!", IM_COL32(255, 120, 80, 255), 3.4f);
-                Audio_PlaySoundGeneral(NA_SE_EN_VALVAISA_FIRE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                Audio_PlaySoundGeneral(BossArrivalSound(e.item), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
             case royale::ClientEvent::Type::Strike:
-                gStrikeFx.push_back({ e.x, e.z, e.amount, ImGui::GetTime() + std::max(0.3f, e.health), false, e.id == royale::net::kNoPlayer16 });
+                AddStrikeFx(e.x, e.z, e.amount, e.health, e.id == royale::net::kNoPlayer16 ? static_cast<uint8_t>(royale::StrikeStyle::Bolt) : e.item, e.id);
                 break;
             case royale::ClientEvent::Type::AllyChanged: {
                 const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
@@ -5412,12 +5809,17 @@ void ReportEvents(const royale::HudState& hud) {
                 gPickupLog.clear();
                 break;
             case royale::ClientEvent::Type::AbilityUsed:
+                if (e.item < royale::kItemCount) AbilityFx(e.id, static_cast<royale::ItemId>(e.item), e.id == hud.selfId, e.x, e.z);
                 if (e.item == royale::net::kRevivedItem) {
                     if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
+                if (InGame()) {   // Link's cry as he goes down
+                    auto victim = gActorOf.find(e.id);
+                    if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
+                }
                 const std::string victim = me ? std::string("You") : nameOf(e.id);
                 std::string line;
                 if (e.other == royale::net::kNoPlayer16) line = victim + (me ? " were" : " was") + " caught by the storm";
@@ -6689,6 +7091,7 @@ bool gBgmMuted = false;
 void SetGameBgmVolume(bool muted) {
     if (muted == gBgmMuted) return;
     gBgmMuted = muted;
+    gOot.lastVolume = -1;   // a converted song on the second music player keeps its own volume (set again on the next update)
     const float main = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
     const float sub = muted ? 0.0f : static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.SubMusic"), 100)) / 100.0f;
     Audio_SetGameVolume(SEQ_PLAYER_BGM_MAIN, main);
@@ -6879,6 +7282,7 @@ void OnGameFrameUpdate() {
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
+    UpdateSongMelody();
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
@@ -6962,6 +7366,8 @@ void OnSceneInit(int16_t) {
     gPuppetOf.clear();
     gActorOf.clear();
     gPlaying.clear();
+    gMotion.clear();
+    gLastFind.clear();
     gPlate.clear();
     gCorpses.clear();
     gCorpseOf.clear();
@@ -7032,7 +7438,7 @@ struct UiState {
     int playerLimit = royale::kMaxPlayers; // the host's slider
     bool autoStart = true;                 // the lobby starts the match by itself after two minutes
     int mapId = 0;                         // which place to play (host)
-    bool majorBoss = true;                 // the map's dragon arrives halfway through (host)
+    bool majorBoss = true;                 // the map's major boss arrives halfway through (host)
     int weatherSeason = royale::kSeasonRandom;   // 0-3 or kSeasonRandom (host)
     int weatherIntensity = 60;             // 0 = no weather (host)
     int weatherChange = 50;                // how often the weather changes (host)
@@ -7155,6 +7561,7 @@ void DrawMinimapOptions() {
         { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
         { "HeldGlowSelf", "Glow on your own weapon too", false },
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
+        { "OotInstruments", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background)", true },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
         { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
@@ -7172,9 +7579,10 @@ void DrawMinimapOptions() {
     ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
     if (gLobbyMusic.status.empty()) ScanMusicFolder();
     ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
+    if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
     if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
     ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Custom dragon model: put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
+    ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
     if (!gDragonModel.tried) LoadCustomDragon();
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
     if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
@@ -7333,7 +7741,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
             }
             ImGui::EndCombo();
         }
-        if (ImGui::Checkbox("A dragon boss arrives halfway through the match", &ui.majorBoss)) {
+        if (ImGui::Checkbox("The map's major boss arrives halfway through the match", &ui.majorBoss)) {
             gSession.SetMajorBoss(ui.majorBoss);
             SaveUi(ui);
         }

@@ -422,13 +422,13 @@ const OOTSONG = (function () {
         }
         return best;
     }
-    function centroid(pcm, from, n, rate) {
+    function centroid(pcm, from, n, rate, lo, hi) {
         let size = 1; while (size < n) size <<= 1;
         const re = new Float64Array(size), im = new Float64Array(size);
         for (let i = 0; i < n; i++) re[i] = pcm[from + i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / n));
         fft(re, im);
         let num = 0, den = 0;
-        for (let b = 1; b < size / 2; b++) { const m = Math.hypot(re[b], im[b]); num += m * b * rate / size; den += m; }
+        for (let b = 1; b < size / 2; b++) { const hz = b * rate / size; if (hz < (lo || 0) || hz > (hi || Infinity)) continue; const m = Math.hypot(re[b], im[b]); num += m * hz; den += m; }
         return den > 0 ? num / den : 0;
     }
     function analyze(model, p) {
@@ -436,16 +436,18 @@ const OOTSONG = (function () {
             for (const z of p.zones) {
                 const s = model.samples[z.sample], rate = OUTPUT_RATE * z.tuning, n = Math.min(s.pcm.length, 2048);
                 z.centroid = centroid(s.pcm, 0, n, rate);
+                z.band = {};
+                for (const k in DRUM_BANDS) z.band[k] = centroid(s.pcm, 0, n, rate, DRUM_BANDS[k][0], DRUM_BANDS[k][1]);
                 z.length = s.loop ? 9 : s.pcm.length / rate;
             }
             return;
         }
+        // its natural range: around each sample's own pitch (where it sounds most like itself), within the keys it is used for
         let w = 0, c = 0;
         for (const z of p.zones) {
             const nat = 60 - 12 * Math.log2(z.tuning > 0 ? z.tuning : 1);
-            const lo = z.lo === 0 ? Math.max(z.lo, z.hi - 18) : z.lo, hi = z.hi === 127 ? Math.min(z.hi, lo + 30) : z.hi;
-            const width = Math.max(1, hi - lo);
-            c += Math.min(Math.max(nat, lo), hi) * width; w += width;
+            const width = Math.max(1, Math.min(z.hi, nat + 18) - Math.max(z.lo, nat - 18));
+            c += Math.min(Math.max(nat, z.lo), z.hi) * width; w += width;
         }
         p.center = Math.round(c / w);
         const main = p.zones.find(z => z.lo <= p.center && p.center <= z.hi) || p.zones[0];
@@ -459,12 +461,52 @@ const OOTSONG = (function () {
         p.attack = main.attack;
     }
 
+    // ---- what a part sounds like in a recording: how bright, how fast it starts, and whether it holds or dies away ----------------------
+    // Measured on the note's own harmonics (the first 4 for low notes, where other parts' harmonics crowd in), so other instruments
+    // playing at the same time mostly stay out of it. The median over notes.
+    function timbreOf(y, sr, notes, maxNotes) {
+        const N = 4096, win = new Float64Array(N);
+        for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+        const re = new Float64Array(N), im = new Float64Array(N);
+        const spectrumAt = t => {
+            const a = Math.round(t * sr) - N / 2;
+            for (let i = 0; i < N; i++) { const v = y[a + i]; re[i] = (v === undefined ? 0 : v) * win[i]; im[i] = 0; }
+            fft(re, im);
+            return b => { const k = Math.round(b); return k > 0 && k < N / 2 ? Math.max(Math.hypot(re[k], im[k]), Math.hypot(re[k - 1], im[k - 1]), Math.hypot(re[k + 1], im[k + 1])) : 0; };
+        };
+        const harmonics = (spec, f0) => { const a = [], top = f0 < 200 ? 4 : 8; for (let h = 1; h <= top; h++) a.push(f0 * h < sr / 2 - 100 ? spec(f0 * h * N / sr) : 0); return a; };
+        const picks = notes.filter(n => n.end - n.start > 0.12).sort((a, b) => (b.end - b.start) * (b.amp || 1) - (a.end - a.start) * (a.amp || 1)).slice(0, maxNotes || 30);
+        const B = [], D = [], A = [];
+        for (const n of picks) {
+            const f0 = 440 * Math.pow(2, (n.pitch - 69) / 12), len = n.end - n.start;
+            const early = harmonics(spectrumAt(n.start + 0.06), f0), late = harmonics(spectrumAt(n.start + Math.min(len - 0.03, 0.45)), f0);
+            const e0 = early.reduce((s, v) => s + v * v, 0), e1 = late.reduce((s, v) => s + v * v, 0), tot = early.reduce((s, v) => s + v, 0);
+            if (e0 <= 0 || tot <= 0) continue;
+            B.push(early.reduce((s, v, h) => s + v * (h + 1), 0) / tot);                                       // 1 = pure tone, higher = brighter
+            const dt = Math.min(len - 0.03, 0.45) - 0.06;
+            if (dt > 0.08) D.push(10 * Math.log10(Math.max(1e-9, e1) / e0) / dt);                             // dB per second: 0 holds, below dies away
+            const s0 = harmonics(spectrumAt(n.start + 0.015), f0).reduce((s, v) => s + v * v, 0);
+            A.push(Math.max(0, Math.min(1, s0 / e0)));                                                        // near 1 = hits at once, near 0 = swells in
+        }
+        const med = a => { if (!a.length) return null; const s = a.slice().sort((x, z) => x - z); return s[s.length >> 1]; };
+        return { brightness: med(B), decay: med(D), attack: med(A), count: B.length };
+    }
+    function timbreDistance(a, b) {
+        if (!a || !b || a.brightness == null || b.brightness == null) return 0;
+        let d = Math.abs(Math.log(a.brightness / b.brightness)) * 2.5;
+        if (a.decay != null && b.decay != null) d += Math.abs(Math.max(-40, a.decay) - Math.max(-40, b.decay)) / 15;
+        if (a.attack != null && b.attack != null) d += Math.abs(a.attack - b.attack) * 1.5;
+        return d;
+    }
+
     // ---- picking a soundfont and instruments that suit the song ------------------------------------------------------------------------
-    // For each music soundfont, the best melody, harmony and bass instruments: pitched ones whose natural range is near the part's notes,
-    // held ones for long notes. The soundfont whose best trio fits best wins.
+    // Each part (melody, harmony, bass) gets the pitched instrument that sounds most like that part of the recording (bright or soft,
+    // hitting or swelling, holding or dying away) and whose natural range suits the notes, moved by whole octaves when far off.
+    // One soundfont is preferred; instruments from different soundfonts are mixed only when that fits clearly better.
+    const PARTS = ['melody', 'harmony', 'bass'], PART_WEIGHT = { melody: 1, harmony: 0.6, bass: 0.8 };
     function songShape(notes) {
         const shape = {};
-        for (const part of ['melody', 'harmony', 'bass']) {
+        for (const part of PARTS) {
             const ns = notes.filter(n => n.part === part);
             const ps = ns.map(n => n.pitch).sort((a, b) => a - b);
             shape[part] = { count: ns.length, median: ps.length ? ps[ps.length >> 1] : { melody: 72, harmony: 64, bass: 43 }[part],
@@ -472,33 +514,89 @@ const OOTSONG = (function () {
         }
         return shape;
     }
-    function partCost(p, part, sh) {
+    // octaves to move a part by so its notes sit in the instrument's good range (bass by one at most, so it stays a bass)
+    function fitShift(p, part, median) {
+        if (!p || p.bank === 128 || p.center == null) return 0;
+        let sh = 0;
+        while (median + sh < p.center - 15 && sh < 24) sh += 12;
+        while (median + sh > p.center + 15 && sh > -24) sh -= 12;
+        return part === 'bass' ? Math.max(-12, Math.min(12, sh)) : sh;
+    }
+    function instrumentTimbre(model, p, key) {
+        p.timbres = p.timbres || {};
+        if (!(key in p.timbres)) {
+            const r = renderNote(model, p, key, 100, 0.6, 22050);
+            p.timbres[key] = r ? timbreOf(r[0], 22050, [{ start: 0, end: 0.6, pitch: key }]) : null;
+        }
+        return p.timbres[key];
+    }
+    function partCost(model, p, part, sh, heard) {
         if (!p.pitched) return 50;
-        let c = Math.max(0, Math.abs(p.center - sh.median) - 7) / 6;
+        const shift = fitShift(p, part, sh.median), at = sh.median + shift;
+        let c = Math.max(0, Math.abs(p.center - at) - 7) / 6 + Math.abs(shift) / 12 * 0.35;
         if (sh.dur > 0.35 && p.ring < sh.dur) c += Math.min(1.5, (sh.dur - p.ring) * 2);
         if (sh.dur < 0.2 && p.attack > 0.04) c += 0.7;
         if (part === 'melody' && p.attack > 0.12) c += 0.6;
-        if (part === 'bass' && p.center > 55) c += 0.8;
+        if (part === 'bass' && p.center > 60) c += 0.8;
+        if (heard && heard[part] && heard[part].count >= 3) c += 0.8 * timbreDistance(heard[part], instrumentTimbre(model, p, Math.max(12, Math.min(108, Math.round(at)))));
         return c + (1 - p.harmonicity);
     }
-    function pickInstruments(model, notes, fontIndex) {
-        const shape = songShape(notes), total = Math.max(1, notes.length);
-        const weight = part => Math.max(0.15, shape[part].count / total);
-        let best = null;
-        for (const f of model.fonts) {
-            if (fontIndex != null && f.index !== fontIndex) continue;
-            const ins = model.presets.filter(p => p.font === f.index && p.bank !== 128 && p.pitched);
-            if (!ins.length) continue;
-            const pick = {}; let cost = 0;
-            const used = new Set();
+    // what the recording's parts sound like (for the matching above), and its drums
+    function hearSong(y, sr, notes, hits) {
+        const heard = {};
+        for (const part of PARTS) heard[part] = timbreOf(y, sr, notes.filter(n => n.part === part), 24);
+        heard.drums = drumSound(hits || []);
+        let lo = 0, all = 1e-12;                                                // how much of the sound is bass
+        const N = 2048, re = new Float64Array(N), im = new Float64Array(N);
+        for (let a = 0; a + N <= y.length; a += N * 4) {
+            for (let i = 0; i < N; i++) { re[i] = y[a + i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / N)); im[i] = 0; }
+            fft(re, im);
+            for (let b = Math.round(40 * N / sr); b < Math.round(4000 * N / sr); b++) { const e = re[b] * re[b] + im[b] * im[b]; all += e; if (b * sr / N < 180) lo += e; }
+        }
+        heard.bassShare = lo / all;
+        return heard;
+    }
+    function pickInstruments(model, notes, fontIndex, heard) {
+        const shape = songShape(notes), total = Math.max(1, notes.filter(n => n.part !== 'drums').length);
+        const weight = part => PART_WEIGHT[part] * Math.max(0.15, shape[part].count / total);
+        const fonts = model.fonts.filter(f => fontIndex == null || f.index === fontIndex);
+        const choose = list => {
+            const pick = {}, used = new Set(); let cost = 0;
             for (const part of ['melody', 'bass', 'harmony']) {
                 let bp = null, bc = Infinity;
-                for (const p of ins) { const c = partCost(p, part, shape[part]) + (used.has(p) && ins.length > 2 ? 0.4 : 0); if (c < bc) { bc = c; bp = p; } }
+                for (const p of list) { const c = partCost(model, p, part, shape[part], heard) + (used.has(p) && list.length > 2 ? 0.4 : 0); if (c < bc) { bc = c; bp = p; } }
                 pick[part] = bp; used.add(bp); cost += bc * weight(part);
             }
-            cost += ins.length < 3 ? 0.5 : 0;
-            if (!best || cost < best.cost) best = { font: f, cost, pick, drums: model.presets.find(p => p.font === f.index && p.bank === 128) || null };
+            return { pick, cost };
+        };
+        let best = null;
+        for (const f of fonts) {
+            const ins = model.presets.filter(p => p.font === f.index && p.bank !== 128 && p.pitched);
+            if (!ins.length) continue;
+            const c = choose(ins);
+            c.cost += ins.length < 3 ? 0.5 : 0;
+            if (!best || c.cost < best.cost) best = Object.assign(c, { font: f });
         }
+        if (!best) return null;
+        if (fontIndex == null) {                                                 // the best of every soundfont, each part on its own
+            const all = model.presets.filter(p => p.bank !== 128 && p.pitched && fonts.some(f => f.index === p.font));
+            const mixed = choose(all);
+            const used = new Set(PARTS.map(part => mixed.pick[part].font)).size;
+            mixed.cost += 0.25 * (used - 1);
+            if (used > 1 && mixed.cost < best.cost - 0.05) best = Object.assign(mixed, { font: model.fonts.find(f => f.index === mixed.pick.melody.font), mixed: true });
+        }
+        best.shift = {};
+        for (const part of PARTS) best.shift[part] = fitShift(best.pick[part], part, shape[part].median);
+        // drums: the kit whose kick, snare and hi-hat sound most like the recording's (the melody's own soundfont's kit if close)
+        let kit = null, kc = Infinity;
+        for (const p of model.presets) {
+            if (p.bank !== 128 || (fontIndex != null && p.font !== fontIndex)) continue;
+            const m = kitMap(p, heard && heard.drums);
+            if (!m) continue;
+            const c = m.miss - (p.font === best.pick.melody.font ? 0.3 : 0);
+            if (c < kc) { kc = c; kit = p; }
+        }
+        best.drums = kit;
         return best;
     }
 
@@ -716,6 +814,7 @@ const OOTSONG = (function () {
     }
 
     // ---- drums: broadband bursts in the low (kick), middle (snare) and top (hi-hat) of the spectrum ---------------------------------------
+    const DRUM_BANDS = { kick: [30, 1000], snare: [150, 8000], hat: [2000, 11000] };
     function transcribeDrums(y, sr) {
         const N = 1024, H = 256, frames = Math.max(0, Math.floor((y.length - N) / H) + 1);
         if (frames < 3) return [];
@@ -726,13 +825,17 @@ const OOTSONG = (function () {
         const re = new Float64Array(N), im = new Float64Array(N);
         let prev = new Float64Array(nb), cur = new Float64Array(nb);
         const flux = { L: new Float64Array(frames), S: new Float64Array(frames), M: new Float64Array(frames), H: new Float64Array(frames), B: new Float64Array(frames) };
-        const lowE = new Float64Array(frames), flatM = new Float64Array(frames), flatH = new Float64Array(frames), mag = new Float64Array(nb);
+        const lowE = new Float64Array(frames), hiShare = new Float64Array(frames), centK = new Float64Array(frames), centS = new Float64Array(frames), centH = new Float64Array(frames), pm = new Float64Array(nb), flatM = new Float64Array(frames), flatH = new Float64Array(frames), mag = new Float64Array(nb);
         const flat = (a, z) => { let lg = 0, ar = 0; for (let b = a; b <= z; b++) { lg += Math.log(mag[b] + 1e-9); ar += mag[b]; } const n = z - a + 1; return ar > 0 ? Math.exp(lg / n) / (ar / n) : 0; };
         for (let f = 0; f < frames; f++) {
             for (let i = 0; i < N; i++) { re[i] = y[f * H + i] * win[i]; im[i] = 0; }
             fft(re, im);
             for (let b = 0; b < nb; b++) { mag[b] = Math.hypot(re[b], im[b]); cur[b] = Math.log1p(100 * mag[b]); }
             for (let b = bands.L[0]; b <= bands.L[1]; b++) lowE[f] += mag[b] * mag[b];
+            { let h = 0, all = 1e-12; for (let b = 1; b < nb; b++) { const e = mag[b] * mag[b]; all += e; if (b >= bands.H[0]) h += e; } hiShare[f] = h / all; }
+            // what just arrived: how bright, in the range where each kind of drum lives
+            { const c = (lo, hi) => { let num = 0, den = 1e-12; for (let b = bin(lo); b <= bin(hi); b++) { const d = Math.max(0, mag[b] - pm[b]); num += d * b * sr / N; den += d; } return num / den; };
+              centK[f] = c(DRUM_BANDS.kick[0], DRUM_BANDS.kick[1]); centS[f] = c(DRUM_BANDS.snare[0], DRUM_BANDS.snare[1]); centH[f] = c(DRUM_BANDS.hat[0], Math.min(DRUM_BANDS.hat[1], sr / 2 - 200)); pm.set(mag); }
             flatM[f] = flat(bin(1500), bin(5000)); flatH[f] = flat(bands.H[0], bands.H[1]);       // noise is flat, notes are peaky
             if (f > 0) {
                 for (const k of ['L', 'S', 'M', 'H']) { let s = 0; const [a, z] = bands[k]; for (let b = a; b <= z; b++) s += Math.max(0, cur[b] - prev[b]); flux[k][f] = s / (z - a + 1); }
@@ -751,25 +854,37 @@ const OOTSONG = (function () {
             const t = (f * H + N / 2) / sr, B = flux.B[f];
             const L = flux.L[f] / ref.L, M = flux.M[f] / ref.M, Hh = flux.H[f] / ref.H;
             const after = k => lowE[Math.min(frames - 1, f + k)];
-            const fades = after(9) < 0.5 * Math.max(after(1), after(2));                        // a kick dies away fast; a bass note holds
-            const noisyM = Math.max(flatM[f], flatM[Math.min(frames - 1, f + 1)]) > 0.35, noisyH = Math.max(flatH[f], flatH[Math.min(frames - 1, f + 1)]) > 0.4;
-            if (isPeak(flux.L, f) && L > 0.45 && fades && flux.L[f] > 1.8 * localMean(flux.L, f) && f - last.kick > gap) { hits.push({ time: t, kind: 'kick', vel: Math.min(120, 60 + 40 * L) }); last.kick = f; }
-            if (isPeak(flux.M, f) && M > 0.45 && noisyM && B > 0.12 && flux.S[f] / ref.S > 0.4 && (f - last.kick > 2 || M > 0.9) && flux.M[f] > 1.8 * localMean(flux.M, f) && f - last.snare > gap) { hits.push({ time: t, kind: 'snare', vel: Math.min(120, 60 + 40 * M) }); last.snare = f; }
-            if (isPeak(flux.H, f) && Hh > 0.35 && noisyH && flux.H[f] > 1.6 * localMean(flux.H, f) && f - last.hat > gap) { hits.push({ time: t, kind: 'hat', vel: Math.min(110, 50 + 35 * Hh) }); last.hat = f; }
+            const fades = after(9) < 0.65 * Math.max(after(1), after(2));                        // a kick dies away fast; a bass note holds
+            const noisyM = Math.max(flatM[f], flatM[Math.min(frames - 1, f + 1)]) > 0.6, noisyH = Math.max(flatH[f], flatH[Math.min(frames - 1, f + 1)]) > 0.4;
+            if (isPeak(flux.L, f) && L > 1.0 && fades && flux.L[f] > 1.8 * localMean(flux.L, f) && f - last.kick > gap) { hits.push({ time: t, kind: 'kick', vel: Math.min(120, 60 + 40 * L), str: L, cent: 0.5 * (centK[f] + centK[Math.min(frames - 1, f + 1)]) }); last.kick = f; }
+            if (isPeak(flux.M, f) && M > 1.25 && noisyM && hiShare[Math.min(frames - 1, f + 1)] > 0.06 && B > 0.12 && flux.S[f] / ref.S > 0.4 && (f - last.kick > 2 || M > 0.9) && flux.M[f] > 1.8 * localMean(flux.M, f) && f - last.snare > gap) { hits.push({ time: t, kind: 'snare', vel: Math.min(120, 60 + 40 * M), str: M, cent: 0.5 * (centS[f] + centS[Math.min(frames - 1, f + 1)]) }); last.snare = f; }
+            if (isPeak(flux.H, f) && Hh > 0.35 && hiShare[Math.min(frames - 1, f + 1)] > 0.03 && noisyH && flux.H[f] > 1.6 * localMean(flux.H, f) && f - last.hat > gap) { hits.push({ time: t, kind: 'hat', vel: Math.min(110, 50 + 35 * Hh), str: Hh, cent: 0.5 * (centH[f] + centH[Math.min(frames - 1, f + 1)]) }); last.hat = f; }
         }
         return hits;
     }
 
     // which drum of a kit sounds like a kick, a snare and a hi-hat: by how bright and how long each one is
-    function kitMap(kit) {
+    function kitMap(kit, heard) {
         const z = kit.zones.filter(q => q.centroid > 0);
         if (!z.length) return null;
         const by = (f, list) => list.slice().sort((a, b) => f(a) - f(b))[0];
-        const kick = by(q => q.centroid + (q.length < 0.08 ? 5000 : 0), z);
-        const hat = by(q => -q.centroid + (q.length > 0.6 ? 5000 : 0), z.filter(q => q !== kick)) || kick;
+        const near = (q, hz, kind) => hz && q.band && q.band[kind] > 0 ? Math.abs(Math.log2(q.band[kind] / hz)) : 0;
+        heard = heard || {};
+        const kick = by(q => q.centroid + (q.length < 0.08 ? 5000 : 0) + 300 * near(q, heard.kick, 'kick'), z);
+        const hat = by(q => -q.centroid + (q.length > 0.6 ? 5000 : 0) + 1500 * near(q, heard.hat, 'hat'), z.filter(q => q !== kick)) || kick;
         const mids = z.filter(q => q !== kick && q !== hat);
-        const snare = mids.length ? by(q => Math.abs(Math.log2(q.centroid / 2500)), mids) : hat;
-        return { kick: kick.lo, snare: snare.lo, hat: hat.lo };
+        const snare = mids.length ? by(q => (heard.snare ? near(q, heard.snare, 'snare') : Math.abs(Math.log2(q.centroid / 2500))) + (q.length > 1.2 ? 1 : 0), mids) : hat;
+        const miss = near(kick, heard.kick, 'kick') + near(snare, heard.snare, 'snare') + near(hat, heard.hat, 'hat');
+        return { kick: kick.lo, snare: snare.lo, hat: hat.lo, miss };
+    }
+    // the drums of the recording: how bright its kick, snare and hi-hat are (the middle of each)
+    function drumSound(hits) {
+        const out = {};
+        for (const kind of ['kick', 'snare', 'hat']) {
+            const c = hits.filter(h => h.kind === kind && h.cent > 0).map(h => h.cent).sort((a, b) => a - b);
+            if (c.length >= 3) out[kind] = c[c.length >> 1];
+        }
+        return out;
     }
 
     // ---- note finding with Basic Pitch (Spotify's open-source note-transcription model, Apache-2.0), run with TensorFlow.js -------------
@@ -839,7 +954,9 @@ const OOTSONG = (function () {
                 if (i - s <= minNoteLen) continue;
                 let amp = 0;
                 for (let q = s; q < i; q++) { amp += frames[q][j]; clear(q, j); }
-                notes.push({ s, e: i, pitch: j + 21, amp: amp / (i - s) });
+                let before = 1;
+                for (let q = Math.max(0, s - 4); q < s; q++) before = Math.min(before, frames[q][j]);
+                notes.push({ s, e: i, pitch: j + 21, amp: amp / (i - s), onset: true, strike: on[s][j], rise: frames[Math.min(n - 1, s + 2)][j] - before });
             }
             // the melodia trick: notes with no clear onset, taken from the strongest energy left (rows' maxima kept so each step is quick)
             const rowMax = new Float32Array(n), touched = new Set();
@@ -864,7 +981,7 @@ const OOTSONG = (function () {
                 for (let q = s; q < e; q++) amp += frames[q][bj];
                 notes.push({ s, e, pitch: bj + 21, amp: amp / (e - s) });
             }
-            return notes.map(x => ({ start: frameToTime(x.s), end: frameToTime(x.e), pitch: x.pitch, vel: Math.round(Math.min(120, Math.max(40, 30 + 130 * x.amp))), amp: x.amp, part: 'harmony' }))
+            return notes.map(x => ({ start: frameToTime(x.s), end: frameToTime(x.e), pitch: x.pitch, vel: Math.round(Math.min(120, Math.max(40, 30 + 130 * x.amp))), amp: x.amp, onset: !!x.onset, strike: x.strike || 0, rise: x.rise || 0, part: 'harmony' }))
                 .sort((a, b) => a.start - b.start || a.pitch - b.pitch);
         }
         return { run, toNotes, SR };
@@ -886,6 +1003,94 @@ const OOTSONG = (function () {
         }
         for (const n of live) if ((top.get(n) || 0) > 0.5 * (n.end - n.start)) n.part = 'melody';
         return notes;
+    }
+
+    // ---- tidying what the note finder heard, and splitting it into melody, harmony and bass --------------------------------------------
+    // A recording gives held notes heard as several, and blips. These are mended or dropped,
+    // then the bass (the lowest line), the melody (the strongest, smoothest high line) and the harmony (the rest, at most 4 at once) are found.
+    function cleanNotes(input, opts) {
+        opts = opts || {};
+        let notes = input.map(n => Object.assign({}, n, { amp: n.amp == null ? (n.vel || 90) / 160 : n.amp }));
+        const dur = n => n.end - n.start;
+        // 1. pieces of one held note: the same key again straight after, without a real new attack (a weak onset and no jump in loudness)
+        const byKey = new Map();
+        for (const n of notes) { if (!byKey.has(n.pitch)) byKey.set(n.pitch, []); byKey.get(n.pitch).push(n); }
+        const keep = new Set(notes);
+        if (!(opts.skip||'').includes('1')) for (const list of byKey.values()) {
+            list.sort((a, b) => a.start - b.start);
+            let cur = list[0];
+            for (let i = 1; i < list.length; i++) {
+                const n = list[i], gap = n.start - cur.end;
+                if (gap < 0.15 && (!n.onset || (n.strike < 0.65 && n.rise < 0.2))) {
+                    cur.amp = (cur.amp * dur(cur) + n.amp * dur(n)) / Math.max(1e-6, dur(cur) + dur(n));
+                    cur.end = Math.max(cur.end, n.end); keep.delete(n);
+                } else cur = n;
+            }
+        }
+        notes = notes.filter(n => keep.has(n)).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+        // a note that faded in with no attack of its own most likely began with the nearest clear attack just before it
+        if (!(opts.skip||'').includes('s')) {
+            const anchors = notes.filter(n => n.onset && n.strike >= 0.65).map(n => n.start).concat((opts.drums || []).map(h => h.time)).sort((a, b) => a - b);
+            for (const n of notes) {
+                if (n.onset && n.strike >= 0.65) continue;
+                let best = null;
+                for (const t of anchors) { if (t > n.start + 0.02) break; if (t >= n.start - 0.15) best = t; }
+                if (best != null && best < n.start) n.start = best;
+            }
+        }
+        // 2. blips
+        const amps = notes.map(n => n.amp).sort((a, b) => a - b), medAmp = amps.length ? amps[amps.length >> 1] : 0.5;
+        if (!(opts.skip||'').includes('3')) notes = notes.filter(n => dur(n) >= 0.06 && !(dur(n) < 0.1 && n.amp < 0.8 * medAmp));
+        if (!notes.length) return notes;
+        for (const n of notes) n.part = 'harmony';
+        // 3. bass: the lowest line under G3, one note at a time
+        const bassTop = opts.bassBelow || 55;
+        // a kick drum is heard as a short, weak low note: those go
+        const kicks = (opts.drums || []).filter(h => h.kind === 'kick').map(h => h.time);
+        notes = notes.filter(n => !(n.pitch < 50 && dur(n) < 0.25 && n.amp < 0.5 && kicks.some(t => Math.abs(t - n.start) < 0.04)));
+        const low = notes.filter(n => n.pitch < bassTop), lost = new Set();
+        for (const n of low) {
+            const mid = n.start + Math.min(0.1, dur(n) / 2);
+            const beaten = low.some(m => m !== n && m.start <= mid && m.end > mid && (m.amp > 1.15 * n.amp || (m.pitch < n.pitch && m.amp > 0.85 * n.amp)));
+            if (!beaten) n.part = 'bass'; else if (n.pitch < 48) lost.add(n);     // a weak extra note that low is an echo of the bass
+        }
+        // a bass note's overtones (12, 19 or 24 keys up, starting and stopping with it, quieter) are not notes of their own
+        const bassNotes = low.filter(n => n.part === 'bass');
+        for (const n of notes) if (n.part !== 'bass' && bassNotes.some(m => [12, 19, 24].includes(n.pitch - m.pitch) && Math.abs(n.start - m.start) < 0.04 &&
+            Math.abs(n.end - m.end) < 0.08 && n.amp < 0.75 * m.amp)) lost.add(n);
+        notes = notes.filter(n => !lost.has(n));
+        // 4. melody: the best path through the notes above the bass, liking loud, high, long notes and small steps between them
+        const up = notes.filter(n => n.part !== 'bass').sort((a, b) => a.start - b.start);
+        if (up.length) {
+            const pitches = up.map(n => n.pitch).sort((a, b) => a - b), hiRef = pitches[Math.floor(pitches.length * 0.85)];
+            const gain = n => dur(n) * (0.4 + 1.2 * n.amp + 0.5 * Math.max(-4, Math.min(1, (n.pitch - hiRef) / 7)));
+            const best = new Float64Array(up.length), from = new Int32Array(up.length).fill(-1);
+            for (let i = 0; i < up.length; i++) {
+                const n = up[i];
+                best[i] = gain(n);
+                for (let j = i - 1; j >= 0 && up[j].start > n.start - 4; j--) {
+                    const m = up[j];
+                    if (m.start >= n.start - 0.04 || m.end > n.start + Math.min(0.25, dur(m) * 0.5)) continue;     // must come before, not mostly alongside
+                    const jump = Math.abs(n.pitch - m.pitch), gap = Math.max(0, n.start - m.end);
+                    const v = best[j] + gain(n) - 0.012 * Math.max(0, jump - 2) * Math.min(1, dur(n) + 0.2) - 0.05 * Math.max(0, gap - 0.5);
+                    if (v > best[i]) { best[i] = v; from[i] = j; }
+                }
+            }
+            let end = 0;
+            for (let i = 1; i < up.length; i++) if (best[i] > best[end]) end = i;
+            for (let i = end; i >= 0; i = from[i]) up[i].part = 'melody';
+        }
+        // 5. one note at a time for melody and bass; at most 4 harmony notes at once (the quietest go)
+        for (const part of ['melody', 'bass']) {
+            const line = notes.filter(n => n.part === part).sort((a, b) => a.start - b.start);
+            for (let i = 0; i + 1 < line.length; i++) if (line[i].end > line[i + 1].start) line[i].end = Math.max(line[i].start + 0.05, line[i + 1].start);
+        }
+        const harm = notes.filter(n => n.part === 'harmony').sort((a, b) => b.amp - a.amp), placed = [], drop = new Set();
+        for (const n of harm) {
+            const mid = (n.start + n.end) / 2;
+            if (!(opts.skip||'').includes('6') && placed.filter(m => m.start <= mid && m.end > mid).length >= 4) drop.add(n); else placed.push(n);
+        }
+        return notes.filter(n => !drop.has(n));
     }
 
     // ---- MIDI files -----------------------------------------------------------------------------------------------------------------------
@@ -978,30 +1183,63 @@ const OOTSONG = (function () {
         });
     }
 
-    function render(notes, model, programs, reverbAmount, sr, progress) {
+    // opts: shift (octaves in keys per part, to fit each instrument's range), bassShare (how much of the recording is bass)
+    function render(notes, model, programs, reverbAmount, sr, progress, opts) {
         if (!notes.length) throw new Error('No notes were found in the song.');
-        sr = sr || 44100;
-        const total = Math.max(...notes.map(n => n.end)) + 3, n = Math.floor(total * sr);
-        const L = new Float32Array(n), R = new Float32Array(n), gain = { melody: 1, harmony: 0.5, bass: 0.75, drums: 0.55 };
-        // even the parts out: each instrument is brought to the same loudness, and a busy harmony part is turned down
-        const level = {};
-        for (const part of Object.keys(programs)) {
-            const p = programs[part];
-            if (!p) continue;
-            const key = p.bank === 128 ? p.zones[0].lo : (p.center || 60), r = renderNote(model, p, key, 100, 0.4, sr);
-            let e = 0; if (r) for (const v of r[0]) e += v * v;
-            const rms = r ? Math.sqrt(e / r[0].length) : 0;
-            level[part] = rms > 1e-5 ? 0.12 / rms : 1;
+        sr = sr || 44100; opts = opts || {};
+        const shift = opts.shift || {};
+        // the bass as one smooth line: small gaps closed, its loudness kept even
+        notes = notes.map(n => Object.assign({}, n));
+        const bass = notes.filter(n => n.part === 'bass').sort((a, b) => a.start - b.start);
+        for (let i = 0; i + 1 < bass.length; i++) { const gap = bass[i + 1].start - bass[i].end; if (gap > 0 && gap < 0.15) bass[i].end = bass[i + 1].start; }
+        for (const n of bass) n.vel = Math.round(45 + 0.55 * n.vel);
+        const key = n => n.part === 'drums' ? n.pitch : Math.max(0, Math.min(127, n.pitch + (shift[n.part] || 0)));
+        // how loud each part comes out (estimated from one rendered note per key and length), so the parts can be balanced
+        const cache = new Map(), energy = {}, span = {};
+        const noteEnergy = nt => {
+            const preset = programs[nt.part], d = Math.max(0.05, nt.end - nt.start), db = Math.round(Math.log2(d) * 2), k = key(nt);
+            const id = nt.part + ':' + k + ':' + db;
+            if (!cache.has(id)) {
+                const r = renderNote(model, preset, k, 100, Math.pow(2, db / 2), 22050);
+                let e = 0; if (r) for (let i = 0; i < r[0].length; i++) e += r[0][i] * r[0][i] + r[1][i] * r[1][i];
+                cache.set(id, e / 22050);
+            }
+            return cache.get(id) * Math.pow(nt.vel / 100, 2.4);
+        };
+        for (const nt of notes) {
+            if (!programs[nt.part]) continue;
+            energy[nt.part] = (energy[nt.part] || 0) + noteEnergy(nt);
+            span[nt.part] = Math.max(span[nt.part] || 0, nt.end);
         }
-        const harm = notes.filter(x => x.part === 'harmony'), span = harm.length ? Math.max(...harm.map(x => x.end)) - Math.min(...harm.map(x => x.start)) : 1;
-        const poly = harm.reduce((a, x) => a + x.end - x.start, 0) / Math.max(0.1, span);
-        gain.harmony /= Math.sqrt(Math.max(1, poly / 2));
+        const share = opts.bassShare == null ? 0.3 : opts.bassShare;
+        const target = { melody: 1, harmony: 0.5, bass: Math.max(0.5, Math.min(1.3, 0.8 * Math.sqrt(share / 0.3))), drums: 0.75 };
+        const level = {};
+        for (const part of Object.keys(energy)) {
+            const rms = Math.sqrt(energy[part] / Math.max(1, span[part]));
+            level[part] = rms > 1e-6 ? (target[part] || 0.6) * 0.1 / rms : 1;
+        }
+        // drums: each kind at its own level, a hi-hat well under the kick
+        const drumLevel = new Map();
+        if (programs.drums) for (const nt of notes) if (nt.part === 'drums' && !drumLevel.has(nt.pitch)) {
+            const r = renderNote(model, programs.drums, nt.pitch, 100, 0.15, 22050);
+            let e = 0; if (r) for (let i = 0; i < Math.min(r[0].length, 4410); i++) e += r[0][i] * r[0][i];
+            const rms = Math.sqrt(e / 4410), want = { kick: 1, snare: 0.8, hat: 0.35 }[nt.kind] || 0.7;
+            drumLevel.set(nt.pitch, rms > 1e-6 ? want * 0.1 / rms : 1);
+        }
+        if (drumLevel.size) {                                                   // the drum part as a whole still follows level.drums
+            let e = 0, n0 = 0;
+            for (const nt of notes) if (nt.part === 'drums') { e += noteEnergy(nt) * Math.pow(drumLevel.get(nt.pitch), 2); n0++; }
+            const rms = Math.sqrt(e / Math.max(1, span.drums || 1));
+            level.drums = rms > 1e-6 ? target.drums * 0.1 / rms : 1;
+        }
+        const total = Math.max(...notes.map(n => n.end)) + 3, n = Math.floor(total * sr);
+        const L = new Float32Array(n), R = new Float32Array(n);
         notes.forEach((nt, i) => {
             const preset = programs[nt.part];
             if (!preset) return;
-            const r = renderNote(model, preset, nt.pitch, nt.vel, Math.max(0.05, nt.end - nt.start), sr);
+            const r = renderNote(model, preset, key(nt), nt.vel, Math.max(0.05, nt.end - nt.start), sr);
             if (!r) return;
-            const a = Math.floor(nt.start * sr), g = (gain[nt.part] || 0.7) * (level[nt.part] || 1), m = Math.min(r[0].length, n - a);
+            const a = Math.floor(nt.start * sr), g = (level[nt.part] || 1) * (nt.part === 'drums' ? drumLevel.get(nt.pitch) || 1 : 1), m = Math.min(r[0].length, n - a);
             for (let k = 0; k < m; k++) { L[a + k] += r[0][k] * g; R[a + k] += r[1][k] * g; }
             if (progress && i % 200 === 0) progress('playing the notes ' + i + '/' + notes.length);
         });
@@ -1024,8 +1262,8 @@ const OOTSONG = (function () {
         return b;
     }
 
-    return { BP, transcribeDrums, kitMap, SONGS, seqFontTableAt, songShape, pickInstruments, analyze, normalizeRom, yaz0, findDmaTable, findAudio, decodeVadpcm, readSample, readEnvelope, releaseSeconds, extract, writeSf2, renderNote,
-        fft, transcribe, assignParts, readMidi, writeMidi, render, wav, CODEC, OUTPUT_RATE };
+    return { BP, transcribeDrums, kitMap, drumSound, hearSong, fitShift, PARTS, SONGS, seqFontTableAt, songShape, pickInstruments, analyze, normalizeRom, yaz0, findDmaTable, findAudio, decodeVadpcm, readSample, readEnvelope, releaseSeconds, extract, writeSf2, renderNote,
+        fft, timbreOf, timbreDistance, transcribe, assignParts, cleanNotes, readMidi, writeMidi, render, wav, CODEC, OUTPUT_RATE };
 })();
 // END_LIB
 
@@ -1093,22 +1331,29 @@ if (typeof document !== 'undefined') (function () {
         const src = c.createBufferSource(); src.buffer = buf; src.connect(c.destination); src.start(); playing = src;
     }
 
-    // the instrument lists follow the soundfont chosen (or picked): its pitched instruments first
+    // the instrument lists: one soundfont's instruments, or (when the best match is picked) every soundfont's, grouped
+    const sel = part => $('sel' + part[0].toUpperCase() + part.slice(1));
+    const shortLabel = f => f.songs.slice(0, 2).join(', ') + (f.songs.length > 2 ? '...' : '');
+    let manual = {};                                                     // parts whose instrument was chosen by hand
     function fillInstruments(fontIndex) {
         for (const part of PARTS) {
-            const sel = $('sel' + part[0].toUpperCase() + part.slice(1)), keep = sel.value;
-            sel.innerHTML = '';
-            const anyPitched = model.presets.some(p => p.font === fontIndex && p.bank !== 128 && p.pitched);
-            model.presets.forEach((p, i) => {
-                if (p.bank === 128 || p.font !== fontIndex || (anyPitched && !p.pitched)) return;
-                const o = document.createElement('option'); o.value = i; o.textContent = instLabel(p); sel.appendChild(o);
-            });
-            if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+            const el = sel(part), keep = el.value;
+            el.innerHTML = '';
+            for (const f of model.fonts) {
+                if (fontIndex != null && f.index !== fontIndex) continue;
+                const anyPitched = model.presets.some(p => p.font === f.index && p.bank !== 128 && p.pitched);
+                const host = fontIndex == null ? el.appendChild(Object.assign(document.createElement('optgroup'), { label: shortLabel(f) })) : el;
+                model.presets.forEach((p, i) => {
+                    if (p.bank === 128 || p.font !== f.index || (anyPitched && !p.pitched)) return;
+                    const o = document.createElement('option'); o.value = i; o.textContent = instLabel(p); host.appendChild(o);
+                });
+            }
+            if ([...el.options].some(o => o.value === keep)) el.value = keep;
         }
     }
-    function choose(pick) {
-        fillInstruments(pick.font.index);
-        for (const part of PARTS) $('sel' + part[0].toUpperCase() + part.slice(1)).value = model.presets.indexOf(pick.pick[part]);
+    function choose(pick, onlyAuto) {
+        fillInstruments($('selFont').value === 'auto' ? null : pick.font.index);
+        for (const part of PARTS) if (!(onlyAuto && manual[part])) sel(part).value = model.presets.indexOf(pick.pick[part]);
     }
 
     function fillPresets() {
@@ -1127,22 +1372,19 @@ if (typeof document !== 'undefined') (function () {
                 box.appendChild(row);
             });
         }
-        const first = model.fonts.find(f => model.presets.some(p => p.font === f.index && p.bank !== 128 && p.pitched)) || model.fonts[0];
-        const pick = OOTSONG.pickInstruments(model, [], first.index);
-        if (pick) choose(pick); else fillInstruments(first.index);
+        manual = {};
+        const pick = OOTSONG.pickInstruments(model, [], null);
+        if (pick) choose(pick); else fillInstruments(null);
         $('presetBox').hidden = false;
     }
     $('selFont').onchange = () => {
-        const v = $('selFont').value;
-        if (v === 'auto') { if (result && result.pick) choose(result.pick); return; }
-        const pick = OOTSONG.pickInstruments(model, notesFound || [], +v);
-        if (pick) choose(pick); else fillInstruments(+v);
+        manual = {};
+        const v = $('selFont').value, auto = v === 'auto';
+        const pick = OOTSONG.pickInstruments(model, notesFound || [], auto ? null : +v, heard);
+        if (pick) choose(pick); else fillInstruments(auto ? null : +v);
     };
-    // a change made by hand sticks: the soundfont in use stops being picked automatically
-    for (const part of PARTS) $('sel' + part[0].toUpperCase() + part.slice(1)).onchange = () => {
-        const p = model.presets[+$('sel' + part[0].toUpperCase() + part.slice(1)).value];
-        if (p && $('selFont').value === 'auto') $('selFont').value = p.font;
-    };
+    // an instrument chosen by hand stays, even when the rest are picked again
+    for (const part of PARTS) sel(part).onchange = () => { manual[part] = true; };
 
     dropZone($('romDrop'), $('romFile'), async f => {
         $('log').textContent = '';
@@ -1157,10 +1399,10 @@ if (typeof document !== 'undefined') (function () {
         } catch (e) { log('Error: ' + e.message); model = null; }
     });
 
-    let notesFound = null, drumHits = null;
+    let notesFound = null, drumHits = null, heard = null;
     dropZone($('songDrop'), $('songFile'), async f => {
         songName = f.name.replace(/\.[^.]+$/, '');
-        notesFound = drumHits = null;
+        notesFound = drumHits = heard = null;
         const bytes = new Uint8Array(await f.arrayBuffer());
         if (/\.midi?$/i.test(f.name) || String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'MThd') song = { midi: bytes };
         else {
@@ -1198,7 +1440,7 @@ if (typeof document !== 'undefined') (function () {
         return [json, w.buffer];
     }
     async function findNotes() {
-        if (song.midi) { log('Reading the MIDI file...'); return OOTSONG.readMidi(song.midi); }
+        if (song.midi) { log('Reading the MIDI file...'); return OOTSONG.assignParts(OOTSONG.readMidi(song.midi)); }
         try {
             log('Finding the notes with Basic Pitch...');
             const tf = await loadTf();
@@ -1208,10 +1450,11 @@ if (typeof document !== 'undefined') (function () {
             const t0 = performance.now();
             const { frames, onsets } = await OOTSONG.BP.run(tf, json, weights, song.audio, p => { const q = Math.floor(p * 10); if (q > shown) { shown = q; log('  ' + q * 10 + '%'); } });
             log('  done in ' + ((performance.now() - t0) / 1000).toFixed(0) + ' s');
-            return OOTSONG.BP.toNotes(frames, onsets, 0.5, 0.3, 11, 11);
+            drumHits = OOTSONG.transcribeDrums(song.audio, song.sr);
+            return OOTSONG.cleanNotes(OOTSONG.BP.toNotes(frames, onsets, 0.5, 0.3, 11, 11), { drums: drumHits });
         } catch (e) {
             log('Basic Pitch is not available here (' + e.message + '), so the simpler built-in note finder is used.'); await tick();
-            return OOTSONG.transcribe(song.audio, song.sr, {});
+            return OOTSONG.assignParts(OOTSONG.transcribe(song.audio, song.sr, {}));
         }
     }
 
@@ -1221,30 +1464,36 @@ if (typeof document !== 'undefined') (function () {
             if (!notesFound) {
                 notesFound = await findNotes();
                 if (!notesFound.length) throw new Error('No notes were found in the song.');
-                OOTSONG.assignParts(notesFound);
-                drumHits = song.audio ? OOTSONG.transcribeDrums(song.audio, song.sr) : [];
+                if (song.audio) {
+                    if (!drumHits) drumHits = OOTSONG.transcribeDrums(song.audio, song.sr);
+                    log('Listening to how each part sounds...'); await tick();
+                    heard = OOTSONG.hearSong(song.audio, song.sr, notesFound, drumHits);
+                } else drumHits = [];
             }
             const notes = notesFound.slice();
             const c = p => notes.filter(n => n.part === p).length;
             log('Found ' + notes.length + ' notes (' + c('melody') + ' melody, ' + c('harmony') + ' harmony, ' + c('bass') + ' bass)' +
                 (song.audio ? ' and ' + drumHits.length + ' drum hits.' : '.'));
             const auto = $('selFont').value === 'auto';
-            const pick = OOTSONG.pickInstruments(model, notes, auto ? null : +$('selFont').value);
-            if (auto && pick) { choose(pick); log('Best match: the soundfont from ' + pick.font.label + '.'); }
-            const programs = {};
-            for (const part of PARTS) programs[part] = model.presets[+$('sel' + part[0].toUpperCase() + part.slice(1)).value];
-            const font = programs.melody ? programs.melody.font : null;
-            const kit = model.presets.find(p => p.bank === 128 && p.font === font) || model.presets.find(p => p.bank === 128);
+            const pick = OOTSONG.pickInstruments(model, notes, auto ? null : +$('selFont').value, heard);
+            if (pick) {
+                choose(pick, true);
+                if (auto) log(pick.mixed ? 'Best match: instruments from several soundfonts, led by the one from ' + pick.font.label + '.' : 'Best match: the soundfont from ' + pick.font.label + '.');
+            }
+            const programs = {}, shape = OOTSONG.songShape(notes), shift = {};
+            for (const part of PARTS) { programs[part] = model.presets[+sel(part).value]; shift[part] = OOTSONG.fitShift(programs[part], part, shape[part].median); }
+            const moved = PARTS.filter(part => shift[part] && c(part)).map(part => part + ' ' + (shift[part] > 0 ? 'up ' : 'down ') + Math.abs(shift[part] / 12) + ' octave' + (Math.abs(shift[part]) > 12 ? 's' : ''));
+            if (moved.length) log('To suit the instruments: ' + moved.join(', ') + '.');
+            const kit = (pick && pick.drums) || model.presets.find(p => p.bank === 128 && p.font === (programs.melody || {}).font) || model.presets.find(p => p.bank === 128);
             const dur = song.audio ? song.audio.length / song.sr : 1;
             const drumsOn = $('selDrums').value === 'on' || ($('selDrums').value === 'auto' && drumHits && drumHits.length / dur > 1);
-            const map = kit && drumsOn ? OOTSONG.kitMap(kit) : null;
+            const map = kit && drumsOn ? OOTSONG.kitMap(kit, heard && heard.drums) : null;
             if (map) {
                 programs.drums = kit;
-                for (const h of drumHits) notes.push({ start: h.time, end: h.time + 0.15, pitch: map[h.kind], vel: Math.round(h.vel), part: 'drums' });
+                for (const h of drumHits) notes.push({ start: h.time, end: h.time + 0.15, pitch: map[h.kind], kind: h.kind, vel: Math.round(h.vel), part: 'drums' });
             }
-            result = { pick };
             log('Playing them...'); await tick();
-            const [L, R] = OOTSONG.render(notes, model, programs, +$('reverb').value, SR);
+            const [L, R] = OOTSONG.render(notes, model, programs, +$('reverb').value, SR, null, { shift, bassShare: heard ? heard.bassShare : null });
             result = { L, R, notes, pick, wav: OOTSONG.wav(L, R, SR) };
             const p = $('player'); p.src = URL.createObjectURL(new Blob([result.wav], { type: 'audio/wav' })); p.hidden = false;
             $('bWav').disabled = $('bMp3').disabled = $('bMid').disabled = false;

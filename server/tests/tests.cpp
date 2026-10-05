@@ -197,6 +197,47 @@ static void AttackRules() {
     AttackResult miss = m.Attack(1, 1000, false);
     CHECK(miss.ok && !miss.hit && m.Find(1000)->health == hp);
 }
+// Jump slashes hit harder, spin attacks catch everyone close, and a raised shield facing the blow takes most of it.
+static void StrikesAndGuard() {
+    Simulation sim = Duel(1, {0, 0}, {50, 0});
+    Match& m = sim.match;
+    m.Find(1)->weapon = {ItemId::KokiriSword, Rarity::Common};
+    auto rest = [&] { for (int i = 0; i < 2 * kTickHz; i++) m.Tick(kDt); m.Find(1000)->health = kMaxHealth; };
+    const AttackResult plain = m.Attack(1, 1000);
+    rest();
+    const AttackResult jump = m.Attack(1, 1000, true, AttackStyle::JumpSlash);
+    CHECK(jump.ok && jump.damage > plain.damage * 1.4f);
+    rest();
+    // A third player just behind the swordsman: a spin catches them, a plain swing doesn't.
+    PlayerState* third = nullptr;
+    for (auto& p : m.Players()) if (p.id != 1 && p.id != 1000) { third = &p; break; }
+    CHECK(third != nullptr);
+    third->alive = true; third->health = kMaxHealth; third->pos = {-40, 0};
+    CHECK(m.Attack(1, 1000).extraHits == 0 && third->health == kMaxHealth);
+    rest();
+    const AttackResult spin = m.Attack(1, 1000, true, AttackStyle::Spin);
+    CHECK(spin.ok && spin.extraHits == 1 && third->health < kMaxHealth);
+    third->alive = false;
+    rest();
+    // Shield up and facing the attacker (who stands towards -x): blocked.
+    PlayerState* t = m.Find(1000);
+    t->hasShield = true; t->shield = {ItemId::HylianShield, Rarity::Common};
+    const AttackResult shielded = m.Attack(1, 1000);
+    rest();
+    t->anim = static_cast<uint8_t>(Anim::Guard);
+    t->rot = -16384;   // facing -x
+    const AttackResult guarded = m.Attack(1, 1000);
+    CHECK(guarded.blocked && guarded.damage < shielded.damage * 0.3f);
+    rest();
+    t->rot = 16384;    // facing away: the shield is on the wrong side
+    const AttackResult behind = m.Attack(1, 1000);
+    CHECK(!behind.blocked && behind.damage == shielded.damage);
+    rest();
+    t->rot = -16384;   // light arrows go through any shield
+    m.Find(1)->weapon = {ItemId::LightArrows, Rarity::Common};
+    for (auto& p : m.Players()) p.ammo.fill(60);
+    CHECK(!m.Attack(1, 1000).blocked);
+}
 static void NoAttacksDuringDrop() {
     Match m(1, MapCircle(), 0);
     m.AddHuman(1);
@@ -1842,6 +1883,68 @@ static void BotsRollAndLockOn() {
     CHECK(seen.count(static_cast<int>(Anim::SideL)) || seen.count(static_cast<int>(Anim::SideR)));
 }
 
+static void BotsPlayLikePlayers() {
+    // Fights: side hops and back flips beside the rolls, jump slashes to open an exchange, and the shield raised against a swing.
+    std::set<int> seen;
+    for (uint64_t seed = 40; seed < 48; seed++) {
+        Simulation sim(seed, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* a = sim.match.Find(1000);
+        PlayerState* b = sim.match.Find(1001);
+        a->pos = {-160, 0}; b->pos = {160, 0};
+        a->weapon = b->weapon = {ItemId::MasterSword, Rarity::Rare};
+        a->hasShield = b->hasShield = true;
+        a->shield = b->shield = {ItemId::HylianShield, Rarity::Rare};
+        a->maxHealth = a->health = b->maxHealth = b->health = 400.0f;
+        for (int i = 0; i < 20 * 20; i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->alive = false;
+            for (uint32_t id : {1000u, 1001u}) seen.insert(sim.match.Find(id)->anim);
+        }
+    }
+    CHECK(seen.count(static_cast<int>(Anim::HopL)) || seen.count(static_cast<int>(Anim::HopR)));
+    CHECK(seen.count(static_cast<int>(Anim::JumpSlash)));
+    CHECK(seen.count(static_cast<int>(Anim::Guard)));
+    CHECK(seen.count(static_cast<int>(Anim::Jump)));
+    CHECK(IsDodge(static_cast<uint8_t>(Anim::HopL)) && IsDodge(static_cast<uint8_t>(Anim::Backflip)) && !IsDodge(static_cast<uint8_t>(Anim::Guard)));
+
+    // Chests: the bot stops, kicks it open, then holds up what was inside.
+    {
+        Simulation sim = Duel(77, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        LootSpawn chest{{150, 0}, ItemId::MasterSword, Rarity::Epic, true, true};
+        sim.match.AddLoot(chest);
+        std::vector<int> order;
+        for (int i = 0; i < 8 * kTickHz; i++) {
+            sim.Tick(kDt);
+            if (order.empty() || order.back() != a->anim) order.push_back(a->anim);
+        }
+        auto at = [&](Anim x) { return std::find(order.begin(), order.end(), static_cast<int>(x)) - order.begin(); };
+        CHECK(a->weapon.item == ItemId::MasterSword);
+        CHECK(at(Anim::OpenChest) < static_cast<long>(order.size()) && at(Anim::ItemGet) < static_cast<long>(order.size()) && at(Anim::OpenChest) < at(Anim::ItemGet));
+    }
+
+    // Bushes and rocks: a bot short of arrows cuts the bush beside it; the server is asked to break it.
+    {
+        Simulation sim = Duel(78, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        a->weapon = {ItemId::FairyBow, Rarity::Rare};
+        a->ammo.fill(0);
+        sim.bots.SetProps({{{200, 0}, PropKind::Bush, 0}, {{0, 2500}, PropKind::Rock, 0}});
+        std::vector<std::pair<uint32_t, size_t>> asked;
+        for (int i = 0; i < 6 * kTickHz && asked.empty(); i++) {
+            sim.Tick(kDt);
+            asked = sim.bots.DrainSmashes();
+        }
+        CHECK(asked.size() == 1 && asked[0].first == 1000 && asked[0].second == 0);
+        CHECK(Distance(a->pos, {200, 0}) < 200.0f);
+    }
+}
+
 static void BotsLeaveBlastRings() {
     // Hard bots standing in a marked blast walk or roll out before it lands; they are not stuck there taking it.
     int escaped = 0, trials = 0;
@@ -2040,7 +2143,7 @@ static void PointsOfInterest() {
     for (const Prop& p : a.props) grounded &= valid(p.pos);
     for (const Vec2& sp : a.lootSpots) grounded &= valid(sp);
     CHECK(grounded);
-    CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 6);       // a building, a cave and ruins at each
+    CHECK(a.props.size() > a.pois.size() * 20 && a.lootSpots.size() >= a.pois.size() * 3);       // every place is built up and has chests
     for (int i = 0; i < kPoiNameTotal; i++) CHECK(kPoiNames[i] != nullptr && kPoiNames[i][0] != 0);
 
     // The chests: every spot gets one, always on the better tiers, in a container, on top of the scattered ones.
@@ -2143,6 +2246,147 @@ static void CustomObjModels() {
     CHECK(neg.ok && neg.triangles == 1);
 }
 
+static void BouldersAndFormations() {
+    // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
+    // budget, and each map's stone a different colour.
+    std::set<int> looks;
+    for (uint32_t theme = 0; theme < 5; theme++) {
+        for (int shape = 0; shape < kBoulderShapes; shape++) {
+            const MeshData m = BuildMesh(MeshKind::Boulder, static_cast<uint32_t>(shape) + kBoulderShapes * theme);
+            float mn[3], mx[3];
+            m.Bounds(mn, mx);
+            CHECK(m.Triangles() >= 100 && m.Triangles() <= 420 && mn[1] >= -0.01f);
+            CHECK(std::fabs(mx[1] - BoulderHeight(shape)) < 1.0f && BoulderTop(shape) < mx[1] && mx[0] - mn[0] < 260 && mx[2] - mn[2] < 260);
+            if (shape == 0) {
+                long r = 0, g = 0, b = 0;
+                for (const auto& v : m.v) { r += v.r; g += v.g; b += v.b; }
+                const long n = static_cast<long>(m.v.size());
+                looks.insert(static_cast<int>(r / n / 8) * 10000 + static_cast<int>(g / n / 8) * 100 + static_cast<int>(b / n / 8));
+            }
+        }
+        const MeshData rock = BuildMesh(MeshKind::Rock, kBoulderShapes * theme);
+        float mn[3], mx[3];
+        rock.Bounds(mn, mx);
+        CHECK(rock.Triangles() <= 420 && mx[1] < 60 && mx[0] - mn[0] < 120);
+    }
+    CHECK(looks.size() == 5);
+    CHECK(BoulderHeight(1) > 150 && BoulderTop(2) < 64);                                          // a slab you can't climb, a table rock you can
+    // The shape and size come from the rotation, and a formation can ask for the shape it wants.
+    Rng rng(4);
+    for (int shape = 0; shape < kBoulderShapes; shape++)
+        for (int i = 0; i < 50; i++) CHECK(BoulderShape(RotForShape(rng, shape)) == shape);
+    std::set<int> shapes;
+    for (uint32_t r = 0; r < 0x10000; r += 97) {
+        shapes.insert(BoulderShape(static_cast<uint16_t>(r)));
+        CHECK(BoulderScale(static_cast<uint16_t>(r)) >= 0.85f && BoulderScale(static_cast<uint16_t>(r)) <= 1.15f);
+    }
+    CHECK(static_cast<int>(shapes.size()) == kBoulderShapes);
+
+    // Formations: boulders of several shapes in a group, the ring with a chest in the middle, all kept off the towns.
+    const Circle map = {{0, 0}, 4000};
+    for (int f = 0; f < kFormationCount; f++) {
+        PoiLayout one;
+        Rng frng(9 + f);
+        AddFormation(one, frng, static_cast<Formation>(f), {0, 0}, 0.4f, nullptr);
+        int boulders = 0;
+        std::set<int> kinds;
+        for (const Prop& p : one.props) if (p.kind == PropKind::Boulder) { boulders++; kinds.insert(BoulderShape(p.rot)); }
+        CHECK(boulders >= 4);
+        CHECK(static_cast<Formation>(f) == Formation::Ring ? kinds.size() == 1 && one.sites.size() == 1 && Distance(one.sites[0].pos, {0, 0}) < 1.0f : kinds.size() >= 2);
+        for (const Prop& p : one.props) CHECK(Distance(p.pos, {0, 0}) < 700.0f);
+    }
+    for (uint64_t seed = 1; seed < 5; seed++) {
+        PoiLayout layout = GeneratePois(seed, map, 12, nullptr, 1);
+        const size_t before = layout.props.size();
+        GenerateWilds(layout, seed, map, {}, layout.lootSpots, 4, 0, nullptr, 8);
+        int formationBoulders = 0;
+        for (size_t i = before; i < layout.props.size(); i++) {
+            if (layout.props[i].kind != PropKind::Boulder) continue;
+            formationBoulders++;
+            for (const Poi& poi : layout.pois) CHECK(Distance(layout.props[i].pos, poi.center) > poi.radius);
+        }
+        CHECK(formationBoulders >= 25);
+        // Loose scenery stays off the towns' streets.
+        const std::vector<Circle> clear = PoiClearings(layout.pois);
+        for (const Prop& p : GenerateProps(seed, map, 600, nullptr, &clear))
+            for (const Circle& c : clear) CHECK(Distance(p.pos, c.center) >= c.radius);
+    }
+}
+
+static void OutpostsAreDesigned() {
+    // Every outpost is one connected structure of blocks on the grid (each block touches another edge to edge), whichever way it faces, and its
+    // prize sits on its highest block (or in the arena's pit).
+    for (int k = 0; k < kOutpostCount; k++) {
+        for (int dir = 0; dir < 4; dir++) {
+            PoiLayout one;
+            Rng rng(k * 4 + dir + 1);
+            CHECK(AddOutpost(one, rng, static_cast<Outpost>(k), {300, -200}, dir, nullptr));
+            std::vector<Prop> blocks;
+            for (const Prop& p : one.props) if (IsPlatform(p.kind)) blocks.push_back(p);
+            CHECK(blocks.size() >= 4 && one.sites.size() == 1);
+            for (size_t i = 0; i < blocks.size(); i++) {
+                bool touches = false;
+                for (size_t j = 0; j < blocks.size(); j++)
+                    if (i != j && std::fabs(Distance(blocks[i].pos, blocks[j].pos) - kPlatformHalf * 2.0f) < 0.5f) touches = true;
+                CHECK(touches);
+            }
+            float highest = 0, under = -1;
+            for (const Prop& b : blocks) {
+                highest = (std::max)(highest, PlatformHeight(b.kind));
+                if (Distance(b.pos, one.sites[0].pos) < 1.0f) under = PlatformHeight(b.kind);
+            }
+            CHECK(static_cast<Outpost>(k) == Outpost::Arena ? under < 0 && one.sites[0].bonus == 1 : under == highest && one.sites[0].bonus == 2);
+        }
+        PoiLayout none;
+        Rng rng(1);
+        CHECK(!AddOutpost(none, rng, static_cast<Outpost>(k), {0, 0}, 0, [](Vec2 p) { return p.x < 100.0f; }) && none.props.empty());   // half over a drop: not built
+    }
+    // A map gets several, kept away from the towns.
+    const Circle map = {{0, 0}, 4000};
+    PoiLayout layout = GeneratePois(6, map, 12, nullptr, 1);
+    const size_t before = layout.props.size();
+    GenerateWilds(layout, 6, map, {}, layout.lootSpots, 0, 0, nullptr, 0, 5);
+    int blocks = 0;
+    for (size_t i = before; i < layout.props.size(); i++) {
+        if (!IsPlatform(layout.props[i].kind)) continue;
+        blocks++;
+        for (const Poi& poi : layout.pois) CHECK(Distance(layout.props[i].pos, poi.center) > poi.radius);
+    }
+    CHECK(blocks >= 20);
+}
+
+static void TownsAreDifferentPlaces() {
+    // Kinds of town are dealt so that every kind turns up before any repeats, and never the same twice running.
+    Rng rng(11);
+    const std::vector<TownKind> kinds = DealTownKinds(rng, 20);
+    std::set<int> firstDeck;
+    for (int i = 0; i < kTownKindCount; i++) firstDeck.insert(static_cast<int>(kinds[i]));
+    CHECK(static_cast<int>(firstDeck.size()) == kTownKindCount);
+    for (size_t i = 1; i < kinds.size(); i++) CHECK(kinds[i] != kinds[i - 1]);
+    // Every kind of town has chests and a prize up high, and stands on its own ground.
+    for (int k = 0; k < kTownKindCount; k++) {
+        PoiLayout one;
+        Rng trng(k + 1);
+        BuildTown(one, trng, static_cast<TownKind>(k), {1000, -500}, 0.3f * k, nullptr);
+        int tops = 0;
+        for (const ChestSite& st : one.sites) tops += st.bonus == 2;
+        CHECK(tops >= 1 && one.lootSpots.size() + one.sites.size() >= 3 && one.props.size() >= 10);
+        for (const Prop& p : one.props) CHECK(Distance(p.pos, {1000, -500}) < kTownRadius + 300.0f);
+        // Nothing solid stands on a chest.
+        for (const Vec2& sp : one.lootSpots) for (const Prop& p : one.props) CHECK(PropRadius(p.kind) == 0.0f || IsPlatform(p.kind) || Distance(sp, p.pos) > PropRadius(p.kind) * 0.8f);
+    }
+    // A small map gets fewer, whole towns rather than a heap of overlapping ones; a big one gets the full set.
+    const PoiLayout small = GeneratePois(3, {{0, 0}, 1900}, 12, nullptr, 2), big = GeneratePois(3, {{0, 0}, 4000}, 12, nullptr, 2);
+    CHECK(small.pois.size() >= 4 && small.pois.size() <= 7 && big.pois.size() >= 10);
+    for (size_t i = 0; i < small.pois.size(); i++)
+        for (size_t j = i + 1; j < small.pois.size(); j++) CHECK(Distance(small.pois[i].center, small.pois[j].center) >= 1050.0f);
+    for (size_t i = 0; i < big.pois.size(); i++)
+        for (size_t j = i + 1; j < big.pois.size(); j++) CHECK(Distance(big.pois[i].center, big.pois[j].center) >= 1250.0f);
+    std::set<int> names;
+    for (const Poi& p : big.pois) names.insert(p.name);
+    CHECK(names.size() == big.pois.size());
+}
+
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
@@ -2162,7 +2406,7 @@ static void CustomMeshes() {
             for (const auto& p : m.v) { lo = (std::min)(lo, static_cast<int>(p.g)); hi = (std::max)(hi, static_cast<int>(p.g)); }
             CHECK(hi > lo + 15 && hi > 60);
             if (static_cast<MeshKind>(k) == MeshKind::Rock) CHECK(mx[0] - mn[0] < 120 && mx[1] < 60);
-            if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && mx[1] < 150);
+            if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && std::fabs(mx[1] - BoulderHeight(static_cast<int>(variant) % kBoulderShapes)) < 1.0f);
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
@@ -2496,6 +2740,189 @@ static void MiniBosses() {
     }
 }
 
+// One mini boss of the given kind at the origin, with the test player (who can't die) at `human`.
+static Simulation OneBoss(BossKind kind, Vec2 human, std::shared_ptr<const NavGrid> nav = nullptr) {
+    Simulation sim = BossArena({{0, 0}}, 1, human);
+    MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+    b->kind = kind;
+    b->maxHealth = b->health = BossOf(kind).health;
+    PlayerState* h = sim.match.Find(1);
+    h->maxHealth = h->health = 100.0f;
+    if (nav) sim.match.SetNav(std::move(nav));
+    return sim;
+}
+
+static void BossesUseTheirOwnMoves() {
+    // Every mini boss, fought for a while, does its own thing from the game (and the blasts it marks are its own kind).
+    struct Want { BossKind kind; DragonMode mode; StrikeStyle style; float start; };
+    const Want wants[] = {
+        {BossKind::Stone, DragonMode::Leap, StrikeStyle::Rock, 400.0f},      // Stalfos: jump slash
+        {BossKind::Lava, DragonMode::Charge, StrikeStyle::Fire, 430.0f},     // Magma Dodongo: rolls at you from further off, leaving fire
+        {BossKind::Lava, DragonMode::Breath, StrikeStyle::Count, 150.0f},    // ...and breathes fire up close
+        {BossKind::Frost, DragonMode::Summon, StrikeStyle::Ice, 150.0f},     // White Wolfos: freezing howl
+        {BossKind::Moss, DragonMode::Summon, StrikeStyle::Spore, 400.0f},    // Moss Lizalfos: spore pods
+        {BossKind::Tide, DragonMode::Charge, StrikeStyle::Count, 430.0f},    // Big Octo: spin charge
+        {BossKind::Shade, DragonMode::Summon, StrikeStyle::Shadow, 400.0f},  // Dead Hand: hands out of the ground
+        {BossKind::Dune, DragonMode::Slam, StrikeStyle::Rock, 150.0f},       // Iron Knuckle: overhead cleave
+    };
+    for (const Want& w : wants) {
+        Simulation sim = OneBoss(w.kind, {w.start, 0});
+        bool sawMode = false, sawStyle = w.style == StrikeStyle::Count, dazedLater = false;
+        for (int i = 0; i < static_cast<int>(12 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {w.start, 0};   // stand still where it found you
+            const MiniBoss& b = sim.match.Bosses()[0];
+            sawMode |= b.mode == w.mode;
+            dazedLater |= sawMode && b.mode == DragonMode::Stunned;
+            for (const auto& e : sim.match.DrainEvents()) sawStyle |= e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(w.style);
+        }
+        CHECK(sawMode && sawStyle);
+        if (w.kind == BossKind::Tide || w.kind == BossKind::Dune || (w.kind == BossKind::Lava && w.mode == DragonMode::Charge)) CHECK(dazedLater);   // and is dazed after it
+    }
+    // Dead Hand burrows over to you after its grab; while it is underground nothing can hit it, and dazed it takes extra.
+    {
+        Simulation sim = OneBoss(BossKind::Shade, {400, 0});
+        bool hid = false;
+        for (int i = 0; i < static_cast<int>(10 * kTickHz) && !hid; i++) { sim.Tick(kDt); sim.match.Find(1)->health = 100.0f; hid = BossHidden(sim.match.Bosses()[0].mode); }
+        CHECK(hid);
+        PlayerState* h = sim.match.Find(1);
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        h->weapon = {ItemId::FairyBow, Rarity::Legendary};
+        h->pos = {b->pos.x + 200, b->pos.z};
+        h->attackReadyAt = 0;
+        h->stunUntil = h->frozenUntil = 0;   // (its hands were holding you)
+        CHECK(!sim.match.AttackBoss(1, b->id, true).ok);
+        b->mode = DragonMode::Chase;
+        h->attackReadyAt = 0;
+        const float plain = sim.match.AttackBoss(1, b->id, true).damage;
+        b->mode = DragonMode::Stunned; b->modeUntil = sim.match.Clock() + 5;
+        h->attackReadyAt = 0;
+        const float dazed = sim.match.AttackBoss(1, b->id, true).damage;
+        CHECK(plain > 0 && dazed > plain * 1.2f);
+    }
+    // The Stalfos gets back up once; the second time it stays down.
+    {
+        Simulation sim = OneBoss(BossKind::Stone, {60, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        MiniBoss* b = const_cast<MiniBoss*>(&m.Bosses()[0]);
+        b->health = 0.1f;
+        h->attackReadyAt = 0;
+        const AttackResult first = m.AttackBoss(1, b->id, true);
+        CHECK(first.hit && !first.killed && b->alive && b->mode == DragonMode::Stunned && std::abs(b->health - b->maxHealth * kStalfosGetsUpWith) < 0.01f);
+        b->health = 0.1f;
+        h->attackReadyAt = 0;
+        CHECK(m.AttackBoss(1, b->id, true).killed && !b->alive);
+    }
+    // The Iron Knuckle with its armour off is faster.
+    {
+        Simulation a = OneBoss(BossKind::Dune, {400, 0}), bare = OneBoss(BossKind::Dune, {400, 0});
+        MiniBoss* x = const_cast<MiniBoss*>(&bare.match.Bosses()[0]);
+        x->health = x->maxHealth * 0.4f;
+        Run(a, 1.2f); Run(bare, 1.2f);
+        CHECK(Distance(bare.match.Bosses()[0].pos, {0, 0}) > Distance(a.match.Bosses()[0].pos, {0, 0}) * 1.3f);
+    }
+    // What the blasts do: ice freezes, shadow holds you, fire sets you alight.
+    {
+        Simulation sim = OneBoss(BossKind::Frost, {1900, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->pos = {1500, 0};
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Ice);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->frozenUntil);
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Shadow);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->stunUntil);
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Fire);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->burnUntil);
+    }
+}
+
+static void BossesFindTheirWay() {
+    // A wall between the boss and you: with the grid it walks around it (never through it); a boss that can leap is not stopped
+    // by a gap it can't walk round, and Dead Hand goes under.
+    auto wall = std::make_shared<NavGrid>(MapCircle(), NotWall);
+    {
+        Simulation sim = BossArena({{-200, 0}}, 1, {200, 0});
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        b->kind = BossKind::Dune;   // an Iron Knuckle: it walks
+        sim.match.SetNav(wall);
+        sim.match.Find(1)->maxHealth = sim.match.Find(1)->health = 100.0f;
+        bool throughWall = false;
+        float closest = 1e9f;
+        for (int i = 0; i < static_cast<int>(20 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {200, 0};
+            const MiniBoss& x = sim.match.Bosses()[0];
+            throughWall |= std::fabs(x.pos.x) < 25.0f && std::fabs(x.pos.z) < 450.0f;   // the grid is 60 wide, so only the core of the wall is guaranteed
+            closest = std::min(closest, Distance(x.pos, {200, 0}));
+        }
+        CHECK(!throughWall && closest < 200.0f);
+    }
+    // A pocket it can't walk to: the Stalfos leaps in, Dead Hand burrows in, the Lizalfos climbs over.
+    auto sealed = std::make_shared<NavGrid>(MapCircle(), [](Vec2 p) { const float d = std::hypot(p.x - 400.0f, p.z); return d < 150.0f || d > 300.0f; });
+    for (BossKind k : {BossKind::Stone, BossKind::Shade, BossKind::Moss}) {
+        Simulation sim = BossArena({{50, 0}}, 1, {400, 0});
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        b->kind = k;
+        sim.match.SetNav(sealed);
+        bool trick = false;
+        float closest = 1e9f;
+        for (int i = 0; i < static_cast<int>(20 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {400, 0};
+            const MiniBoss& x = sim.match.Bosses()[0];
+            trick |= x.mode == DragonMode::Leap || x.mode == DragonMode::Hidden || x.mode == DragonMode::Climb;
+            closest = std::min(closest, Distance(x.pos, {400, 0}));
+        }
+        CHECK(trick && closest < 160.0f);
+    }
+}
+
+static void MajorBossesFightTheirOwnWay() {
+    float half = 0;
+    for (const auto& ph : kStormPhases) half += ph.waitSec + ph.closeSec;
+    half *= 0.5f;
+    // Each map's major boss is its own, and fought for a while shows its own moves.
+    struct Want { int map; BossKind kind; std::vector<DragonMode> modes; std::vector<StrikeStyle> styles; };
+    const Want wants[] = {
+        {3, BossKind::DragonFire, {DragonMode::Hidden, DragonMode::Emerge, DragonMode::Landed}, {StrikeStyle::Fire, StrikeStyle::Rock}},
+        {1, BossKind::DragonWater, {DragonMode::Hidden, DragonMode::Emerge, DragonMode::Slam, DragonMode::Stunned}, {StrikeStyle::Water}},
+        {0, BossKind::DragonForest, {DragonMode::Hidden, DragonMode::Charge, DragonMode::Beam, DragonMode::Cast}, {StrikeStyle::Magic, StrikeStyle::Bolt}},
+        {2, BossKind::DragonShadow, {DragonMode::Slam}, {StrikeStyle::Shadow}},
+        {4, BossKind::DragonSand, {DragonMode::Beam}, {StrikeStyle::Fire, StrikeStyle::Ice}},
+    };
+    for (const Want& w : wants) {
+        Simulation sim = DragonArena(w.map, true);
+        Run(sim, half + 1.0f);
+        Match& m = sim.match;
+        const MiniBoss* d = m.FindBoss(kDragonId);
+        CHECK(d && d->kind == w.kind && std::string(BossOf(d->kind).name).size() > 3);
+        if (!d) continue;
+        PlayerState* h = m.Find(1);
+        h->invulnUntil = 0;
+        std::set<int> modes, styles, auxes;
+        for (int i = 0; i < static_cast<int>(90 * kTickHz); i++) {
+            sim.Tick(kDt);
+            h->health = h->maxHealth;
+            h->pos = {d->pos.x + 300.0f, d->pos.z};   // keep close to it
+            if (d->kind == BossKind::DragonWater && i % static_cast<int>(kTickHz * 3) == 0) h->pos = {0, 0};
+            modes.insert(static_cast<int>(d->mode));
+            if (d->mode == DragonMode::Beam || d->mode == DragonMode::Slam) auxes.insert(d->aux);
+            for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.a == kDragonId) styles.insert(e.item);
+        }
+        for (DragonMode md : w.modes) CHECK(modes.count(static_cast<int>(md)));
+        for (StrikeStyle st : w.styles) CHECK(styles.count(static_cast<int>(st)));
+        if (w.kind == BossKind::DragonSand) CHECK(auxes.count(0) && auxes.count(1));   // fire and ice take turns
+    }
+}
+
 static void PlayerLimitSlider() {
     Match m(1, MapCircle());
     CHECK(m.PlayerLimit() == kMaxPlayers);
@@ -2717,14 +3144,14 @@ static void LiloTheCatModel() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomObjModels(); CustomMeshes(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

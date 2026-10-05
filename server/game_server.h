@@ -88,12 +88,16 @@ class GameServer {
         const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
         const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
         // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
-        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 260)), valid);
-        // Climbs out in the open and chests hidden behind boulders, spread out over the whole map.
-        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid);
+        // Loose scenery stays off the towns' streets.
+        const std::vector<Circle> clearings = PoiClearings(layout.pois);
+        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 420)), valid, &clearings);
+        // Boulder formations, stone outposts, climbs out in the open and chests hidden behind boulders, spread out over the whole map.
+        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid,
+                      2 + static_cast<int>(map.radius / 650.0f), 2 + static_cast<int>(map.radius / 1100.0f));
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
         broken.assign(props.size(), false);
+        sim.bots.SetProps(props);
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
@@ -107,6 +111,7 @@ class GameServer {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
             sim.bots.SetNav(grid);
+            sim.match.SetNav(grid);   // the bosses find their way around with it too
         }
         sim.match.RegenerateLoot(lootCount);
         for (uint32_t id : humans) sim.match.AddHuman(id);
@@ -141,6 +146,7 @@ class GameServer {
         if (!p || !p->alive || (sim.match.State() != MatchState::InMatch && sim.match.State() != MatchState::Drop)) return false;
         if (Distance(p->pos, prop.pos) > kSmashReach) return false;
         broken[index] = true;
+        sim.bots.PropGone(index);
         const Match::PropDrop drop = sim.match.GrantPropLoot(playerId, prop.kind, index);
         net::EvPropBroken ev;
         ev.index = static_cast<uint16_t>(index);
@@ -310,7 +316,7 @@ class GameServer {
             case net::MsgType::AttackReport: {
                 net::AttackReport m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.Attack(c->playerId, m.target, m.hit).ok) stats.rejectedActions++;
+                if (!sim.match.Attack(c->playerId, m.target, m.hit, static_cast<AttackStyle>(m.style)).ok) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PickupRequest: {
@@ -464,7 +470,7 @@ class GameServer {
         p->y = in.y;
         p->rot = in.rot;
         p->anim = in.anim;
-        if (in.anim == static_cast<uint8_t>(Anim::Roll) && sim.match.CanRoll(*p)) sim.match.StartRoll(p->id); // a human's roll counts from the moment it starts
+        if (IsDodge(in.anim) && sim.match.CanRoll(*p)) sim.match.StartRoll(p->id); // a human's roll (or side hop or back flip) counts from the moment it starts
         p->scene = in.scene;
     }
 
@@ -489,6 +495,7 @@ class GameServer {
             if (lobbyElapsed >= autoStartSec + kLobbyStartGraceSec) StartMatch();
         }
         sim.Tick(kStep);
+        for (const auto& [bot, index] : sim.bots.DrainSmashes()) SmashProp(bot, index);   // the bushes and rocks the bots cut and broke
         clock += kStep;
         tick++;
         BroadcastEvents();
@@ -568,7 +575,7 @@ class GameServer {
                 case MatchEvent::Type::Strike: {
                     net::EvStrike st;
                     st.by = static_cast<uint16_t>(e.a);
-                    st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health;
+                    st.x = e.x; st.z = e.z; st.radius = e.amount; st.delay = e.health; st.style = e.item;
                     Broadcast(st);
                     break;
                 }
@@ -739,6 +746,7 @@ class GameServer {
                 n.smashing = sim.match.Clock() - b.lastSmashAt < 0.4f;
                 n.y = static_cast<int16_t>(std::lround((std::max)(0.0f, (std::min)(b.y, 3000.0f))));
                 n.mode = static_cast<uint8_t>(b.mode);
+                n.aux = b.aux;
                 s.bosses.push_back(n);
             }
             for (const AllyState& a : sim.match.Allies()) {

@@ -1,7 +1,7 @@
 # Custom models
 
 Put `dragon.obj` (and `dragon.mtl` if it has colours) in the **models** folder inside the game's data folder (it is made the first time you open the
-Royale menu; the menu shows the exact path and whether the model loaded, with a Reload button). It replaces the dragon.
+Royale menu; the menu shows the exact path and whether the model loaded, with a Reload button). It replaces Volvagia, Death Mountain Crater's major boss (the other major bosses always use the game's own models).
 
 - **Format:** Wavefront OBJ, up to 40,000 triangles. Colours come from the `.mtl` (`Kd`) or per-vertex colours (`v x y z r g b`). Textures are not used:
   the game draws these with vertex colours and its own lighting.
