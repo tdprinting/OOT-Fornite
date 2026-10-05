@@ -210,6 +210,7 @@ const char* SceneName(int scene) {
 int gTravelCooldown = 0; // game frames (20 per second) before another travel request is allowed
 
 bool gOurTravel = false; // a scene change we asked for ourselves (see SealExits)
+void Trace(const char* step);   // the crash breadcrumb trail, defined with the music code
 
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
@@ -221,7 +222,7 @@ bool TravelTo(int entrance) {
     gTravelCooldown = 5 * royale::kTickHz;
     return true;
 }
-bool GoToWaitingRoom() { return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
+bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
 int EntranceFor(int mapId) {
     switch (royale::ClampMap(mapId)) {
         case 1: return ENTR_LAKE_HYLIA_0_1;
@@ -5183,8 +5184,21 @@ LobbyMusic gLobbyMusic;
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
+// A breadcrumb trail for crashes the phone gives no log for: each step is written to royale-trace.txt (next to the music folder) and closed
+// again straight away, so the last line says how far the game got. The file starts afresh each run.
+void Trace(const char* step) {
+    static bool fresh = true;
+    static std::string last;
+    if (last == step) return;   // a step drawn every frame is written once
+    last = step;
+    std::ofstream out(std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt")), fresh ? std::ios::trunc : std::ios::app);
+    fresh = false;
+    if (out) out << step << "\n";
+}
+
 void QueueOotSongs();
 void ScanMusicFolder() {
+    Trace("music scan: start");
     gLobbyMusic.tracks.clear();
     std::error_code ec;
     std::filesystem::create_directories(MusicFolder(), ec);
@@ -5200,10 +5214,13 @@ void ScanMusicFolder() {
     gLobbyMusic.scanned = true;
     gLobbyMusic.failed = false;
     gLobbyMusic.status = std::to_string(gLobbyMusic.tracks.size()) + " .wav song(s) found in " + MusicFolder().string();
+    Trace("music scan: listed");
     QueueOotSongs();
+    Trace("music scan: done");
 }
 
 bool LoadNextTrack() {
+    Trace("song load: start");
     LobbyMusic& m = gLobbyMusic;
     for (size_t tries = 0; tries < m.tracks.size(); tries++) {
         const std::filesystem::path& file = m.tracks[m.next++ % m.tracks.size()];
@@ -5230,6 +5247,7 @@ bool LoadNextTrack() {
         }
         m.pos = 0;
         m.nowPlaying = file.stem().string();
+        Trace("song load: done");
         return !m.pcm.empty();
     }
     return false;
@@ -8460,6 +8478,7 @@ void OnGameFrameUpdate() {
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
+        Trace("lobby: joined");
         gLastEpoch = gSession.Client()->Epoch();
         WantsWaitingRoom = CVarGetInteger(CVAR_SETTING("Royale.WaitingRoom"), 1) != 0;
         Say(hud.isHost ? "Lobby open. Share your address from the Battle Royale menu" : "Joined the lobby");
@@ -8506,6 +8525,7 @@ void OnGameFrameUpdate() {
 }
 
 void OnSceneInit(int16_t) {
+    Trace("scene: init");
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
@@ -8731,15 +8751,16 @@ void DrawMinimapOptions() {
     }
     ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
     ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    if (gLobbyMusic.status.empty()) ScanMusicFolder();
-    ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
+    Trace("options: opened");
+    if (gLobbyMusic.status.empty()) ImGui::TextColored(kGrey, "Press Rescan to look for songs.");   // not scanned for you: opening this section stays light
+    else ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
     if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
     ImGui::Spacing();
     ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
-    if (!gDragonModel.tried) LoadCustomDragon();
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
-    if (ImGui::Button("Reload custom dragon")) LoadCustomDragon();
+    if (ImGui::Button(gDragonModel.tried ? "Reload custom dragon" : "Look for a custom dragon")) LoadCustomDragon();
+    Trace("options: drawn");
 }
 
 // What every item and power does, read from the item table (shared/items.h) so it follows the items as they change. Grouped by kind, with the
@@ -8842,10 +8863,13 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         ui.error.clear();
         SaveUi(ui);
         gSession.ClearLastEnded();
+        Trace("host: pressed");
         if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error)) {
             ui.error = "Could not host: " + ui.error;
         } else {
+            Trace("host: server up");
             RefreshLocalAddresses(ui, true);
+            Trace("host: addresses listed");
         }
     }
     ImGui::Spacing();
