@@ -3605,7 +3605,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     const int owIndex = gPlayState->sceneNum - SCENE_HYRULE_FIELD;
     const GameMinimap* gm = gFortniteScene ? nullptr : GameMinimapFor(gPlayState->sceneNum);
     if (gFortniteScene) {   // the island's own picture (its texture), laid over the whole map
-        const ImTextureID tex = FortniteMinimapTexture();
+        ImTextureID tex = FortniteMinimapTexture();
         if (tex != nullptr) dl->AddImage(tex, toMap(-royale::fortnite::kHalfX, -royale::fortnite::kHalfZ), toMap(royale::fortnite::kHalfX, royale::fortnite::kHalfZ), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 210));
     } else if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
         const float sx = gMapData->owCompassInfo[owIndex][0], sz = gMapData->owCompassInfo[owIndex][1];
