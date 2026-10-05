@@ -332,6 +332,7 @@ struct MenuState {
     struct Hit { ImVec2 a, b; int index; };
     std::vector<Hit> hits;
     float selTop = 0.0f, selBottom = 0.0f;
+    int outOfGameFrames = 0;   // frames in a row without a player in the scene (a scene change); the menu closes only after a while
     bool mouseMoved = false;
     ImVec2 lastMouse = ImVec2(-1, -1);
     bool touchBack = false;
@@ -348,8 +349,11 @@ bool OnTitleScreen() {
     return gGameState != nullptr && gGameState->init == Play_Init && gPlayState != nullptr && gSaveContext.gameMode == GAMEMODE_TITLE_SCREEN;
 }
 
+// A lobby you host or join is "on" from the moment you ask for it, while it connects too (Joined() only turns true once the host has answered).
+bool SessionActive() { return gSession.GetMode() != royale::RoyaleSession::Mode::Idle; }
+
 Page HomePage() {
-    if (!gSession.Joined()) return Page::Main;
+    if (!SessionActive()) return Page::Main;
     const royale::HudState h = gSession.Hud();
     if (!h.connected) return Page::Lobby;
     switch (h.state) {
@@ -439,7 +443,9 @@ void OnMenuMainStart() {
     }
 
     const bool title = OnTitleScreen();
-    if (!title && !InGame() && gMenu.open) MenuClose();
+    // Leaving a scene (the waiting room, the map) takes the player away for a moment: that must not close the menu, only really being out of the game does.
+    gMenu.outOfGameFrames = InGame() ? 0 : gMenu.outOfGameFrames + 1;
+    if (!title && gMenu.outOfGameFrames > 2 * royale::kTickHz && gMenu.open) MenuClose();
     if (title && gMenu.launching) { ClearInput(in); return; }
 
     if (!gMenu.open) {
@@ -589,8 +595,8 @@ void OnMenuFrame() {
         gMenu.launching = false;
         const Launch what = gMenu.launch;
         gMenu.launch = Launch::None;
-        if (what != Launch::None && !gSession.Joined()) DoLaunch(what);
-        else if (!gSession.Joined() && !gMenu.open) MenuOpen(Page::Main);
+        if (what != Launch::None && !SessionActive()) DoLaunch(what);
+        else if (!SessionActive() && !gMenu.open) MenuOpen(Page::Main);
     }
 
     // Solo: the lobby needs a moment to exist, then the match starts by itself.
@@ -604,7 +610,7 @@ void OnMenuFrame() {
     }
 
     // Left a lobby or a match: back to the main menu.
-    const bool joined = gSession.Joined();
+    const bool joined = SessionActive();
     if (gMenuWasJoined && !joined && !gMenu.open) MenuOpen(Page::Main);
     gMenuWasJoined = joined;
     // The page on screen no longer fits (the match started, ended, or you left): show the one that does.
