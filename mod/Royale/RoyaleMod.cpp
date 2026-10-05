@@ -11,6 +11,7 @@
 #include "build_version.h"
 #include "lilo_anim.h"
 #include "logo_data.h"
+#include "fortnite_map.h"
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
@@ -128,6 +129,7 @@ bool InGame() {
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+bool gFortniteScene = false;   // the scene now loaded is Hyrule Field with the Fortnite map's collision (see "the Fortnite map" below)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
 royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
 int gHatHookCalls = 0;       // how many times the game has asked us about the cap (shown in the menu, to prove the hook is wired)
@@ -195,7 +197,12 @@ void WindNow(float* wx, float* wz, float* strength) {
 }
 
 const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
-bool InField() { return InGame() && gPlayState->sceneNum == CurrentMap().scene; }
+// The Fortnite map is played in Hyrule Field's scene, so being in that scene is not enough: it must be the version loaded with the island's collision
+// (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
+bool InField() {
+    return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
+           (!gSession.Joined() || (gMapId == royale::fortnite::kMapId) == gFortniteScene);
+}
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
 const char* SceneName(int scene) {
@@ -3513,6 +3520,26 @@ ImTextureID UploadRgba(const uint8_t* rgba, int w, int h, int* idInOut) {
     return reinterpret_cast<ImTextureID>(static_cast<intptr_t>(*idInOut));
 }
 
+// The Fortnite map's picture for the minimap: the baked vertex colours of the island, upscaled smoothly by the graphics card.
+ImTextureID FortniteMinimapTexture() {
+    static int texId = -1;
+    static ImTextureID tex = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        constexpr int n = royale::fortnite::kFine + 1;
+        std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
+        for (int i = 0; i < n * n; i++) {
+            rgba[i * 4 + 0] = royale::fortnite::kColours[i * 3 + 0];
+            rgba[i * 4 + 1] = royale::fortnite::kColours[i * 3 + 1];
+            rgba[i * 4 + 2] = royale::fortnite::kColours[i * 3 + 2];
+            rgba[i * 4 + 3] = 255;
+        }
+        tex = UploadRgba(rgba.data(), n, n, &texId);
+    }
+    return tex;
+}
+
 const GameMinimap* GameMinimapFor(int sceneNum) {
     static GameMinimap maps[20];
     const int index = sceneNum - SCENE_HYRULE_FIELD;
@@ -3576,8 +3603,11 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     // The game's minimap, placed with the game's own numbers for where it sits and how world positions land on it (z_map_exp.c's compass
     // icons): pixel u = (offsetX + x / scaleX) / 10 + 160 - minimapX, pixel v = 120 - (offsetY - z / scaleY) / 10 - minimapY.
     const int owIndex = gPlayState->sceneNum - SCENE_HYRULE_FIELD;
-    const GameMinimap* gm = GameMinimapFor(gPlayState->sceneNum);
-    if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
+    const GameMinimap* gm = gFortniteScene ? nullptr : GameMinimapFor(gPlayState->sceneNum);
+    if (gFortniteScene) {   // the island's own picture (its texture), laid over the whole map
+        ImTextureID tex = FortniteMinimapTexture();
+        if (tex != nullptr) dl->AddImage(tex, toMap(-royale::fortnite::kHalfX, -royale::fortnite::kHalfZ), toMap(royale::fortnite::kHalfX, royale::fortnite::kHalfZ), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 210));
+    } else if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
         const float sx = gMapData->owCompassInfo[owIndex][0], sz = gMapData->owCompassInfo[owIndex][1];
         const float ox = gMapData->owCompassInfo[owIndex][2], oy = gMapData->owCompassInfo[owIndex][3];
         const float mx = gMapData->owMinimapPosX[owIndex], my = gMapData->owMinimapPosY[owIndex];
@@ -5716,6 +5746,7 @@ bool gWasJoined = false;
 int gLastCountdownShown = -1;
 int gAttackCooldown = 0;     // game frames until B may attack again
 bool gPendingStart = false;  // the host pressed Start; waiting to be in Hyrule Field, measure the map, then begin
+bool gSoloStartWanted = false;   // "Fortnite Map solo test" was pressed: start the match as soon as the host is in its own lobby
 int gInFieldFrames = 0;      // frames spent in the field without a transition, so the scene's collision is ready
 bool gSpectating = false;
 
@@ -6137,6 +6168,159 @@ void EnsureSolidScenery() {
         gSolidActor = nullptr;
         gSolidBgId = -1;
     }
+}
+
+// ---- the Fortnite map ---------------------------------------------------------------------------------------------------------
+// The island (shared/fortnite_map.h) is played inside Hyrule Field's scene. patches/0013 lets us do three things there:
+//   * swap the scene's collision for the island's triangles when the scene loads (Royale_CustomCollision, at the end of this file), so everything
+//     the game does with the ground (walking, rolling, arrows, bombs, the camera, chests, spawns, the skydive's landing) works as on any map;
+//   * not draw the field's rooms (Royale_HideRooms), and kill the scene's own actors (grass, rocks, trees: they stand on the old field's ground);
+//   * and this actor draws the island in their place, with the texture baked into vertex colours (the game draws our meshes that way).
+// Water is one big water box at the water level: lakes, rivers and the sea are the ground below it, and Link swims there.
+struct FortniteGpu {
+    std::vector<Vtx> vtx[2];                                                  // [0] the fine blocks, [1] the coarse ones
+    std::vector<Gfx> dl[2][(royale::fortnite::kCells / 8) * (royale::fortnite::kCells / 8)];   // one display list per chunk of 8 x 8 blocks
+    bool built = false;
+};
+FortniteGpu gFortniteGpu;
+Actor* gFortniteActor = nullptr;
+bool gFortniteArrived = false;   // the local player has been put on the island since this scene loaded
+
+void BuildFortniteGpu() {
+    namespace fn = royale::fortnite;
+    constexpr int kChunk = 8, kChunks = fn::kCells / kChunk;
+    FortniteGpu& g = gFortniteGpu;
+    const int perBlock[2] = { fn::kBlockVerts, 4 };
+    for (int lod = 0; lod < 2; lod++) g.vtx[lod].assign(static_cast<size_t>(fn::kCells) * fn::kCells * perBlock[lod], Vtx{});   // never resized again: the lists point into them
+    std::vector<fn::DrawVert> tmp;
+    for (int bj = 0; bj < fn::kCells; bj++) {
+        for (int bi = 0; bi < fn::kCells; bi++) {
+            for (int lod = 0; lod < 2; lod++) {
+                tmp.clear();
+                fn::BlockVertices(bi, bj, lod == 0, tmp);
+                Vtx* out = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * perBlock[lod]];
+                for (size_t k = 0; k < tmp.size(); k++) {
+                    out[k].v.ob[0] = tmp[k].x; out[k].v.ob[1] = tmp[k].y; out[k].v.ob[2] = tmp[k].z;
+                    out[k].v.flag = 0;
+                    out[k].v.tc[0] = out[k].v.tc[1] = 0;
+                    out[k].v.cn[0] = tmp[k].r; out[k].v.cn[1] = tmp[k].g; out[k].v.cn[2] = tmp[k].b; out[k].v.cn[3] = 255;
+                }
+            }
+        }
+    }
+    for (int cj = 0; cj < kChunks; cj++) {
+        for (int ci = 0; ci < kChunks; ci++) {
+            for (int lod = 0; lod < 2; lod++) {
+                const size_t perBlockCmds = lod == 0 ? 1 + fn::kSub * fn::kSub * 2 : 3;
+                std::vector<Gfx>& dl = g.dl[lod][cj * kChunks + ci];
+                dl.assign(kChunk * kChunk * perBlockCmds + 1, Gfx{});
+                Gfx* p = dl.data();
+                for (int bj = cj * kChunk; bj < (cj + 1) * kChunk; bj++) {
+                    for (int bi = ci * kChunk; bi < (ci + 1) * kChunk; bi++) {
+                        const Vtx* base = &g.vtx[lod][(static_cast<size_t>(bj) * fn::kCells + bi) * perBlock[lod]];
+                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), perBlock[lod], 0);
+                        if (lod == 0) {
+                            const int row = fn::kSub + 1;
+                            for (int b = 0; b < fn::kSub; b++) {
+                                for (int a = 0; a < fn::kSub; a++) {
+                                    const int v = b * row + a;
+                                    gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
+                                    gSP1Triangle(p++, v, v + row + 1, v + row, 0);
+                                }
+                            }
+                        } else {
+                            gSP1Triangle(p++, 0, 1, 3, 0);
+                            gSP1Triangle(p++, 0, 3, 2, 0);
+                        }
+                    }
+                }
+                gSPEndDisplayList(p++);
+                dl.resize(static_cast<size_t>(p - dl.data()));
+            }
+        }
+    }
+    g.built = true;
+}
+
+void FortniteTerrain_Init(Actor* actor, PlayState*) {
+    Actor_SetScale(actor, 1.0f);
+    actor->world.pos = actor->home.pos = { 0, 0, 0 };
+}
+void FortniteTerrain_Update(Actor*, PlayState*) {}
+void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
+
+void FortniteTerrain_Draw(Actor*, PlayState* play) {
+    namespace fn = royale::fortnite;
+    if (!gFortniteGpu.built) BuildFortniteGpu();
+    constexpr int kChunk = 8, kChunks = fn::kCells / kChunk;
+    const Vec3f eye = play->view.eye;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0.0f, 0.0f, 0.0f, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // the colours are baked in; draw both sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    for (int cj = 0; cj < kChunks; cj++) {
+        for (int ci = 0; ci < kChunks; ci++) {
+            const float cx = -fn::kHalfX + (ci + 0.5f) * kChunk * fn::kCellX, cz = -fn::kHalfZ + (cj + 0.5f) * kChunk * fn::kCellZ;
+            const int lod = std::hypot(eye.x - cx, eye.z - cz) < 3300.0f ? 0 : 1;   // fine up close, two triangles per square far away
+            gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][cj * kChunks + ci].data()));
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+int FortniteActorId() {
+    static int id = -1;
+    if (id < 0) {
+        ActorDBInit init;
+        init.name = "Royale_Terrain";
+        init.desc = "Battle royale island";
+        init.category = ACTORCAT_BG;
+        init.flags = ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+        init.objectId = OBJECT_GAMEPLAY_KEEP;
+        init.instanceSize = sizeof(Actor);
+        init.init = FortniteTerrain_Init;
+        init.destroy = FortniteTerrain_Destroy;
+        init.update = FortniteTerrain_Update;
+        init.draw = FortniteTerrain_Draw;
+        id = ActorDB::Instance->AddEntry(init).entry.id;
+    }
+    return id;
+}
+
+// Called every frame: the island is drawn while we are in a scene loaded with its collision; the player is put on it once on arrival (the scene
+// puts Link at the field's door, which is somewhere inside or under the island); and a lobby that changes between the field and the island
+// reloads the scene, since the collision is chosen when the scene loads.
+void DriveFortnite(Player* player, const royale::HudState& hud) {
+    if (gPlayState == nullptr || !InGame()) return;
+    const bool onIsland = gFortniteScene && gPlayState->sceneNum == SCENE_HYRULE_FIELD;
+    if (onIsland && gFortniteActor == nullptr) {
+        gFortniteActor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, static_cast<s16>(FortniteActorId()), 0, 0, 0, 0, 0, 0, 0, false);
+    } else if (!onIsland && gFortniteActor != nullptr) {
+        Actor_Kill(gFortniteActor);
+        gFortniteActor = nullptr;
+    }
+    if (!gSession.Joined()) return;
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && gFortniteScene != (gMapId == royale::fortnite::kMapId)) {
+        GoToField();   // the host changed the map: load the scene again with the right ground
+        return;
+    }
+    if (!onIsland) { gFortniteArrived = false; return; }
+    if (gFortniteArrived || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return;
+    gFortniteArrived = true;
+    // A little scatter, so a lobby's players don't all stand in one spot. Only in the lobby: once the match is on, the skydive places everyone.
+    if (hud.state != royale::MatchState::Lobby || gSkydiving) return;
+    namespace fn = royale::fortnite;
+    const float a = static_cast<float>(std::rand() % 628) / 100.0f, r = static_cast<float>(std::rand() % 220);
+    const float x = fn::kSpawnX + std::sin(a) * r, z = fn::kSpawnZ + std::cos(a) * r;
+    float y = 0;
+    if (!fn::GroundHeight(x, z, &y)) return;
+    player->actor.world.pos = { x, y + 12.0f, z };
+    player->actor.prevPos = player->actor.world.pos;
+    player->actor.velocity = { 0, 0, 0 };
+    player->actor.speedXZ = 0.0f;
+    player->fallDistance = 0;
 }
 
 void ApplyPlatforms(Player* player) {
@@ -6735,6 +6919,7 @@ void OnPlayerUpdate() {
     NoticePoi(player, hud);
     if (gActionFrames > 0) gActionFrames--;
     SyncLocalWeapon(player, hud);
+    DriveFortnite(player, hud);
     EnsureSolidScenery();
     gAngryPlayerAlive = !(hud.haveSelf && !hud.selfAlive);
     ApplyPlatforms(player);
@@ -7075,6 +7260,10 @@ void ReportEvents(const royale::HudState& hud) {
 // The host's Start does three things in order: get to Hyrule Field, measure the real playable area and rebuild the world on it
 // (loot, spawns and storm on ground that exists), then begin.
 void DriveStart(const royale::HudState& hud) {
+    if (gSoloStartWanted) {   // the solo test needs no one else: press Start for the host as soon as they are in the lobby
+        if (!gSession.Joined() || !gSession.SoloTest()) gSoloStartWanted = false;
+        else if (hud.isHost && hud.state == royale::MatchState::Lobby && hud.haveSelf && InGame() && !gPendingStart) { gPendingStart = true; gSoloStartWanted = false; }
+    }
     if (!gPendingStart) return;
     if (!gSession.Joined() || !hud.isHost || hud.state != royale::MatchState::Lobby) { gPendingStart = false; return; }
     if (!InGame()) return;
@@ -8617,6 +8806,7 @@ void OnSceneInit(int16_t) {
     gInFieldFrames = 0;
     gAngry.clear();
     gSolidActor = nullptr; gSolidBgId = -1; gSolidFailed = false; gSolidSet.clear();   // the scene's collision (and our actor with it) is gone
+    gFortniteActor = nullptr; gFortniteArrived = false;
 }
 
 void RegisterRoyaleMod() {
@@ -8656,6 +8846,15 @@ void RegisterRoyaleMod() {
             actor->destroy = Puppet_Destroy;
             if (gSpawningPuppet >= kCorpseIdBase) { actor->update = Corpse_Update; actor->draw = Corpse_Draw; } // a body, not a live player
         });
+
+    // The Fortnite map has no use for the field's own scenery (grass, rocks, trees, cows): it stands on the old field's ground, not the island's.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneSpawnActors>([]() {
+        if (!gFortniteScene || gPlayState == nullptr || gPlayState->sceneNum != SCENE_HYRULE_FIELD) return;
+        for (int cat = 0; cat < ACTORCAT_MAX; cat++) {
+            if (cat == ACTORCAT_PLAYER) continue;
+            for (Actor* a = gPlayState->actorCtx.actorLists[cat].head; a != nullptr; a = a->next) Actor_Kill(a);
+        }
+    });
 
     // No enemies spawn while in a lobby or match.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
@@ -8941,6 +9140,21 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
             Trace("host: addresses listed");
         }
     }
+    ImGui::Spacing();
+
+    if (ImGui::Button("Fortnite Map: solo test", ImVec2(220, 0))) {
+        ui.port = std::clamp(ui.port, 1024, 65535);
+        ui.error.clear();
+        SaveUi(ui);
+        gSession.ClearLastEnded();
+        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true)) {
+            ui.error = "Could not host: " + ui.error;
+        } else {
+            gSoloStartWanted = true;
+            RefreshLocalAddresses(ui, true);
+        }
+    }
+    ImGui::TextColored(kGrey, "Just you on the Fortnite Map, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
@@ -9352,3 +9566,72 @@ void RegisterRoyaleMenu() {
 RegisterMenuInitFunc royaleMenuInit(RegisterRoyaleMenu);
 
 } // namespace
+
+// ---- the Fortnite map, the parts the game calls (patches/0013) ------------------------------------------------------------------
+
+namespace {
+// The island's collision in the game's own formats. Built once, then it stays: the game keeps pointers into it for as long as the scene is loaded.
+std::vector<Vec3s> gFortniteVtx;
+std::vector<CollisionPoly> gFortnitePoly;
+SurfaceType gFortniteSurface[1];
+CamData gFortniteCam[1];
+WaterBox gFortniteWater[1];
+CollisionHeader gFortniteHeader;
+bool gFortniteBuilt = false;
+
+CollisionHeader* FortniteHeader() {
+    namespace fn = royale::fortnite;
+    if (gFortniteBuilt) return &gFortniteHeader;
+    const fn::Mesh mesh = fn::BuildCollision();
+    gFortniteVtx.resize(mesh.verts.size());
+    for (size_t i = 0; i < mesh.verts.size(); i++) gFortniteVtx[i] = { mesh.verts[i].x, mesh.verts[i].y, mesh.verts[i].z };
+    gFortnitePoly.resize(mesh.polys.size());
+    for (size_t i = 0; i < mesh.polys.size(); i++) {
+        const fn::Poly& p = mesh.polys[i];
+        CollisionPoly& c = gFortnitePoly[i];
+        c = {};
+        c.type = 0;
+        c.flags_vIA = p.a;
+        c.flags_vIB = p.b;
+        c.vIC = p.c;
+        c.normal = { p.nx, p.ny, p.nz };
+        c.dist = p.dist;
+    }
+    gFortniteSurface[0] = {};                       // plain ground: no exit, no damage, the first camera entry
+    gFortniteCam[0] = {};
+    gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
+    gFortniteCam[0].numCameras = 0;
+    gFortniteCam[0].camPosData = nullptr;
+    gFortniteWater[0] = {};                         // one box over the whole island: every room (0x3F), the scene's first light setting
+    gFortniteWater[0].xMin = static_cast<s16>(std::lround(-fn::kHalfX - 2.0f));
+    gFortniteWater[0].zMin = static_cast<s16>(std::lround(-fn::kHalfZ - 2.0f));
+    gFortniteWater[0].xLength = static_cast<s16>(std::lround(2.0f * fn::kHalfX + 4.0f));
+    gFortniteWater[0].zLength = static_cast<s16>(std::lround(2.0f * fn::kHalfZ + 4.0f));
+    gFortniteWater[0].ySurface = static_cast<s16>(fn::kWaterY);
+    gFortniteWater[0].properties = 0x3Fu << 13;
+    gFortniteHeader = {};
+    gFortniteHeader.minBounds = { mesh.lo.x, mesh.lo.y, mesh.lo.z };
+    gFortniteHeader.maxBounds = { mesh.hi.x, mesh.hi.y, mesh.hi.z };
+    gFortniteHeader.numVertices = static_cast<u16>(gFortniteVtx.size());
+    gFortniteHeader.vtxList = gFortniteVtx.data();
+    gFortniteHeader.numPolygons = static_cast<u16>(gFortnitePoly.size());
+    gFortniteHeader.polyList = gFortnitePoly.data();
+    gFortniteHeader.surfaceTypeList = gFortniteSurface;
+    gFortniteHeader.cameraDataList = gFortniteCam;
+    gFortniteHeader.cameraDataListLen = 1;
+    gFortniteHeader.numWaterBoxes = 1;
+    gFortniteHeader.waterBoxes = gFortniteWater;
+    gFortniteBuilt = true;
+    return &gFortniteHeader;
+}
+} // namespace
+
+// Called as every scene loads its collision: the island's, if this is Hyrule Field and the lobby's map is the Fortnite map; otherwise null (the scene's own).
+extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
+    gFortniteScene = false;
+    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || gMapId != royale::fortnite::kMapId) return nullptr;
+    gFortniteScene = true;
+    return FortniteHeader();
+}
+extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }
+extern "C" s32 Royale_HideRooms(void) { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }

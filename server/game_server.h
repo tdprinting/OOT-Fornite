@@ -48,6 +48,9 @@ class GameServer {
         return true;
     }
     int PlayerLimit() const { return playerLimit; }
+    // Test mode (see Match::SetSoloTest): no bots, and the match goes on with one player. Survives Reconfigure.
+    void SetSoloTest(bool on) { soloTest = on; sim.match.SetSoloTest(on); }
+    bool SoloTest() const { return soloTest; }
     // The lobby starts the match by itself after this many seconds (0 turns it off). The clock starts when the first player is here.
     void SetAutoStart(float seconds) { autoStartSec = seconds; if (seconds <= 0) lobbyElapsed = 0; }
     float AutoStartSeconds() const { return autoStartSec; }
@@ -107,6 +110,7 @@ class GameServer {
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
+        sim.match.SetSoloTest(soloTest);
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid);
             for (const Prop& p : props) if (PropRadius(p.kind) > 0) grid->Block(p.pos, PropRadius(p.kind) + 20.0f);
@@ -782,6 +786,7 @@ class GameServer {
     int poiCount = 12;
     int bossCount = 0;
     int playerLimit = kMaxPlayers;
+    bool soloTest = false;
     float autoStartSec = 0;
     float lobbyElapsed = 0;
     PlacementFn lastValid;
