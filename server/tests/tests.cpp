@@ -2730,7 +2730,7 @@ static void MiniBosses() {
         sim.match.Bosses();
         MiniBoss* mb = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
         mb->health = mb->maxHealth * 0.5f;
-        for (int i = 0; i < 30 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->pos = {1900, 1000}; }
+        for (int i = 0; i < 30 * kTickHz; i++) { sim.Tick(kDt); sim.match.Find(1)->pos = {1900, 1000}; sim.match.Find(1000)->pos = {-1950, -1950}; }   // the bot sprints in from the storm otherwise
         CHECK(Distance(sim.match.Bosses()[0].pos, sim.match.Bosses()[0].home) < 20.0f);
         CHECK(sim.match.Bosses()[0].health > sim.match.Bosses()[0].maxHealth * 0.5f + 5.0f);
     }
@@ -3210,6 +3210,199 @@ static void LiloTheCatModel() {
     CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
 }
 
+// ---- Bots get about like players: the skydive, sprinting, ledges, cliffs, cover and high ground --------------------------------
+
+// A cliff: x < 0 is low ground, x >= 0 is 300 higher, except a gentle ramp across z > 900 that climbs from one to the other.
+static bool CliffFloor(Vec2 p, float* y) {
+    if (p.z > 900.0f) *y = (std::max)(0.0f, (std::min)(300.0f, (p.x + 400.0f) * 0.375f));
+    else *y = p.x < 0.0f ? 0.0f : 300.0f;
+    return true;
+}
+
+static void NavKnowsLedgesAndCliffs() {
+    NavGrid nav(MapCircle(), nullptr, CliffFloor);
+    CHECK(nav.HasHeights());
+    CHECK(std::fabs(nav.FloorAt({-500, 0}) - 0.0f) < 1.0f && std::fabs(nav.FloorAt({500, 0}) - 300.0f) < 1.0f);
+    std::vector<Vec2> path;
+    // Up the cliff: not straight up the face, but round by the ramp, a long way round.
+    CHECK(!nav.LineClear({-500, 0}, {500, 0}, true));
+    CHECK(nav.FindPath({-500, 0}, {500, 0}, path, true));
+    float length = 0, highestZ = -1e9f;
+    Vec2 at = {-500, 0};
+    for (Vec2 w : path) { length += Distance(at, w); at = w; highestZ = (std::max)(highestZ, w.z); }
+    CHECK(length > 1800.0f && highestZ > 850.0f);
+    // Down it: a 300 drop is safe, so straight over the edge.
+    CHECK(nav.FindPath({500, 0}, {-500, 0}, path, true) && path.size() <= 2);
+    // A drop too far is a cliff it goes round, as is a wall too tall to climb.
+    NavGrid deep(MapCircle(), nullptr, [](Vec2 p, float* y) { *y = std::fabs(p.x) < 200.0f && std::fabs(p.z) < 500.0f ? -600.0f : 0.0f; return true; });
+    CHECK(deep.FindPath({-500, 0}, {500, 0}, path, true));
+    at = {-500, 0};
+    bool dropped = false;
+    for (Vec2 w : path) { for (float t = 0; t <= 1.0f; t += 0.02f) dropped |= deep.FloorAt({at.x + (w.x - at.x) * t, at.z + (w.z - at.z) * t}) < -100.0f; at = w; }
+    CHECK(!dropped);   // never went down into the pit (it couldn't get out)
+    // Bosses and allies keep their old ways: heights don't matter to them, only open ground.
+    CHECK(nav.FindPath({-500, 0}, {500, 0}, path) && path.size() == 1);
+}
+
+static void BotsClimbBlocksAndBoulders() {
+    // A staircase of blocks (60, 120, 180 high) and a lone 180 block: the stairs are climbed one step at a time, the lone block can't be.
+    std::vector<Prop> props = {
+        {{0, 0}, PropKind::PlatformLow, 0}, {{150, 0}, PropKind::PlatformMid, 0}, {{300, 0}, PropKind::PlatformHigh, 0},
+        {{-900, 600}, PropKind::PlatformHigh, 0},
+    };
+    auto grid = std::make_shared<NavGrid>(MapCircle(), nullptr);
+    AddSceneryToNav(*grid, props);
+    CHECK(grid->Standable({300, 0}) && !grid->Walkable({300, 0}));   // a bot can stand up there; a boss still goes round
+    std::vector<Vec2> path;
+    CHECK(grid->FindPath({-600, 0}, {300, 0}, path, true));
+    CHECK(!grid->FindPath({-900, 0}, {-900, 600}, path, true));
+    // A bot climbs the stairs for a chest on top, jumping up each step, and ends up standing 180 up.
+    Simulation sim = Duel(5, {1900, 0}, {-600, 0});
+    sim.bots.SetNav(grid);
+    sim.bots.SetProps(props);
+    const size_t chest = sim.match.AddLoot({{300, 0}, ItemId::MasterSword, Rarity::Epic, true, true});
+    PlayerState* b = sim.match.Find(1000);
+    float highest = 0;
+    int jumps = 0;
+    uint8_t prevAnim = 0;
+    for (int i = 0; i < 30 * kTickHz && !sim.match.Loot()[chest].taken; i++) {
+        sim.Tick(kDt);
+        highest = (std::max)(highest, b->y);
+        if (b->anim == static_cast<uint8_t>(Anim::Jump) && prevAnim != b->anim) jumps++;
+        prevAnim = b->anim;
+    }
+    CHECK(sim.match.Loot()[chest].taken);
+    CHECK(highest > 170.0f && jumps >= 2);
+    // Walking off the far side it falls rather than snapping to the ground.
+    Simulation drop = Duel(5, {1900, 0}, {300, 0});
+    drop.bots.SetNav(grid);
+    drop.bots.SetProps(props);
+    drop.match.AddLoot({{600, 0}, ItemId::MasterSword, Rarity::Epic, false});
+    PlayerState* d = drop.match.Find(1000);
+    bool midAir = false;
+    for (int i = 0; i < 6 * kTickHz; i++) { drop.Tick(kDt); midAir |= d->y > 20.0f && d->y < 170.0f && d->pos.x > 380.0f; }
+    CHECK(midAir && d->y < 1.0f);
+}
+
+static void BotsSkydiveIn() {
+    // From the start of the countdown every bot hangs in the sky, glides during the drop and is on the ground (and on solid ground) soon
+    // after; most come down by a chest.
+    Simulation sim(21, MapCircle(), 0);
+    sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
+    for (int i = 0; i < 12; i++) sim.match.AddLoot({{-1500.0f + 260.0f * static_cast<float>(i), (i % 2 ? 500.0f : -700.0f)}, ItemId::MasterSword, Rarity::Rare, true, true});
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    sim.Tick(kDt);
+    bool allHigh = true;
+    for (const auto& p : sim.match.Players()) if (p.isBot) allHigh &= std::fabs(p.y - kSkyHeight) < 1.0f;
+    CHECK(allHigh);
+    std::unordered_map<uint32_t, Vec2> startAt;
+    while (sim.match.State() == MatchState::Countdown) sim.Tick(kDt);
+    for (const auto& p : sim.match.Players()) startAt[p.id] = p.pos;
+    bool falling = true, steered = false;
+    for (int i = 0; i < 3 * kTickHz; i++) sim.Tick(kDt);
+    for (const auto& p : sim.match.Players()) if (p.isBot) { falling &= p.y < kSkyHeight - 3 * kGlideSpeed * 0.9f && p.y > 100.0f; steered |= Distance(p.pos, startAt[p.id]) > 100.0f; }
+    CHECK(falling && steered);
+    while (sim.match.State() == MatchState::Drop) sim.Tick(kDt);
+    Run(sim, 1.0f);
+    int landed = 0, bots = 0, byChest = 0;
+    for (const auto& p : sim.match.Players()) {
+        if (!p.isBot || !p.alive) continue;
+        bots++;
+        landed += p.y < 1.0f && NotWall(p.pos);
+        for (const auto& l : sim.match.Loot()) if (l.spawn.container && Distance(l.spawn.pos, p.pos) < 500.0f) { byChest++; break; }
+    }
+    CHECK(bots > 20 && landed == bots);
+    CHECK(byChest * 2 > bots);
+    // A bot that joins mid-match (or a test that skips the drop) is simply on the ground.
+    Simulation duel = Duel(5, {1900, 0}, {0, 0});
+    duel.Tick(kDt);
+    CHECK(duel.match.Find(1000)->y == 0.0f);
+}
+
+static void BotsSprintLikePlayers() {
+    // Out in the storm a bot sprints for the zone: faster than a run, shown as a sprint, and only as long as a full bar lasts.
+    Simulation sim = Duel(9, {0, 0}, {0, 1950});
+    sim.match.Find(1)->alive = true;
+    PlayerState* b = sim.match.Find(1000);
+    while (sim.match.GetStorm().DamagePerSecond(b->pos, sim.match.StormTime()) <= 0 && sim.match.State() == MatchState::InMatch) { sim.match.Tick(kDt); b->pos = {0, 1950}; }
+    int sprintTicks = 0, runTicks = 0, stretch = 0, longest = 0;
+    float fastest = 0;
+    for (int i = 0; i < 12 * kTickHz; i++) {
+        const Vec2 before = b->pos;
+        sim.Tick(kDt);
+        if (b->anim == static_cast<uint8_t>(Anim::Sprint)) { sprintTicks++; fastest = (std::max)(fastest, Distance(before, b->pos) / kDt); longest = (std::max)(longest, ++stretch); }
+        else stretch = 0;
+        if (b->anim == static_cast<uint8_t>(Anim::Run)) runTicks++;
+    }
+    CHECK(sprintTicks > kTickHz && fastest > kRunSpeed * 1.25f && runTicks > 0);   // and back to a run once the bar is spent or it is safe
+    CHECK(longest <= static_cast<int>(kSprintSeconds * kTickHz) + 2);   // no longer than a full bar in one go
+    // A wounded bot running from a stronger foe sprints too, once the foe is close.
+    Simulation flee = Duel(5, {200, 0}, {0, 0});
+    PlayerState* f = flee.match.Find(1000);
+    f->health = 0.7f; f->potions.clear();
+    f->weapon = {ItemId::DekuStick, Rarity::Common};
+    flee.match.Find(1)->weapon = {ItemId::MasterSword, Rarity::Legendary};
+    bool sprinted = false;
+    for (int i = 0; i < 2 * kTickHz; i++) { flee.Tick(kDt); sprinted |= f->anim == static_cast<uint8_t>(Anim::Sprint); }
+    CHECK(sprinted);
+}
+
+static uint16_t RotForShapeFixed(int shape) { Rng r(7); return RotForShape(r, shape); }
+
+static void BotsUseCoverAndHighGround() {
+    // A tall boulder between a bot with a bow and a human: the bot can't see the human, so it doesn't shoot; with nothing in the way it does.
+    std::vector<Prop> rock = {{{300, 0}, PropKind::Boulder, RotForShapeFixed(1)}};
+    for (int blocked = 0; blocked < 2; blocked++) {
+        Simulation sim = Duel(5, {600, 0}, {0, 0});
+        auto grid = std::make_shared<NavGrid>(MapCircle(), nullptr);
+        if (blocked) AddSceneryToNav(*grid, rock);
+        sim.bots.SetNav(grid);
+        if (blocked) sim.bots.SetProps(rock);
+        PlayerState* b = sim.match.Find(1000);
+        b->weapon = {ItemId::FairyBow, Rarity::Rare};
+        PlayerState* h = sim.match.Find(1);
+        bool shot = false;
+        for (int i = 0; i < 2 * kTickHz; i++) { sim.Tick(kDt); h->pos = {600, 0}; shot |= h->health < kMaxHealth; b->pos = {0, 0}; }
+        CHECK(shot == !blocked);
+    }
+    // Hurt, with a human shooting at it, a bot with a potion gets behind the boulder before it drinks.
+    {
+        Simulation sim = Duel(5, {-500, 0}, {0, 0});
+        auto grid = std::make_shared<NavGrid>(MapCircle(), nullptr);
+        std::vector<Prop> near = {{{100, 120}, PropKind::Boulder, RotForShapeFixed(1)}};
+        AddSceneryToNav(*grid, near);
+        sim.bots.SetNav(grid);
+        sim.bots.SetProps(near);
+        PlayerState* b = sim.match.Find(1000);
+        PlayerState* h = sim.match.Find(1);
+        h->weapon = {ItemId::FairyBow, Rarity::Rare};
+        b->health = 1.6f;
+        b->potions = {{ItemId::RedPotion, Rarity::Common}};
+        b->weapon = {ItemId::KokiriSword, Rarity::Common};
+        BotController::CalmSeconds() = 1e9f;   // no fighting back in this one: it is about hiding
+        bool drankInCover = false;
+        for (int i = 0; i < 8 * kTickHz && !b->potions.empty(); i++) {
+            sim.Tick(kDt);
+            h->pos = {-500, 0};
+            if (b->potions.empty()) drankInCover = Distance(b->pos, {100, 120}) < 200.0f && b->pos.x > 100.0f;
+        }
+        BotController::CalmSeconds() = 0.0f;
+        CHECK(drankInCover);
+    }
+    // A bot with a bow fighting on flat ground climbs a low rise next to it to shoot from.
+    {
+        Simulation sim = Duel(5, {650, 0}, {0, 0});
+        sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), nullptr, [](Vec2 p, float* y) { *y = Distance(p, {0, 220}) < 140.0f ? 60.0f : 0.0f; return true; }));
+        PlayerState* b = sim.match.Find(1000);
+        b->weapon = {ItemId::FairyBow, Rarity::Rare};
+        sim.match.Find(1)->weapon = {ItemId::FairyBow, Rarity::Rare};
+        bool upHigh = false;
+        for (int i = 0; i < 6 * kTickHz && !upHigh; i++) { sim.Tick(kDt); sim.match.Find(1)->pos = {650, 0}; sim.match.Find(1)->health = kMaxHealth; upHigh = Distance(b->pos, {0, 220}) < 130.0f; }
+        CHECK(upHigh);
+    }
+}
+
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
@@ -3221,6 +3414,7 @@ int main() {
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

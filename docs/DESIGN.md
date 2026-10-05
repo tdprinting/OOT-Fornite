@@ -322,14 +322,27 @@ marks a spot when safe and jumps back when fleeing, or when far outside the zone
 outside the zone or fleeing; Lens of Truth and Saria's Song when nobody is known and the match is late; Nocturne of Shadow to
 escape; the Ocarinas as a gamble when a foe is near or the bot is hurt.
 
-**Navigation.** The host's game probes the floor of Hyrule Field when the match is prepared and builds a `NavGrid` (60 unit
-cells). Bots path with A* over eight neighbours, with no corner cutting, a capped search, string-pulling to a few waypoints
-and repaths when the goal moves. They slide along walls and, if they stop making progress, pick a new heading. Without a
-grid (unit tests, the headless server) they walk straight lines.
+**Navigation.** The host's game probes the floor when the match is prepared and builds a `NavGrid` (60 unit cells) that
+knows each cell's floor height and what scenery stands on it. Bots path with A* over eight neighbours, with no corner
+cutting, a capped search, string-pulling to a few waypoints and repaths when the goal moves. Height steps up to
+`NavGrid::kStepUp` are walked, up to `kClimbUp` are a jump and a clamber (a ledge, the next climbing block, a low boulder),
+higher is a wall; drops up to `kDropDown` are fine, deeper is a cliff they go round. Water and hazard floors are off the
+grid. Bosses and allies keep to open ground as before. They slide along walls and, if they stop making progress, pick a new
+heading. Without a grid (unit tests, the headless server) they walk straight lines.
 
-Known gaps: the grid is only floor presence, so bots can't tell a low ledge from a cliff or avoid water that has floor
-under it; no use of cover; no line-of-sight (bots see through walls); bots don't use Hover Boots or Epona; all numbers are
-placeholders until the game has been played.
+**Moving like a player.** Bots skydive in: they hang `kSkyHeight` up through the countdown, pick a landing spot in glide
+reach with chests close by (greedy bots want the most loot, cautious ones a spot no other bot is heading for), glide there and
+dive once diving still gets them there. They sprint on the players' stamina numbers (`kSprintMult`, `kSprintSeconds`, ...)
+out of the storm, away from a losing fight, after a runner, to a supply drop or far loot, keeping some of the bar back unless
+it is an escape. A bot's `y` is its height above the scene floor (a block top, a fall, the sky); clients add the floor.
+
+**Using the ground.** Hills and tall scenery block sight: a bot doesn't notice someone hidden behind them (unless within 250
+units), and its shots into them miss. Hurt with a bow trained on it, it gets behind a rock or over a rise before drinking,
+and runs for cover when fleeing from one. A bot with a bow takes higher ground near by when there is some, and shoots
+better downhill; a sword can't reach up a ledge.
+
+Known gaps: bots don't use Hover Boots or Epona, swim, or climb ladders and vines; all numbers are placeholders until the
+game has been played.
 
 ## 5. Architecture
 

@@ -502,6 +502,15 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
     return y > BGCHECK_Y_MIN + 1.0f ? y : fallback;
 }
 
+// Where a bot is drawn. The server moves bots in x and z and sends their height above the scene's own floor: 0 on the ground, the top of a
+// climbing block or boulder they stand on, or how high they still are in the skydive. (The scene floor without our scenery, because the
+// scenery near you is solid and would otherwise be counted twice.)
+float BotY(PlayState* play, float x, float z, float lift) {
+    float y = 0;
+    if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    return y + lift;
+}
+
 // How a puppet holds the weapon the server says it has. Player_SetModelGroup and Player_Draw read the *local* equipped sword,
 // so the matching item is swapped in around those calls.
 struct Look {
@@ -995,7 +1004,7 @@ struct PuppetMotion {
     float speed = 0;            // units per game frame, smoothed
     float prevFrame = 0;        // for footsteps
     int idleFrames = 0;         // standing about: now and then a look round
-    float jumpT = -1;           // a bot's jump arc, 0..1 (bots move on flat ground, so the jump is drawn here)
+    float jumpT = -1;           // a bot's jump arc, 0..1 (the server only says which floor it is on, so the jump is drawn here)
     int floorCheck = 0;
     royale::ItemId heldWeapon = royale::ItemId::Count;
     int flinch = 0;
@@ -1083,8 +1092,8 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 
     actor->world.pos.x = s.x;
     actor->world.pos.z = s.z;
-    // Bots are simulated on a flat plane (y = 0), so stand them on the real floor. Humans report their own height.
-    actor->world.pos.y = s.isBot ? GroundY(play, s.x, s.z, s.y) : s.y;
+    // Bots are simulated in x and z with a height above the floor (BotY). Humans report their own height.
+    actor->world.pos.y = s.isBot ? BotY(play, s.x, s.z, s.y) : s.y;
     actor->shape.rot.y = s.rot;
     actor->world.rot.y = s.rot;
     actor->shape.shadowAlpha = 255;
@@ -1236,7 +1245,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         }
         m.prevFrame = cur;
     }
-    // Bots move on flat ground: their jumps, hops and jump slashes are lifted into the air here.
+    // Bots' jumps, hops and jump slashes are lifted into the air here (the server only moves them between floors).
     if (m.jumpT >= 0.0f) {
         const bool big = m.anim == static_cast<uint8_t>(Anim::Jump);
         const float seconds = big ? 0.55f : 0.4f, height = big ? 48.0f : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
@@ -3317,11 +3326,11 @@ bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see
 // It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
 // click, so it is read from SDL directly. The game's own top run speed is raised (patches/0011), so Link's legs, footsteps and turning
 // keep up with it; others see the Sprint pose (see ClassifyAnim). Purely local: the server trusts your position.
-constexpr float kSprintMult = 1.35f;        // run speed while sprinting
-constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
-constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
-constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
-constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
+constexpr float kSprintMult = royale::kSprintMult;   // shared/balance.h: the bots sprint with the same numbers
+constexpr float kSprintSeconds = royale::kSprintSeconds;
+constexpr float kStaminaRefill = royale::kStaminaRefill;
+constexpr float kStaminaRest = royale::kStaminaRest;
+constexpr float kSprintMinStamina = royale::kSprintMinStamina;
 float gStamina = 1.0f;
 float gStaminaRestLeft = 0.0f;
 bool gSprinting = false;
@@ -6566,10 +6575,10 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
 // The match-start skydive, as in Fortnite: you spawn high above your spawn point, hang there during the countdown, then fall
 // during the drop. The stick steers, holding Z dives faster, and the ground ends it (anyone still airborne when the drop ends
 // plummets). The server only knows x and z, and protects everyone for the whole drop, so this is all done on the client.
-constexpr float kSkyHeight = 3000.0f;   // units above the ground you start
-constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (the drop lasts 18 s)
-constexpr float kDiveSpeed = 380.0f;    // holding Z
-constexpr float kAirSpeed = 130.0f;     // steering speed
+constexpr float kSkyHeight = royale::kSkyHeight;   // shared/balance.h: the bots skydive with the same numbers
+constexpr float kGlideSpeed = royale::kGlideSpeed;
+constexpr float kDiveSpeed = royale::kDiveSpeed;
+constexpr float kAirSpeed = royale::kAirSpeed;
 // Where you may touch down: floor that is not water, lava, a door, a cliff face or a bottomless drop, inside the circle the storm has left.
 bool SafeLanding(float x, float z, const royale::HudState& hud) {
     float y;
@@ -6645,7 +6654,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
     if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
-    else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
+    else if (hud.state == royale::MatchState::InMatch) fall = royale::kLateFallSpeed;           // the drop is over: land now
     SteerToSafeLanding(player, hud, dt);
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - fall * dt;
@@ -6715,7 +6724,7 @@ void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const float sx = in.cur.stick_x, sy = in.cur.stick_y;
     const float mag = std::min(1.0f, std::sqrt(sx * sx + sy * sy) / 60.0f);
     const bool dropping = gStateNow == royale::MatchState::Drop;
-    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : 700.0f;
+    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : royale::kLateFallSpeed;
     const float seconds = std::max(0.0f, (py - below)) / fall;
     float lx = px, lz = pz;
     if (mag > 0.1f) {   // the same steering the skydive uses, held for the rest of the fall
@@ -6970,7 +6979,7 @@ void OnPlayerUpdate() {
         if (const royale::PuppetState* t = SpectateTarget()) {
             player->actor.world.pos.x = t->x;
             player->actor.world.pos.z = t->z;
-            player->actor.world.pos.y = t->isBot ? GroundY(gPlayState, t->x, t->z, t->y) : t->y;
+            player->actor.world.pos.y = t->isBot ? BotY(gPlayState, t->x, t->z, t->y) : t->y;
             player->actor.prevPos = player->actor.world.pos;
             player->actor.velocity.y = 0.0f;
             player->actor.shape.rot.y = t->rot;
@@ -7271,7 +7280,7 @@ void DriveStart(const royale::HudState& hud) {
     if (gPlayState->transitionTrigger != TRANS_TRIGGER_OFF || ++gInFieldFrames < royale::kTickHz) return; // let the scene settle
     royale::Circle measured;
     if (MeasureField(&measured)) {
-        gSession.ConfigureMap(measured, WalkableAt);
+        gSession.ConfigureMap(measured, WalkableAt, [](royale::Vec2 p, float* y) { return RawFloorAt(p.x, p.z, y); });   // the bots learn the ledges and cliffs
     }
     gSession.StartMatch();
     gPendingStart = false;
