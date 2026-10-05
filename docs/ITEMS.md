@@ -1,5 +1,7 @@
 # Item audit: what is the game's own and what is ours
 
+**Held items are the game's own.** The weapon you carry sits on Link's B button as the real game item (Deku Stick, swords, hammer, bow, elemental arrows, slingshot, boomerang, bombs, bombchus, deku nuts), so the game's own item code takes it out, holds it, swings, shoots or throws it, with its own models, sounds and flying arrows, bombs and boomerangs. The server still decides damage and ammo. Spells and songs show the game's own effects (the real Din's Fire, Nayru's Love and Farore's Wind for your own Link, the game's particle and shock effects for everyone else); fire, ice and light arrows mark whoever they hit.
+
 Generated from the source. *Model* = the game's own 3D item model (as dropped loot). *Icon* = the game's own icon texture (hotbar, menus). *In hand* = drawn in the character's hand when it is the held weapon. Gameplay numbers (damage, ranges, cooldowns) are the server's own balance tables (shared/balance.h): the match runs on a headless server that cannot run the game's actor code, so the *behaviour* follows the originals (bombs have a fuse and blast, arrows fly and drop, boomerangs return as a throw, potions heal) but the *code* is ours.
 
 | Item | Kind | Model | Icon | In hand | Effect |
