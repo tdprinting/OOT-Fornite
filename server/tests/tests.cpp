@@ -2911,8 +2911,8 @@ static void MajorBossesFightTheirOwnWay() {
         for (int i = 0; i < static_cast<int>(90 * kTickHz); i++) {
             sim.Tick(kDt);
             h->health = h->maxHealth;
-            h->pos = {d->pos.x + 300.0f, d->pos.z};   // keep close to it
-            if (d->kind == BossKind::DragonWater && i % static_cast<int>(kTickHz * 3) == 0) h->pos = {0, 0};
+            // Keep close to it. Morpha travels under the water to a spot beside you and rises there, so you have to stand still for it to arrive.
+            if (d->kind == BossKind::DragonWater) h->pos = {0, 0}; else h->pos = {d->pos.x + 300.0f, d->pos.z};
             modes.insert(static_cast<int>(d->mode));
             if (d->mode == DragonMode::Beam || d->mode == DragonMode::Slam) auxes.insert(d->aux);
             for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.a == kDragonId) styles.insert(e.item);
