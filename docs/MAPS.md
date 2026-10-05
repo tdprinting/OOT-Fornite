@@ -46,3 +46,9 @@ chests and more scenery to match. It also has places of its own (`GenerateFieldP
 
 Between them are three to eight ordinary towns (house, cave, ruins, climb). The ground itself cannot be reshaped (the scene's collision is the
 game's own), so the new geometry is built from the mod's solid stone blocks, walls and rings, which the bots path around and players can climb.
+
+## Landing, solid scenery and villagers
+
+* **Safe landings.** The skydive no longer lets you touch down in lava, water, a doorway, on a steep slope or over a bottomless drop, or outside the storm's circle: low down, the glider drifts to the nearest safe ground, and if you fall past the bottom of the map you are put back above it. Spawns, chests and storm centres skip damage floors and steep slopes too (`HazardFloorAt`).
+* **Walkable blocks and rocks.** The climbing blocks, rocks, boulders and standing stones are now the game's own collision (one actor, `Royale_Solid`, rebuilt from the scenery nearest you), so Link lands, walks, rolls and climbs on them like normal ground. If the game has no free collision slot the older mod-side standing code still runs.
+* **Angry villagers.** Hit a villager (a carpenter, say) with a swing, spin or shot and they chase you and hit you for half a heart about once a second (the host takes the health, protocol 21). Get away or leave them alone for about 25 seconds and they walk back to where they were.

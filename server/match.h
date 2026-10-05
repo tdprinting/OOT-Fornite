@@ -64,6 +64,7 @@ struct PlayerState {
     uint32_t burnBy = 0xFFFFFFFFu;
     float stunUntil = 0, frozenUntil = 0;
     float invulnUntil = 0;
+    float npcHitReadyAt = 0;   // a villager can land another blow after this (match clock)
     float speedUntil = 0, speedMult = 1;
     float regenUntil = 0, regenRate = 0;
     float revealUntil = 0;
@@ -346,6 +347,16 @@ class Match {
         }
         if (killed) Eliminate(*p, attacker);
         return killed;
+    }
+
+    // An angered villager hit this player. A few hits a second at most, and only while the match is on.
+    bool NpcHit(uint32_t id, float hearts) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop)) return false;
+        if (clock < p->npcHitReadyAt) return false;
+        p->npcHitReadyAt = clock + 0.6f;
+        Damage(id, (std::min)(hearts, 2.0f), kNoPlayer, DamageKind::Normal, false);
+        return true;
     }
 
     // A player left (closed the game, lost connection). In the lobby they just vanish; in a match they are eliminated.

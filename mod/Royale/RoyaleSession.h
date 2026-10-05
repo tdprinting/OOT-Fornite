@@ -163,6 +163,7 @@ class RoyaleSession {
     void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
     bool SetPlayerLimit(int n) { playerLimit = n; return server ? server->SetPlayerLimit(n) : false; }
     // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
+    void ReportNpcHit(float hearts) { if (Joined()) client->ReportNpcHit(hearts); }
     void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void HireAlly(int index) { if (client) client->HireAlly(index); }

@@ -355,6 +355,12 @@ class GameServer {
                 if (!sim.match.SelectWeapon(c->playerId, m.slot)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::NpcHitRequest: {
+                net::NpcHitRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.NpcHit(c->playerId, m.tenths * 0.1f)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::HireAllyRequest: {
                 net::HireAllyRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
