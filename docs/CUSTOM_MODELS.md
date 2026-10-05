@@ -10,3 +10,17 @@ Royale menu; the menu shows the exact path and whether the model loaded, with a 
   bobs, banks and tilts, so it works without any naming.
 - **Fitting:** the model is centred, stood on the ground and scaled to a standard wingspan. Add a `dragon.cfg` to change it:
   `scale=1.0` (size multiplier), `yaw=0` (degrees to turn it; try 180 or 90 if it flies backwards or sideways), `lift=0`, `flap=35` (wing beat, degrees).
+
+## Lilo's model (built in, made in Blender)
+
+Lilo the cat is a real low poly model, not code-built shapes: `assets/lilo/lilo.blend` (also `lilo.glb`) has the mesh (about 650 triangles), two small
+textures in the N64's sizes (a 64x32 fur atlas and a 32x32 face with the eyes open, half shut and shut), a 25 bone skeleton and eleven actions:
+idle, walk, run, jump, sit, talk, groom, sleep, stretch, pounce, happy. The game reads it from `shared/lilo_model.h`, which is generated.
+
+- **Rebuild everything from code:** `python3 tools/lilo/build_lilo.py` (needs Blender, or `pip install bpy==4.2.0`; Python 3.11). It writes the .blend,
+  .glb, .fbx and the texture PNGs into `assets/lilo/`.
+- **After changing the .blend by hand** (or the build script): `python3 tools/lilo/export_lilo.py` regenerates `shared/lilo_model.h`. Keep the bone
+  names, the two materials (`LiloFur`, `LiloFace`), the image names and the action names; actions are keyed at 20 frames a second.
+- **Previews:** `python3 tools/lilo/render_previews.py [folder]` renders the poses and a contact sheet.
+- In the game she is skinned on the CPU every frame and drawn with her own textures (`DrawLiloModel` in `RoyaleMod.cpp`). Her size is
+  `kLiloPetScale` (the pet) and `kLiloMapScale` (Lilo sitting on the map).

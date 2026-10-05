@@ -10,6 +10,7 @@
 #include "cloth.h"
 #include <string>
 #include "../../shared/anim.h"
+#include "../../shared/lilo_anim.h"
 #include "../../shared/loot.h"
 #include <cstdio>
 #include <cstdlib>
@@ -3074,10 +3075,76 @@ static void ShieldBar() {
     CHECK(bot->armor > 1.9f && bot->potions.empty());
 }
 
+// Lilo's Blender model (shared/lilo_model.h): a low poly budget, batches the graphics chip can load, sane textures, and clips that pose her sensibly.
+static void LiloTheCatModel() {
+    using namespace royale::lilo;
+    CHECK(kTriCount >= 300 && kTriCount <= 1200 && kVertCount >= 200);
+    int tris = 0, verts = 0;
+    for (int b = 0; b < kBatchCount; b++) {
+        const Batch& bt = kBatches[b];
+        CHECK(bt.vertCount > 0 && bt.vertCount <= 32 && bt.firstVert == verts && bt.firstTri == tris);
+        for (int t = bt.firstTri; t < bt.firstTri + bt.triCount; t++)
+            for (int k = 0; k < 3; k++) CHECK(kTris[t][k] < bt.vertCount);
+        tris += bt.triCount;
+        verts += bt.vertCount;
+    }
+    CHECK(tris == kTriCount && verts == kVertCount);
+    int faceBatches = 0;
+    for (int b = 0; b < kBatchCount; b++) faceBatches += kBatches[b].texture == kFace;
+    CHECK(faceBatches > 0 && faceBatches < kBatchCount);
+    for (int i = 0; i < kVertCount; i++) {
+        const Vert& v = kVerts[i];
+        const int w = v.s / 32, h = v.t / 32;
+        CHECK(v.b0 < kBoneCount && v.b1 < kBoneCount && w >= -1 && h >= -1 && w <= kFurW + 1 && h <= kFurH + 1);
+        CHECK(std::abs(std::sqrt(static_cast<float>(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz)) - 127.0f) < 4.0f);
+    }
+    CHECK(sizeof(kFurTex) == kFurW * kFurH * 2 && sizeof(kFaceTex[0]) == kFaceW * kFaceH * 2 && kFurW * kFurH * 2 <= 4096);   // fits the N64's texture memory
+    for (int i = 0; i < kFurW * kFurH; i++) CHECK(kFurTex[i * 2 + 1] & 1);   // opaque
+    CHECK(std::string(kClips[kIdle].name) == "idle" && std::string(kClips[kTalk].name) == "talk" && std::string(kClips[kSleep].name) == "sleep");
+    for (int f = 0; f < kFrameCount * kBoneCount; f++) {
+        const int16_t* q = &kPoses[f * 7];
+        const float len = std::sqrt(static_cast<float>(q[0]) * q[0] + static_cast<float>(q[1]) * q[1] + static_cast<float>(q[2]) * q[2] + static_cast<float>(q[3]) * q[3]) / 32767.0f;
+        CHECK(std::fabs(len - 1.0f) < 0.002f);
+    }
+    // Standing she is about 50 units tall and 75 long, nose towards +z, paws on the ground; nothing sinks far into the ground in any clip.
+    Pose p;
+    float mn[3], mx[3];
+    SampleClip(kIdle, 0.0f, p);
+    PoseBounds(p, mn, mx);
+    CHECK(std::fabs(mn[1]) < 1.0f && mx[1] > 40.0f && mx[1] < 60.0f && mx[2] - mn[2] > 60.0f && mx[2] > 25.0f && mx[0] - mn[0] < 30.0f);
+    const float standing = mx[1];
+    for (int c = 0; c < kClipCount; c++)
+        for (float t = 0.0f; t <= ClipSeconds(c); t += 0.05f) { SampleClip(c, t, p); PoseBounds(p, mn, mx); CHECK(mn[1] > -10.0f && mx[1] < 85.0f); }
+    SampleClip(kSleep, 0.0f, p);
+    PoseBounds(p, mn, mx);
+    CHECK(mx[1] < standing * 0.75f);   // curled up low
+    SampleClip(kJump, 0.45f, p);
+    PoseBounds(p, mn, mx);
+    CHECK(mn[1] > 15.0f);              // in the air
+    Pose a, b;
+    SampleClip(kTalk, 0.0f, a);
+    SampleClip(kTalk, 0.125f, b);
+    CHECK(std::fabs(a.bone[5].q[0] - b.bone[5].q[0]) > 0.03f);   // the jaw opens and shuts as she mews
+    SampleClip(kWalk, ClipSeconds(kWalk) + 0.1f, a);
+    SampleClip(kWalk, 0.1f, b);
+    CHECK(std::fabs(a.bone[8].q[0] - b.bone[8].q[0]) < 1e-4f);   // loops wrap round
+    // The animator cross-fades, and a one-shot clip ends.
+    Animator an;
+    an.Play(kJump);
+    CHECK(an.clip == kJump && an.from == kIdle && !an.Done());
+    for (int i = 0; i < 40; i++) an.Update(0.05f);
+    CHECK(an.Done() && an.from < 0);
+    an.Play(kWalk, 0.0f);
+    an.Update(1e9f, 1.0f);
+    an.Update(-1.0f, std::nanf(""));
+    an.Evaluate(p);
+    CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
+}
+
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

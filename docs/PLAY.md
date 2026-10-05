@@ -123,11 +123,11 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Heart Container chests.** A few hidden and climb chests are pink and hold an extra heart. **Adult Power**, a very rare Legendary find, makes you bigger for a minute: you hit harder, take less and run faster.
 - **Climbs.** Stone block staircases (jump and clamber) with the best chest on top; some chests are hidden behind boulders.
 - **Cloth and wind.** The glider's canopy is simulated cloth and Link's cap swings in the wind. There is a slider in the lobby for how much.
-- **The sign and Maya.** A sign stands in the middle of every map and a little Kokiri called Maya somewhere on it: walk up to the sign to read it, press **A** next to Maya to talk to her.
+- **The sign and Maya.** A sign stands in the middle of every map and a little Kokiri called Maya somewhere on it: press **A** at the sign to read it and next to Maya to talk to her. Both answer in the game's own text box, like any NPC.
 - **Match replay.** When a match ends, a top-down replay of it plays beside the results.
 - **Music.** Lobby music from the music folder, and "Match music": the game's own, random songs from the folder, or none.
 - **Controls added:** **C-Left** drinks a shield potion, **C-Up** jumps, **C-Right** emotes, **A** also hires allies and talks.
-- **Lilo the cat.** An Easter egg: a grey and white cat called Lilo sits at a random spot on the map. Press **A** next to her to talk. It can be switched off with "Lilo the cat" under "Minimap and game options" in the Royale menu.
+- **Lilo the cat.** An Easter egg: Lilo, a grey tabby with a white bib and socks (a low poly, N64 style model made in Blender from a photo of the real Lilo), sits at a random spot on the map. Press **A** next to her to talk: she mews her line in the game's own text box, and when you close it... It can be switched off with "Lilo the cat" under "Minimap and game options" in the Royale menu.
 
 ## Latest changes (real assets, weather, scenery)
 - **Hotbar and loot icons** are the game's own item icons wherever the game has one (swords, bow, bombs, bottles, tunics, masks...). Songs, rupee piles and a few others keep a drawn fallback.
@@ -150,4 +150,4 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
   (players alive, the zone timer, and short timers for whatever is affecting you). The screen is kept quiet on purpose: sounds, the storm haze and the
   red safe-zone arrow do the warning, and the corner pop-ups are kept for things you need to act on. Everything you carry also appears in the pause-menu inventory, and your own
   inventory is put back when the match ends.
-- Options: "Lilo follows me around as a pet" (looks only: no effect on the match, only you see her).
+- Options: "Lilo follows me around as a pet" (looks only: no effect on the match, only you see her). She walks or runs to keep up, jumps when you jump, sits when you stop, then grooms, stretches, pounces and naps; she hops when you pick something up. Stand still facing her and press **A** to talk: she sits and answers in the game's own text box, with something new each time.
