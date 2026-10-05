@@ -113,6 +113,8 @@ class GameClient {
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }
+    // An angered villager hit me: `hearts` is how much it hurts (the server rations how often).
+    void ReportNpcHit(float hearts) { net::NpcHitRequest m; m.tenths = static_cast<uint8_t>(std::clamp(static_cast<int>(hearts * 10.0f + 0.5f), 1, 20)); SendIfJoined(m); }
     void HireAlly(int index) { net::HireAllyRequest m; m.index = static_cast<uint8_t>(index); SendIfJoined(m); }   // next to a free ally, with the rupees
     // Drink a shield potion.
     void UseShield() { SendIfJoined(net::UseShieldRequest{}); }

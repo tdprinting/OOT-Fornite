@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "soh/ShipInit.hpp"
+#include "soh/ActorDB.h"
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/Enhancements/nametag.h"
 #include "soh/Notification/Notification.h"
@@ -406,9 +407,24 @@ bool UnderWater(float x, float z, float floorY) {
     return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
 }
 
+// Ground that hurts or throws you out: lava and other damage floors, floors that put you back at the last door, bottomless drops, and slopes too steep to
+// stand on. (The floor property numbers are the game's own, see FUNC_80041EA4_*.) Looks at the scene's own floor only: our blocks are always fine.
+bool HazardFloorAt(float x, float z) {
+    if (!InField()) return false;
+    CollisionPoly poly;
+    s32 bgId = BGCHECK_SCENE;
+    Vec3f pos = { x, 4000.0f, z };
+    const float y = BgCheck_AnyRaycastFloor2(&gPlayState->colCtx, &poly, &bgId, &pos);
+    if (y <= BGCHECK_Y_MIN + 1.0f) return true;   // nothing there at all
+    if (gSolidBgId >= 0 && bgId == gSolidBgId) return false;
+    const u32 property = func_80041EA4(&gPlayState->colCtx, &poly, bgId);
+    if (property == FUNC_80041EA4_RESPAWN || property == FUNC_80041EA4_STOP || property == FUNC_80041EA4_VOID_OUT) return true;
+    return poly.normal.y < COLPOLY_SNORMAL(0.8f);   // steeper than about 37 degrees: you slide off it
+}
+
 bool WalkableAt(royale::Vec2 p) {
     float y;
-    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f);
+    return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
 
 // Probe the floor on a grid across the whole scene and fit a circle around the part that has ground. Takes a few thousand
@@ -5115,6 +5131,119 @@ int gLastWeaponSlot = 0;     // the reserve slot last swapped in (D-pad Left swa
 int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
 
 // A swing that finds no player cuts the bush or breaks the rock in front of Link (a boulder needs something heavy or explosive).
+// ---- angry villagers -------------------------------------------------------------------------------------------------------
+// The scene's own people (the carpenters, say) stay in a match. Hit one by accident and they turn on you: they run at you and swing, and the server
+// takes a little health for each blow. Leave them alone for a while (or get away from them) and they calm down and walk back to where they were.
+struct AngryNpc {
+    ActorFunc origUpdate = nullptr;
+    ActorFunc origDestroy = nullptr;
+    Vec3f home = { 0, 0, 0 };
+    float timer = 0;      // seconds of anger left
+    float cooldown = 0;   // until the next swing
+    bool returning = false;
+};
+std::unordered_map<Actor*, AngryNpc> gAngry;
+bool gAngryPlayerAlive = true;
+constexpr float kNpcDt = 1.0f / 20.0f;          // the game runs its actors at 20 frames a second
+constexpr float kNpcAngerSeconds = 25.0f;
+constexpr float kNpcRunSpeed = 4.2f;            // units a frame: a little slower than Link running, so you can get away
+constexpr float kNpcForgetDistance = 600.0f;    // out of sight, out of mind: anger runs down twice as fast beyond this
+
+bool CanAnger(Actor* a) {
+    if (a == nullptr || a->update == nullptr || a->category != ACTORCAT_NPC) return false;
+    if (a->id == ACTOR_PLAYER || a->id == ACTOR_EN_OE2 || a->id == ACTOR_EN_ISHI) return false;   // players' puppets and our own stand-ins
+    return gPuppetOf.find(a) == gPuppetOf.end();
+}
+
+void AngryNpc_Destroy(Actor* actor, PlayState* play) {
+    auto it = gAngry.find(actor);
+    ActorFunc orig = nullptr;
+    if (it != gAngry.end()) { orig = it->second.origDestroy; gAngry.erase(it); }
+    if (orig) orig(actor, play);
+}
+
+bool NpcStepTo(Actor* actor, PlayState* play, float tx, float tz, float speed) {
+    const float dx = tx - actor->world.pos.x, dz = tz - actor->world.pos.z;
+    const float d = std::hypot(dx, dz);
+    const s16 yaw = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+    actor->world.rot.y = actor->shape.rot.y = yaw;
+    if (d < 1.0f) return true;
+    const float step = std::min(speed, d);
+    Vec3f from = { actor->world.pos.x, actor->world.pos.y + 30.0f, actor->world.pos.z };
+    Vec3f to = { actor->world.pos.x + dx / d * (step + 14.0f), actor->world.pos.y + 30.0f, actor->world.pos.z + dz / d * (step + 14.0f) };
+    Vec3f hit;
+    CollisionPoly* poly = nullptr;
+    s32 bgId = 0;
+    if (BgCheck_EntityLineTest1(&play->colCtx, &from, &to, &hit, &poly, true, false, false, true, &bgId)) return false;   // a wall: stay put
+    actor->world.pos.x += dx / d * step;
+    actor->world.pos.z += dz / d * step;
+    actor->world.pos.y = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y);
+    return false;
+}
+
+void AngryNpc_Update(Actor* actor, PlayState* play) {
+    auto it = gAngry.find(actor);
+    if (it == gAngry.end()) return;
+    AngryNpc& a = it->second;
+    if (a.origUpdate) a.origUpdate(actor, play);   // the villager's own animation keeps running; where it stands and faces is ours from here
+    Player* player = GET_PLAYER(play);
+    if (player == nullptr || !InField()) return;
+    const float dx = player->actor.world.pos.x - actor->world.pos.x, dz = player->actor.world.pos.z - actor->world.pos.z;
+    const float dist = std::hypot(dx, dz);
+    a.cooldown = std::max(0.0f, a.cooldown - kNpcDt);
+    if (!a.returning) {
+        a.timer -= kNpcDt * (dist > kNpcForgetDistance || !gAngryPlayerAlive ? 2.0f : 1.0f);
+        if (a.timer <= 0.0f) a.returning = true;
+    }
+    if (a.returning) {
+        if (NpcStepTo(actor, play, a.home.x, a.home.z, kNpcRunSpeed * 0.6f) || std::hypot(a.home.x - actor->world.pos.x, a.home.z - actor->world.pos.z) < 20.0f) {
+            actor->update = a.origUpdate;   // calm again: the game's own behaviour takes back over
+            actor->destroy = a.origDestroy;
+            gAngry.erase(it);
+        }
+        return;
+    }
+    if (dist > 60.0f) NpcStepTo(actor, play, player->actor.world.pos.x, player->actor.world.pos.z, kNpcRunSpeed);
+    else actor->world.rot.y = actor->shape.rot.y = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+    if (dist <= 85.0f && a.cooldown <= 0.0f && gAngryPlayerAlive && std::fabs(player->actor.world.pos.y - actor->world.pos.y) < 70.0f) {
+        a.cooldown = 1.0f;
+        a.timer = std::max(a.timer, kNpcAngerSeconds * 0.6f);   // it is busy hitting you: it stays angry while it does
+        gSession.ReportNpcHit(0.5f);
+        Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT, &actor->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        Player_PlaySfx(&player->actor, NA_SE_VO_LI_DAMAGE_S + player->ageProperties->unk_92);
+    }
+}
+
+void AngerNpc(Actor* actor) {
+    auto it = gAngry.find(actor);
+    if (it != gAngry.end()) { it->second.timer = kNpcAngerSeconds; it->second.returning = false; return; }
+    AngryNpc a;
+    a.origUpdate = actor->update;
+    a.origDestroy = actor->destroy;
+    a.home = actor->world.pos;
+    a.timer = kNpcAngerSeconds;
+    gAngry[actor] = a;
+    actor->update = AngryNpc_Update;
+    actor->destroy = AngryNpc_Destroy;
+    Audio_PlaySoundGeneral(NA_SE_EN_STAL_WARAU, &actor->projectedPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+}
+
+// A swing, spin or shot that found no player: did it hit a villager? (A bad aim at a carpenter makes an enemy of them.)
+void HitNpcInFront(Player* player, const royale::WeaponStats& w) {
+    if (!InField() || !gSession.Joined()) return;
+    const float reach = w.ranged ? std::clamp(w.range, 150.0f, 500.0f) : std::clamp(w.range, 90.0f, 170.0f);
+    const int cone = w.ranged ? 0x1000 : 0x2800;
+    for (Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_NPC].head; a != nullptr; a = a->next) {
+        if (!CanAnger(a) && gAngry.find(a) == gAngry.end()) continue;
+        const float dx = a->world.pos.x - player->actor.world.pos.x, dz = a->world.pos.z - player->actor.world.pos.z;
+        const float d = std::hypot(dx, dz);
+        if (d > reach + 25.0f || std::fabs(a->world.pos.y - player->actor.world.pos.y) > 90.0f) continue;
+        const s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+        if (std::abs(static_cast<int>(static_cast<s16>(toTarget - player->actor.shape.rot.y))) > cone && d > 40.0f) continue;
+        AngerNpc(a);
+    }
+}
+
 void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
     if (!gSession.Client()) return;
     const auto& props = gSession.Client()->Props();
@@ -5414,7 +5543,7 @@ void ApplyPlatforms(Player* player) {
 // so you walked into the stone). You are pushed out of their sides, and can walk up onto the low ones (a rock, a boulder) the same way as onto the
 // climbing blocks: step up by walking into them, or jump. Tall stones (the posts) are only walls.
 void ApplyRocks(Player* player) {
-    if (!InField() || !gSession.Client()) return;
+    if (!InField() || !gSession.Client() || SolidActive()) return;
     const auto& props = gSession.Client()->Props();
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
     const float py = player->actor.world.pos.y;
@@ -5493,7 +5622,7 @@ static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8
     float dist = 1e9f;
     const uint16_t target = PickStrikeTarget(player, w.range, &dist);
     if (dist < 1e8f) gSession.ReportAttack(target, true, static_cast<uint8_t>(jump ? royale::AttackStyle::JumpSlash : royale::AttackStyle::Spin));
-    else SmashPropInFront(player, w);
+    else { HitNpcInFront(player, w); SmashPropInFront(player, w); }
     gAttackCooldown = std::max(gAttackCooldown, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 }
 
@@ -5619,6 +5748,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (hasAmmo && w.ranged) SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f, player->actor.world.pos.z, aim);
     else Audio_PlaySoundGeneral(NA_SE_IT_SWORD_SWING_HARD, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
+    HitNpcInFront(player, w);
     SmashPropInFront(player, w);
 }
 
@@ -5629,6 +5759,57 @@ constexpr float kSkyHeight = 3000.0f;   // units above the ground you start
 constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (the drop lasts 18 s)
 constexpr float kDiveSpeed = 380.0f;    // holding Z
 constexpr float kAirSpeed = 130.0f;     // steering speed
+// Where you may touch down: floor that is not water, lava, a door, a cliff face or a bottomless drop, inside the circle the storm has left.
+bool SafeLanding(float x, float z, const royale::HudState& hud) {
+    float y;
+    if (!FloorAt(x, z, &y) || std::fabs(y - gMedianFloorY) > 1200.0f || UnderWater(x, z, y) || OnExitFloor(x, z) || NearLoadingZone(x, z, 200.0f) || HazardFloorAt(x, z)) return false;
+    if (hud.safeZone.radius > 0.0f && royale::Distance({ x, z }, hud.safeZone.center) > hud.safeZone.radius * 0.97f) return false;
+    return true;
+}
+
+// The skydive is steered by you, but it never lets you land in the lava, the lake or a doorway: low enough to matter, the glider eases toward the nearest
+// ground that is safe, and if you somehow end up over nothing at all you are put back above the nearest safe ground.
+royale::Vec2 gLandTarget = {};
+bool gHaveLandTarget = false;
+int gLandCheckAge = 0;
+bool FindSafeLanding(float x, float z, const royale::HudState& hud, royale::Vec2* out) {
+    for (float r = 120.0f; r <= 3600.0f; r += 120.0f) {   // rings outward from where you are: the nearest safe spot wins
+        const int n = std::max(8, static_cast<int>(r / 60.0f));
+        for (int i = 0; i < n; i++) {
+            const float a = 6.2831853f * i / n;
+            const float tx = x + std::sin(a) * r, tz = z + std::cos(a) * r;
+            if (SafeLanding(tx, tz, hud)) { *out = { tx, tz }; return true; }
+        }
+    }
+    return false;
+}
+void SteerToSafeLanding(Player* player, const royale::HudState& hud, float dt) {
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    float ground = 0;
+    const bool haveGround = FloorAt(px, pz, &ground);
+    const float height = haveGround ? player->actor.world.pos.y - ground : 1.0e5f;
+    if (haveGround && height > 1500.0f) { gHaveLandTarget = false; return; }   // high up: steer wherever you like
+    if (++gLandCheckAge >= 6 || (haveGround ? false : !gHaveLandTarget)) {       // a few times a second
+        gLandCheckAge = 0;
+        gHaveLandTarget = !SafeLanding(px, pz, hud) && FindSafeLanding(px, pz, hud, &gLandTarget);
+    }
+    if (!haveGround && player->actor.world.pos.y < gMedianFloorY - 400.0f) {   // fell past the bottom of the map: back above the closest safe ground
+        royale::Vec2 safe;
+        if (FindSafeLanding(px, pz, hud, &safe) || FindSafeLanding(hud.safeZone.center.x, hud.safeZone.center.z, hud, &safe)) {
+            player->actor.world.pos.x = safe.x; player->actor.world.pos.z = safe.z;
+            player->actor.world.pos.y = gMedianFloorY + 500.0f;
+        }
+        return;
+    }
+    if (!gHaveLandTarget) return;
+    const float dx = gLandTarget.x - px, dz = gLandTarget.z - pz;
+    const float d = std::hypot(dx, dz);
+    if (d < 20.0f) { gHaveLandTarget = false; return; }
+    const float pull = std::min(d, kAirSpeed * 1.6f * dt);   // a firm drift: faster than you can steer away from it once you are low
+    player->actor.world.pos.x += dx / d * pull;
+    player->actor.world.pos.z += dz / d * pull;
+}
+
 void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
@@ -5654,6 +5835,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     float fall = 0.0f;                                                          // hold in the sky during the countdown
     if (hud.state == royale::MatchState::Drop) fall = (in.cur.button & BTN_Z) ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
+    SteerToSafeLanding(player, hud, dt);
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - fall * dt;
     if (ground > -1.0e5f && y <= ground + 8.0f) {
@@ -5761,6 +5943,8 @@ void OnPlayerUpdate() {
     NoticePoi(player, hud);
     if (gActionFrames > 0) gActionFrames--;
     SyncLocalWeapon(player, hud);
+    EnsureSolidScenery();
+    gAngryPlayerAlive = !(hud.haveSelf && !hud.selfAlive);
     ApplyPlatforms(player);
     ApplyRocks(player);
     HandleCombatInput(player, hud);
@@ -7559,6 +7743,8 @@ void OnSceneInit(int16_t) {
     gPropOf.clear();
     gCulledProps.clear();
     gInFieldFrames = 0;
+    gAngry.clear();
+    gSolidActor = nullptr; gSolidBgId = -1; gSolidFailed = false; gSolidSet.clear();   // the scene's collision (and our actor with it) is gone
 }
 
 void RegisterRoyaleMod() {

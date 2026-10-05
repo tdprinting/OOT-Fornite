@@ -89,6 +89,7 @@ static void MessagesRoundTrip() {
     { AttackReport a, b; a.target = 12; a.hit = true; CHECK(RoundTrips(a, b) && b.target == 12 && b.hit); }
     { PickupRequest a, b; a.index = 123456; a.force = true; CHECK(RoundTrips(a, b) && b.index == 123456 && b.force); }
     { UsePotionRequest a, b; CHECK(RoundTrips(a, b)); }
+    { NpcHitRequest a, b; a.tenths = 7; CHECK(RoundTrips(a, b) && b.tenths == 7); }
     { Welcome a = SampleWelcome(), b; CHECK(RoundTrips(a, b));
       CHECK(b.playerId == 7 && b.seed == a.seed && b.map.radius == 3000 && b.loot.size() == 2 && b.roster[1].name == "Zelda");
       CHECK(b.loot[0].chest && !b.loot[0].taken && b.loot[1].taken && b.stormEnds[5].radius == 95.0f); }
