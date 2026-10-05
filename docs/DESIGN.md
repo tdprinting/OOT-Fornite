@@ -564,5 +564,7 @@ Everything below is implemented, covered by the server tests, and described for 
 | Match replay (recorded by the server, sent at the end, drawn top-down) | `shared/replay.h`, `server/match.h` (`TickReplay`) |
 | Logo everywhere (launcher icons, title screen, menus) | `assets/logo.png`, `scripts/make_logo_assets.py`, `scripts/apply_logo.sh` |
 | The sign in the middle of every map, and Maya the Kokiri | `RoyaleMod.cpp` (sign, Maya), `shared/map.h` |
+| Lilo the cat: a low poly Blender model (about 650 triangles, RGBA16 fur and face textures, 25 bones, 11 clips), skinned on the CPU; as a pet she follows you with walk, run, jump, sit, groom, sleep, stretch, pounce and happy clips | `tools/lilo/`, `assets/lilo/`, `shared/lilo_model.h` (generated), `shared/lilo_anim.h`, `RoyaleMod.cpp` (Lilo) |
+| Lilo, Maya and the sign talk through the game's own text box (custom messages, text ids from 0x7F00) | `patches/0012-royale-custom-message-table.patch`, `RoyaleMod.cpp` (talking) |
 
 Balance is tuned with a headless simulator (`royale_balance [matches] [easy|normal|hard] [map] [players]`): the targets are the first kill within about 20 seconds, 20+ players alive at one minute, matches of roughly four to six minutes (longer on the big maps), few storm deaths, and the major boss a threat rather than the main killer. The protocol version is 20.
