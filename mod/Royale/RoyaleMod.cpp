@@ -726,6 +726,9 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::Emote3: return AnimSeq(RA(demo_kaoage), false).Add(RA(demo_kaoage_wait), true);   // looks up
         case Anim::Emote4: return AnimSeq(RA(demo_kenmiru1), false).Add(RA(demo_kenmiru1_wait), true);   // admires a sword
         case Anim::Emote5: return AnimSeq(RA(normal_wait), true);       // the chicken dance poses the limbs itself (ApplyChickenDance)
+        case Anim::Emote6: return AnimSeq(RA(demo_get_itemA), false);   // holds his prize high, the item-get pose
+        case Anim::Emote7: return AnimSeq(RA(demo_kousan), false);      // gives up
+        case Anim::Emote8: return AnimSeq(RA(demo_kakeyori_mimawasi), false).Add(RA(demo_kakeyori_wait), true);   // looks all around
         default: return AnimSeq(RA(normal_wait), true);                 // Idle and anything newer than this build
     }
 }
@@ -1527,6 +1530,7 @@ bool LiveAndAlive(const royale::HudState& h) {
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
 void PlayOneShot(int kind);
+void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale); // below, with the skydive
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 bool LiloNear();
 void TalkToLilo();
@@ -2901,6 +2905,7 @@ std::string ClockText(float seconds) {
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see OnEmoteWheelInput), so it can't lock on and flatten the camera
 
 // Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
 // It stops when you let go of the stick, click again or run dry, and the bar refills after a short rest. The N64 pad has no stick
@@ -4406,7 +4411,8 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive");
+    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
+    if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
@@ -4565,46 +4571,145 @@ void EnsureHudWindow() {
 // ---- local player <-> session ----------------------------------------------------------------------------------------
 
 // ---- emotes -------------------------------------------------------------------------------------------------------------------
+// Your own Link does the emote himself: the game keeps running him as usual (standing still), and just before he is drawn his pose is
+// replaced with the emote's frame. (It used to be done by a stand-in copy of Link while the real one was hidden, which could leave him
+// invisible afterwards with only his shadow showing.)
 
 struct EmoteState {
     int id = -1;               // which emote is playing, -1 for none
-    double endAt = 0;
-    Actor* actor = nullptr;    // the double that performs it
+    double startAt = 0, endAt = 0;
+    Player* player = nullptr;  // the Link whose drawing was taken over
 };
 EmoteState gEmote;
-int gNextEmote = 0;            // what C-Right plays next
+
+bool CanEmote(const royale::HudState& hud) { return LiveAndAlive(hud) && InField() && !gSkydiving; }
+
+void LocalEmote_Draw(Actor* actor, PlayState* play);
+
+// Gives Link back his own drawing (only if he is still the same Link: a scene change makes a new one).
+void ReleaseEmoteDraw() {
+    if (gPlayState == nullptr) return;
+    Player* player = GET_PLAYER(gPlayState);
+    if (player != nullptr && player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw;
+}
 
 void StopEmote() {
     if (gEmote.id < 0) return;
-    if (gEmote.actor) Actor_Kill(gEmote.actor);
+    ReleaseEmoteDraw();
     gEmote = EmoteState{};
 }
 
 void StartEmote(int index, const royale::HudState& hud) {
-    if (!LiveAndAlive(hud) || !InField() || gSkydiving) return;
+    if (!CanEmote(hud) || index < 0 || index >= royale::kEmoteCount) return;
     StopEmote();
     Player* player = GET_PLAYER(gPlayState);
-    royale::PuppetState me;
-    me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
-    me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic;
-    Actor* a = SpawnEmoteDouble(me, index);
-    if (a == nullptr) return;
+    if (player == nullptr || (player->actor.draw != Player_Draw && player->actor.draw != LocalEmote_Draw)) return;
     gEmote.id = index;
-    gEmote.actor = a;
-    gEmote.endAt = ImGui::GetTime() + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
-    gEmotePanelOpen = false;
+    gEmote.player = player;
+    gEmote.startAt = ImGui::GetTime();
+    gEmote.endAt = gEmote.startAt + (index == royale::kChickenDanceEmote ? royale::kChickenDanceSeconds : 3.4);
+    gLastEmote = index;
+    player->actor.draw = LocalEmote_Draw;
 }
 
-// While an emote plays, the real character is hidden and any movement, attack or a few seconds ends it.
+// Any movement, attack or a few seconds ends an emote.
 void UpdateEmote(Player* player, const royale::HudState& hud) {
-    if (gEmote.id < 0) return;
+    if (gEmote.id < 0) { if (player->actor.draw == LocalEmote_Draw) player->actor.draw = Player_Draw; return; }
     const Input& in = gPlayState->state.input[0];
     const bool moved = std::fabs(static_cast<float>(in.cur.stick_x)) > 25.0f || std::fabs(static_cast<float>(in.cur.stick_y)) > 25.0f;
-    if (!LiveAndAlive(hud) || !InField() || ImGui::GetTime() > gEmote.endAt || moved || (in.press.button & (BTN_B | BTN_A | BTN_CUP | BTN_DDOWN | BTN_DUP))) {
+    if (!CanEmote(hud) || player != gEmote.player || ImGui::GetTime() > gEmote.endAt || moved ||
+        (in.press.button & (BTN_B | BTN_A | BTN_Z | BTN_R | BTN_CUP | BTN_CLEFT | BTN_CDOWN | BTN_DDOWN | BTN_DUP))) {
         StopEmote();
-        return;
     }
-    player->stateFlags2 |= PLAYER_STATE2_DISABLE_DRAW;
+}
+
+// Copies one frame of one of Link's animations straight into a joint table, the same way the game's own loader reads it (patched Ship of
+// Harkinian reads the frame at once rather than by DMA), so it can be done while drawing, after the game has posed Link for the frame.
+void LoadLinkFrame(LinkAnimationHeader* animation, int frame, int limbCount, Vec3s* out) {
+    if (animation == nullptr) return;
+    if (ResourceMgr_OTRSigCheck(reinterpret_cast<char*>(animation)) != 0)
+        animation = reinterpret_cast<LinkAnimationHeader*>(ResourceMgr_LoadAnimByName(reinterpret_cast<const char*>(animation)));
+    if (animation == nullptr) return;
+    const LinkAnimationHeader* header = static_cast<const LinkAnimationHeader*>(SEGMENTED_TO_VIRTUAL(animation));
+    char path[128];
+    snprintf(path, sizeof(path), "misc/link_animetion/gPlayerAnimData_%06X",
+             static_cast<unsigned>(reinterpret_cast<uintptr_t>(header->segment) - 0x07000000));
+    const char* data = ResourceMgr_LoadPlayerAnimByName(path);
+    if (data == nullptr) return;
+    const size_t stride = sizeof(Vec3s) * limbCount + 2;   // every limb, then the eyes and mouth
+    std::memcpy(out, data + stride * frame, stride);
+}
+
+// Poses Link for the emote at this moment: its animations one after another (Link's animations step once per game tick), the last one
+// looping or holding its final pose. He stays where he stands: only the height of the animation's root is used.
+void PoseEmote(Player* player) {
+    const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
+    const AnimSeq seq = SeqFor(royale::EmoteAnim(gEmote.id), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player);
+    float f = t * royale::kTickHz;
+    LinkAnimationHeader* anim = nullptr;
+    int frame = 0;
+    for (int i = 0; i < seq.count; i++) {
+        const float len = static_cast<float>(Animation_GetLastFrame(seq.step[i].anim)) + 1.0f;
+        if (seq.step[i].loop) { anim = seq.step[i].anim; frame = static_cast<int>(std::fmod(f, len)); break; }
+        if (f < len || i == seq.count - 1) { anim = seq.step[i].anim; frame = static_cast<int>(std::min(f, len - 1.0f)); break; }
+        f -= len;
+    }
+    if (anim == nullptr) return;
+    Vec3s* j = player->skelAnime.jointTable;
+    const s16 rootX = j[0].x, rootZ = j[0].z;
+    LoadLinkFrame(anim, std::max(0, frame), player->skelAnime.limbCount, j);
+    j[0].x = rootX;
+    j[0].z = rootZ;
+    if (gEmote.id == royale::kChickenDanceEmote) {
+        ApplyChickenDance(player, t);
+        if (player->actor.scale.y > 0.0f) j[0].y = static_cast<s16>(j[0].y + ChickenDanceBob(t) / player->actor.scale.y);
+    }
+}
+
+void LocalEmote_Draw(Actor* actor, PlayState* play) {
+    Player* player = reinterpret_cast<Player*>(actor);
+    if (gEmote.id >= 0 && gEmote.player == player && player == GET_PLAYER(play)) PoseEmote(player);
+    Player_Draw(actor, play);
+}
+
+// The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
+// choose an emote instead of moving Link.
+void OnEmoteWheelInput() {
+    if (gPlayState == nullptr || !gSession.Joined() || !InGame()) { if (gWheel.open) CloseEmoteWheel(); return; }
+    Input& in = gPlayState->state.input[0];
+    const royale::HudState hud = gSession.Hud();
+    // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
+    // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
+    gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
+    if (gSkydiving) in.cur.button &= ~BTN_Z, in.press.button &= ~BTN_Z, in.rel.button &= ~BTN_Z;
+    if (!gWheel.open) {
+        if (!(in.press.button & BTN_CRIGHT) || !CanEmote(hud)) return;
+        OpenEmoteWheel(false);
+    }
+    if (!CanEmote(hud) || (in.press.button & BTN_START)) { CloseEmoteWheel(); return; }
+    if (in.press.button & BTN_B) {
+        CloseEmoteWheel();
+        Audio_PlaySoundGeneral(NA_SE_SY_FSEL_CLOSE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    } else {
+        const float sx = in.cur.stick_x, sy = in.cur.stick_y;
+        if (sx * sx + sy * sy > 35.0f * 35.0f) {   // the last emote pointed at stays chosen when the stick springs back
+            const int slice = WheelSliceAt(sx, sy);
+            if (slice != gWheel.hover)
+                Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+            gWheel.hover = slice;
+        }
+        int pick = -1;
+        if (in.press.button & BTN_A) pick = gWheel.hover;
+        if (!gWheel.byTouch && !(in.cur.button & BTN_CRIGHT)) {   // let go of C-Right
+            if (gWheel.hover >= 0) pick = gWheel.hover;
+            else if (ImGui::GetTime() - gWheel.openedAt < 0.3) pick = gLastEmote;   // a quick tap: the last one again
+            else CloseEmoteWheel();
+        }
+        if (pick >= 0) { CloseEmoteWheel(); StartEmote(pick, hud); }
+    }
+    // This frame's buttons and stick were the wheel's.
+    in.cur.button = in.press.button = in.rel.button = 0;
+    in.cur.stick_x = in.cur.stick_y = in.rel.stick_x = in.rel.stick_y = in.press.stick_x = in.press.stick_y = 0;
 }
 
 // The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
@@ -5418,11 +5523,6 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    if ((in.press.button & BTN_CRIGHT) && gEmote.id < 0) {
-        StartEmote(gNextEmote, hud);
-        gNextEmote = (gNextEmote + 1) % royale::kEmoteCount;
-    }
-
     if (in.press.button & BTN_DDOWN) {
         if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, 0.9f); UseBurst(player, { 120, 255, 150, 255 }, NA_SE_SY_HP_RECOVER); }
         else Say("No potions");
@@ -5537,10 +5637,10 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     }
 
     gGliderRoll += ((mag > 0.1f ? -sx / 80.0f * 0.5f : 0.0f) - gGliderRoll) * 0.12f;                  // bank into the turn
-    gGliderDiving = hud.state == royale::MatchState::Drop && (in.cur.button & BTN_Z);
+    gGliderDiving = hud.state == royale::MatchState::Drop && gDiveHeld;
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
-    if (hud.state == royale::MatchState::Drop) fall = (in.cur.button & BTN_Z) ? kDiveSpeed : kGlideSpeed;
+    if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = 700.0f;            // the drop is over: land now
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - fall * dt;
@@ -5553,6 +5653,46 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     player->actor.velocity.y = 0.0f;
     player->actor.speedXZ = 0.0f;
     player->fallDistance = 0;                                                     // no landing damage or hard-landing stun
+}
+
+// Where you will land if you keep doing what you are doing: a ring on the ground at that spot (and a faint one straight below you), with how
+// high you are. Steering moves the ring, holding Z pulls it closer, so you can pick a landing spot before you get there.
+void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    if (gPlayState == nullptr || !InField()) return;
+    Player* player = GET_PLAYER(gPlayState);
+    const Input& in = gPlayState->state.input[0];
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z, py = player->actor.world.pos.y;
+    const float below = GroundY(gPlayState, px, pz, -1.0e6f);
+    if (below < -1.0e5f) return;
+    const float sx = in.cur.stick_x, sy = in.cur.stick_y;
+    const float mag = std::min(1.0f, std::sqrt(sx * sx + sy * sy) / 60.0f);
+    const bool dropping = gStateNow == royale::MatchState::Drop;
+    const float fall = dropping ? (gDiveHeld ? kDiveSpeed : kGlideSpeed) : 700.0f;
+    const float seconds = std::max(0.0f, (py - below)) / fall;
+    float lx = px, lz = pz;
+    if (mag > 0.1f) {   // the same steering the skydive uses, held for the rest of the fall
+        const float yaw = static_cast<float>(Camera_GetInputDirYaw(GET_ACTIVE_CAM(gPlayState))) * (3.14159265f / 32768.0f);
+        const float a = yaw + std::atan2(-sx, sy);
+        lx += std::sin(a) * kAirSpeed * mag * seconds;
+        lz += std::cos(a) * kAirSpeed * mag * seconds;
+    }
+    const float ly = GroundY(gPlayState, lx, lz, py);
+    const ImU32 gold = IM_COL32(255, 236, 120, 255);
+    ImVec2 at, under;
+    const bool haveUnder = WorldToScreen(px, below + 2.0f, pz, &under);
+    if (WorldToScreen(lx, (ly > -1.0e5f ? ly : below) + 2.0f, lz, &at) && at.x > 0 && at.x < ds.x && at.y > 0 && at.y < ds.y) {
+        const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
+        const float r = (16.0f + 3.0f * pulse) * scale;
+        dl->AddCircle(at, r + 2 * scale, IM_COL32(0, 0, 0, 160), 24, 5.0f * scale);
+        dl->AddCircle(at, r, gold, 24, 3.0f * scale);
+        dl->AddCircleFilled(at, 3.5f * scale, gold);
+        if (haveUnder && mag > 0.1f) dl->AddLine(under, at, IM_COL32(255, 236, 120, 90), 2.0f * scale);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%d m", static_cast<int>((py - below) * 0.1f));
+        const ImVec2 sz = font->CalcTextSizeA(15.0f * scale, FLT_MAX, 0, text);
+        dl->AddText(font, 15.0f * scale, ImVec2(at.x - sz.x * 0.5f + scale, at.y + r + 5 * scale + scale), IM_COL32(0, 0, 0, 220), text);
+        dl->AddText(font, 15.0f * scale, ImVec2(at.x - sz.x * 0.5f, at.y + r + 5 * scale), IM_COL32(255, 255, 255, 255), text);
+    }
 }
 
 // Boots, Epona's Song and friends: the server allows a faster run and the game applies it by stretching the step Link just took.
@@ -7437,6 +7577,8 @@ void OnSceneInit(int16_t) {
     gMotion.clear();
     gLastFind.clear();
     gPlate.clear();
+    gEmote = EmoteState{};   // the old Link is gone with the scene
+    CloseEmoteWheel();
     gCorpses.clear();
     gCorpseOf.clear();
     gLastSeen.clear();
@@ -7453,6 +7595,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>(OnEmoteWheelInput);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
