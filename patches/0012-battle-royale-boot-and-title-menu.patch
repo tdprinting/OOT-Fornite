@@ -1,0 +1,54 @@
+diff --git a/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c b/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
+index be2302a..f730140 100644
+--- a/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
++++ b/soh/src/overlays/actors/ovl_En_Mag/z_en_mag.c
+@@ -784,11 +784,18 @@ void EnMag_DrawInner(Actor* thisx, PlayState* play, Gfx** gfxP) {
+     *gfxP = gfx;
+ }
+ 
++// OOT Royale: while the mod's Battle Royale menu is open over the title screen, the title (logo, "PRESS START", copyright) steps aside.
++extern int Royale_TitleMenuOpen(void);
++
+ void EnMag_Draw(Actor* thisx, PlayState* play) {
+     s32 pad;
+     Gfx* gfx;
+     Gfx* gfxRef;
+ 
++    if (Royale_TitleMenuOpen()) {
++        return;
++    }
++
+     OPEN_DISPS(play->state.gfxCtx);
+ 
+     gfxRef = POLY_OPA_DISP;
+diff --git a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+index 318551f..a1ba161 100644
+--- a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
++++ b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+@@ -3544,6 +3544,8 @@ void FileChoose_DrawRandoSaveVersionWarning(GameState* thisx) {
+     CLOSE_DISPS(this->state.gfxCtx);
+ }
+ 
++s32 Royale_BootFileSlot(void); // defined by the OOT Royale mod: the save slot to load straight away, or -1 for the normal file select
++
+ void FileChoose_Main(GameState* thisx) {
+     static void* controlsTextures[] = {
+         gFileSelControlsENGTex,
+@@ -3554,6 +3556,17 @@ void FileChoose_Main(GameState* thisx) {
+     FileChooseContext* this = (FileChooseContext*)thisx;
+     Input* input = &this->state.input[0];
+ 
++    // OOT Royale: the game is Battle Royale only, so there is no file select. The mod picks (and if needed makes) its Battle Royale save
++    // and it is loaded right away. It answers -1 only if it can't (all three slots hold story saves), and then this screen works as usual.
++    {
++        s32 royaleSlot = Royale_BootFileSlot();
++        if (royaleSlot >= 0) {
++            this->buttonIndex = royaleSlot;
++            FileChoose_LoadGame(&this->state);
++            return;
++        }
++    }
++
+     Color_RGB8 helpTextColor = { 100, 255, 255 };
+     if (CVarGetInteger(CVAR_COSMETIC("Title.FileChoose.Changed"), 0)) {
+         Color_RGB8 backgroundColor =
