@@ -1050,7 +1050,7 @@ void PageSetup(Ctx& c, bool inLobby) {
     changed |= Slider(c, "Players (bots fill the rest)", &ui.playerLimit, lo, royale::kMaxPlayers, 1);
     static const char* kLevels[] = { "Easy", "Normal", "Hard" };
     changed |= Choice(c, "Bot difficulty", &ui.botDifficulty, kLevels, 3);
-    changed |= Toggle(c, "Dragon boss halfway through", &ui.majorBoss);
+    changed |= Toggle(c, "The map's major boss halfway through", &ui.majorBoss);
     static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
     changed |= Choice(c, "Season", &ui.weatherSeason, kSeasons, 5);
     changed |= Slider(c, "Weather strength", &ui.weatherIntensity, 0, 100, 10, "%");
@@ -1172,7 +1172,7 @@ void PageOptions(Ctx& c) {
     if (Toggle(c, "Wait in the Temple of Time in lobbies", &ui.waitingRoom)) Saved();
     OptionToggle(c, "LiloCat", "Lilo the cat hides on the map", true);
     OptionToggle(c, "LiloPet", "Lilo follows me as a pet", false);
-    if (Button(c, "Reload the custom dragon")) LoadCustomDragon();
+    if (Button(c, "Reload the custom dragon (replaces Volvagia)")) LoadCustomDragon();
     if (!gDragonModel.tried) LoadCustomDragon();
     Note(c, gDragonModel.status);
     Header(c, "MAP PICTURES");

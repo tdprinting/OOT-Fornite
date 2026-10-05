@@ -196,6 +196,47 @@ static void AttackRules() {
     AttackResult miss = m.Attack(1, 1000, false);
     CHECK(miss.ok && !miss.hit && m.Find(1000)->health == hp);
 }
+// Jump slashes hit harder, spin attacks catch everyone close, and a raised shield facing the blow takes most of it.
+static void StrikesAndGuard() {
+    Simulation sim = Duel(1, {0, 0}, {50, 0});
+    Match& m = sim.match;
+    m.Find(1)->weapon = {ItemId::KokiriSword, Rarity::Common};
+    auto rest = [&] { for (int i = 0; i < 2 * kTickHz; i++) m.Tick(kDt); m.Find(1000)->health = kMaxHealth; };
+    const AttackResult plain = m.Attack(1, 1000);
+    rest();
+    const AttackResult jump = m.Attack(1, 1000, true, AttackStyle::JumpSlash);
+    CHECK(jump.ok && jump.damage > plain.damage * 1.4f);
+    rest();
+    // A third player just behind the swordsman: a spin catches them, a plain swing doesn't.
+    PlayerState* third = nullptr;
+    for (auto& p : m.Players()) if (p.id != 1 && p.id != 1000) { third = &p; break; }
+    CHECK(third != nullptr);
+    third->alive = true; third->health = kMaxHealth; third->pos = {-40, 0};
+    CHECK(m.Attack(1, 1000).extraHits == 0 && third->health == kMaxHealth);
+    rest();
+    const AttackResult spin = m.Attack(1, 1000, true, AttackStyle::Spin);
+    CHECK(spin.ok && spin.extraHits == 1 && third->health < kMaxHealth);
+    third->alive = false;
+    rest();
+    // Shield up and facing the attacker (who stands towards -x): blocked.
+    PlayerState* t = m.Find(1000);
+    t->hasShield = true; t->shield = {ItemId::HylianShield, Rarity::Common};
+    const AttackResult shielded = m.Attack(1, 1000);
+    rest();
+    t->anim = static_cast<uint8_t>(Anim::Guard);
+    t->rot = -16384;   // facing -x
+    const AttackResult guarded = m.Attack(1, 1000);
+    CHECK(guarded.blocked && guarded.damage < shielded.damage * 0.3f);
+    rest();
+    t->rot = 16384;    // facing away: the shield is on the wrong side
+    const AttackResult behind = m.Attack(1, 1000);
+    CHECK(!behind.blocked && behind.damage == shielded.damage);
+    rest();
+    t->rot = -16384;   // light arrows go through any shield
+    m.Find(1)->weapon = {ItemId::LightArrows, Rarity::Common};
+    for (auto& p : m.Players()) p.ammo.fill(60);
+    CHECK(!m.Attack(1, 1000).blocked);
+}
 static void NoAttacksDuringDrop() {
     Match m(1, MapCircle(), 0);
     m.AddHuman(1);
@@ -1841,6 +1882,68 @@ static void BotsRollAndLockOn() {
     CHECK(seen.count(static_cast<int>(Anim::SideL)) || seen.count(static_cast<int>(Anim::SideR)));
 }
 
+static void BotsPlayLikePlayers() {
+    // Fights: side hops and back flips beside the rolls, jump slashes to open an exchange, and the shield raised against a swing.
+    std::set<int> seen;
+    for (uint64_t seed = 40; seed < 48; seed++) {
+        Simulation sim(seed, MapCircle(), 0);
+        sim.bots.SetDifficulty(BotDifficulty::Hard);
+        sim.match.AddHuman(1);
+        sim.match.Start();
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
+        PlayerState* a = sim.match.Find(1000);
+        PlayerState* b = sim.match.Find(1001);
+        a->pos = {-160, 0}; b->pos = {160, 0};
+        a->weapon = b->weapon = {ItemId::MasterSword, Rarity::Rare};
+        a->hasShield = b->hasShield = true;
+        a->shield = b->shield = {ItemId::HylianShield, Rarity::Rare};
+        a->maxHealth = a->health = b->maxHealth = b->health = 400.0f;
+        for (int i = 0; i < 20 * 20; i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->alive = false;
+            for (uint32_t id : {1000u, 1001u}) seen.insert(sim.match.Find(id)->anim);
+        }
+    }
+    CHECK(seen.count(static_cast<int>(Anim::HopL)) || seen.count(static_cast<int>(Anim::HopR)));
+    CHECK(seen.count(static_cast<int>(Anim::JumpSlash)));
+    CHECK(seen.count(static_cast<int>(Anim::Guard)));
+    CHECK(seen.count(static_cast<int>(Anim::Jump)));
+    CHECK(IsDodge(static_cast<uint8_t>(Anim::HopL)) && IsDodge(static_cast<uint8_t>(Anim::Backflip)) && !IsDodge(static_cast<uint8_t>(Anim::Guard)));
+
+    // Chests: the bot stops, kicks it open, then holds up what was inside.
+    {
+        Simulation sim = Duel(77, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        LootSpawn chest{{150, 0}, ItemId::MasterSword, Rarity::Epic, true, true};
+        sim.match.AddLoot(chest);
+        std::vector<int> order;
+        for (int i = 0; i < 8 * kTickHz; i++) {
+            sim.Tick(kDt);
+            if (order.empty() || order.back() != a->anim) order.push_back(a->anim);
+        }
+        auto at = [&](Anim x) { return std::find(order.begin(), order.end(), static_cast<int>(x)) - order.begin(); };
+        CHECK(a->weapon.item == ItemId::MasterSword);
+        CHECK(at(Anim::OpenChest) < static_cast<long>(order.size()) && at(Anim::ItemGet) < static_cast<long>(order.size()) && at(Anim::OpenChest) < at(Anim::ItemGet));
+    }
+
+    // Bushes and rocks: a bot short of arrows cuts the bush beside it; the server is asked to break it.
+    {
+        Simulation sim = Duel(78, {1500, 0}, {0, 0});
+        PlayerState* a = sim.match.Find(1000);
+        a->weapon = {ItemId::FairyBow, Rarity::Rare};
+        a->ammo.fill(0);
+        sim.bots.SetProps({{{200, 0}, PropKind::Bush, 0}, {{0, 2500}, PropKind::Rock, 0}});
+        std::vector<std::pair<uint32_t, size_t>> asked;
+        for (int i = 0; i < 6 * kTickHz && asked.empty(); i++) {
+            sim.Tick(kDt);
+            asked = sim.bots.DrainSmashes();
+        }
+        CHECK(asked.size() == 1 && asked[0].first == 1000 && asked[0].second == 0);
+        CHECK(Distance(a->pos, {200, 0}) < 200.0f);
+    }
+}
+
 static void BotsLeaveBlastRings() {
     // Hard bots standing in a marked blast walk or roll out before it lands; they are not stuck there taking it.
     int escaped = 0, trials = 0;
@@ -2636,6 +2739,189 @@ static void MiniBosses() {
     }
 }
 
+// One mini boss of the given kind at the origin, with the test player (who can't die) at `human`.
+static Simulation OneBoss(BossKind kind, Vec2 human, std::shared_ptr<const NavGrid> nav = nullptr) {
+    Simulation sim = BossArena({{0, 0}}, 1, human);
+    MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+    b->kind = kind;
+    b->maxHealth = b->health = BossOf(kind).health;
+    PlayerState* h = sim.match.Find(1);
+    h->maxHealth = h->health = 100.0f;
+    if (nav) sim.match.SetNav(std::move(nav));
+    return sim;
+}
+
+static void BossesUseTheirOwnMoves() {
+    // Every mini boss, fought for a while, does its own thing from the game (and the blasts it marks are its own kind).
+    struct Want { BossKind kind; DragonMode mode; StrikeStyle style; float start; };
+    const Want wants[] = {
+        {BossKind::Stone, DragonMode::Leap, StrikeStyle::Rock, 400.0f},      // Stalfos: jump slash
+        {BossKind::Lava, DragonMode::Charge, StrikeStyle::Fire, 430.0f},     // Magma Dodongo: rolls at you from further off, leaving fire
+        {BossKind::Lava, DragonMode::Breath, StrikeStyle::Count, 150.0f},    // ...and breathes fire up close
+        {BossKind::Frost, DragonMode::Summon, StrikeStyle::Ice, 150.0f},     // White Wolfos: freezing howl
+        {BossKind::Moss, DragonMode::Summon, StrikeStyle::Spore, 400.0f},    // Moss Lizalfos: spore pods
+        {BossKind::Tide, DragonMode::Charge, StrikeStyle::Count, 430.0f},    // Big Octo: spin charge
+        {BossKind::Shade, DragonMode::Summon, StrikeStyle::Shadow, 400.0f},  // Dead Hand: hands out of the ground
+        {BossKind::Dune, DragonMode::Slam, StrikeStyle::Rock, 150.0f},       // Iron Knuckle: overhead cleave
+    };
+    for (const Want& w : wants) {
+        Simulation sim = OneBoss(w.kind, {w.start, 0});
+        bool sawMode = false, sawStyle = w.style == StrikeStyle::Count, dazedLater = false;
+        for (int i = 0; i < static_cast<int>(12 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {w.start, 0};   // stand still where it found you
+            const MiniBoss& b = sim.match.Bosses()[0];
+            sawMode |= b.mode == w.mode;
+            dazedLater |= sawMode && b.mode == DragonMode::Stunned;
+            for (const auto& e : sim.match.DrainEvents()) sawStyle |= e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(w.style);
+        }
+        CHECK(sawMode && sawStyle);
+        if (w.kind == BossKind::Tide || w.kind == BossKind::Dune || (w.kind == BossKind::Lava && w.mode == DragonMode::Charge)) CHECK(dazedLater);   // and is dazed after it
+    }
+    // Dead Hand burrows over to you after its grab; while it is underground nothing can hit it, and dazed it takes extra.
+    {
+        Simulation sim = OneBoss(BossKind::Shade, {400, 0});
+        bool hid = false;
+        for (int i = 0; i < static_cast<int>(10 * kTickHz) && !hid; i++) { sim.Tick(kDt); sim.match.Find(1)->health = 100.0f; hid = BossHidden(sim.match.Bosses()[0].mode); }
+        CHECK(hid);
+        PlayerState* h = sim.match.Find(1);
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        h->weapon = {ItemId::FairyBow, Rarity::Legendary};
+        h->pos = {b->pos.x + 200, b->pos.z};
+        h->attackReadyAt = 0;
+        h->stunUntil = h->frozenUntil = 0;   // (its hands were holding you)
+        CHECK(!sim.match.AttackBoss(1, b->id, true).ok);
+        b->mode = DragonMode::Chase;
+        h->attackReadyAt = 0;
+        const float plain = sim.match.AttackBoss(1, b->id, true).damage;
+        b->mode = DragonMode::Stunned; b->modeUntil = sim.match.Clock() + 5;
+        h->attackReadyAt = 0;
+        const float dazed = sim.match.AttackBoss(1, b->id, true).damage;
+        CHECK(plain > 0 && dazed > plain * 1.2f);
+    }
+    // The Stalfos gets back up once; the second time it stays down.
+    {
+        Simulation sim = OneBoss(BossKind::Stone, {60, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->weapon = {ItemId::MasterSword, Rarity::Legendary};
+        MiniBoss* b = const_cast<MiniBoss*>(&m.Bosses()[0]);
+        b->health = 0.1f;
+        h->attackReadyAt = 0;
+        const AttackResult first = m.AttackBoss(1, b->id, true);
+        CHECK(first.hit && !first.killed && b->alive && b->mode == DragonMode::Stunned && std::abs(b->health - b->maxHealth * kStalfosGetsUpWith) < 0.01f);
+        b->health = 0.1f;
+        h->attackReadyAt = 0;
+        CHECK(m.AttackBoss(1, b->id, true).killed && !b->alive);
+    }
+    // The Iron Knuckle with its armour off is faster.
+    {
+        Simulation a = OneBoss(BossKind::Dune, {400, 0}), bare = OneBoss(BossKind::Dune, {400, 0});
+        MiniBoss* x = const_cast<MiniBoss*>(&bare.match.Bosses()[0]);
+        x->health = x->maxHealth * 0.4f;
+        Run(a, 1.2f); Run(bare, 1.2f);
+        CHECK(Distance(bare.match.Bosses()[0].pos, {0, 0}) > Distance(a.match.Bosses()[0].pos, {0, 0}) * 1.3f);
+    }
+    // What the blasts do: ice freezes, shadow holds you, fire sets you alight.
+    {
+        Simulation sim = OneBoss(BossKind::Frost, {1900, 0});
+        Match& m = sim.match;
+        PlayerState* h = m.Find(1);
+        h->pos = {1500, 0};
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Ice);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->frozenUntil);
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Shadow);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->stunUntil);
+        m.AddStrike({1500, 0}, 100.0f, 0.1f, 0.1f, m.Bosses()[0].id, StrikeStyle::Fire);
+        Run(sim, 0.3f);
+        CHECK(m.Clock() < h->burnUntil);
+    }
+}
+
+static void BossesFindTheirWay() {
+    // A wall between the boss and you: with the grid it walks around it (never through it); a boss that can leap is not stopped
+    // by a gap it can't walk round, and Dead Hand goes under.
+    auto wall = std::make_shared<NavGrid>(MapCircle(), NotWall);
+    {
+        Simulation sim = BossArena({{-200, 0}}, 1, {200, 0});
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        b->kind = BossKind::Dune;   // an Iron Knuckle: it walks
+        sim.match.SetNav(wall);
+        sim.match.Find(1)->maxHealth = sim.match.Find(1)->health = 100.0f;
+        bool throughWall = false;
+        float closest = 1e9f;
+        for (int i = 0; i < static_cast<int>(20 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {200, 0};
+            const MiniBoss& x = sim.match.Bosses()[0];
+            throughWall |= std::fabs(x.pos.x) < 25.0f && std::fabs(x.pos.z) < 450.0f;   // the grid is 60 wide, so only the core of the wall is guaranteed
+            closest = std::min(closest, Distance(x.pos, {200, 0}));
+        }
+        CHECK(!throughWall && closest < 200.0f);
+    }
+    // A pocket it can't walk to: the Stalfos leaps in, Dead Hand burrows in, the Lizalfos climbs over.
+    auto sealed = std::make_shared<NavGrid>(MapCircle(), [](Vec2 p) { const float d = std::hypot(p.x - 400.0f, p.z); return d < 150.0f || d > 300.0f; });
+    for (BossKind k : {BossKind::Stone, BossKind::Shade, BossKind::Moss}) {
+        Simulation sim = BossArena({{50, 0}}, 1, {400, 0});
+        MiniBoss* b = const_cast<MiniBoss*>(&sim.match.Bosses()[0]);
+        b->kind = k;
+        sim.match.SetNav(sealed);
+        bool trick = false;
+        float closest = 1e9f;
+        for (int i = 0; i < static_cast<int>(20 * kTickHz); i++) {
+            sim.Tick(kDt);
+            sim.match.Find(1)->health = 100.0f;
+            sim.match.Find(1)->pos = {400, 0};
+            const MiniBoss& x = sim.match.Bosses()[0];
+            trick |= x.mode == DragonMode::Leap || x.mode == DragonMode::Hidden || x.mode == DragonMode::Climb;
+            closest = std::min(closest, Distance(x.pos, {400, 0}));
+        }
+        CHECK(trick && closest < 160.0f);
+    }
+}
+
+static void MajorBossesFightTheirOwnWay() {
+    float half = 0;
+    for (const auto& ph : kStormPhases) half += ph.waitSec + ph.closeSec;
+    half *= 0.5f;
+    // Each map's major boss is its own, and fought for a while shows its own moves.
+    struct Want { int map; BossKind kind; std::vector<DragonMode> modes; std::vector<StrikeStyle> styles; };
+    const Want wants[] = {
+        {3, BossKind::DragonFire, {DragonMode::Hidden, DragonMode::Emerge, DragonMode::Landed}, {StrikeStyle::Fire, StrikeStyle::Rock}},
+        {1, BossKind::DragonWater, {DragonMode::Hidden, DragonMode::Emerge, DragonMode::Slam, DragonMode::Stunned}, {StrikeStyle::Water}},
+        {0, BossKind::DragonForest, {DragonMode::Hidden, DragonMode::Charge, DragonMode::Beam, DragonMode::Cast}, {StrikeStyle::Magic, StrikeStyle::Bolt}},
+        {2, BossKind::DragonShadow, {DragonMode::Slam}, {StrikeStyle::Shadow}},
+        {4, BossKind::DragonSand, {DragonMode::Beam}, {StrikeStyle::Fire, StrikeStyle::Ice}},
+    };
+    for (const Want& w : wants) {
+        Simulation sim = DragonArena(w.map, true);
+        Run(sim, half + 1.0f);
+        Match& m = sim.match;
+        const MiniBoss* d = m.FindBoss(kDragonId);
+        CHECK(d && d->kind == w.kind && std::string(BossOf(d->kind).name).size() > 3);
+        if (!d) continue;
+        PlayerState* h = m.Find(1);
+        h->invulnUntil = 0;
+        std::set<int> modes, styles, auxes;
+        for (int i = 0; i < static_cast<int>(90 * kTickHz); i++) {
+            sim.Tick(kDt);
+            h->health = h->maxHealth;
+            h->pos = {d->pos.x + 300.0f, d->pos.z};   // keep close to it
+            if (d->kind == BossKind::DragonWater && i % static_cast<int>(kTickHz * 3) == 0) h->pos = {0, 0};
+            modes.insert(static_cast<int>(d->mode));
+            if (d->mode == DragonMode::Beam || d->mode == DragonMode::Slam) auxes.insert(d->aux);
+            for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.a == kDragonId) styles.insert(e.item);
+        }
+        for (DragonMode md : w.modes) CHECK(modes.count(static_cast<int>(md)));
+        for (StrikeStyle st : w.styles) CHECK(styles.count(static_cast<int>(st)));
+        if (w.kind == BossKind::DragonSand) CHECK(auxes.count(0) && auxes.count(1));   // fire and ice take turns
+    }
+}
+
 static void PlayerLimitSlider() {
     Match m(1, MapCircle());
     CHECK(m.PlayerLimit() == kMaxPlayers);
@@ -2791,14 +3077,14 @@ static void ShieldBar() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");
