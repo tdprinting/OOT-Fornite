@@ -2469,16 +2469,169 @@ void ApplyTrees(Player* player) {
         }
 }
 
+// ---- the storm wall and the weather, in the world ------------------------------------------------------------------------------
+// Where the safe zone's edge stands this frame, set by DriveStorm from the match state and drawn as a wall by DrawStormWall.
+royale::Circle gWallZone;
+float gWallAlpha = 0.0f;    // fades in when a match starts and out when it ends
+float gWallBase = 0.0f;     // roughly where the ground is (the wall reaches well below and far above it)
+bool gWallBaseKnown = false;
+
+bool ScreenCovered();   // a menu or pause screen is over the game (defined with the screen drawing)
+
+// Once per game tick: are you standing in the storm (alive, outside the safe zone), and where is the wall?
+void DriveStorm(const royale::HudState& h) {
+    const bool live = gSession.Joined() && InField() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
+    const bool in = live && h.haveSelf && h.selfAlive && !ScreenCovered() && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
+    gStormWeather = std::clamp(gStormWeather + (in ? 0.06f : -0.09f), 0.0f, 1.0f);   // about a second to come and go
+    const bool wall = live && h.safeZone.radius > 0 && !(h.haveSelf && !h.selfAlive) && !ScreenCovered();
+    if (wall) gWallZone = h.safeZone;
+    gWallAlpha = std::clamp(gWallAlpha + (wall ? 0.05f : -0.05f), 0.0f, 1.0f);
+    if (!InField() || gPlayState == nullptr) { gWallBaseKnown = false; return; }
+    Player* pl = GET_PLAYER(gPlayState);
+    const float ground = pl->actor.floorHeight > BGCHECK_Y_MIN + 1.0f ? pl->actor.floorHeight : pl->actor.world.pos.y;
+    gWallBase = gWallBaseKnown ? gWallBase + (ground - gWallBase) * 0.05f : ground;   // follows slowly, so it never jumps when you jump
+    gWallBaseKnown = true;
+}
+
+// The edge of the safe zone as a wall of violet storm light all the way round, a little see-through, bright at the foot and fading out high
+// up, with bands of light rolling along it. It is drawn without the game's distance fog, so it shows from anywhere on the map (out to the
+// game's own draw distance), and the hills and buildings in front of it hide it as they should.
+void DrawStormWall(PlayState* play) {
+    if (gWallAlpha <= 0.0f || gWallZone.radius <= 0.0f || !gWallBaseKnown) return;
+    const float r = gWallZone.radius;
+    const float shrink = std::max(1.0f, r / 30000.0f);   // vertex positions are 16 bit: scale them down for a huge circle
+    const int segs = std::clamp(static_cast<int>(r / 120.0f), 48, 160);
+    const float t = static_cast<float>(ImGui::GetTime());
+    constexpr int kRows = 4;
+    const float heights[kRows] = { gWallBase - 3000.0f, gWallBase + 250.0f, gWallBase + 2600.0f, gWallBase + 7500.0f };
+    const float alphas[kRows] = { 175.0f, 160.0f, 110.0f, 0.0f };
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
+    if (v == nullptr) return;
+    auto put = [&](Vtx& o, float ang, int row) {
+        const float c = std::cos(ang), s = std::sin(ang);
+        // Rolling bands of brighter light, running round the wall and drifting upward.
+        const float band = 0.5f + 0.5f * std::sin(ang * 23.0f + t * 0.9f + row * 1.3f) * std::sin(ang * 7.0f - t * 0.55f + heights[row] * 0.0007f + t * 0.4f);
+        const float k = 0.72f + 0.38f * band;
+        o.v.ob[0] = static_cast<s16>(std::lround(c * r / shrink));
+        o.v.ob[1] = static_cast<s16>(std::clamp(std::lround(heights[row] / shrink), -32000L, 32000L));
+        o.v.ob[2] = static_cast<s16>(std::lround(s * r / shrink));
+        o.v.flag = 0;
+        o.v.tc[0] = o.v.tc[1] = 0;
+        o.v.cn[0] = static_cast<u8>(std::min(255.0f, 150.0f * k + 20.0f * (row == 0)));
+        o.v.cn[1] = static_cast<u8>(std::min(255.0f, 70.0f * k));
+        o.v.cn[2] = static_cast<u8>(std::min(255.0f, 235.0f * k));
+        o.v.cn[3] = static_cast<u8>(std::clamp(alphas[row] * (0.8f + 0.3f * band), 0.0f, 255.0f));
+    };
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);   // seen from either side, and not lost in the fog
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);   // vertex colour, vertex alpha x our fade
+    gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, static_cast<u8>(255.0f * gWallAlpha));
+    Matrix_Translate(gWallZone.center.x, 0.0f, gWallZone.center.z, MTXMODE_NEW);
+    if (shrink > 1.0f) Matrix_Scale(shrink, shrink, shrink, MTXMODE_APPLY);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    for (int i = 0; i < segs; i++) {   // one strip of the wall: two columns of four, three quads high
+        const float a0 = 6.2831853f * static_cast<float>(i) / segs, a1 = 6.2831853f * static_cast<float>(i + 1) / segs;
+        Vtx* q = &v[i * 2 * kRows];
+        for (int row = 0; row < kRows; row++) { put(q[row], a0, row); put(q[kRows + row], a1, row); }
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(q), 2 * kRows, 0);
+        for (int row = 0; row + 1 < kRows; row++)
+            gSP2Triangles(POLY_XLU_DISP++, row, kRows + row, kRows + row + 1, 0, row, kRows + row + 1, row + 1, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Ash and blowing sand: specks drifting through the air all around the camera, in the world (they pass in front of and behind things, and
+// you fly through them), carried by the wind. Embers glow and rise; sand streaks along the wind. "Weather density" sets how many (0: none).
+void DrawWeatherParticles(PlayState* play) {
+    const royale::Sky sky = gWeatherShown.sky;
+    if (sky != royale::Sky::Ash && sky != royale::Sky::Sandstorm) return;
+    const float amount = WeatherAmount() * gWeatherDensity;
+    if (amount <= 0.02f) return;
+    const bool ash = sky == royale::Sky::Ash;
+    const int n = std::min(ash ? 220 : 300, static_cast<int>((ash ? 150.0f : 220.0f) * amount));
+    if (n <= 0) return;
+    const Vec3f eye = play->view.eye;
+    const float t = static_cast<float>(ImGui::GetTime());
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
+    const float speed = ash ? 60.0f + 0.25f * wl : 380.0f + 0.9f * wl;
+    constexpr float kBox = 1400.0f, kHalf = kBox * 0.5f, kTall = 900.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 8 * sizeof(Vtx)));
+    if (v == nullptr) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);   // the specks are placed around the camera
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    for (int i = 0; i < n; i++) {
+        const float h1 = Flora01(i, 7, 201), h2 = Flora01(i, 11, 202), h3 = Flora01(i, 13, 203), depth = 0.6f + 0.8f * Flora01(i, 17, 204);
+        // Each speck drifts along the wind (and up or down) through a box that moves with the camera, wrapping round its sides.
+        const float drift = t * speed * depth;
+        const float rise = ash ? t * (i % 3 == 0 ? 45.0f : -25.0f) * depth : std::sin(t * 2.0f + i) * 20.0f;
+        float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
+        float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
+        float y = wrap(h3 * kTall + eye.y + rise, kTall) - kTall * 0.5f;
+        if (ash) { x += std::sin(t * 0.8f + i) * 25.0f; z += std::cos(t * 0.7f + i * 1.7f) * 25.0f; }
+        // Two crossed quads, so the speck looks the same from any side: a small square for ash, a thin streak along the wind for sand.
+        float ax, ay, az, bx, by, bz, cx, cy, cz;
+        if (ash) {
+            const float s = (i % 3 == 0 ? 3.0f : 4.5f) * depth;
+            ax = 0.0f; ay = s; az = 0.0f; bx = s; by = 0.0f; bz = 0.0f; cx = 0.0f; cy = 0.0f; cz = s;
+        } else {
+            const float len = 26.0f * depth, th = 1.6f * depth;
+            ax = dx * len; ay = 0.0f; az = dz * len; bx = 0.0f; by = th; bz = 0.0f; cx = -dz * th; cy = 0.0f; cz = dx * th;
+        }
+        u8 r, g, b, a;
+        if (ash && i % 3 == 0) { const float glow = 0.75f + 0.25f * std::sin(t * 6.0f + i); r = 255; g = static_cast<u8>(140 * glow); b = 40; a = 235; }   // a glowing ember
+        else if (ash) { r = 120; g = 112; b = 108; a = 200; }
+        else { r = 232; g = 196; b = 132; a = static_cast<u8>(150 + 60 * h3); }
+        Vtx* q = &v[i * 8];
+        const float corners[8][3] = { {x - ax - bx, y - ay - by, z - az - bz}, {x + ax - bx, y + ay - by, z + az - bz}, {x + ax + bx, y + ay + by, z + az + bz}, {x - ax + bx, y - ay + by, z - az + bz},
+                                      {x - ax - cx, y - ay - cy, z - az - cz}, {x + ax - cx, y + ay - cy, z + az - cz}, {x + ax + cx, y + ay + cy, z + az + cz}, {x - ax + cx, y - ay + cy, z - az + cz} };
+        for (int k = 0; k < 8; k++) {
+            q[k].v.ob[0] = static_cast<s16>(std::lround(corners[k][0]));
+            q[k].v.ob[1] = static_cast<s16>(std::lround(corners[k][1]));
+            q[k].v.ob[2] = static_cast<s16>(std::lround(corners[k][2]));
+            q[k].v.flag = 0; q[k].v.tc[0] = q[k].v.tc[1] = 0;
+            q[k].v.cn[0] = r; q[k].v.cn[1] = g; q[k].v.cn[2] = b; q[k].v.cn[3] = a;
+        }
+    }
+    for (int first = 0; first < n; first += 4) {   // four specks (32 vertices) at a time
+        const int count = std::min(4, n - first);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[first * 8]), count * 8, 0);
+        for (int k = 0; k < count; k++) {
+            const int o = k * 8;
+            gSP2Triangles(POLY_XLU_DISP++, o, o + 1, o + 2, 0, o, o + 2, o + 3, 0);
+            gSP2Triangles(POLY_XLU_DISP++, o + 4, o + 5, o + 6, 0, o + 4, o + 6, o + 7, 0);
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Rain and snow are the game's own: its rain streaks and its falling snow (the same flakes as its winter holiday mode), switched on and scaled with
-// the server's spell of weather and the storm. The flat 2D weather in DrawWeather keeps only the tint, fog and lightning.
+// the server's spell of weather and the storm. So are the rest: thunderstorms and the storm zone bring the game's lightning (bolts on the horizon,
+// the sky flashing), fog, sand, ash and the storm thicken the game's own distance fog and tint it, and a sandstorm brings the Haunted Wasteland's
+// sandstorm. Everything is handed back to the game when the weather clears or the match ends.
 void DriveRealWeather() {
-    if (!InField() || gPlayState == nullptr) return;
+    static bool rainManaged = false, snowManaged = false, lightningManaged = false, sandManaged = false, fogManaged = false;
+    static float fogNearAdj = 0.0f, fogFarAdj = 0.0f, fogColAdj[3] = { 0.0f, 0.0f, 0.0f };
+    if (!InField() || gPlayState == nullptr) {   // the scene is going (or gone): the next one starts from its own settings
+        rainManaged = snowManaged = lightningManaged = sandManaged = fogManaged = false;
+        fogNearAdj = fogFarAdj = fogColAdj[0] = fogColAdj[1] = fogColAdj[2] = 0.0f;
+        return;
+    }
     PlayState* play = gPlayState;
     const float w = WeatherAmount();
-    const bool rainSky = gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder;
+    const royale::Sky sky = gWeatherShown.sky;
+    const bool rainSky = sky == royale::Sky::Rain || sky == royale::Sky::Thunder;
     const float rain = std::max(rainSky ? w : 0.0f, gStormWeather * 0.8f) * gWeatherDensity;
-    const float snow = gWeatherShown.sky == royale::Sky::Snow ? w * gWeatherDensity : 0.0f;
-    static bool rainManaged = false, snowManaged = false;
+    const float snow = sky == royale::Sky::Snow ? w * gWeatherDensity : 0.0f;
     const int wantRain = std::clamp(static_cast<int>(rain * 70.0f), 0, 130);
     if (wantRain > 0 || (rainManaged && play->envCtx.unk_EE[1] > 0)) {
         const int cur = play->envCtx.unk_EE[1];
@@ -2494,6 +2647,66 @@ void DriveRealWeather() {
     } else if (snowManaged) {
         play->envCtx.unk_EE[3] = 0;   // the flakes thin out by themselves
         if (play->envCtx.unk_EE[2] == 0) snowManaged = false;
+    }
+
+    // Lightning: the game strikes at random every few seconds while it is on. It is turned off with "one last strike", which lets a flash
+    // that is under way finish (switching straight off would leave the sky lit).
+    const bool wantLightning = (sky == royale::Sky::Thunder && w > 0.25f) || gStormWeather > 0.5f;
+    if (wantLightning) {
+        play->envCtx.lightningMode = LIGHTNING_MODE_ON;
+        lightningManaged = true;
+    } else if (lightningManaged) {
+        if (play->envCtx.lightningMode == LIGHTNING_MODE_ON) play->envCtx.lightningMode = LIGHTNING_MODE_LAST;
+        lightningManaged = false;
+    }
+
+    // The desert's sandstorm, as in the Haunted Wasteland. "Weather density" 0 leaves it out.
+    const bool wantSand = sky == royale::Sky::Sandstorm && w * gWeatherDensity > 0.2f;
+    if (wantSand) {
+        if (play->envCtx.sandstormState == SANDSTORM_OFF || play->envCtx.sandstormState == SANDSTORM_DISSIPATE) play->envCtx.sandstormState = SANDSTORM_ACTIVE;
+        sandManaged = true;
+    } else if (sandManaged) {
+        if (play->envCtx.sandstormState != SANDSTORM_OFF) play->envCtx.sandstormState = SANDSTORM_DISSIPATE;   // it fades out and switches itself off
+        sandManaged = false;
+    }
+
+    // Fog, in the game's own fog: a fog "near" of 996 is no fog at all, lower brings it closer; "far" is where it is solid (and also how far the
+    // game draws). Each kind of weather pulls both in and tints the fog its colour; the storm wins where it is thicker.
+    float near = 996.0f, far = 12800.0f, amount = 0.0f;
+    float col[3] = { 0.0f, 0.0f, 0.0f };
+    auto want = [&](float a, float n, float f, int r, int g, int b) {
+        if (a <= 0.0f) return;
+        const float nn = 996.0f + (n - 996.0f) * a, ff = 12800.0f + (f - 12800.0f) * a;
+        if (nn >= near && a <= amount) return;
+        near = std::min(near, nn); far = std::min(far, ff);
+        amount = std::max(amount, a);
+        col[0] = static_cast<float>(r); col[1] = static_cast<float>(g); col[2] = static_cast<float>(b);
+    };
+    switch (sky) {
+        case royale::Sky::Fog: want(w, 900.0f, 3200.0f, 205, 212, 218); break;
+        case royale::Sky::Sandstorm: want(w, 930.0f, 4200.0f, 205, 165, 105); break;
+        case royale::Sky::Ash: want(w, 960.0f, 6000.0f, 70, 52, 48); break;
+        case royale::Sky::Thunder: want(w, 975.0f, 8000.0f, 60, 66, 84); break;
+        case royale::Sky::Rain: want(w, 985.0f, 10000.0f, 110, 118, 130); break;
+        case royale::Sky::Snow: want(w, 975.0f, 8000.0f, 220, 228, 240); break;
+        default: break;
+    }
+    want(gStormWeather, 940.0f, 5000.0f, 70, 40, 120);   // inside the storm: violet murk
+    const EnvLightSettings& base = play->envCtx.lightSettings;
+    const float targetNear = amount > 0.0f ? std::min(0.0f, near - static_cast<float>(base.fogNear & 0x3FF)) : 0.0f;
+    const float targetFar = amount > 0.0f ? std::min(0.0f, far - static_cast<float>(base.fogFar)) : 0.0f;
+    if (amount > 0.0f || fogManaged) {
+        auto toward = [](float cur, float target, float step) { return cur < target ? std::min(target, cur + step) : std::max(target, cur - step); };
+        fogNearAdj = toward(fogNearAdj, targetNear, 1.5f);
+        fogFarAdj = toward(fogFarAdj, targetFar, 220.0f);
+        for (int i = 0; i < 3; i++) {
+            const float target = amount > 0.0f ? (col[i] - static_cast<float>(base.fogColor[i])) * std::min(1.0f, amount * 1.2f) : 0.0f;
+            fogColAdj[i] = toward(fogColAdj[i], target, 4.0f);
+        }
+        play->envCtx.adjFogNear = static_cast<s16>(std::lround(fogNearAdj));
+        play->envCtx.adjFogFar = static_cast<s16>(std::lround(fogFarAdj));
+        for (int i = 0; i < 3; i++) play->envCtx.adjFogColor[i] = static_cast<s16>(std::lround(fogColAdj[i]));
+        fogManaged = amount > 0.0f || fogNearAdj != 0.0f || fogFarAdj != 0.0f || fogColAdj[0] != 0.0f || fogColAdj[1] != 0.0f || fogColAdj[2] != 0.0f;
     }
 }
 
@@ -2662,6 +2875,8 @@ void DrawHeldFinds(PlayState* play) {
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     DrawFlora(play);
+    DrawStormWall(play);
+    DrawWeatherParticles(play);
     DrawHeldFinds(play);
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
@@ -3175,113 +3390,45 @@ std::string SpectateName() {
     return "yourself";
 }
 
-// The storm. There is no wall to see (anything drawn over the world showed through hills and buildings); the edge is on the map and the
-// timer. What you do see is the weather: while you stand outside the safe zone the sky goes dark (DriveTimeOfDay), and this puts a heavy
-// grey-violet haze, driving rain, gusting wind streaks and lightning on the screen. It fades in and out over a few seconds.
+// Is something covering the game right now (its own pause screen or the port's menu)? Then the storm and weather tints stay off the screen.
+bool RoyaleMenuOpen();   // the Battle Royale menu (RoyaleMenu.inc)
+bool ScreenCovered() {
+    if (gPlayState != nullptr && gPlayState->pauseCtx.state != 0) return true;
+    if (RoyaleMenuOpen()) return true;
+    return SohGui::mSohMenu && SohGui::mSohMenu->IsVisible();
+}
+
+// The storm. Its edge is a glowing wall standing in the world (DrawStormWall), so you can see it from across the map. Standing outside the safe
+// zone you are in the storm itself: the sky goes dark (DriveTimeOfDay), the game's own rain, lightning and a violet fog close in
+// (DriveRealWeather), and this adds only a faint violet tint on top. Nothing of it is drawn while you are dead or a menu covers the game.
 void DrawStorm(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
-    const bool in = InField() && h.safeZone.radius > 0 && h.stormDamagePerSecond > 0;
-    gStormWeather = std::clamp(gStormWeather + (in ? 0.02f : -0.03f), 0.0f, 1.0f);
+    (void)scale;
     const float w = gStormWeather;
-    if (w <= 0.0f || !InField()) return;
-    const double t = ImGui::GetTime();
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(22, 12, 44, static_cast<int>(150 * w)), IM_COL32(22, 12, 44, static_cast<int>(150 * w)),
-                                IM_COL32(48, 34, 84, static_cast<int>(110 * w)), IM_COL32(48, 34, 84, static_cast<int>(110 * w)));
-    const int drops = static_cast<int>(260 * w);
-    for (int i = 0; i < drops; i++) { // slanting rain, three depths
-        const float depth = 0.6f + 0.4f * (i % 3) / 2.0f;
-        const float x = std::fmod(i * 97.3f + static_cast<float>(t) * 420.0f * depth, ds.x + 320.0f) - 160.0f;
-        const float y = std::fmod(i * 61.7f + static_cast<float>(t) * 1250.0f * depth, ds.y + 120.0f) - 60.0f;
-        dl->AddLine(ImVec2(x, y), ImVec2(x - 16 * scale * depth, y + 40 * scale * depth), IM_COL32(205, 195, 255, static_cast<int>(130 * w * depth)), 1.6f * scale * depth);
-    }
-    for (int i = 0; i < 14; i++) { // long gust streaks racing across
-        const float y = std::fmod(i * 131.1f, ds.y);
-        const float x = std::fmod(static_cast<float>(t) * (900.0f + 70.0f * i) + i * 200.0f, ds.x * 1.6f) - ds.x * 0.3f;
-        dl->AddLine(ImVec2(x, y), ImVec2(x - 150 * scale, y + 14 * scale), IM_COL32(190, 180, 235, static_cast<int>(50 * w)), 2.0f * scale);
-    }
-    const float cycle = std::fmod(static_cast<float>(t), 6.1f); // lightning every few seconds: a double flash, then a fork
-    const float flash = cycle < 0.12f ? 1.0f - cycle / 0.12f : (cycle > 0.25f && cycle < 0.40f ? 0.7f * (1.0f - (cycle - 0.25f) / 0.15f) : 0.0f);
-    if (flash > 0.0f) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(235, 225, 255, static_cast<int>(flash * 170.0f * w)));
-    if (cycle < 0.32f) {
-        const int seed = static_cast<int>(t / 6.1f);
-        float x = ds.x * (0.15f + 0.7f * std::fmod(seed * 0.381f, 1.0f)), y = 0;
-        while (y < ds.y * 0.7f) {
-            const float nx = x + (std::fmod((y + seed) * 12.9898f, 1.0f) - 0.5f) * 70.0f * scale, ny = y + 40.0f * scale;
-            dl->AddLine(ImVec2(x, y), ImVec2(nx, ny), IM_COL32(240, 235, 255, static_cast<int>(230 * w)), 3.0f * scale);
-            x = nx; y = ny;
-        }
-    }
+    if (w <= 0.0f || !InField() || !h.selfAlive || ScreenCovered()) return;
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(40, 16, 70, static_cast<int>(60 * w)), IM_COL32(40, 16, 70, static_cast<int>(60 * w)),
+                                IM_COL32(70, 40, 110, static_cast<int>(35 * w)), IM_COL32(70, 40, 110, static_cast<int>(35 * w)));
 }
 
 // ---- seasons and weather ----------------------------------------------------------------------------------------------------
-// What the sky is doing (the server's spell of weather) drawn over the game: a seasonal tint, then rain, fog, snow, ash or sand streaming
-// across the screen. Everything fades in and out as spells change. The "Weather density" option scales the particles (0 turns them off).
+// What the sky is doing (the server's spell of weather). Rain, snow, lightning, fog and the desert sandstorm are the game's own effects, in the
+// world (DriveRealWeather); ash and blowing sand are particles in the world too (DrawWeatherParticles). All that is left on the screen is a faint
+// seasonal tint and the flash of a bolt landing next to you. Everything fades in and out as spells change.
 
 float WeatherAmount() { return gWeatherBlend * gWeatherShown.Strength(); }
 
 void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
+    (void)scale;
     const bool live = InField() && gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
     const bool active = live && h.weather.sky != royale::Sky::Clear && h.weather.intensity > 0;
     if (active) gWeatherShown = h.weather;
     gWeatherBlend = std::clamp(gWeatherBlend + (active ? 0.012f : -0.012f), 0.0f, 1.0f);
     if (live) gWeatherShown.season = h.weather.season;
-    const double t = ImGui::GetTime();
-    const float tf = static_cast<float>(t);
-    if (!live) return;
+    if (!live || ScreenCovered()) return;
     // The season colours the whole picture a little.
     static const ImU32 kSeasonTint[4] = { IM_COL32(150, 230, 140, 16), IM_COL32(255, 214, 120, 18), IM_COL32(255, 150, 60, 26), IM_COL32(190, 215, 255, 30) };
     dl->AddRectFilled(ImVec2(0, 0), ds, kSeasonTint[static_cast<int>(h.weather.season) & 3]);
-    const float w = WeatherAmount();
-    const float density = gWeatherDensity;
-    if (w > 0.01f && density > 0.0f) {
-        const float d = std::clamp(w * density, 0.0f, 2.0f);
-        switch (gWeatherShown.sky) {
-            case royale::Sky::Rain: case royale::Sky::Thunder: {
-                const bool thunder = gWeatherShown.sky == royale::Sky::Thunder;
-                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(40, 50, 70, static_cast<int>((thunder ? 80 : 50) * w)));
-                break;
-            }
-            case royale::Sky::Fog: {
-                dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(205, 210, 215, static_cast<int>(120 * w)), IM_COL32(205, 210, 215, static_cast<int>(120 * w)),
-                                            IM_COL32(215, 218, 222, static_cast<int>(185 * w)), IM_COL32(215, 218, 222, static_cast<int>(185 * w)));
-                const int n = static_cast<int>(7 * std::min(1.5f, density));
-                for (int i = 0; i < n; i++) {   // slow drifting banks
-                    const float x = std::fmod(tf * (22.0f + 9.0f * i) + i * 310.0f, ds.x + 700.0f) - 350.0f, y = ds.y * (0.25f + 0.1f * i);
-                    dl->AddRectFilledMultiColor(ImVec2(x, y - 55 * scale), ImVec2(x + 650 * scale, y + 55 * scale), IM_COL32(225, 228, 232, 0), IM_COL32(225, 228, 232, static_cast<int>(60 * w)),
-                                                IM_COL32(225, 228, 232, 0), IM_COL32(225, 228, 232, static_cast<int>(60 * w)));
-                }
-                break;
-            }
-            case royale::Sky::Snow: {
-                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(220, 230, 245, static_cast<int>(48 * w)));
-                break;
-            }
-            case royale::Sky::Ash: {
-                dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(60, 40, 36, static_cast<int>(95 * w)));
-                const int n = static_cast<int>(120 * d);
-                for (int i = 0; i < n; i++) {
-                    const float depth = 0.5f + 0.5f * (i % 4) / 3.0f;
-                    const float x = std::fmod(i * 91.3f + tf * 60.0f * depth, ds.x + 120.0f) - 60.0f + std::sin(tf + i) * 18.0f * scale;
-                    const float y = ds.y - std::fmod(i * 53.1f + tf * 70.0f * depth, ds.y + 40.0f) + 20.0f;   // embers rise
-                    const bool ember = i % 3 == 0;
-                    dl->AddCircleFilled(ImVec2(x, y), (1.2f + 2.0f * depth) * scale, ember ? IM_COL32(255, 150, 50, 230) : IM_COL32(150, 145, 140, 170), 6);
-                }
-                break;
-            }
-            case royale::Sky::Sandstorm: {
-                dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(205, 165, 105, static_cast<int>(95 * w)), IM_COL32(205, 165, 105, static_cast<int>(95 * w)),
-                                            IM_COL32(190, 145, 85, static_cast<int>(165 * w)), IM_COL32(190, 145, 85, static_cast<int>(165 * w)));
-                const int n = static_cast<int>(120 * d);
-                for (int i = 0; i < n; i++) {
-                    const float depth = 0.5f + 0.5f * (i % 3) / 2.0f;
-                    const float y = std::fmod(i * 71.9f, ds.y), x = std::fmod(i * 131.3f + tf * 1300.0f * depth, ds.x + 400.0f) - 200.0f;
-                    dl->AddLine(ImVec2(x, y), ImVec2(x - 70 * scale * depth, y + 6 * scale), IM_COL32(235, 200, 140, static_cast<int>(120 * depth)), 1.5f * scale);
-                }
-                break;
-            }
-            default: break;
-        }
-    }
     // A lightning bolt landing nearby lights up the whole screen.
+    const double t = ImGui::GetTime();
     if (t < gBoltFlashUntil) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(225, 232, 255, static_cast<int>(std::min(1.0, (gBoltFlashUntil - t) / 0.35) * 150.0)));
 }
 
@@ -7786,6 +7933,7 @@ void OnGameFrameUpdate() {
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    DriveStorm(hud);
     DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     SyncPauseInventory(hud);
@@ -8135,6 +8283,7 @@ void DrawDebug(UiState& ui) {
 }
 
 #include "RoyaleMenu.inc"
+bool RoyaleMenuOpen() { return gMenu.open; }
 
 // The Battle Royale menu is the game's own now (RoyaleMenu.inc). The port menu's "Battle Royale" page keeps a way into it, the developer tools,
 // and a way back to the game's normal file select.
