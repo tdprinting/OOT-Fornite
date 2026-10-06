@@ -1,7 +1,7 @@
 name: Game build
 
 # Builds the whole game (Shipwright-Android fork + our patches + the Royale mod). Slow (the fork is large), so it only
-# runs when game-facing files change, or on demand. It compiles and links but does not run the game: that needs your ROM.
+# runs when game-facing files change, or on demand. Every successful run publishes a release (see the last step). It compiles and links but does not run the game: that needs your ROM.
 on:
   push:
     branches: ["claude/**", "main"]
@@ -67,14 +67,34 @@ jobs:
             third_party/Shipwright-Android/Android/app/build/intermediates/cxx/**/obj/arm64-v8a/*.so
             third_party/Shipwright-Android/Android/app/build/intermediates/merged_native_libs/**/*.so
           if-no-files-found: warn
-      - name: Publish as the newest release (what the in-game updater downloads)
-        if: github.ref_name == github.event.repository.default_branch
+      - name: Publish the build (what the in-game updater downloads)
         env:
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          # Every successful build is published, numbered by this run (the game's version is "0.<number>"):
+          #   - builds of the default branch are normal releases, the ones the updater offers by default;
+          #   - builds of any other branch (a pull request being tested) are pre-releases, offered only when
+          #     "Include test builds" is ticked in the game's updater. They never become "latest".
+          # Runs can finish out of order, so after publishing we point "latest" at the highest normal build, whatever finished last.
+          N=${{ github.run_number }}
           cp third_party/Shipwright-Android/Android/app/build/outputs/apk/release/*.apk TDawgsBattleRoyale.apk
-          gh release create "build-${{ github.run_number }}" TDawgsBattleRoyale.apk --latest \
-            --title "Build 0.${{ github.run_number }}" \
-            --notes "Automatic build of ${{ github.sha }}. Install it from the game's Battle Royale menu > Game updates."
-          # keep only the 10 newest builds
-          gh release list --limit 100 --json tagName --jq '.[10:][].tagName' | xargs -r -n1 gh release delete --cleanup-tag --yes
+          if [ "$BRANCH" = "$DEFAULT_BRANCH" ]; then
+            gh release create "build-$N" TDawgsBattleRoyale.apk --latest=false \
+              --title "Build 0.$N" \
+              --notes "Automatic build of ${{ github.sha }}. Install it from the game's Battle Royale menu > Game updates."
+          else
+            gh release create "build-$N" TDawgsBattleRoyale.apk --prerelease --latest=false \
+              --title "Test build 0.$N ($BRANCH)" \
+              --notes "Test build of branch $BRANCH (${{ github.sha }}), made before merging. Offered in Game updates when 'Include test builds' is ticked."
+          fi
+          NEWEST=$(gh release list --limit 200 --json tagName,isPrerelease \
+            --jq '[.[] | select(.isPrerelease | not) | .tagName | ltrimstr("build-") | tonumber] | max // empty')
+          [ -n "$NEWEST" ] && gh release edit "build-$NEWEST" --latest
+          # Tidy up: keep the 10 highest normal builds and the 10 highest test builds (by number, not by date). Never the newest.
+          for KIND in false true; do
+            gh release list --limit 200 --json tagName,isPrerelease \
+              --jq "[.[] | select(.isPrerelease == $KIND) | .tagName | ltrimstr(\"build-\") | tonumber] | sort | reverse | .[10:][] | \"build-\(.)\"" \
+              | xargs -r -n1 gh release delete --cleanup-tag --yes
+          done

@@ -12245,6 +12245,8 @@ void UpdaterCall(const char* method) {
 
 void DrawUpdater() {
     if (!ImGui::CollapsingHeader("Game updates")) return;
+    // Test builds are made from branches that are not merged yet, so a change can be tried before it is accepted
+    static bool includeTests = false;
     const int state = UpdaterInt("getState");
     if (state < 0) {
         ImGui::TextColored(kRed, "The updater is missing from this build.");
@@ -12259,18 +12261,19 @@ void DrawUpdater() {
         case kUpdIdle:
         case kUpdError:
             if (state == kUpdError) ImGui::TextColored(kRed, "%s", message.c_str());
-            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall("check");
+            ImGui::Checkbox("Include test builds (changes not merged yet)", &includeTests);
+            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall(includeTests ? "checkWithTests" : "check");
             break;
         case kUpdChecking:
             ImGui::Text("%s", message.c_str());
             break;
         case kUpdChecked:
             if (latest > own) {
-                ImGui::TextColored(kGold, "Version 0.%d is ready (%lld MB).", latest, static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
+                ImGui::TextColored(kGold, "%s is ready (%lld MB).", UpdaterString("getLatestName").c_str(), static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
                 if (ImGui::Button("Download and install", ImVec2(260, 0))) UpdaterCall("download");
             } else {
                 ImGui::Text("You have the newest build (0.%d is the newest on GitHub).", latest);
-                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall("check");
+                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall(includeTests ? "checkWithTests" : "check");
                 ImGui::SameLine();
                 if (ImGui::Button("Reinstall it anyway", ImVec2(260, 0))) UpdaterCall("download");
             }
