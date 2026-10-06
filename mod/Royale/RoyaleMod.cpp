@@ -43,8 +43,6 @@
 #include <vector>
 #include <sstream>
 #include <cstdarg>
-#include <cstring>
-#include <fstream>
 #ifdef __ANDROID__
 #include <csignal>
 #include <dlfcn.h>
@@ -6431,17 +6429,40 @@ LobbyMusic gLobbyMusic;
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
 // A breadcrumb trail for crashes the phone gives no log for: each step is written to royale-trace.txt (next to the music folder) and closed
-// again straight away, so the last line says how far the game got. The file starts afresh each run.
+// again straight away, so the last line says how far the game got. Each run starts a new file; the one from the run before is kept as
+// royale-trace-prev.txt so it is still there to read after the game is reopened.
 char gTraceLast[160] = "(nothing yet)";   // the newest step, for the crash report
+
+// Free memory in MB as Linux and Android report it, or -1. A phone that runs low closes the game with no message at all.
+int FreeMemoryMb() {
+    std::ifstream in("/proc/meminfo");
+    std::string key;
+    long kb = 0;
+    std::string unit;
+    while (in >> key >> kb >> unit) {
+        if (key == "MemAvailable:") return static_cast<int>(kb / 1024);
+    }
+    return -1;
+}
+
 void Trace(const char* step) {
     static bool fresh = true;
     static std::string last;
     if (last == step) return;   // a step drawn every frame is written once
     last = step;
     std::snprintf(gTraceLast, sizeof(gTraceLast), "%s", step);
-    std::ofstream out(std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt")), fresh ? std::ios::trunc : std::ios::app);
+    const std::filesystem::path file(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt"));
+    if (fresh) {
+        std::error_code ec;
+        std::filesystem::rename(file, Ship::Context::GetPathRelativeToAppDirectory("royale-trace-prev.txt"), ec);
+    }
+    std::ofstream out(file, fresh ? std::ios::trunc : std::ios::app);
     fresh = false;
-    if (out) out << step << "\n";
+    if (out) {
+        out << step;
+        if (std::strncmp(step, "start:", 6) == 0) out << " (free memory " << FreeMemoryMb() << " MB)";
+        out << "\n";
+    }
 }
 
 // ---- crash report ---------------------------------------------------------------------------------------------------------------
@@ -6518,25 +6539,46 @@ void InstallCrashReporter() {}
 
 // A crash report from the last run, shown at the top of the Battle Royale menu until dismissed.
 void DrawCrashReport() {
-    static int state = 0;   // 0: not looked yet, 1: showing, 2: none or dismissed
+    static int state = 0;   // 0: not looked yet, 1: showing a crash, 2: none or dismissed, 3: showing a silent stop
     static std::string text;
     const std::filesystem::path file(Ship::Context::GetPathRelativeToAppDirectory("royale-crash.txt"));
+    const std::filesystem::path prev(Ship::Context::GetPathRelativeToAppDirectory("royale-trace-prev.txt"));
     if (state == 0) {
         std::ifstream in(file);
         std::stringstream ss;
         if (in) ss << in.rdbuf();
         text = ss.str();
         state = text.empty() ? 2 : 1;
+        if (state == 2) {
+            // No crash report, but the last run's trail may end in the middle of a match start: the phone closed the game without a signal
+            std::ifstream trail(prev);
+            std::string line, lastLine;
+            while (std::getline(trail, line)) if (!line.empty()) lastLine = line;
+            if (std::strncmp(lastLine.c_str(), "start:", 6) == 0 && lastLine.find("match started") == std::string::npos) {
+                text = lastLine;
+                state = 3;
+            }
+        }
     }
-    if (state != 1) return;
-    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "The game closed unexpectedly last time. Please send a photo of this to Claude:");
-    ImGui::TextWrapped("%s", text.c_str());
-    if (ImGui::Button("Dismiss crash report")) {
-        std::error_code ec;
-        std::filesystem::remove(file, ec);
-        state = 2;
+    if (state == 1) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "The game closed unexpectedly last time. Please send a photo of this to Claude:");
+        ImGui::TextWrapped("%s", text.c_str());
+        if (ImGui::Button("Dismiss crash report")) {
+            std::error_code ec;
+            std::filesystem::remove(file, ec);
+            state = 2;
+        }
+        ImGui::Separator();
+    } else if (state == 3) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Last time the game stopped while starting a match, with no crash report (Android may have closed it, for example for memory). Please send a photo of this to Claude:");
+        ImGui::TextWrapped("%s", text.c_str());
+        if (ImGui::Button("Dismiss")) {
+            std::error_code ec;
+            std::filesystem::remove(prev, ec);
+            state = 2;
+        }
+        ImGui::Separator();
     }
-    ImGui::Separator();
 }
 
 void QueueOotSongs();
