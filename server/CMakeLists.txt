@@ -34,3 +34,7 @@ endforeach()
 # Headless balance simulator (not a test): plays bot-only matches and prints how they went. Run: royale_balance 12 normal 0 32
 add_executable(royale_balance tools/balance_sim.cpp)
 target_link_libraries(royale_balance royale_net)
+
+add_executable(royale_graphics_tests tests/graphics_tests.cpp)
+target_link_libraries(royale_graphics_tests PRIVATE royale_core)
+add_test(NAME royale_graphics_tests COMMAND royale_graphics_tests)

@@ -22,3 +22,6 @@ assets/avriella/previews/
 # Fish authoring backups and on-demand previews
 assets/fish/*.blend1
 assets/fish/previews/
+
+# Local graphics validation build
+build-graphics-tests/
