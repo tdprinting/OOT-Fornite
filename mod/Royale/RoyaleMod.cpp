@@ -2969,12 +2969,14 @@ void DriveRealWeather() {
     const float snow = sky == royale::Sky::Snow ? w * gWeatherDensity : 0.0f;
     const int wantRain = std::clamp(static_cast<int>(rain * 70.0f), 0, 130);
     if (wantRain > 0 || (rainManaged && play->envCtx.unk_EE[1] > 0)) {
+        if (!rainManaged) Trace("weather: rain on");
         const int cur = play->envCtx.unk_EE[1];
         play->envCtx.unk_EE[1] = static_cast<u8>(cur < wantRain ? std::min(wantRain, cur + 2) : std::max(wantRain, cur - 2));
         rainManaged = true;
     } else rainManaged = false;
     const int wantSnow = std::clamp(static_cast<int>(snow * 40.0f) & ~1, 0, 62);
     if (wantSnow > 0) {
+        if (!snowManaged) Trace("weather: snow on");
         snowManaged = true;
         play->envCtx.unk_EE[3] = static_cast<u8>(wantSnow);
         static int tryFrame = 0;
@@ -2988,6 +2990,7 @@ void DriveRealWeather() {
     // that is under way finish (switching straight off would leave the sky lit).
     const bool wantLightning = (sky == royale::Sky::Thunder && w > 0.25f) || gStormWeather > 0.5f;
     if (wantLightning) {
+        if (!lightningManaged) Trace("weather: lightning on");
         play->envCtx.lightningMode = LIGHTNING_MODE_ON;
         lightningManaged = true;
     } else if (lightningManaged) {
@@ -2998,6 +3001,7 @@ void DriveRealWeather() {
     // The desert's sandstorm, as in the Haunted Wasteland. "Weather density" 0 leaves it out.
     const bool wantSand = sky == royale::Sky::Sandstorm && w * gWeatherDensity > 0.2f;
     if (wantSand) {
+        if (!sandManaged) Trace("weather: sandstorm on");
         if (play->envCtx.sandstormState == SANDSTORM_OFF || play->envCtx.sandstormState == SANDSTORM_DISSIPATE) play->envCtx.sandstormState = SANDSTORM_ACTIVE;
         sandManaged = true;
     } else if (sandManaged) {
@@ -3031,6 +3035,7 @@ void DriveRealWeather() {
     const float targetNear = amount > 0.0f ? std::min(0.0f, near - static_cast<float>(base.fogNear & 0x3FF)) : 0.0f;
     const float targetFar = amount > 0.0f ? std::min(0.0f, far - static_cast<float>(base.fogFar)) : 0.0f;
     if (amount > 0.0f || fogManaged) {
+        if (!fogManaged) Trace("weather: fog on");
         auto toward = [](float cur, float target, float step) { return cur < target ? std::min(target, cur + step) : std::max(target, cur - step); };
         fogNearAdj = toward(fogNearAdj, targetNear, 1.5f);
         fogFarAdj = toward(fogFarAdj, targetFar, 220.0f);
