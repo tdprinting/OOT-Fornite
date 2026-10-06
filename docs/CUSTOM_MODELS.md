@@ -25,6 +25,22 @@ idle, walk, run, jump, sit, talk, groom, sleep, stretch, pounce, happy. The game
 - In the game she is skinned on the CPU every frame and drawn with her own textures (`DrawLiloModel` in `RoyaleMod.cpp`). Her size is
   `kLiloPetScale` (the pet) and `kLiloMapScale` (Lilo sitting on the map).
 
+## Avriella's model (the baby pet, made in Blender)
+
+Avriella is a low poly baby in the Ocarina of Time style: `assets/avriella/avriella.blend` (also `avriella.glb`; the big `.fbx` is not committed) has the mesh
+(about 1050 triangles: a big round head with a face picture, a curly hair tuft, a pumpkin-print ruffle-shoulder romper, chubby arms and legs, and three
+tiny rocks), the skeleton (23 bones: a spine, neck, head, tuft, shoulder frills, arms with hands, legs with feet, and the three rocks) and fifteen clips: idle, sit,
+crawl (unused: she cannot crawl yet), wave, giggle, clap, roll, nap, stand, reach, babble, rocks (stacking the rocks), tumble (rolling about), kick, chew and cap (swirling a cap overhead). The textures are painted per pixel in code, 5 bits a channel, at most 64x32 so
+each one fits the N64's texture memory: `avriella_cloth` (romper and sleeves), `avriella_skin` (legs, hair, frills, stone, plain skin) and five faces (smile, sleepy, asleep,
+giggle, "oh"). The game reads it from `shared/avriella_model.h`, which is generated.
+
+- **Rebuild everything from code:** `python3 tools/avriella/build_avriella.py` (needs Blender, or `pip install bpy==4.2.0`; Python 3.11).
+- **After changing the .blend by hand** (or the build script): `python3 tools/avriella/export_avriella.py` regenerates `shared/avriella_model.h`. Keep the bone names,
+  the three materials (`AvriellaCloth`, `AvriellaSkin`, `AvriellaFace`), the image names and the action names; actions are keyed at 20 frames a second.
+- **Previews:** `python3 tools/avriella/render_previews.py [folder]` renders the poses and a contact sheet.
+- In the game she is skinned on the CPU every frame and drawn with her own textures (`DrawAvriellaModel` in `RoyaleMod.cpp`). Her size is `kBabyScale`. The rocks have no parent bone and
+  sit under the ground in every clip except `rocks`, where her hands carry them (the build solves the arm angles that put a hand on each rock).
+
 ## The Lon Lon Buggy (built in, made in Blender)
 
 The cart is a low poly model in the same style: `assets/cart/cart.blend` (also `cart.glb`) has about 1,300 triangles in six rigid parts (the body, the
