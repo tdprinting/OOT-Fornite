@@ -49,3 +49,11 @@ jobs:
         with:
           name: royale-android-apk
           path: third_party/Shipwright-Android/Android/app/build/outputs/apk/release/*.apk
+      - name: Keep the unstripped libraries (to read crash reports)
+        uses: actions/upload-artifact@v4
+        with:
+          name: royale-android-symbols
+          path: |
+            third_party/Shipwright-Android/Android/app/build/intermediates/cxx/**/obj/arm64-v8a/*.so
+            third_party/Shipwright-Android/Android/app/build/intermediates/merged_native_libs/**/*.so
+          if-no-files-found: warn
