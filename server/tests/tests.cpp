@@ -1486,7 +1486,7 @@ static void HeartChestsAndAdultPower() {
     CHECK(grown.ok && grown.damage > plain * 1.3f);
     CHECK(m.SpeedMultiplier(*me) > 1.09f);
     const float hp = me->health;
-    me->invulnUntil = 0;
+    me->invulnUntil = 0; me->armor = 0;
     m.Damage(1, 0.5f, 1000);
     CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken) < 0.01f);
     // A second one straight away is not wasted; near the end it tops you up.
@@ -2018,6 +2018,42 @@ static void BotsPlayLikePlayers() {
         CHECK(asked.size() == 1 && asked[0].first == 1000 && asked[0].second == 0);
         CHECK(Distance(a->pos, {200, 0}) < 200.0f);
     }
+}
+
+static void LilosToxicCloud() {
+    Simulation sim(77, MapCircle(), 0);
+    sim.match.AddHuman(1);
+    sim.match.AddHuman(2);   // somebody else alive, so the match goes on
+    PlayerState* me = sim.match.Find(1);
+    me->pos = {0, 0};
+    CHECK(!sim.match.StartFartCloud(1, {0, 0}));   // not while the match is off
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 2) p.alive = false;
+    me = sim.match.Find(1);
+    me->pos = {0, 0};
+    sim.match.Find(2)->pos = {1800, 1800};
+    me->maxHealth = me->health = 10.0f;
+    me->invulnUntil = 0; me->armor = 0;
+    CHECK(!sim.match.StartFartCloud(1, {kFartCloudReach + 50.0f, 0}));   // Lilo is beside you, not across the map
+    CHECK(sim.match.StartFartCloud(1, {0, 0}));
+    CHECK(!sim.match.StartFartCloud(1, {0, 0}));   // not again straight away
+    auto run = [&](float seconds) { for (int i = 0; i < static_cast<int>(seconds * kTickHz); i++) { sim.match.Tick(kDt); me->pos = me->pos; } };
+    run(kFartGraceSeconds - 0.4f);
+    CHECK(me->health == 10.0f);                    // the first seconds do nothing
+    run(0.4f + 2.0f);
+    CHECK(me->health < 10.0f && me->health > 10.0f - 2.0f * kFartDps - 0.2f);   // then a small tick, about kFartDps a second
+    // walking out drains the count, and nothing happens outside
+    me->pos = {kFartCloudRadius + 100.0f, 0};
+    run(kFartGraceSeconds);
+    CHECK(me->gasTime == 0.0f);
+    const float outside = me->health;
+    run(2.0f);
+    CHECK(me->health == outside);
+    // and a cloud expires
+    CHECK(sim.match.FartClouds().size() == 1);
+    run(kFartCloudSeconds + 1.0f);
+    CHECK(sim.match.FartClouds().empty());
 }
 
 static void BotsLeaveBlastRings() {
@@ -3905,7 +3941,7 @@ static void BotsUseCoverAndHighGround() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
