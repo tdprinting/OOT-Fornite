@@ -1,6 +1,7 @@
 #pragma once
 #include "glider_model.h"
 #include "boulder_texture.h"
+#include "scenery_model.h"
 #include "props.h"
 #include "storm.h"
 #include <algorithm>
@@ -18,7 +19,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -993,6 +994,29 @@ inline MeshData ThemeTree(uint32_t variant) {
     return b.mesh;
 }
 
+// ---- Hyrule Field's scenery for the Fortnite Map ----------------------------------------------------------------------------------------
+// Made in Blender with painted textures (tools/scenery/build_scenery.py, assets/scenery/scenery.blend) after the Ocarina of Time field artwork:
+// round, glossy oaks with sunlit tops, flowering hedges, warm red-brown rock that catches pink light, strata cliffs with a grassy lip, pink-lit snow
+// crags, drifts of small white, yellow and pink flowers, and cattails at the water. The textures are baked into each corner's colour in
+// shared/scenery_model.h. `variant` = item (0-7) + 8 * season (spring, summer, autumn, winter, as in FloraSeason):
+//   0 a lone field oak   1 a flowering hedge   2 a boulder with its pebbles   3 a strata cliff slab   4 a snow-capped crag
+//   5 white and yellow flowers   6 pink flowers with tall spikes   7 cattails and reeds
+inline MeshData Scenery(uint32_t variant) {
+    namespace sm = scenery_model;
+    const int item = static_cast<int>(variant % 8), season = static_cast<int>(variant / 8 % 4);
+    static const uint8_t* const colours[4] = {sm::kColSpring, sm::kColSummer, sm::kColAutumn, sm::kColWinter};
+    int first = 0;
+    for (int i = 0; i < item; i++) first += sm::kCorners[i];
+    MeshData m;
+    m.v.reserve(static_cast<size_t>(sm::kCorners[item]));
+    for (int k = first; k < first + sm::kCorners[item]; k++) {
+        const int16_t* p = &sm::kPos[k * 3];
+        const uint8_t* c = &colours[season][k * 3];
+        m.v.push_back({p[0] * 0.25f, p[1] * 0.25f, p[2] * 0.25f, c[0], c[1], c[2]});
+    }
+    return m;
+}
+
 // A low mound of snow, 200 across and a little over a hand tall: scattered close together they read as a snowy ground. Variants 4-7 are a
 // blanket instead: a broad, nearly flat sheet about 300 across with a soft hump, laid between the mounds once the snow lies deep.
 inline MeshData SnowBlanket(uint32_t variant);
@@ -1359,6 +1383,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Decor: return mesh_detail::Decor(variant);
         case MeshKind::Clutter: return mesh_detail::Clutter(variant);
         case MeshKind::ThemeTree: return mesh_detail::ThemeTree(variant);
+        case MeshKind::Scenery: return mesh_detail::Scenery(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
