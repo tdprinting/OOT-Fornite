@@ -3840,6 +3840,73 @@ void DrawFogBanks(PlayState* play) {
     fd.Draw(play);
 }
 
+// Light effects tied to the sky: shafts of sun (gold at sunrise and sunset) or moon (cool blue) fanning out from the sun or moon, strongest in broken cloud, mist and
+// at the low sun, gone in a storm or heavy overcast; and fireflies that glow and drift near the ground at dusk and through clear nights.
+void DrawSkyLight(PlayState* play) {
+    if (!InField() || !gSkyOot) return;
+    const SkyLight L = SkyLightNow();
+    float tint[3];
+    const float ov = SkyOvercast(tint);
+    const float t = static_cast<float>(ImGui::GetTime());
+    const float kTau = 6.2831853f;
+    constexpr float kR = 6900.0f;
+    const bool sunUp = L.sunH > -0.02f;
+    const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
+    float amt = sunUp ? std::clamp(L.sunH * 5.0f + 0.3f, 0.0f, 1.0f) : std::clamp(-L.sunH * 5.0f, 0.0f, 1.0f) * 0.45f;
+    const float broken = std::clamp(0.35f + ov * 1.4f, 0.0f, 1.0f) * (1.0f - std::clamp((ov - 0.55f) * 2.2f, 0.0f, 1.0f));
+    amt *= broken * (1.0f + 0.9f * L.twilight) * (gWeatherShown.sky == royale::Sky::Fog ? 1.4f : 1.0f) * (1.0f - 0.9f * std::min(1.0f, gStormWeather * 1.4f));
+    amt = std::min(1.0f, amt) * gFogAmount;
+    if (amt > 0.03f) {
+        float dx = std::cos(0.6f) * c, dy = L.sunH, dz = std::sin(0.6f) * c;
+        if (!sunUp) { dx = -dx; dy = -dy; dz = -dz; }
+        const float h = std::max(0.001f, std::hypot(dx, dz));
+        const float ax = -dz / h, az = dx / h, bx = -dy * dx / h, by = h, bz = -dy * dz / h;
+        const float col[3] = { sunUp ? 255.0f : 170.0f, sunUp ? 226.0f - 70.0f * L.twilight : 196.0f, sunUp ? 150.0f - 60.0f * L.twilight : 255.0f };
+        constexpr int kShafts = 10;
+        Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kShafts) * 3 * sizeof(Vtx)));
+        if (v == nullptr) return;
+        for (int i = 0; i < kShafts; i++) {
+            const float th = kTau * (i + 0.5f * Flora01(i, 3, 761)) / kShafts + 0.15f * std::sin(t * 0.12f + i);
+            const float len = kR * (0.5f + 0.5f * Flora01(i, 5, 762)), w = kR * (0.025f + 0.04f * Flora01(i, 7, 763));
+            const float pulse = 0.6f + 0.4f * std::sin(t * (0.25f + 0.2f * Flora01(i, 9, 764)) + i * 1.7f);
+            const float ux = std::cos(th), uy = std::sin(th), vx = -uy, vy = ux;   // along the shaft and across it, in the sky plane
+            auto P = [&](float x, float y, float* o) { o[0] = dx * kR * 0.95f + (ax * x + bx * y); o[1] = dy * kR * 0.95f + by * y; o[2] = dz * kR * 0.95f + (az * x + bz * y); };
+            float p0[3], p1[3], p2[3];
+            P(vx * w * 0.3f, vy * w * 0.3f, p0); P(-vx * w * 0.3f, -vy * w * 0.3f, p1); P(ux * len + vx * w, uy * len + vy * w, p2);
+            const float a0 = 70.0f * amt * pulse;
+            SetVtx(v[i * 3], p0[0], p0[1], p0[2], col[0], col[1], col[2], a0);
+            SetVtx(v[i * 3 + 1], p1[0], p1[1], p1[2], col[0], col[1], col[2], a0);
+            SetVtx(v[i * 3 + 2], p2[0], p2[1], p2[2], col[0], col[1], col[2], 0.0f);
+        }
+        SkyBegin(play);
+        OPEN_DISPS(play->state.gfxCtx);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v), kShafts * 3, 0);
+        for (int i = 0; i < kShafts; i++) gSP1Triangle(POLY_XLU_DISP++, i * 3, i * 3 + 1, i * 3 + 2, 0);
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    // Fireflies.
+    const float ff = std::max(L.twilight * 0.8f, L.night) * (1.0f - std::min(1.0f, ov * 1.5f)) * (1.0f - std::min(1.0f, gStormWeather * 2.0f)) * gFogAmount;
+    if (ff < 0.05f) return;
+    constexpr int kFlies = 36;
+    Vtx* q = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kFlies) * 4 * sizeof(Vtx)));
+    if (q == nullptr) return;
+    for (int i = 0; i < kFlies; i++) {
+        const float a = Flora01(i, 3, 771) * kTau + 0.1f * std::sin(t * 0.3f + i), d = 150.0f + 900.0f * Flora01(i, 5, 772);
+        const float y = -30.0f + 150.0f * Flora01(i, 7, 773) + 18.0f * std::sin(t * 0.8f + i * 1.9f);
+        const float x = std::cos(a) * d + 30.0f * std::sin(t * 0.5f + i), z = std::sin(a) * d + 30.0f * std::cos(t * 0.45f + i * 2.0f);
+        const float blink = std::max(0.0f, std::sin(t * (1.1f + Flora01(i, 9, 774)) + i * 3.1f));
+        SkyQuad(&q[i * 4], x, y, z, std::sqrt(x * x + y * y + z * z), 5.0f + 4.0f * blink, 220, 255, 120, 255.0f * ff * (0.25f + 0.75f * blink));
+    }
+    SkyBegin(play);
+    OPEN_DISPS(play->state.gfxCtx);
+    for (int first = 0; first < kFlies; first += 8) {
+        const int n = std::min(8, kFlies - first);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&q[first * 4]), n * 4, 0);
+        for (int k = 0; k < n; k++) gSP2Triangles(POLY_XLU_DISP++, k * 4, k * 4 + 1, k * 4 + 2, 0, k * 4, k * 4 + 2, k * 4 + 3, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // ---- wind streaks and the tornado --------------------------------------------------------------------------------------------------
 // Wind streaks: thin pale lines that drift through the air round the camera along the wind, longer, quicker and more of them as it picks up
 // (so a storm's squalls show), which is how you see which way it blows. Ash and sand have their own specks, so those skies skip this.
@@ -4323,6 +4390,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
     if (DebugOn(kDbgSky)) DrawSky(play);
     Feat("draw: fog banks");
     if (DebugOn(kDbgFog)) DrawFogBanks(play);
+    if (DebugOn(kDbgSky)) DrawSkyLight(play);
     Feat("draw: foliage and puddles");
     if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: island scenery");
