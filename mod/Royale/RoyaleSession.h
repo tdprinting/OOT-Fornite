@@ -213,6 +213,11 @@ class RoyaleSession {
     void UseAbility() { if (Joined()) client->UseAbility(); }
     void UseShield() { if (Joined()) client->UseShield(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
+    // Carts: get in, get out, change seats, and (driving) report where the cart is each tick.
+    void EnterVehicle(int index, Seat seat) { if (Joined()) client->EnterVehicle(index, seat); }
+    void ExitVehicle() { if (Joined()) client->ExitVehicle(); }
+    void SwitchSeat() { if (Joined()) client->SwitchSeat(); }
+    void SendDrive(int index, const CartBody& b, float air, bool handbrake, float impact, float landing) { if (Joined()) client->SendDrive(index, b, air, handbrake, impact, landing); }
     // Host only: another match right away with everyone who is connected.
     void RequestPlayAgain() { if (Joined()) client->RequestRematch(); }
 

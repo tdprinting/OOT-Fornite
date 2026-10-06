@@ -8,6 +8,7 @@
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
 #include <set>
+#include <unordered_set>
 #include "cloth.h"
 #include <string>
 #include "../../shared/anim.h"
@@ -3388,6 +3389,284 @@ static void BotsClimbBlocksAndBoulders() {
     CHECK(midAir && d->y < 1.0f);
 }
 
+// ---- carts ---------------------------------------------------------------------------------------------------------------------------------
+
+static CartBody CartAt(float x, float z, float yaw, const CartWorld& w = {}) {
+    CartBody b; b.x = x; b.z = z; b.yaw = yaw;
+    SettleCart(b, w);
+    return b;
+}
+
+static void CartPhysics() {
+    // Flat ground: it speeds up to near its top speed straight ahead (yaw 0 is +z), turns, brakes, and backs up slower than it goes forward.
+    const CartWorld flat;
+    CartBody b = CartAt(0, 0, 0);
+    CHECK(b.grounded && std::fabs(b.y) < 1.0f);
+    for (int i = 0; i < 3 * kTickHz; i++) StepCart(b, {1, 0, false, false}, flat, kDt);
+    CHECK(b.speed > 300.0f && b.speed <= kCartMaxSpeed + 1.0f && b.z > 400.0f && std::fabs(b.x) < 5.0f);
+    const float yaw0 = b.yaw;
+    for (int i = 0; i < kTickHz; i++) StepCart(b, {1, 1, false, false}, flat, kDt);
+    CHECK(std::fabs(cartdetail::WrapAngle(b.yaw - yaw0)) > 0.5f);
+    for (int i = 0; i < 2 * kTickHz; i++) StepCart(b, {0, 0, true, false}, flat, kDt);
+    CHECK(std::fabs(b.speed) < 5.0f);
+    for (int i = 0; i < 4 * kTickHz; i++) StepCart(b, {-1, 0, false, false}, flat, kDt);
+    CHECK(b.speed < -100.0f && b.speed >= -kCartMaxReverse - 1.0f);
+    // The handbrake at speed in a turn slides it sideways.
+    CartBody d = CartAt(0, 0, 0);
+    for (int i = 0; i < 3 * kTickHz; i++) StepCart(d, {1, 0, false, false}, flat, kDt);
+    float slide = 0;
+    for (int i = 0; i < kTickHz / 2; i++) { StepCart(d, {1, 1, false, true}, flat, kDt); slide = (std::max)(slide, std::fabs(d.slide)); }
+    CHECK(slide > 40.0f);
+
+    // A wall: it stops at it, and the crash is reported (and hurts).
+    CartWorld walled;
+    walled.solid = [](float, float z) { return z > 600.0f; };
+    CartBody w = CartAt(0, 0, 0, walled);
+    float impact = 0;
+    for (int i = 0; i < 5 * kTickHz; i++) impact = (std::max)(impact, StepCart(w, {1, 0, false, false}, walled, kDt).impact);
+    CHECK(w.z < 600.0f && w.z > 450.0f && std::fabs(w.speed) < 100.0f && impact > kCartCrashFrom && CrashDamage(impact) > 0.0f);
+    // A step taller than a wheel can climb is a wall too; a low one it rolls over.
+    for (float rise : {20.0f, 120.0f}) {
+        CartWorld stepped;
+        stepped.ground = [rise](float, float z, float* y) { *y = z > 500.0f ? rise : 0.0f; return true; };
+        CartBody c = CartAt(0, 0, 0, stepped);
+        for (int i = 0; i < 5 * kTickHz; i++) StepCart(c, {1, 0, false, false}, stepped, kDt);
+        CHECK((c.z > 700.0f) == (rise < kCartMaxStep));
+    }
+    // Off a cliff: it flies, falls and lands hard below.
+    CartWorld cliff;
+    cliff.ground = [](float, float z, float* y) { *y = z > 500.0f ? -500.0f : 0.0f; return true; };
+    CartBody f = CartAt(0, 0, 0, cliff);
+    bool flew = false; float landing = 0;
+    for (int i = 0; i < 6 * kTickHz; i++) {
+        const CartStep st = StepCart(f, {1, 0, false, false}, cliff, kDt);
+        flew |= st.tookOff || !f.grounded;
+        landing = (std::max)(landing, st.landing);
+    }
+    CHECK(flew && f.grounded && std::fabs(f.y + 500.0f) < 5.0f && landing > kCartLandFrom && LandingDamage(landing) > 0.0f);
+    // A bot's wish to get somewhere: DriveToward takes it there and pulls up.
+    CartBody g = CartAt(0, 0, 0);
+    for (int i = 0; i < 12 * kTickHz; i++) StepCart(g, DriveToward(g, {800, -600}, 80), flat, kDt);
+    CHECK(Distance({g.x, g.z}, {800, -600}) < 200.0f && std::fabs(g.speed) < 120.0f);
+}
+
+// A duel with carts parked at the given spots.
+static Simulation CartDuel(uint64_t seed, Vec2 humanPos, Vec2 botPos, std::vector<Vec2> spots) {
+    Simulation sim(seed, MapCircle(), 0);
+    sim.match.SetVehicleCount(static_cast<int>(spots.size()));
+    sim.match.SetVehicleSpots(spots);
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
+    FillAmmo(sim);
+    sim.match.Find(1)->pos = humanPos;
+    sim.match.Find(1000)->pos = botPos;
+    return sim;
+}
+
+static int CartNear(const Match& m, Vec2 at) {
+    for (const auto& v : m.Vehicles()) if (Distance({v.body.x, v.body.z}, at) < 50.0f) return v.index;
+    return -1;
+}
+
+static void CartsSeatsRamsAndWrecks() {
+    CHECK(VehicleCountFor(2000) >= 4 && VehicleCountFor(1e6f) == kMaxVehicles);
+    Simulation sim = CartDuel(4, {1500, 1500}, {-1500, -1500}, {{0, 0}, {1000, 0}});
+    Match& m = sim.match;
+    CHECK(m.Vehicles().size() == 2);
+    const int ci = CartNear(m, {0, 0});
+    CHECK(ci >= 0);
+    if (ci < 0) return;
+    VehicleState& v = m.MutableVehicles()[static_cast<size_t>(ci)];
+    PlayerState* h = m.Find(1);
+    PlayerState* b = m.Find(1000);
+    // Too far away to get in; at the driver's door it works, and the rider sits on the saddle.
+    CHECK(!m.EnterVehicle(1, ci, Seat::Driver));
+    h->pos = ExitSpot(v.body, Seat::Driver);
+    CHECK(m.EnterVehicle(1, ci, Seat::Driver));
+    int idx; Seat seat;
+    CHECK(m.RidingIn(1, &idx, &seat) && idx == ci && seat == Seat::Driver && v.Driver() == 1u);
+    CHECK(!m.EnterVehicle(1, 1 - ci, Seat::Driver));   // one cart at a time
+    // The bot asks for the driver's seat but that is taken: it gets the back one.
+    b->pos = ExitSpot(v.body, Seat::Passenger);
+    CHECK(m.EnterVehicle(1000, ci, Seat::Driver) && v.Passenger() == 1000u);
+    // The driver's game reports the cart: a plausible move is taken, a teleport is cut short.
+    CartBody moved = v.body; moved.z += 20.0f; moved.speed = 200.0f;
+    m.Tick(kDt);
+    CHECK(m.DriveVehicle(1, ci, moved, 0, false, 0, 0) && std::fabs(v.body.z - moved.z) < 0.01f);
+    CartBody far = v.body; far.z += 3000.0f;
+    m.Tick(kDt);
+    CHECK(m.DriveVehicle(1, ci, far, 0, false, 0, 0) && v.body.z < moved.z + 200.0f);
+    CHECK(!m.DriveVehicle(1000, ci, moved, 0, false, 0, 0));   // only the driver drives
+    // Riders move with it.
+    m.Tick(kDt);
+    float sx, sy, sz;
+    SeatSpot(v.body, Seat::Passenger, &sx, &sy, &sz);
+    CHECK(Distance(b->pos, {sx, sz}) < 2.0f);
+    // Getting out puts them down at their door.
+    CHECK(m.ExitVehicle(1000) && !m.RidingIn(1000) && Distance(b->pos, ExitSpot(v.body, Seat::Passenger)) < 1.0f && b->y == 0.0f);
+    // The passenger takes the reins when the driver has got out.
+    b->pos = ExitSpot(v.body, Seat::Passenger);
+    CHECK(m.EnterVehicle(1000, ci, Seat::Passenger));
+    CHECK(!m.SwitchSeat(1000));
+    CHECK(m.ExitVehicle(1));
+    CHECK(m.SwitchSeat(1000) && v.Driver() == 1000u && v.Passenger() == kNoPlayer);
+    CHECK(m.ExitVehicle(1000));
+
+    // Running somebody over: the human drives at the bot standing in front.
+    h->pos = ExitSpot(v.body, Seat::Driver);
+    CHECK(m.EnterVehicle(1, ci, Seat::Driver));
+    b->pos = {v.body.x + std::sin(v.body.yaw) * 30.0f, v.body.z + std::cos(v.body.yaw) * 30.0f};
+    const float before = b->health;
+    CartBody fast = v.body; fast.speed = 380.0f;
+    m.Tick(kDt);
+    m.DriveVehicle(1, ci, fast, 0, false, 0, 0);
+    m.Tick(kDt);
+    CHECK(b->health < before - kRamBase && !InsideCart(v.body, b->pos.x, b->pos.z));
+
+    // Smashed up: the riders are thrown out, the firebox goes up and hurts whoever is close, and the wreck burns out.
+    b->pos = {v.body.x + 120.0f, v.body.z};
+    b->health = h->health = kMaxHealth;
+    const float bBefore = b->health;
+    m.DamageVehicle(v, kCartHealth + 1.0f, 1000);
+    CHECK(v.wrecked && !m.RidingIn(1) && v.Driver() == kNoPlayer);
+    for (int i = 0; i < kTickHz; i++) m.Tick(kDt);
+    CHECK(b->health < bBefore || !b->alive);
+    h->pos = ExitSpot(v.body, Seat::Driver);
+    CHECK(!m.EnterVehicle(1, ci, Seat::Driver));
+    for (int i = 0; i < static_cast<int>((kCartWreckSeconds + 1) * kTickHz); i++) m.Tick(kDt);
+    CHECK(v.gone && m.State() == MatchState::InMatch);
+    // Swords hurt carts too.
+    VehicleState& other = m.MutableVehicles()[static_cast<size_t>(1 - ci)];
+    const float hp = other.health;
+    m.DamageVehicle(other, 2.0f, 1);
+    CHECK(other.health < hp && !other.wrecked);
+}
+
+// A point on the map far from where the safe zone is heading.
+static constexpr float kStormLookaheadForTests = 15.0f;
+static Vec2 FarFromZone(Simulation& sim, float later) {
+    const Vec2 c = sim.match.GetStorm().SafeZoneAt(sim.match.StormTime() + later).center;
+    const float d = std::hypot(c.x, c.z);
+    return d < 1.0f ? Vec2{0, 1750.0f} : Vec2{-c.x / d * 1750.0f, -c.z / d * 1750.0f};
+}
+static void MoveCart(Simulation& sim, int ci, Vec2 to) {
+    VehicleState& v = sim.match.MutableVehicles()[static_cast<size_t>(ci)];
+    v.body.x = to.x; v.body.z = to.z;
+    SettleCart(v.body, sim.match.VehicleWorld());
+}
+
+static void BotsDriveAndRideCarts() {
+    // A bot that likes driving (1001 does), with nobody about and a cart close by, gets in and drives off somewhere.
+    {
+        Simulation sim = CartDuel(9, {-1900, 0}, {0, 1900}, {{0, 0}});
+        const Vec2 far = FarFromZone(sim, 200.0f);
+        sim.match.Find(1000)->alive = false;
+        PlayerState* lover = sim.match.Find(1001);
+        lover->alive = true;
+        lover->pos = far;
+        sim.match.Find(1)->pos = {-far.x, -far.z};
+        MoveCart(sim, 0, {far.x * 0.88f, far.z * 0.88f});
+        bool drove = false;
+        float bestMove = 0;
+        Vec2 start = {};
+        for (int i = 0; i < kTickHz * 60 && lover->alive && sim.match.State() == MatchState::InMatch; i++) {
+            sim.Tick(kDt);
+            int idx; Seat seat;
+            if (sim.match.RidingIn(1001, &idx, &seat) && seat == Seat::Driver) {
+                const auto& v = sim.match.Vehicles()[static_cast<size_t>(idx)];
+                if (!drove) start = {v.body.x, v.body.z};
+                drove = true;
+                bestMove = (std::max)(bestMove, Distance(start, {v.body.x, v.body.z}));
+            }
+        }
+        CHECK(drove && bestMove > 500.0f);
+    }
+    // Put behind the reins, a bot drives somewhere (not off the map), and gets out at the end.
+    {
+        Simulation sim = CartDuel(11, {-1900, 0}, {1300, 0}, {{0, 0}});
+        const Vec2 far = FarFromZone(sim, kStormLookaheadForTests);
+        sim.match.Find(1)->pos = {-far.x, -far.z};
+        MoveCart(sim, 0, far);
+        const int ci = 0;
+        PlayerState* b = sim.match.Find(1000);
+        b->pos = ExitSpot(sim.match.Vehicles()[0].body, Seat::Driver);
+        CHECK(sim.match.EnterVehicle(1000, ci, Seat::Driver));
+        float topSpeed = 0, moved = 0;
+        bool gotOut = false;
+        for (int i = 0; i < kTickHz * 30; i++) {
+            sim.Tick(kDt);
+            const auto& v = sim.match.Vehicles()[0];
+            topSpeed = (std::max)(topSpeed, std::fabs(v.body.speed));
+            moved = (std::max)(moved, Distance(far, {v.body.x, v.body.z}));
+            CHECK(sim.match.Inside({v.body.x, v.body.z}));
+            gotOut |= !sim.match.RidingIn(1000);
+        }
+        CHECK(topSpeed > 150.0f && moved > 400.0f && gotOut);
+    }
+    // A cart coming straight at a bot: it gets out of the way.
+    {
+        int dodged = 0;
+        for (uint64_t seed = 1; seed <= 6; seed++) {
+            Simulation sim = CartDuel(seed, {-1900, 0}, {0, 400}, {{0, -200}});
+            const int ci = CartNear(sim.match, {0, -200});
+            if (ci < 0) continue;
+            VehicleState& v = sim.match.MutableVehicles()[static_cast<size_t>(ci)];
+            v.body.yaw = 0;
+            PlayerState* h = sim.match.Find(1);
+            h->pos = ExitSpot(v.body, Seat::Driver);
+            CHECK(sim.match.EnterVehicle(1, ci, Seat::Driver));
+            const float hp = sim.match.Find(1000)->health;
+            for (int i = 0; i < kTickHz * 2; i++) {
+                CartBody b = v.body; b.speed = 350.0f; b.z += 350.0f * kDt; b.x = 0;
+                sim.match.DriveVehicle(1, ci, b, 0, false, 0, 0);
+                sim.Tick(kDt);
+            }
+            dodged += sim.match.Find(1000)->health >= hp;
+        }
+        CHECK(dodged >= 3);
+    }
+    // A bot in the back with nobody driving takes the reins.
+    {
+        Simulation sim = CartDuel(13, {-1900, 0}, {1300, 0}, {{1400, 200}});
+        const int ci = CartNear(sim.match, {1400, 200});
+        if (ci < 0) { CHECK(false); return; }
+        PlayerState* b = sim.match.Find(1000);
+        b->pos = ExitSpot(sim.match.Vehicles()[static_cast<size_t>(ci)].body, Seat::Passenger);
+        CHECK(sim.match.EnterVehicle(1000, ci, Seat::Passenger));
+        Run(sim, 1.0f);
+        int idx; Seat seat = Seat::None;
+        CHECK((sim.match.RidingIn(1000, &idx, &seat) && seat == Seat::Driver) || !sim.match.RidingIn(1000));
+    }
+}
+
+static void FullMatchWithCarts() {
+    // 31 bots and a parked human on a map with carts: bots get in, drive, ride and get out, and the match still ends with one winner.
+    const float calm = BotController::CalmSeconds();
+    BotController::CalmSeconds() = 40.0f;   // a quiet start, as in a real match, when bots go looking for carts
+    Simulation sim(17, MapCircle(), 0);
+    sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
+    sim.match.SetVehicleWorld(CartWorld{nullptr, [](float x, float z) { return !NotWall({x, z}) || std::hypot(x, z) > 1960.0f; }});
+    sim.match.SetVehicleCount(VehicleCountFor(2000.0f));
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    std::unordered_set<uint32_t> drivers, passengers;
+    int guard = 0;
+    while (sim.match.State() != MatchState::Ending && guard++ < kTickHz * 1500) {
+        sim.Tick(kDt);
+        for (const auto& v : sim.match.Vehicles()) {
+            if (v.Driver() != kNoPlayer && std::fabs(v.body.speed) > 100.0f) drivers.insert(v.Driver());
+            if (v.Passenger() != kNoPlayer) passengers.insert(v.Passenger());
+        }
+        for (const auto& p : sim.match.Players()) if (p.alive && sim.match.RidingIn(p.id)) CHECK(sim.match.Inside(p.pos));
+    }
+    CHECK(sim.match.State() == MatchState::Ending && sim.match.Alive() <= 1);
+    BotController::CalmSeconds() = calm;
+    CHECK(drivers.size() >= 3);
+    std::printf("  carts: %zu bots drove, %zu rode along, match over after %.0f s\n", drivers.size(), passengers.size(), sim.match.Clock());
+}
+
 static void BotsSkydiveIn() {
     // From the start of the countdown every bot hangs in the sky, glides during the drop and is on the ground (and on solid ground) soon
     // after; most come down by a chest.
@@ -3413,7 +3692,7 @@ static void BotsSkydiveIn() {
     for (const auto& p : sim.match.Players()) {
         if (!p.isBot || !p.alive) continue;
         bots++;
-        landed += p.y < 1.0f && NotWall(p.pos);
+        landed += (p.y < 1.0f || sim.match.RidingIn(p.id)) && NotWall(p.pos);   // (or already sat in a cart)
         for (const auto& l : sim.match.Loot()) if (l.spawn.container && Distance(l.spawn.pos, p.pos) < 500.0f) { byChest++; break; }
     }
     CHECK(bots > 20 && landed == bots);
@@ -3519,6 +3798,7 @@ int main() {
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
+    CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

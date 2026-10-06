@@ -1046,12 +1046,21 @@ static void FullMatchOverTheNetwork() {
 
 static void BandwidthWith32Players() {
     Rig rig(5);
+    rig.server.SetVehicleCount(kMaxVehicles);   // with every cart there could be, most of them near (some driven, the rest parked)
     for (int i = 0; i < kMaxPlayers; i++) rig.Add("P" + std::to_string(i));
     CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
     rig.StartAndGoLive();
     for (auto& p : rig.M().Players()) { // spread out so interest management has real work to do
         p.pos.x = static_cast<float>(static_cast<int>(p.id % 7) * 40);
         p.pos.z = static_cast<float>(static_cast<int>(p.id % 5) * 40);
+    }
+    {   // two carts with people in them right among them, the rest parked round about
+        auto& carts = rig.M().MutableVehicles();
+        for (size_t i = 0; i < carts.size(); i++) {
+            carts[i].body.x = 300.0f + 700.0f * static_cast<float>(i % 4);
+            carts[i].body.z = -300.0f - 700.0f * static_cast<float>(i / 4);
+            if (i < 2) carts[i].seat[0] = rig.M().Players()[i].id;   // somebody in it: sent every snapshot
+        }
     }
     rig.Run(2.0f);
     uint64_t before = rig.server.GetStats().bytesOut;
@@ -1261,6 +1270,59 @@ static void WeatherOverTheWire() {
     CHECK(changed && me.CurrentWeather().Strength() > 0);
 }
 
+static void VehiclesOverTheWire() {
+    { VehicleRequest a, b; a.action = VehicleRequest::SwitchSeat; a.index = 5; a.seat = 1; CHECK(RoundTrips(a, b) && b.action == VehicleRequest::SwitchSeat && b.index == 5 && b.seat == 1); }
+    { VehicleRequest bad, out; bad.index = kMaxVehicles; CHECK(!RoundTrips(bad, out)); }
+    { VehicleDrive a, b; a.index = 2; a.x = 10.5f; a.y = -3; a.z = 99; a.yaw = -1234; a.pitch = -12; a.roll = 7; a.speed = -140; a.slide = 33; a.vy = -800; a.steer = -50;
+      a.air = 120; a.flags = 3; a.impact = 410; a.landing = 900;
+      CHECK(RoundTrips(a, b) && b.x == 10.5f && b.yaw == -1234 && b.pitch == -12 && b.roll == 7 && b.speed == -140 && b.vy == -800 && b.steer == -50 && b.air == 120 &&
+            b.flags == 3 && b.impact == 410 && b.landing == 900); }
+    { VehicleDrive bad, out; bad.x = std::nanf(""); CHECK(!RoundTrips(bad, out)); }
+    { Snapshot a, b; VehicleNet n; n.index = 3; n.x = 5; n.y = 6; n.z = -7; n.yaw = 9000; n.speed = -20; n.steer = 40; n.air = 15; n.hp = 128; n.driver = 4; n.passenger = 1002;
+      n.flags = VehicleNet::kDrift | VehicleNet::kGrounded; a.vehicles = {n};
+      CHECK(RoundTrips(a, b) && b.vehicles.size() == 1 && b.vehicles[0].yaw == 9000 && b.vehicles[0].driver == 4 && b.vehicles[0].passenger == 1002 &&
+            b.vehicles[0].hp == 128 && b.vehicles[0].flags == (VehicleNet::kDrift | VehicleNet::kGrounded)); }
+    { Snapshot bad, out; VehicleNet n; n.index = kMaxVehicles; bad.vehicles = {n}; CHECK(!RoundTrips(bad, out)); }
+
+    // A player walks up to a cart, gets in, drives it (their game runs the physics and reports), and gets out again; the others see it go.
+    Rig rig(43, 0);
+    rig.server.SetVehicleCount(4);
+    GameClient& me = rig.Add("Driver");
+    GameClient& other = rig.Add("Watcher");
+    CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined && other.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    CHECK(rig.M().Vehicles().size() == 4);
+    const VehicleState& v = rig.M().Vehicles()[0];
+    PlayerState* self = rig.M().Find(me.Self()->id);
+    PlayerState* watcher = rig.M().Find(other.Self()->id);
+    self->pos = ExitSpot(v.body, Seat::Driver);
+    watcher->pos = {v.body.x + 600.0f, v.body.z};
+    CHECK(rig.RunUntil([&] { for (const auto& n : me.Vehicles()) if (n.index == 0) return true; return false; }, 3));
+    me.EnterVehicle(0, Seat::Driver);
+    int index = -1; Seat seat = Seat::None;
+    CHECK(rig.RunUntil([&] { return me.MyVehicle(&index, &seat); }, 3));
+    CHECK(index == 0 && seat == Seat::Driver && v.Driver() == self->id);
+    CartBody body = v.body;
+    const Vec2 start = {body.x, body.z};
+    for (int i = 0; i < 2 * kTickHz; i++) {
+        StepCart(body, {1, 0, false, false}, rig.M().VehicleWorld(), kDt);
+        me.SendDrive(0, body, 0, false, 0, 0);
+        rig.Step();
+    }
+    CHECK(Distance(start, {v.body.x, v.body.z}) > 150.0f && v.body.speed > 100.0f);
+    net::VehicleNet seen;
+    CHECK(rig.RunUntil([&] { return other.SampleVehicle(0, seen) && Distance(start, {seen.x, seen.z}) > 150.0f; }, 2));
+    CHECK(seen.driver == self->id);
+    // Stop, then get out.
+    body.speed = 0;
+    me.SendDrive(0, body, 0, false, 0, 0);
+    rig.Run(0.2f);
+    me.ExitVehicle();
+    CHECK(rig.RunUntil([&] { return !me.MyVehicle(nullptr, nullptr); }, 3));
+    CHECK(!rig.M().RidingIn(self->id));
+}
+
 static void AlliesOverTheWire() {
     { HireAllyRequest a, b; a.index = 3; CHECK(RoundTrips(a, b) && b.index == 3); }
     { HireAllyRequest bad, out; bad.index = 9; CHECK(!RoundTrips(bad, out)); }
@@ -1410,7 +1472,7 @@ int main() {
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
-    WeatherOverTheWire(); AlliesOverTheWire(); ReplayOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
+    WeatherOverTheWire(); AlliesOverTheWire(); VehiclesOverTheWire(); ReplayOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");

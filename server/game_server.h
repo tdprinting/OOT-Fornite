@@ -120,7 +120,19 @@ class GameServer {
             AddSceneryToNav(*grid, props);
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
+            // The carts the server drives (for the bots, and the ones nobody drives) roll on the same grid: its heights blended smoothly, and
+            // whatever the bots can't stand on (water, walls, rocks) closed to them.
+            CartWorld world;
+            world.ground = [grid](float x, float z, float* y) { *y = grid->SmoothHeight({x, z}); return true; };
+            world.solid = [grid](float x, float z) { return !grid->Standable({x, z}); };
+            sim.match.SetVehicleWorld(world);
+        } else {
+            CartWorld world;
+            world.solid = [map](float x, float z) { return Distance({x, z}, map.center) > map.radius - 40.0f; };
+            sim.match.SetVehicleWorld(world);
         }
+        sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
+        sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
         sim.match.RegenerateLoot(lootCount);
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
@@ -134,6 +146,23 @@ class GameServer {
         cfg.pois = pois;
         Broadcast(cfg);
         return true;
+    }
+
+    // How many carts a match has: -1 (the default) picks by the map's size, 0 turns them off. Survives Reconfigure.
+    void SetVehicleCount(int n) { vehicleCount = n; if (n >= 0) sim.match.SetVehicleCount(n); }
+    // Good places to park the carts: just outside each town, where the roads come in.
+    static std::vector<Vec2> VehicleSpots(const std::vector<Poi>& towns, const Circle& map, uint64_t seed) {
+        std::vector<Vec2> out;
+        Rng rng(seed ^ 0x7061726Bull);   // "park"
+        for (const Poi& t : towns) {
+            for (int k = 0; k < 2; k++) {
+                const float a = static_cast<float>(rng.Unit() * 6.283185307179586);
+                const float d = t.radius + 140.0f + 120.0f * static_cast<float>(rng.Unit());
+                const Vec2 at = {t.center.x + std::sin(a) * d, t.center.z + std::cos(a) * d};
+                if (Distance(at, map.center) < map.radius * 0.9f) out.push_back(at);
+            }
+        }
+        return out;
     }
 
     // Results screen: everyone still connected plays again on the same map with fresh loot, scenery and storm, with no trip back to
@@ -369,6 +398,27 @@ class GameServer {
                 if (!sim.match.NpcHit(c->playerId, m.tenths * 0.1f)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::VehicleRequest: {
+                net::VehicleRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                bool ok = false;
+                if (m.action == net::VehicleRequest::Enter) ok = sim.match.EnterVehicle(c->playerId, m.index, static_cast<Seat>(m.seat));
+                else if (m.action == net::VehicleRequest::Exit) ok = sim.match.ExitVehicle(c->playerId);
+                else ok = sim.match.SwitchSeat(c->playerId);
+                if (!ok) stats.rejectedActions++;
+                break;
+            }
+            case net::MsgType::VehicleDrive: {
+                net::VehicleDrive m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                CartBody b;
+                b.x = m.x; b.y = m.y; b.z = m.z; b.yaw = BinangToYaw(m.yaw);
+                b.pitch = m.pitch * 0.01f; b.roll = m.roll * 0.01f;
+                b.speed = m.speed; b.slide = m.slide; b.vy = m.vy; b.steer = m.steer * 0.01f;
+                b.grounded = (m.flags & 1) != 0;
+                if (!sim.match.DriveVehicle(c->playerId, m.index, b, m.air, (m.flags & 2) != 0, m.impact, m.landing)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::HireAllyRequest: {
                 net::HireAllyRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -468,6 +518,12 @@ class GameServer {
 
         PlayerState* p = sim.match.Find(c.playerId);
         if (!p || !p->alive) return;
+        if (sim.match.RidingIn(p->id)) {   // in a cart: where they are is the seat (the match keeps it there); the rest is theirs
+            c.lastInputClock = clock;
+            p->anim = in.anim;
+            p->scene = in.scene;
+            return;
+        }
         Vec2 target = {in.x, in.z};
         if (sim.match.State() != MatchState::Lobby) {
             float elapsed = (std::min)(std::max(clock - c.lastInputClock, kStep), kMaxInputGap);
@@ -779,8 +835,39 @@ class GameServer {
                 n.flags = static_cast<uint8_t>((a.moving ? 1 : 0) | (sim.match.Clock() < a.actUntil ? 2 : 0));
                 s.allies.push_back(n);
             }
+            // The carts near enough to see: the player's own and the closest few others (each is 20 bytes, 20 times a second).
+            vehicleNear.clear();
+            for (const VehicleState& v : sim.match.Vehicles()) {
+                if (v.gone) continue;
+                const bool mine = v.seat[0] == c.playerId || v.seat[1] == c.playerId;
+                const float d = Distance(self->pos, {v.body.x, v.body.z});
+                if (mine || d <= kVehicleSendRange) vehicleNear.push_back({mine ? -1.0f : d, &v});
+            }
+            std::sort(vehicleNear.begin(), vehicleNear.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (size_t i = 0; i < vehicleNear.size() && i < kVehicleSendMax; i++) {
+                const VehicleState& v = *vehicleNear[i].second;
+                // A cart standing parked with nobody in it doesn't change: it goes out every fifth snapshot (the client keeps it in between).
+                const bool parked = sim.match.Clock() - v.busyAt > 1.0f;
+                if (parked && (tick + v.index) % net::kParkedVehicleEvery != 0) continue;
+                s.vehicles.push_back(ToNet(v));
+            }
             SendTo(c, s, false);
         }
+    }
+
+    static net::VehicleNet ToNet(const VehicleState& v) {
+        net::VehicleNet n;
+        n.index = v.index;
+        n.x = v.body.x; n.y = v.body.y; n.z = v.body.z;
+        n.yaw = YawToBinang(v.body.yaw);
+        n.speed = static_cast<int16_t>(std::lround(std::clamp(v.body.speed, -30000.0f, 30000.0f)));
+        n.steer = static_cast<int8_t>(std::lround(std::clamp(v.body.steer * 100.0f, -127.0f, 127.0f)));
+        n.air = static_cast<int16_t>(std::lround(std::clamp(v.air, 0.0f, 30000.0f)));
+        n.hp = static_cast<uint8_t>(std::lround(std::clamp(v.health / kCartHealth, 0.0f, 1.0f) * 255.0f));
+        n.driver = v.seat[0] == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(v.seat[0]);
+        n.passenger = v.seat[1] == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(v.seat[1]);
+        n.flags = static_cast<uint8_t>((v.wrecked ? net::VehicleNet::kWrecked : 0) | (v.body.grounded ? net::VehicleNet::kGrounded : 0) | (v.drift ? net::VehicleNet::kDrift : 0));
+        return n;
     }
 
     net::Transport& link;
@@ -795,6 +882,10 @@ class GameServer {
     int propCount = 560;
     int poiCount = 12;
     int bossCount = 0;
+    int vehicleCount = -1;
+    static constexpr float kVehicleSendRange = 4000.0f;
+    static constexpr size_t kVehicleSendMax = 5;
+    std::vector<std::pair<float, const VehicleState*>> vehicleNear;
     int playerLimit = kMaxPlayers;
     bool soloTest = false;
     float autoStartSec = 0;

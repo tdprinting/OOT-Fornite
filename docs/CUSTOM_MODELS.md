@@ -24,3 +24,19 @@ idle, walk, run, jump, sit, talk, groom, sleep, stretch, pounce, happy. The game
 - **Previews:** `python3 tools/lilo/render_previews.py [folder]` renders the poses and a contact sheet.
 - In the game she is skinned on the CPU every frame and drawn with her own textures (`DrawLiloModel` in `RoyaleMod.cpp`). Her size is
   `kLiloPetScale` (the pet) and `kLiloMapScale` (Lilo sitting on the map).
+
+## The Lon Lon Buggy (built in, made in Blender)
+
+The cart is a low poly model in the same style: `assets/cart/cart.blend` (also `cart.glb`) has about 1,300 triangles in six rigid parts (the body, the
+four wheels and the handlebar, each with its pivot) and one 64x32 texture atlas (`cart_atlas.png`: planks, beams, saddle blanket, iron, cloth, gold,
+Goron brick and the glowing firebox). Empties mark the two seats, where riders step off, the chimney top and the flag. The game reads it from
+`shared/cart_model.h` and `shared/cart_geometry.h`, which are generated; the physics, the server and the bots use the same measures.
+
+- **Rebuild everything from code:** `python3.11 tools/cart/build_cart.py` (needs `pip install bpy==4.2.0`). It writes the .blend, .glb and the atlas.
+- **After changing the .blend by hand** (or the build script): `python3.11 tools/cart/export_cart.py` regenerates both headers. Keep the object names
+  (`CartBody`, `WheelFL`, `WheelFR`, `WheelBL`, `WheelBR`, `Handlebar` and the `Seat*`, `Exit*`, `Exhaust`, `FlagTop` empties) and the image name
+  `cart_atlas`. Blender's -Y is the cart's front.
+- **Previews:** `python3.11 tools/cart/render_previews.py [folder]` renders eight views and a contact sheet.
+- In the game the vertices are built once with a fixed light baked in and drawn with one display list per part (`DrawCart` in `RoyaleMod.cpp`);
+  the wheels roll and the front pair and the handlebar steer. Riders sit `kSaddleDrop` under the top of the saddle, in Link's own horse-riding poses.
+

@@ -8,6 +8,7 @@
 #include "../shared/props.h"
 #include "../shared/replay.h"
 #include "../shared/storm.h"
+#include "../shared/vehicle.h"
 #include "../shared/weather.h"
 #include "nav.h"
 #include <algorithm>
@@ -264,6 +265,7 @@ class Match {
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         SpawnBosses();
         SpawnAllies();
+        SpawnVehicles();
         nextSupplyAt = kSupplyFirstSec; supplyCount = 0; pendingSupply.clear();
         for (auto& pl : players) { pl.magic = kMaxMagic; pl.magicStamp = clock; }
         replay = Replay{}; replayNextAt = 0;
@@ -300,6 +302,7 @@ class Match {
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
+                TickVehicles(dt);
                 if (Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
@@ -439,6 +442,7 @@ class Match {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
         if (IsBossId(targetId)) return AttackBoss(attackerId, targetId, hit);
+        if (IsVehicleId(targetId)) return AttackVehicle(attackerId, targetId, hit);
         PlayerState* a = Find(attackerId);
         PlayerState* t = Find(targetId);
         if (!a || !t || a == t || !a->alive || !t->alive) return r;
@@ -503,6 +507,7 @@ class Match {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
                 if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
             }
+            for (auto& v : vehicles) if (!v.wrecked && !v.gone && Distance({v.body.x, v.body.z}, centre) <= w.splashRadius + kCartHitRadius * 0.5f) DamageVehicle(v, base * 0.9f, attackerId);
         }
         return r;
     }
@@ -832,6 +837,274 @@ class Match {
         return true;
     }
 
+    // ---- carts (shared/vehicle.h): anyone can get in one, drive it, ride along, run people over with it or smash it up. ----------------------
+    // The ground and walls the server drives carts on: the host builds it from the bots' navigation grid. Without one, flat open ground.
+    void SetVehicleWorld(CartWorld w) { vehicleWorld = std::move(w); }
+    // Somewhere a person can stand (inside the map and not in a wall), for putting riders down and pushing people out of a cart's way.
+    bool OpenGround(Vec2 at) const { return Inside(at) && !(vehicleWorld.solid && vehicleWorld.solid(at.x, at.z)); }
+    // Good places for carts (the edges of the towns); more are found at random if these run out. And how many there are.
+    void SetVehicleSpots(std::vector<Vec2> spots) { vehicleSpots = std::move(spots); }
+    void SetVehicleCount(int n) { vehicleCount = (std::max)(0, (std::min)(n, kMaxVehicles)); }
+    int VehicleCount() const { return vehicleCount; }
+    const CartWorld& VehicleWorld() const { return vehicleWorld; }
+    const std::vector<VehicleState>& Vehicles() const { return vehicles; }
+    std::vector<VehicleState>& MutableVehicles() { return vehicles; }
+    VehicleState* FindVehicle(int index) { return index >= 0 && index < static_cast<int>(vehicles.size()) ? &vehicles[static_cast<size_t>(index)] : nullptr; }
+    const VehicleState* FindVehicle(int index) const { return index >= 0 && index < static_cast<int>(vehicles.size()) ? &vehicles[static_cast<size_t>(index)] : nullptr; }
+    // Which cart and seat a player is in. False if they are on foot.
+    bool RidingIn(uint32_t id, int* index = nullptr, Seat* seat = nullptr) const {
+        if (id == kNoPlayer) return false;
+        for (const auto& v : vehicles) {
+            for (int s = 0; s < 2; s++) {
+                if (v.seat[s] != id) continue;
+                if (index) *index = v.index;
+                if (seat) *seat = static_cast<Seat>(s);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Park the carts: on fairly flat open ground with room round them, apart from each other, the given spots first.
+    void SpawnVehicles() {
+        vehicles.clear();
+        if (vehicleCount <= 0) return;
+        Rng rng(seed ^ 0x63617274ull);   // "cart"
+        std::vector<Vec2> spots = vehicleSpots;
+        for (size_t i = spots.size(); i > 1; i--) std::swap(spots[i - 1], spots[rng.Below(static_cast<uint32_t>(i))]);
+        auto place = [&](Vec2 at) {
+            if (!Inside(at)) return false;
+            for (const auto& v : vehicles) if (Distance({v.body.x, v.body.z}, at) < 650.0f) return false;
+            for (int t = 0; t < 4; t++) {
+                const float yaw = static_cast<float>(rng.Unit() * 6.283185307179586 - 3.141592653589793);
+                const cartdetail::Footing f = cartdetail::FootingAt(vehicleWorld, at.x, at.z, yaw);
+                if (!f.any || std::fabs(f.pitch) > 0.2f || std::fabs(f.roll) > 0.2f || !cartdetail::Fits(vehicleWorld, at.x, at.z, yaw, f.y)) continue;
+                VehicleState v;
+                v.index = static_cast<uint8_t>(vehicles.size());
+                v.body.x = at.x; v.body.z = at.z; v.body.yaw = yaw;
+                SettleCart(v.body, vehicleWorld);
+                vehicles.push_back(v);
+                return true;
+            }
+            return false;
+        };
+        for (Vec2 at : spots) { if (static_cast<int>(vehicles.size()) >= vehicleCount) break; place(at); }
+        for (int tries = 0; tries < 400 && static_cast<int>(vehicles.size()) < vehicleCount; tries++) place(RandomPointIn(rng, map, placement, 0.85f));
+    }
+
+    // Get in. The wanted seat if it is free, else the other one. You must be on foot, standing by the cart, and it must not be speeding past.
+    bool EnterVehicle(uint32_t playerId, int index, Seat want) {
+        PlayerState* p = Find(playerId);
+        VehicleState* v = FindVehicle(index);
+        if (!p || !v || !p->alive || v->wrecked || v->gone || state != MatchState::InMatch || Stunned(*p) || RidingIn(playerId)) return false;
+        if (std::fabs(v->body.speed) > 200.0f) return false;
+        const Seat order[2] = {want == Seat::Passenger ? Seat::Passenger : Seat::Driver, want == Seat::Passenger ? Seat::Driver : Seat::Passenger};
+        for (Seat s : order) {
+            uint32_t& who = v->seat[static_cast<int>(s)];
+            if (who != kNoPlayer) continue;
+            if (Distance(p->pos, ExitSpot(v->body, s)) > kEnterRange && Distance(p->pos, {v->body.x, v->body.z}) > kEnterRange) continue;
+            who = playerId;
+            if (s == Seat::Driver) { v->lastDriver = playerId; v->reportAt = clock; v->controls = {}; }
+            PlaceRider(*v, *p, s);
+            return true;
+        }
+        return false;
+    }
+    // Move to the cart's other seat (the passenger takes the reins when the driver has got out).
+    bool SwitchSeat(uint32_t playerId) {
+        int index; Seat s;
+        if (!RidingIn(playerId, &index, &s)) return false;
+        VehicleState& v = vehicles[static_cast<size_t>(index)];
+        const int other = s == Seat::Driver ? 1 : 0;
+        if (v.seat[other] != kNoPlayer || v.wrecked) return false;
+        v.seat[other] = playerId;
+        v.seat[static_cast<int>(s)] = kNoPlayer;
+        if (other == 0) { v.lastDriver = playerId; v.reportAt = clock; v.controls = {}; }
+        if (PlayerState* p = Find(playerId)) PlaceRider(v, *p, static_cast<Seat>(other));
+        return true;
+    }
+    // Get out, onto the ground beside your seat.
+    bool ExitVehicle(uint32_t playerId) {
+        int index; Seat s;
+        if (!RidingIn(playerId, &index, &s)) return false;
+        VehicleState& v = vehicles[static_cast<size_t>(index)];
+        v.seat[static_cast<int>(s)] = kNoPlayer;
+        if (PlayerState* p = Find(playerId)) {
+            Vec2 to = ExitSpot(v.body, s);
+            if (!OpenGround(to)) { const Vec2 other = ExitSpot(v.body, s == Seat::Driver ? Seat::Passenger : Seat::Driver); to = OpenGround(other) ? other : Vec2{v.body.x, v.body.z}; }
+            p->pos = to;
+            p->y = p->isBot ? 0.0f : v.body.y;
+        }
+        return true;
+    }
+
+    // A human driver's game reports where the cart is (it runs the physics against the real ground). The move is checked like a player's.
+    bool DriveVehicle(uint32_t playerId, int index, const CartBody& reported, float air, bool drift, float impact, float landing) {
+        VehicleState* v = FindVehicle(index);
+        if (!v || v->wrecked || v->gone || v->Driver() != playerId || state != MatchState::InMatch) return false;
+        if (!std::isfinite(reported.x) || !std::isfinite(reported.z) || !std::isfinite(reported.y)) return false;
+        const float elapsed = (std::min)(0.5f, (std::max)(clock - v->reportAt, 0.05f));
+        const float maxMove = kCartMaxSpeed * 1.5f * elapsed + 60.0f;
+        CartBody b = reported;
+        const float d = std::hypot(b.x - v->body.x, b.z - v->body.z);
+        if (d > maxMove) { const float k = maxMove / d; b.x = v->body.x + (b.x - v->body.x) * k; b.z = v->body.z + (b.z - v->body.z) * k; }
+        b.speed = std::clamp(b.speed, -kCartMaxReverse * 1.5f, kCartMaxSpeed * 1.4f);
+        v->body = b;
+        v->air = (std::max)(0.0f, air);
+        v->drift = drift;
+        v->reportAt = clock;
+        CartStep st;
+        st.impact = (std::min)(impact, 900.0f);
+        st.landing = (std::min)(landing, 3000.0f);
+        ApplyCartStep(*v, st);
+        return true;
+    }
+
+    // Hit a cart with your weapon. Its riders are not hurt (unless it is a blast).
+    AttackResult AttackVehicle(uint32_t attackerId, uint32_t vehicleId, bool hit) {
+        AttackResult r;
+        PlayerState* a = Find(attackerId);
+        VehicleState* v = FindVehicle(static_cast<int>(vehicleId - kVehicleIdBase));
+        if (!a || !a->alive || !v || v->wrecked || v->gone || v->seat[0] == attackerId || v->seat[1] == attackerId) return r;
+        const bool hadAmmo = HasAmmo(*a, a->weapon.item);
+        const WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
+        const Vec2 at = {v->body.x, v->body.z};
+        if (w.damage <= 0 || clock < a->attackReadyAt || Stunned(*a)) return r;
+        if (Distance(a->pos, at) > w.range * 1.1f + kCartHitRadius) return r;
+        a->attackReadyAt = clock + w.cooldown;
+        r.ok = true;
+        if (hadAmmo) SpendAmmo(*a, a->weapon.item);
+        if (!hit) return r;
+        const float base = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, at))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) *
+                           (w.ranged ? TotalsOf(*a).ranged : TotalsOf(*a).melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
+        const float dmg = base * (w.splashRadius > 0 ? 1.5f : 1.0f) * (a->weapon.item == ItemId::MegatonHammer || a->weapon.item == ItemId::GiantsHammer ? 1.6f : 1.0f);
+        r.hit = true;
+        r.damage = dmg;
+        MatchEvent e{MatchEvent::Type::Damaged};
+        e.a = v->Id(); e.b = attackerId; e.amount = dmg; e.health = (std::max)(0.0f, v->health - dmg);
+        events.push_back(e);
+        if (w.splashRadius > 0) {
+            for (auto& o : players) {
+                if (o.alive && o.id != attackerId && Distance(o.pos, at) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, DamageKind::Explosion);
+            }
+        }
+        DamageVehicle(*v, dmg, attackerId);
+        r.killed = v->wrecked;
+        return r;
+    }
+    void DamageVehicle(VehicleState& v, float amount, uint32_t by) {
+        if (v.wrecked || v.gone || !(amount > 0)) return;
+        v.health -= amount;
+        if (by != kNoPlayer) v.lastHitBy = by;
+        if (v.health <= 0) WreckVehicle(v);
+    }
+    // Wrecked: the riders are thrown off, the firebox goes up, and what is left burns for a while.
+    void WreckVehicle(VehicleState& v) {
+        v.health = 0;
+        v.wrecked = true;
+        v.wreckedAt = clock;
+        v.body.speed *= 0.3f;
+        for (int s = 0; s < 2; s++) if (v.seat[s] != kNoPlayer) ExitVehicle(v.seat[s]);
+        AddStrike({v.body.x, v.body.z}, kCartBlastRadius, kCartBlastDamage, 0.0f, v.lastHitBy, StrikeStyle::Fire);
+    }
+
+    void TickVehicles(float dt) {
+        for (auto& v : vehicles) {
+            if (v.gone) continue;
+            if (v.Occupied() || v.wrecked || !v.body.grounded || std::fabs(v.body.speed) > 1.0f) v.busyAt = clock;
+            if (v.wrecked) {
+                if (clock - v.wreckedAt > kCartWreckSeconds) v.gone = true;
+                else if (!v.body.grounded || std::fabs(v.body.speed) > 1.0f) StepCart(v.body, CartControls{}, vehicleWorld, dt);   // it rolls to a stop
+                continue;
+            }
+            for (auto& who : v.seat) { const PlayerState* r = Find(who); if (who != kNoPlayer && (!r || !r->alive)) who = kNoPlayer; }
+            const PlayerState* driver = Find(v.Driver());
+            const bool human = driver && !driver->isBot && clock - v.reportAt < 1.0f;   // its driver's game moves it
+            if (!human) {
+                const CartControls c = driver && driver->isBot ? v.controls : CartControls{};
+                const bool still = v.body.grounded && std::fabs(v.body.speed) < 1.0f && std::fabs(v.body.slide) < 1.0f && c.throttle == 0.0f;
+                if (!still) ApplyCartStep(v, StepCart(v.body, c, vehicleWorld, dt));
+                v.drift = c.handbrake;
+                v.air = 0.0f;
+                if (!v.body.grounded) { const cartdetail::Footing f = cartdetail::FootingAt(vehicleWorld, v.body.x, v.body.z, v.body.yaw); if (f.any) v.air = (std::max)(0.0f, v.body.y - f.y); }
+            }
+            if (v.wrecked) continue;
+            for (int s = 0; s < 2; s++) if (PlayerState* r = Find(v.seat[s])) PlaceRider(v, *r, static_cast<Seat>(s));
+            RamPlayers(v);
+        }
+        BumpCarts();
+    }
+
+  private:
+    // A rider sits on the saddle: the server's idea of where they are follows the cart (bots' heights are above the floor, people's are world heights).
+    void PlaceRider(const VehicleState& v, PlayerState& p, Seat s) {
+        float x, y, z;
+        SeatSpot(v.body, s, &x, &y, &z);
+        p.pos = {x, z};
+        p.y = p.isBot ? (std::max)(0.0f, y - v.body.y + v.air) : y;
+        p.rot = YawToBinang(v.body.yaw);
+    }
+    // Crash and landing damage from a step of the physics, to the cart and (for the hard ones) the riders.
+    void ApplyCartStep(VehicleState& v, const CartStep& st) {
+        const float cartHurt = CrashDamage(st.impact) + LandingDamage(st.landing);
+        const float riderHurt = RiderCrashDamage(st.impact) + LandingDamage(st.landing) * 0.25f;
+        if (riderHurt > 0.0f) for (uint32_t id : v.seat) if (id != kNoPlayer) Damage(id, riderHurt, kNoPlayer, DamageKind::Normal, false);
+        if (cartHurt > 0.0f) DamageVehicle(v, cartHurt, kNoPlayer);
+    }
+    // Anyone on foot in the way of a moving cart is run over: hurt by how fast it was going, credited to whoever is (or last was) driving it.
+    void RamPlayers(VehicleState& v) {
+        const float speed = std::hypot(v.body.speed, v.body.slide);
+        if (speed < kRamMinSpeed) return;
+        const uint32_t by = v.Driver() != kNoPlayer ? v.Driver() : v.lastDriver;
+        for (auto& p : players) {
+            if (!p.alive || p.id == v.seat[0] || p.id == v.seat[1] || RidingIn(p.id) || !InsideCart(v.body, p.pos.x, p.pos.z, 14.0f)) continue;
+            if (p.isBot ? p.y > 70.0f : std::fabs(p.y - v.body.y) > 90.0f) continue;   // up on a block or a roof: it passes underneath
+            if (!v.CanRam(p.id, clock)) continue;
+            v.NoteRam(p.id, clock);
+            Damage(p.id, RamDamage(speed), by == p.id ? kNoPlayer : by, DamageKind::Normal);
+            DamageVehicle(v, kRamCartDamage, kNoPlayer);
+            v.body.speed *= 0.82f;
+            if (p.isBot && p.alive) {   // knocked aside, out of its path
+                const float lx = std::cos(v.body.yaw), lz = -std::sin(v.body.yaw);
+                const float side = (p.pos.x - v.body.x) * lx + (p.pos.z - v.body.z) * lz >= 0 ? 1.0f : -1.0f;
+                const Vec2 to = {p.pos.x + lx * side * 80.0f, p.pos.z + lz * side * 80.0f};
+                if (OpenGround(to)) p.pos = to;
+            }
+            if (v.wrecked) return;
+        }
+    }
+    // Carts that run into each other: pushed apart, both hurt by how fast they met. A cart its driver's game moves isn't pushed by the server
+    // (that game treats the others as walls), but it is still hurt.
+    void BumpCarts() {
+        for (size_t i = 0; i < vehicles.size(); i++) {
+            for (size_t j = i + 1; j < vehicles.size(); j++) {
+                VehicleState& a = vehicles[i];
+                VehicleState& b = vehicles[j];
+                if (a.gone || b.gone) continue;
+                const float dx = b.body.x - a.body.x, dz = b.body.z - a.body.z, d = std::hypot(dx, dz);
+                const float reach = (cart::kMaxZ - cart::kMinZ) * 0.5f + 18.0f;
+                if (d >= reach || d < 1e-3f) continue;
+                const float nx = dx / d, nz = dz / d;
+                const float va = (std::sin(a.body.yaw) * a.body.speed) * nx + (std::cos(a.body.yaw) * a.body.speed) * nz;
+                const float vb = (std::sin(b.body.yaw) * b.body.speed) * nx + (std::cos(b.body.yaw) * b.body.speed) * nz;
+                const float closing = va - vb;
+                if (closing > 40.0f && !a.wrecked && !b.wrecked) {
+                    const float hurt = CrashDamage(closing) * 0.6f;
+                    DamageVehicle(a, hurt, b.Driver());
+                    DamageVehicle(b, hurt, a.Driver());
+                    a.body.speed *= 0.4f; b.body.speed *= 0.4f;
+                }
+                const auto movedByServer = [&](const VehicleState& v) { const PlayerState* dr = Find(v.Driver()); return !(dr && !dr->isBot && clock - v.reportAt < 1.0f); };
+                const float push = reach - d;
+                const bool ma = movedByServer(a), mb = movedByServer(b);
+                const float sa = ma && mb ? 0.5f : (ma ? 1.0f : 0.0f), sb = ma && mb ? 0.5f : (mb ? 1.0f : 0.0f);
+                a.body.x -= nx * push * sa; a.body.z -= nz * push * sa;
+                b.body.x += nx * push * sb; b.body.z += nz * push * sb;
+            }
+        }
+    }
+
+  public:
     // Use the ability slot. Fails (and costs nothing) if there is no ability, it is still recharging, the player is stunned, or the
     // ability needs a target that isn't there (Hookshot with nobody in front). Farore's Wind marks a spot the first time and jumps back
     // to it the second time.
@@ -1177,6 +1450,10 @@ class Match {
                 const DamageKind kind = s.style == StrikeStyle::Fire ? DamageKind::Fire : (s.style == StrikeStyle::Rock ? DamageKind::Explosion : DamageKind::Normal);
                 Damage(p.id, s.damage, s.by, kind);
                 if (p.alive) ApplyStyle(p, s);
+            }
+            for (auto& v : vehicles) {   // blasts break carts too (a wreck's own blast can set off the next one)
+                if (v.wrecked || v.gone || Distance({v.body.x, v.body.z}, s.at) > s.radius + kCartHitRadius * 0.5f) continue;
+                DamageVehicle(v, s.damage * (s.style == StrikeStyle::Bolt ? 1.0f : 1.6f), s.by);
             }
         }
         strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [&](const Strike& s) { return s.applied && clock > s.hitAt + 1.0f; }), strikes.end());
@@ -1933,6 +2210,7 @@ class Match {
         p.health = 0;
         DropKit(p);
         for (auto& ally : allies) if (ally.owner == p.id && ally.alive) ReleaseAlly(ally, false);   // their allies are free to hire again
+        for (auto& v : vehicles) for (auto& who : v.seat) if (who == p.id) who = kNoPlayer;      // and their seat in a cart is empty
         if (killer != kNoPlayer && killer != p.id) {
             if (PlayerState* k = Find(killer)) k->kills++;
         }
@@ -2056,6 +2334,7 @@ class Match {
     }
 
     void Teleport(PlayerState& p, Vec2 to) {
+        for (auto& v : vehicles) for (auto& who : v.seat) if (who == p.id) who = kNoPlayer;   // a warp or a pull takes you out of a cart
         p.pos = to;
         p.dirty = true;
         MatchEvent e{MatchEvent::Type::Teleported};
@@ -2232,6 +2511,10 @@ class Match {
     std::vector<Strike> strikes;
     std::shared_ptr<const NavGrid> nav;
     std::vector<AllyState> allies;
+    std::vector<VehicleState> vehicles;
+    std::vector<Vec2> vehicleSpots;
+    CartWorld vehicleWorld;
+    int vehicleCount = 0;    // the host's game sets it (GameServer); plain matches and most tests have none
     Replay replay;
     float replayNextAt = 0;
     std::vector<Vec2> allySpots;
