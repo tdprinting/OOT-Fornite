@@ -18,3 +18,7 @@ assets/lilo/previews/
 assets/avriella/avriella.fbx
 assets/avriella/avriella.blend1
 assets/avriella/previews/
+
+# Fish authoring backups and on-demand previews
+assets/fish/*.blend1
+assets/fish/previews/

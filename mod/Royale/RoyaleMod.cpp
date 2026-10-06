@@ -20,6 +20,8 @@
 #include "fortnite_map.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
+#include "lobby_fish.h"
+#include "lobby_fish_model.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -321,11 +323,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Water", "Realistic water (waves, splashes, wakes, reflections, swim current, underwater look)" },
     { "Avriella", "Avriella the baby pet (the pet picker)" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
+    { "LobbyFish", "Lobby reef aquarium (clownfish and cleaner wrasse)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll };
-static_assert(kDbgRagdoll + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish };
+static_assert(kDbgLobbyFish + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -13379,6 +13382,9 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     }
 }
 
+// ---- waiting-room reef aquarium ------------------------------------------------------------------------------------------------
+#include "RoyaleLobbyFish.h"
+
 // ---- match music ----------------------------------------------------------------------------------------------------------------
 // "Match music" in the lobby menu: 0 the game's own music as usual, 1 a random song from the music folder (with the game's music turned down),
 // 2 silence. The game's music volume is put back to the player's setting whenever a match is not on.
@@ -13605,6 +13611,7 @@ void OnGameFrameUpdate() {
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
     Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
     Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
+    Feat("lobby reef aquarium"); ReconcileLobbyReef();
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
     Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
@@ -13691,6 +13698,7 @@ void OnSceneInit(int16_t) {
     gAngry.clear();
     gSolidActor = nullptr; gSolidBgId = -1; gSolidFailed = false; gSolidSet.clear();   // the scene's collision (and our actor with it) is gone
     gFortniteActor = nullptr; gFortniteArrived = false;
+    ForgetLobbyReef();
     ForgetCarts();   // the cart actors went with the scene
 }
 
@@ -15027,6 +15035,10 @@ void DrawGraphicsUi() {
         GfxSwitch("BossFx", "Boss effects in the world");
         GfxSwitch("Projectiles", "Arrows, bombs and chest reveals");
         ImGui::PopID();
+    }
+    if (GfxSection("Lobby aquarium", "LobbyFish")) {
+        GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
+        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, and busy cleaner wrasse. Only for looks.");
     }
     ImGui::Spacing();
 }
