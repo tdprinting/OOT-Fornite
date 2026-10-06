@@ -2966,8 +2966,9 @@ void RefreshFloraWorld(PlayState* play) {
 
 // Something lying on (possibly gently sloping) ground: stretched `a` along its long axis and `b` across it, `rise` as tall as it is wide, turned by `yaw`.
 // `alpha` < 0 draws it solid, otherwise see-through with that alpha (0-255).
-void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float a, float rise, float b, int alpha) {
+void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float a, float rise, float b, int alpha, Gfx* dl = nullptr) {
     OPEN_DISPS(play->state.gfxCtx);
+    if (dl == nullptr) dl = const_cast<Gfx*>(m->dl.data());
     Matrix_Translate(x, y, z, MTXMODE_NEW);
     Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
     Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
@@ -2975,13 +2976,64 @@ void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float 
     Matrix_Scale(a / royale::ground::kMeshRadius, rise, b / royale::ground::kMeshRadius, MTXMODE_APPLY);
     if (alpha < 0) {
         gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(m->dl.data()));
+        gSPDisplayList(POLY_OPA_DISP++, dl);
     } else {
         gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
         gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, static_cast<u8>(std::clamp(alpha, 0, 255)));
-        gSPDisplayList(POLY_XLU_DISP++, const_cast<Gfx*>(m->dl.data()));
+        gSPDisplayList(POLY_XLU_DISP++, dl);
     }
     CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// ---- walking through the patches ----------------------------------------------------------------------------------------------------------
+// Whoever walks through snow presses it down (the pile's mesh is dented under their feet and keeps a trail that fills in again, quickly while it
+// snows), and whoever walks through a puddle splashes it and sends rings out across it. The walkers are the local player, everyone else's actors and
+// the carts, the same set the water uses.
+struct Walker { const void* key; float x, y, z, size, speed; };
+struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0; };
+struct SnowDent { float x, z, birth; };
+struct PuddleRing { float x, y, z, birth, size; };
+std::unordered_map<const void*, WalkTrack> gWalkTrack;
+std::vector<SnowDent> gSnowDents;
+std::vector<PuddleRing> gPuddleRings;
+uint32_t gWalkFrame = 0;
+void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add);   // (the carts are known further down)
+constexpr float kDentReach = 34.0f, kDentDepth = 9.0f;   // how wide and how deep a foot goes into snow
+
+// A copy of a snow patch's mesh with the snow pushed down where the dents are (`dents`: x, z, depth 0-1 in the world). nullptr when there is no memory this frame.
+Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<SnowDent>& dents, const std::vector<float>& depth) {
+    const size_t n = m->vtx.size();
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, n * sizeof(Vtx)));
+    if (v == nullptr) return nullptr;
+    const size_t batches = (n / 3 + 9) / 10;
+    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (n / 3 + batches + 1) * sizeof(Gfx)));
+    if (dl == nullptr) return nullptr;
+    const float sa = a / royale::ground::kMeshRadius, sb = b / royale::ground::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
+    for (size_t i = 0; i < n; i++) {
+        v[i] = m->vtx[i];
+        const float lx = m->vtx[i].v.ob[0] * sa, lz = m->vtx[i].v.ob[2] * sb;
+        const float wx = x + lx * c + lz * sn, wz = z - lx * sn + lz * c, h = m->vtx[i].v.ob[1] * rise;
+        float sink = 0.0f;
+        for (size_t k = 0; k < dents.size(); k++) {
+            const float d = std::hypot(wx - dents[k].x, wz - dents[k].z);
+            if (d < kDentReach) { const float f = 1.0f - d / kDentReach; sink = std::max(sink, kDentDepth * depth[k] * f * f * (3.0f - 2.0f * f)); }
+        }
+        if (sink <= 0.0f) continue;
+        const float ny = std::max(0.4f, h - sink);
+        v[i].v.ob[1] = static_cast<s16>(std::lround(ny / std::max(0.05f, rise)));
+        const float k = std::min(1.0f, (h - ny) / kDentDepth) * 0.7f;   // the pressed snow goes a shade bluer
+        v[i].v.cn[0] = static_cast<u8>(v[i].v.cn[0] * (1.0f - k) + 168.0f * k);
+        v[i].v.cn[1] = static_cast<u8>(v[i].v.cn[1] * (1.0f - k) + 188.0f * k);
+        v[i].v.cn[2] = static_cast<u8>(v[i].v.cn[2] * (1.0f - k) + 224.0f * k);
+    }
+    Gfx* g = dl;
+    for (size_t first = 0; first < n; first += 30) {
+        const size_t count = std::min<size_t>(30, n - first);
+        gSPVertex(g++, reinterpret_cast<uintptr_t>(&v[first]), static_cast<int>(count), 0);
+        for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+    }
+    gSPEndDisplayList(g++);
+    return dl;
 }
 
 void DrawGroundPatches(PlayState* play) {
@@ -3024,6 +3076,26 @@ void DrawGroundPatches(PlayState* play) {
     const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
     const float t = static_cast<float>(ImGui::GetTime());
     gFloraBudget = 48;
+    // Who is walking where (tracked frame to frame for speed), and the trail the snow keeps.
+    gWalkFrame++;
+    const bool paused = play->pauseCtx.state != 0;
+    std::vector<Walker> walkers;
+    {
+        auto add = [&](const void* key, float x, float y, float z, float size) {
+            WalkTrack& tr = gWalkTrack[key];
+            const float mx = x - tr.x, mz = z - tr.z;
+            const bool jumped = tr.seen == 0 || std::hypot(mx, mz) > 500.0f || dt <= 0.0001f || paused;
+            walkers.push_back({ key, x, y, z, size, jumped ? 0.0f : std::hypot(mx, mz) / dt });
+        };
+        add(pl, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 16.0f);
+        for (const auto& [id, actor] : gActorOf)
+            if (actor != nullptr && actor != &pl->actor) add(actor, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, 16.0f * actor->scale.y / 0.01f);
+        CollectCartWalkers(add);
+    }
+    const float nowT = t;
+    const float dentLife = snowing ? 8.0f : 30.0f;
+    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > dentLife) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    int fxBudget = paused ? 0 : 3;   // the game's own splashes and ripples this frame (its effect table is shared)
     // The ground says whether a seed may lie where it is: on level ground for water, off the water and the steep for the rest, and the island's
     // meadows and woods for what grows or falls there. Water that stands all the time (the wet places of the Fortnite Map) has an onset below zero.
     auto probe = [&](gp::Kind k, int cx, int cz, gp::Seed& s) -> int {
@@ -3082,16 +3154,60 @@ void DrawGroundPatches(PlayState* play) {
                 if (fade < 0.02f) continue;
                 const float y = spot->y + spot->sx * sh.dx + spot->sz * sh.dz;
                 const float shrink = layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * fade : fade;   // heaps sink into the ground at a distance, flat things fade out
+                // Is anyone inside this patch? (an ellipse: along its long axis `a`, across it `b`)
+                const float ys = std::sin(sh.yaw), yc = std::cos(sh.yaw);
+                auto inside = [&](const Walker& w, float grow) {
+                    const float ex = w.x - x, ez = w.z - z, lx = ex * yc - ez * ys, lz = ex * ys + ez * yc;
+                    const float ra = sh.a * shrink + grow, rb = sh.b * shrink + grow;
+                    return lx * lx / (ra * ra) + lz * lz / (rb * rb) < 1.0f && w.y < y + 40.0f;
+                };
                 if (!seeThrough) {
-                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, -1);
+                    Gfx* dented = nullptr;
+                    if (layer.kind == gp::Kind::Snow && !paused && (!gSnowDents.empty() || !walkers.empty())) {
+                        const float reachD = std::max(sh.a, sh.b) * shrink + kDentReach;
+                        std::vector<SnowDent> dents;
+                        std::vector<float> depth;
+                        for (const SnowDent& dn : gSnowDents)
+                            if (std::hypot(dn.x - x, dn.z - z) < reachD) { dents.push_back(dn); depth.push_back(std::clamp(1.0f - (nowT - dn.birth) / dentLife, 0.0f, 1.0f)); }
+                        for (const Walker& w : walkers) {
+                            if (!inside(w, kDentReach * 0.6f)) continue;
+                            dents.push_back({ w.x, w.z, nowT }); depth.push_back(1.0f);   // under their feet right now
+                            WalkTrack& tr = gWalkTrack[w.key];
+                            if (w.y < y + 14.0f && w.speed > 10.0f && std::hypot(w.x - tr.x, w.z - tr.z) + tr.sinceDent >= 26.0f && gSnowDents.size() < 160) {
+                                gSnowDents.push_back({ w.x, w.z, nowT });
+                                tr.sinceDent = 0.0f;
+                            } else tr.sinceDent += std::hypot(w.x - tr.x, w.z - tr.z);
+                        }
+                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, dents, depth);
+                    }
+                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, -1, dented);
                     continue;
+                }
+                if (layer.kind == gp::Kind::Puddle && !frozen) {   // wading through: a splash on the way in, rings while moving
+                    for (const Walker& w : walkers) {
+                        if (!inside(w, 0.0f) || w.y > y + 14.0f) continue;
+                        WalkTrack& tr = gWalkTrack[w.key];
+                        tr.inPuddle = true;
+                        const float pk = std::clamp(0.4f + w.speed / 300.0f, 0.4f, 1.4f);
+                        if (!tr.wasPuddle && w.speed > 20.0f) {
+                            if (fxBudget >= 2) { fxBudget -= 2; Vec3f sp = { w.x, y + 1.0f, w.z }; EffectSsGSplash_Spawn(gPlayState, &sp, nullptr, nullptr, 0, static_cast<s16>(std::clamp(300.0f * pk * w.size / 16.0f, 220.0f, 900.0f))); }
+                            if (gPuddleRings.size() < 48) gPuddleRings.push_back({ w.x, y + 1.8f, w.z, nowT, w.size / 16.0f * pk });
+                            tr.ring = 0.0f;
+                        } else if (w.speed > 25.0f) {
+                            tr.ring -= dt;
+                            if (tr.ring <= 0.0f) {
+                                tr.ring = std::clamp(0.4f - w.speed / 1200.0f, 0.12f, 0.4f);
+                                if (gPuddleRings.size() < 48) gPuddleRings.push_back({ w.x, y + 1.8f, w.z, nowT, w.size / 16.0f * pk * 0.8f });
+                                if (w.speed > 140.0f && fxBudget >= 1) { fxBudget--; Vec3f sp = { w.x, y + 1.0f, w.z }; EffectSsGRipple_Spawn(gPlayState, &sp, static_cast<s16>(60.0f * pk), static_cast<s16>(300.0f * pk), 0); }
+                            }
+                        }
+                    }
                 }
                 const int alpha = static_cast<int>((layer.kind == gp::Kind::Puddle ? 225.0f : 190.0f) * fade);
                 DrawGroundPatch(play, m, x, y + 1.0f, z, spot->sx, spot->sz, sh.yaw, sh.a, 1.0f, sh.b, alpha);
                 if (layer.kind != gp::Kind::Puddle || !raining || frozen || ripple == nullptr || ripple->dl.empty() || d > 650.0f) continue;
                 // Every drop that lands on a puddle rings out across it: each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle.
                 const int rings = std::clamp(static_cast<int>((1.0f + rainNow * 3.0f) * std::sqrt(sh.a * sh.b) / 90.0f), 1, 6);
-                const float ys = std::sin(sh.yaw), yc = std::cos(sh.yaw);
                 for (int j = 0; j < rings; j++) {
                     const float phase = t / 0.8f + Flora01(patch.cx, patch.cz, 60 + j);
                     const int drop = static_cast<int>(std::floor(phase));
@@ -3103,6 +3219,24 @@ void DrawGroundPatches(PlayState* play) {
                                     40.0f + 130.0f * age, 1.0f, 40.0f + 130.0f * age, static_cast<int>(190.0f * (1.0f - age) * fade));
                 }
             }
+    }
+    // The rings the walkers left in the puddles, spreading and fading over a moment.
+    if (ripple != nullptr && !ripple->dl.empty())
+        for (size_t i = 0; i < gPuddleRings.size();) {
+            const PuddleRing& r = gPuddleRings[i];
+            const float age = (nowT - r.birth) / 0.9f;
+            if (age >= 1.0f || age < 0.0f) { gPuddleRings.erase(gPuddleRings.begin() + i); continue; }
+            const float sz = (30.0f + 110.0f * age) * std::max(0.6f, r.size);
+            DrawGroundPatch(play, ripple, r.x, r.y, r.z, 0.0f, 0.0f, 0.0f, sz, 1.0f, sz, static_cast<int>(200.0f * (1.0f - age)));
+            i++;
+        }
+    for (auto it = gWalkTrack.begin(); it != gWalkTrack.end();) {
+        WalkTrack& tr = it->second;
+        bool live = false;
+        for (const Walker& w : walkers) if (w.key == it->first) { tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true; break; }
+        tr.wasPuddle = tr.inPuddle;
+        tr.inPuddle = false;
+        it = live ? std::next(it) : gWalkTrack.erase(it);
     }
 }
 
@@ -9035,6 +9169,11 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
 }
 
 // Drawn every frame with the other world effects (Projectile_Draw).
+void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add) {
+    for (const auto& [index, c] : gCarts)
+        if (c.actor != nullptr && !c.wrecked) add(&c, c.body.x, c.body.y, c.body.z, 46.0f);
+}
+
 void DrawWater(PlayState* play) {
     if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCamUnder = 0.0f; return; }
     Feat("draw: water");
