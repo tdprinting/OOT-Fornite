@@ -450,6 +450,21 @@ class Match {
         return std::fabs(off) <= kGuardHalfAngle;
     }
 
+    // A shot, throw or lob that had nothing in reach (the arrow, seed, bomb or bombchu still flies on the player's own screen): it spends the ammo and the
+    // cooldown like any other, so the count under the hotbar goes down however it ends. Weapons that use no ammo are not affected.
+    AttackResult ShootAtNothing(uint32_t attackerId) {
+        AttackResult r;
+        if (state != MatchState::InMatch) return r;
+        PlayerState* a = Find(attackerId);
+        if (!a || !a->alive || AmmoUsedBy(a->weapon.item) == AmmoKind::None || !HasAmmo(*a, a->weapon.item)) return r;
+        const WeaponStats w = ActiveWeapon(a->weapon.item, true);
+        if (w.damage <= 0 || clock < a->attackReadyAt || Stunned(*a)) return r;
+        a->attackReadyAt = clock + w.cooldown;
+        SpendAmmo(*a, a->weapon.item);
+        r.ok = true;
+        return r;
+    }
+
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
