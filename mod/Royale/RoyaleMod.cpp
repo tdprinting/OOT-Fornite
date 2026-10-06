@@ -159,6 +159,8 @@ bool gSignKnown = false;
 float gClothScale = 1.0f;           // the local option: cloth and wind physics on the cap, tunic, sheath and glider, 0 (off) to 2
 bool gWindOn = true;                // the local option: a breeze that moves cloth, grass and trees (off: still air)
 float gWindScale = 1.0f;            // how strong the breeze is, 0 to 2 (the slider)
+bool gWindStreaks = true;           // the local option: streaks in the air that show which way the wind blows
+bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
 // The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
@@ -206,6 +208,11 @@ void WindNow(float* wx, float* wz, float* strength) {
     }
     speed += 170.0f * gStormWeather;
     speed *= 0.7f + 0.3f * std::sin(t * 0.9f) + 0.16f * std::sin(t * 2.3f + 1.0f) + 0.08f * std::sin(t * 5.1f + 2.0f);   // gusts come and go
+    // Squalls: rain and thunder come in sudden surges of wind, rolling in every half minute or so.
+    if (gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder) {
+        const float sq = std::max(0.0f, std::sin(t * 0.21f + 1.3f)), sq4 = sq * sq * sq * sq;
+        speed += (gWeatherShown.sky == royale::Sky::Thunder ? 210.0f : 110.0f) * amount * sq4;
+    }
     speed *= gWindScale;
     const float dir = 0.4f + t * 0.04f + static_cast<float>(static_cast<int>(gWeatherShown.season)) * 1.1f;
     *wx = std::cos(dir) * speed;
@@ -2966,6 +2973,179 @@ void DrawWeatherParticles(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+// ---- wind streaks and the tornado --------------------------------------------------------------------------------------------------
+// Wind streaks: thin pale lines that drift through the air round the camera along the wind, longer, quicker and more of them as it picks up
+// (so a storm's squalls show), which is how you see which way it blows. Ash and sand have their own specks, so those skies skip this.
+void DrawWindParticles(PlayState* play) {
+    if (!gWindStreaks || !gWindOn || !InField()) return;
+    if (gWeatherShown.sky == royale::Sky::Ash || gWeatherShown.sky == royale::Sky::Sandstorm) return;
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    if (wind < 0.04f) return;
+    const int n = std::min(80, static_cast<int>((14.0f + 70.0f * wind) * std::min(1.5f, gWeatherDensity)));
+    if (n <= 0) return;
+    const Vec3f eye = play->view.eye;
+    const float t = static_cast<float>(ImGui::GetTime());
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
+    constexpr float kBox = 1500.0f, kHalf = kBox * 0.5f, kTall = 650.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
+    if (v == nullptr) return;
+    for (int i = 0; i < n; i++) {
+        const float h1 = Flora01(i, 31, 301), h2 = Flora01(i, 37, 302), h3 = Flora01(i, 41, 303), depth = 0.6f + 0.8f * Flora01(i, 43, 304);
+        const float drift = t * wl * 1.5f * depth;   // streaks outrun the wind a little so the direction reads at a glance
+        const float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
+        const float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
+        const float y = wrap(h3 * kTall + eye.y * 0.0f, kTall) - kTall * 0.35f + std::sin(t * 1.7f + i) * 14.0f;
+        const float len = (30.0f + 120.0f * wind) * depth, th = 1.8f * depth;
+        const float fade = std::clamp(std::min(wrap(drift * 0.001f + h1, 1.0f), 1.0f - wrap(drift * 0.001f + h1, 1.0f)) * 5.0f, 0.0f, 1.0f);
+        const u8 a = static_cast<u8>(std::clamp((55.0f + 110.0f * wind) * fade * (0.6f + 0.4f * depth), 0.0f, 220.0f));
+        // A flat ribbon along the wind, tilted a little so it is seen from above and from the side.
+        const float ax = dx * len, az = dz * len, bx = -dz * th, bz = dx * th;
+        const float corners[4][3] = { {x - ax - bx, y, z - az - bz}, {x + ax - bx, y + th, z + az - bz}, {x + ax + bx, y + th, z + az + bz}, {x - ax + bx, y, z - az + bz} };
+        for (int k = 0; k < 4; k++) {
+            Vtx& o = v[i * 4 + k];
+            o.v.ob[0] = static_cast<s16>(std::lround(corners[k][0])); o.v.ob[1] = static_cast<s16>(std::lround(corners[k][1])); o.v.ob[2] = static_cast<s16>(std::lround(corners[k][2]));
+            o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+            const bool tip = k == 1 || k == 2;   // the head of the streak is brighter than its tail
+            o.v.cn[0] = 235; o.v.cn[1] = 242; o.v.cn[2] = 255; o.v.cn[3] = tip ? a : static_cast<u8>(a / 5);
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    for (int first = 0; first < n; first += 8) {   // eight streaks (32 vertices) at a time
+        const int count = std::min(8, n - first);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[first * 4]), count * 4, 0);
+        for (int k = 0; k < count; k++) gSP2Triangles(POLY_XLU_DISP++, k * 4, k * 4 + 1, k * 4 + 2, 0, k * 4, k * 4 + 2, k * 4 + 3, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// The tornado: a funnel that wanders over the ground, drifting a little with the wind (and bigger in storms). It is local scenery for fun, so
+// nothing about it is sent to anyone else: you see it, and only you are pulled in. Its physics: inside its reach Link is drawn toward the funnel,
+// whirled round it (faster nearer the core) and lifted; high up he is flung out of the top. Its model is built fresh every frame (rings of
+// the funnel, twisting and leaning, with a dust skirt at the foot), and loose leaves and grass whirl round it.
+struct TornadoState {
+    bool active = false;
+    float x = 0, z = 0, ground = 0, heading = 0;
+    int scene = -1;
+};
+TornadoState gTornado;
+constexpr float kTornadoHeight = 900.0f, kTornadoReach = 460.0f;
+
+float TornadoRadius(float h01) { return 38.0f + 270.0f * std::pow(h01, 1.7f); }   // narrow at the foot, wide at the top
+float TornadoSway(float h01, float t, int axis) { return std::sin(t * (1.1f + 0.3f * axis) + h01 * 3.4f + axis * 2.0f) * 70.0f * h01 * h01; }
+
+// Once per game tick (20 a second): it wanders, and if you are within reach it takes hold of you.
+void UpdateTornado(Player* player) {
+    if (!gTornadoOn || !InField() || gPlayState == nullptr) { gTornado.active = false; return; }
+    Feat("tornado");
+    const float dt = 1.0f / 20.0f, t = static_cast<float>(ImGui::GetTime());
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
+    if (!gTornado.active || gTornado.scene != gPlayState->sceneNum) {   // (re)spawn some way off, where there is ground
+        gTornado.active = false;
+        for (int tries = 0; tries < 24; tries++) {
+            const float a = Flora01(tries, static_cast<int>(t), 311) * 6.2831853f, d = 900.0f + 500.0f * Flora01(tries, 7, 312);
+            const float x = px + std::cos(a) * d, z = pz + std::sin(a) * d;
+            float gy = 0;
+            if (!RawFloorAt(x, z, &gy)) continue;
+            gTornado = { true, x, z, gy, a + 3.14159f, gPlayState->sceneNum };
+            break;
+        }
+        if (!gTornado.active) return;
+    }
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    TornadoState& tn = gTornado;
+    tn.heading += std::sin(t * 0.23f + tn.x * 0.001f) * 0.35f * dt;                    // a slow, drunken wander
+    const float speed = 70.0f + 60.0f * wind;
+    const float nx = tn.x + (std::cos(tn.heading) * speed + wx * 0.35f) * dt, nz = tn.z + (std::sin(tn.heading) * speed + wz * 0.35f) * dt;
+    float gy = tn.ground;
+    if (RawFloorAt(nx, nz, &gy) && std::fabs(gy - tn.ground) < 60.0f) { tn.x = nx; tn.z = nz; tn.ground = gy; }
+    else tn.heading += 2.2f;   // a wall, a cliff or the water's edge: it turns away
+    if (std::hypot(tn.x - px, tn.z - pz) > 6000.0f) tn.active = false;   // lost far behind: a new one will find you
+    // Physics
+    const float ddx = px - tn.x, ddz = pz - tn.z, d = std::max(1.0f, std::hypot(ddx, ddz));
+    if (d > kTornadoReach) return;
+    const float s = std::pow(1.0f - d / kTornadoReach, 1.4f);
+    const float ix = -ddx / d, iz = -ddz / d;            // inward
+    const float tx = -iz, tz = ix;                       // round it (counter-clockwise)
+    Vec3f& pos = player->actor.world.pos;
+    const float above = pos.y - tn.ground;
+    const float pull = 220.0f * s, whirl = 150.0f + 520.0f * s;
+    pos.x += (ix * pull + tx * whirl * s) * dt;
+    pos.z += (iz * pull + tz * whirl * s) * dt;
+    if (d < kTornadoReach * 0.6f && above < kTornadoHeight) {
+        pos.y += 340.0f * s * dt;                                              // lifted up the funnel
+        player->actor.velocity.y = std::max(player->actor.velocity.y, 70.0f * s);
+    }
+    if (above > kTornadoHeight * 0.7f) {                                       // flung out of the top
+        pos.x -= ix * 700.0f * dt; pos.z -= iz * 700.0f * dt;
+    }
+}
+
+void DrawTornado(PlayState* play) {
+    if (!gTornado.active || !gTornadoOn || !InField() || gTornado.scene != play->sceneNum) return;
+    Feat("tornado draw");
+    const float t = static_cast<float>(ImGui::GetTime());
+    const Vec3f eye = play->view.eye;
+    if (std::hypot(gTornado.x - eye.x, gTornado.z - eye.z) > 5500.0f) return;
+    constexpr int kRings = 10, kSegs = 14;
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kSegs + 1) * kRings * sizeof(Vtx)));
+    if (v == nullptr) return;
+    for (int i = 0; i < kRings; i++) {
+        const float h01 = static_cast<float>(i) / (kRings - 1), h = h01 * kTornadoHeight;
+        const float r = TornadoRadius(h01), ox = TornadoSway(h01, t, 0), oz = TornadoSway(h01, t, 1);
+        const float spin = t * (6.0f - 3.5f * h01) + h01 * 5.0f;   // the foot whirls fastest, the top lags: the funnel twists
+        for (int j = 0; j <= kSegs; j++) {
+            const float a = spin + 6.2831853f * j / kSegs;
+            const float streak = 0.5f + 0.5f * std::sin(a * 3.0f + h01 * 9.0f - t * 5.0f);   // dark bands spiralling up it
+            const float shade = 0.55f + 0.4f * streak;
+            Vtx& o = v[i * (kSegs + 1) + j];
+            o.v.ob[0] = static_cast<s16>(std::lround(ox + std::cos(a) * r)); o.v.ob[1] = static_cast<s16>(std::lround(h)); o.v.ob[2] = static_cast<s16>(std::lround(oz + std::sin(a) * r));
+            o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+            o.v.cn[0] = static_cast<u8>(150.0f * shade + 20.0f * (1.0f - h01)); o.v.cn[1] = static_cast<u8>(140.0f * shade + 12.0f * (1.0f - h01)); o.v.cn[2] = static_cast<u8>(130.0f * shade);
+            o.v.cn[3] = static_cast<u8>(std::clamp((i == 0 ? 120.0f : 175.0f) * (1.0f - 0.55f * h01 * h01) * (0.7f + 0.3f * streak), 0.0f, 255.0f));
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    // Debris whirling round it: leaves and grass tufts climbing the funnel.
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    CLOSE_DISPS(play->state.gfxCtx);
+    for (int i = 0; i < 16; i++) {
+        const float life = std::fmod(t * (0.22f + 0.1f * Flora01(i, 3, 321)) + Flora01(i, 5, 322), 1.0f);
+        const float h01 = life * 0.85f, r = TornadoRadius(h01) * (0.85f + 0.5f * Flora01(i, 9, 323));
+        const float a = t * (5.0f - 2.5f * h01) + i * 0.39f;
+        const GpuMesh* m = (i & 1) ? GpuMeshFor(royale::MeshKind::LeafPile, 3u) : GpuMeshFor(royale::MeshKind::Grass, static_cast<uint32_t>(i % 4) + 4u);
+        if (m == nullptr || m->dl.empty()) continue;
+        DrawFloraMesh(play, m, gTornado.x + TornadoSway(h01, t, 0) + std::cos(a) * r, gTornado.ground + h01 * kTornadoHeight, gTornado.z + TornadoSway(h01, t, 1) + std::sin(a) * r,
+                      t * 3.0f + i, t * 2.0f + i, t * 2.6f, (i & 1) ? 0.16f : 0.3f);
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    Matrix_Translate(gTornado.x, gTornado.ground, gTornado.z, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    for (int j = 0; j < kSegs; j++) {   // one strip of the funnel at a time: two columns of rings
+        Vtx* strip = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(2 * kRings) * sizeof(Vtx)));
+        if (strip == nullptr) break;
+        for (int i = 0; i < kRings; i++) { strip[i] = v[i * (kSegs + 1) + j]; strip[kRings + i] = v[i * (kSegs + 1) + j + 1]; }
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(strip), 2 * kRings, 0);
+        for (int i = 0; i + 1 < kRings; i++) gSP2Triangles(POLY_XLU_DISP++, i, kRings + i, kRings + i + 1, 0, i, kRings + i + 1, i + 1, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Rain and snow are the game's own: its rain streaks and its falling snow (the same flakes as its winter holiday mode), switched on and scaled with
 // the server's spell of weather and the storm. So are the rest: thunderstorms and the storm zone bring the game's lightning (bolts on the horizon,
 // the sky flashing), fog, sand, ash and the storm thicken the game's own distance fog and tint it, and a sandstorm brings the Haunted Wasteland's
@@ -3278,6 +3458,10 @@ void Projectile_Draw(Actor*, PlayState* play) {
     DrawStormWall(play);
     Feat("draw: weather particles");
     DrawWeatherParticles(play);
+    Feat("draw: wind streaks");
+    DrawWindParticles(play);
+    Feat("draw: tornado");
+    DrawTornado(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
@@ -9887,10 +10071,18 @@ HatState& StepClothes(const Player* pl) {
     return h;
 }
 
+// Bots are drawn as Player actors too, but their clothes (and the wind on them) are left alone: only people's clothes move.
+bool IsBotActor(const void* actor) {
+    const auto id = gPuppetOf.find(static_cast<const Actor*>(actor));
+    if (id == gPuppetOf.end()) return false;
+    const auto st = gState.find(id->second);
+    return st != gState.end() && st->second.isBot;
+}
+
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     Feat("cap cloth");
     gHatHookCalls++;
-    if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
+    if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame() || IsBotActor(playerPtr)) return;
     HatState& h = StepClothes(static_cast<const Player*>(playerPtr));
     const float toBinary = 32768.0f / 3.14159265f;
     gHatLastSwing = h.spring.fore * 57.2958f;
@@ -9944,7 +10136,7 @@ void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
     if (limbIndex == PLAYER_LIMB_WAIST) {
         gClothLimbCalls++;
         gWaistSwing.active = false;
-        if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
+        if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame() || IsBotActor(playerPtr)) return;
         const Player* pl = static_cast<const Player*>(playerPtr);
         if (WaistChildrenOf(pl) == 0) return;   // can't tell what hangs off the waist: leave this model alone
         HatState& h = StepClothes(pl);
@@ -10291,6 +10483,7 @@ void OnGameFrameUpdate() {
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     Feat("platforms, rocks and trees"); if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    Feat("tornado"); if (gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
     Feat("storm"); DriveStorm(hud);
     Feat("weather"); DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
@@ -10477,6 +10670,7 @@ struct UiState {
     int foliage = 100;                     // grass and trees scattered around, per cent (local)
     bool clothOn = true;                   // cloth physics on hats and gliders at all (local)
     bool windOn = true;                    // a breeze that moves cloth, grass and trees (local)
+    bool windStreaks = true;               // streaks in the air that show the wind's direction (local)
     int windStrength = 100;                // how strong the breeze is, per cent (local)
     int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
@@ -10524,6 +10718,8 @@ UiState& Ui() {
         ui.clothOn = CVarGetInteger(ROYALE_CVAR("ClothOn"), 1) != 0;
         ui.windOn = CVarGetInteger(ROYALE_CVAR("WindOn"), 1) != 0;
         ui.windStrength = std::clamp(CVarGetInteger(ROYALE_CVAR("WindStrength"), 100), 0, 200);
+        ui.windStreaks = CVarGetInteger(ROYALE_CVAR("WindStreaks"), 1) != 0;
+        gWindStreaks = ui.windStreaks;
         gWindOn = ui.windOn;
         gWindScale = ui.windStrength / 100.0f;
         gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
@@ -10563,6 +10759,7 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("ClothOn"), ui.clothOn ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("WindOn"), ui.windOn ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("WindStrength"), ui.windStrength);
+    CVarSetInteger(ROYALE_CVAR("WindStreaks"), ui.windStreaks ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("MusicMode"), ui.musicMode);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
@@ -10921,7 +11118,12 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         if (ui.windOn) {
             ImGui::SetNextItemWidth(280);
             if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
+            if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
+            float wnx, wnz, wns;
+            WindNow(&wnx, &wnz, &wns);
+            ImGui::TextColored(kGrey, "Wind right now: %d%% (it gusts, and rain and thunder bring squalls)", static_cast<int>(wns * 100.0f));
         }
+        { static bool tornado = false; if (ImGui::Checkbox("Tornado (easter egg, only you can see it)", &tornado)) gTornadoOn = tornado; }
         static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
         ImGui::SetNextItemWidth(280);
         if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
