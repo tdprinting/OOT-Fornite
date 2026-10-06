@@ -124,6 +124,69 @@ class GameClient {
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
     // The hireable allies in the latest snapshot (the ones near you, and yours wherever they are).
     const std::vector<net::AllyNet>& Allies() const { return allies; }
+
+    // ---- carts (shared/vehicle.h) ----
+    // Get in (next to a cart, on foot), get out, or move to the other seat. The server answers in the snapshots.
+    void EnterVehicle(int index, Seat seat) { net::VehicleRequest m; m.action = net::VehicleRequest::Enter; m.index = static_cast<uint8_t>(index); m.seat = static_cast<uint8_t>(seat); SendIfJoined(m); }
+    void ExitVehicle() { net::VehicleRequest m; m.action = net::VehicleRequest::Exit; SendIfJoined(m); }
+    void SwitchSeat() { net::VehicleRequest m; m.action = net::VehicleRequest::SwitchSeat; SendIfJoined(m); }
+    // The driver's game runs the cart's physics and reports where it is, every tick (unreliable: the next one replaces it).
+    void SendDrive(int index, const CartBody& b, float air, bool handbrake, float impact, float landing) {
+        net::VehicleDrive m;
+        m.index = static_cast<uint8_t>(index);
+        m.x = b.x; m.y = b.y; m.z = b.z;
+        m.yaw = YawToBinang(b.yaw);
+        m.pitch = static_cast<int8_t>(std::lround(std::clamp(b.pitch * 100.0f, -127.0f, 127.0f)));
+        m.roll = static_cast<int8_t>(std::lround(std::clamp(b.roll * 100.0f, -127.0f, 127.0f)));
+        m.speed = static_cast<int16_t>(std::lround(std::clamp(b.speed, -30000.0f, 30000.0f)));
+        m.slide = static_cast<int16_t>(std::lround(std::clamp(b.slide, -30000.0f, 30000.0f)));
+        m.vy = static_cast<int16_t>(std::lround(std::clamp(b.vy, -30000.0f, 30000.0f)));
+        m.steer = static_cast<int8_t>(std::lround(std::clamp(b.steer * 100.0f, -127.0f, 127.0f)));
+        m.air = static_cast<int16_t>(std::lround(std::clamp(air, 0.0f, 30000.0f)));
+        m.flags = static_cast<uint8_t>((b.grounded ? 1 : 0) | (handbrake ? 2 : 0));
+        m.impact = static_cast<uint16_t>(std::clamp(impact, 0.0f, 65535.0f));
+        m.landing = static_cast<uint16_t>(std::clamp(landing, 0.0f, 65535.0f));
+        if (status == Status::Joined) Send(m, false);
+    }
+    // The carts in the latest snapshot (the ones near you, and the one you are in).
+    const std::vector<net::VehicleNet>& Vehicles() const { return vehicles; }
+    // Which cart and seat you are in, as of the latest snapshot. False on foot.
+    bool MyVehicle(int* index, Seat* seat) const {
+        for (const auto& v : vehicles) {
+            if (v.driver == playerId) { if (index) *index = v.index; if (seat) *seat = Seat::Driver; return true; }
+            if (v.passenger == playerId) { if (index) *index = v.index; if (seat) *seat = Seat::Passenger; return true; }
+        }
+        return false;
+    }
+    // A cart smoothed between snapshots at the render time (as players are). False if it isn't in view.
+    bool SampleVehicle(int index, net::VehicleNet& out) const {
+        auto it = vehicleHistory.find(index);
+        if (it == vehicleHistory.end() || it->second.empty()) return false;
+        bool seen = false;
+        for (const auto& v : vehicles) seen |= v.index == index;
+        if (!seen) return false;
+        const auto& h = it->second;
+        const float t = RenderServerTime();
+        if (t <= h.front().t) { out = h.front().s; return true; }
+        if (t >= h.back().t) { out = h.back().s; return true; }
+        for (size_t i = 1; i < h.size(); i++) {
+            if (h[i].t < t) continue;
+            const auto& a = h[i - 1];
+            const auto& b = h[i];
+            const float k = (t - a.t) / (b.t - a.t);
+            out = k < 0.5f ? a.s : b.s;
+            out.x = a.s.x + (b.s.x - a.s.x) * k;
+            out.y = a.s.y + (b.s.y - a.s.y) * k;
+            out.z = a.s.z + (b.s.z - a.s.z) * k;
+            const int16_t d = static_cast<int16_t>(static_cast<uint16_t>(b.s.yaw) - static_cast<uint16_t>(a.s.yaw));
+            out.yaw = static_cast<int16_t>(static_cast<float>(a.s.yaw) + static_cast<float>(d) * k);
+            out.steer = static_cast<int8_t>(std::lround(a.s.steer + (b.s.steer - a.s.steer) * k));
+            out.air = static_cast<int16_t>(std::lround(a.s.air + (b.s.air - a.s.air) * k));
+            return true;
+        }
+        out = h.back().s;
+        return true;
+    }
     // The replay of the match that just ended (valid once all of it has arrived).
     const Replay& GetReplay() const { return replay; }
     bool ReplayComplete() const { return replay.Valid() && replayGot >= replay.frames.size(); }
@@ -230,6 +293,10 @@ class GameClient {
     struct SampleAt {
         float t;
         net::PlayerNet s;
+    };
+    struct VehicleAt {
+        float t;
+        net::VehicleNet s;
     };
     struct Remote {
         bool visible = false;
@@ -510,6 +577,13 @@ class GameClient {
 
         bosses = s.bosses;
         allies = s.allies;
+        vehicles = s.vehicles;
+        for (const auto& v : s.vehicles) {
+            auto& h = vehicleHistory[v.index];
+            if (!h.empty() && serverTime - h.back().t > 1.0f) h.clear();   // back in view after a while: don't slide in from where it was
+            h.push_back({serverTime, v});
+            while (h.size() > kHistoryMax) h.pop_front();
+        }
         bossesAt = localClock;
         for (auto& [id, p] : players) p.visible = false;
         for (const auto& pn : s.players) {
@@ -540,6 +614,8 @@ class GameClient {
     InventoryInfo inventory;
     std::vector<net::BossNet> bosses;
     std::vector<net::AllyNet> allies;
+    std::vector<net::VehicleNet> vehicles;
+    std::map<int, std::deque<VehicleAt>> vehicleHistory;
     Replay replay;
     size_t replayGot = 0;
     float bossesAt = 0;

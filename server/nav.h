@@ -78,6 +78,21 @@ class NavGrid {
     float FloorAt(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return floor[Index(cx, cz)]; }
     float LiftAt(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return lift[Index(cx, cz)]; }
     float TopAt(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return floor[Index(cx, cz)] + cover[Index(cx, cz)]; }
+    // The ground's height at p blended smoothly between the cells round it (with what is stood on), so a cart rolls over it instead of
+    // bumping down a staircase of cells.
+    float SmoothHeight(Vec2 p) const {
+        const float fx = (p.x - originX) / kCell - 0.5f, fz = (p.z - originZ) / kCell - 0.5f;
+        const int x0 = static_cast<int>(std::floor(fx)), z0 = static_cast<int>(std::floor(fz));
+        const float kx = fx - static_cast<float>(x0), kz = fz - static_cast<float>(z0);
+        auto at = [&](int cx, int cz) {
+            cx = (std::max)(0, (std::min)(w - 1, cx));
+            cz = (std::max)(0, (std::min)(h - 1, cz));
+            return floor[Index(cx, cz)] + lift[Index(cx, cz)];
+        };
+        const float a = at(x0, z0) + (at(x0 + 1, z0) - at(x0, z0)) * kx;
+        const float b = at(x0, z0 + 1) + (at(x0 + 1, z0 + 1) - at(x0, z0 + 1)) * kx;
+        return a + (b - a) * kz;
+    }
     float StandHeight(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return floor[Index(cx, cz)] + lift[Index(cx, cz)]; }
 
     // A step from a to b for a bot: b can be stood on and the height between them can be walked, climbed or dropped.

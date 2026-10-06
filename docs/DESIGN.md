@@ -277,6 +277,25 @@ Zero Build replaces building with movement and cover that is already in the map.
   tiered, as in Zero Build's "Shield" gadgets, not a building system.
 - **Health and shield** replace the build-heal loop. Hearts regen only through items.
 
+### 4.6.1 Carts (implemented: `shared/vehicle.h`, `server/match.h`, `server/bot.h`, the carts section of `RoyaleMod.cpp`)
+- **What:** the Lon Lon Buggy, a wooden two-seater (driver and one passenger), 4 to 16 per match by map size, parked on flat open ground just
+  outside the towns. The model and its measures come from Blender (docs/CUSTOM_MODELS.md).
+- **Physics** (`StepCart`, shared by the server and the game): a bicycle model with an engine that fades towards top speed (420, against 135 for a
+  sprinting Link), brakes, reverse, steering that tightens at low speed, grip that lets the back slide out with the handbrake, slopes that speed it up
+  or slow it down, steps up to 34 units it rolls over, walls it slides along or bounces off, and ledges it flies off and lands from. It runs in
+  50 ms ticks cut into 25 ms pieces.
+- **Authority:** the server owns the seats, the cart's health and the hits. A human driver's game runs the physics against the real collision and
+  reports the cart every tick (the move is clamped like a player's); the server runs it on its navigation grid's heights for bots and for carts
+  rolling with nobody at the reins, and takes over if a human driver's reports stop. Snapshots carry the player's own cart and the six nearest
+  within 4,500 units (about 27 bytes each).
+- **Damage:** running people over (0.6 hearts at speed 120, more the faster, once a second per person), crashes and hard landings (the cart; the
+  riders only for hard ones), and weapons (hammers and bombs hit harder). A cart has 14 hearts; when it is wrecked the riders are thrown off, its
+  firebox blows up (1.5 hearts within 260 units, credited to whoever last hit it), and the wreck burns for nine seconds.
+- **Bots** walk to a cart when the trip is long (out of the storm, across the map, or because they like driving), when running from a losing fight,
+  or to chase a fight a long way off; they follow paths over open ground, slow for corners, drift if skilled, back out when stuck and get out where
+  they are going, when the cart is about to blow, or to fight. Aggressive ones run people down. Bots climb into the back of a cart stopped beside
+  them, shoot from the saddle, take the reins if the driver leaves, and jump out of the way of carts coming at them.
+
 ### 4.7 Economy (optional, v2)
 Rupees picked up in the field can buy tiered items from Great Fairy and Happy Mask shop stalls, a stand-in for
 Fortnite's gold bars and vending machines. Not in v1.

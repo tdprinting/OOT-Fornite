@@ -6,6 +6,7 @@
 #include "poi.h"
 #include "skins.h"
 #include "storm.h"
+#include "vehicle.h"
 #include "replay.h"
 #include "weather.h"
 #include <array>
@@ -22,7 +23,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 21; // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 23; // 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
@@ -31,6 +32,7 @@ constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "use
 
 enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13, NpcHitRequest = 14,
+    VehicleRequest = 15, VehicleDrive = 16,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90,
@@ -140,6 +142,41 @@ struct NpcHitRequest {
     uint8_t tenths = 5;   // hearts lost, in tenths
     void Write(ByteWriter& w) const { w.U8(tenths); }
     bool Read(ByteReader& r) { tenths = r.U8(); return r.ok && tenths >= 1 && tenths <= 20; }
+};
+
+// Get into a cart (`seat` is the one wanted; the other is taken if that one is full), move to its other seat, or get out.
+struct VehicleRequest {
+    static constexpr MsgType kType = MsgType::VehicleRequest;
+    enum Action : uint8_t { Enter = 0, Exit = 1, SwitchSeat = 2 };
+    uint8_t action = Enter;
+    uint8_t index = 0;
+    uint8_t seat = 0;   // Seat::Driver or Seat::Passenger
+    void Write(ByteWriter& w) const { w.U8(action); w.U8(index); w.U8(seat); }
+    bool Read(ByteReader& r) { action = r.U8(); index = r.U8(); seat = r.U8(); return r.ok && action <= 2 && index < kMaxVehicles && seat <= 1; }
+};
+
+// The driver's game runs the cart's physics against the real ground and reports where it is, about 20 times a second. `impact` and `landing` are
+// the hardest crash and landing since the last report (for damage).
+struct VehicleDrive {
+    static constexpr MsgType kType = MsgType::VehicleDrive;
+    uint8_t index = 0;
+    float x = 0, y = 0, z = 0;
+    int16_t yaw = 0;
+    int8_t pitch = 0, roll = 0;    // hundredths of a radian
+    int16_t speed = 0, slide = 0, vy = 0;
+    int8_t steer = 0;              // hundredths of a radian
+    int16_t air = 0;               // height above the ground under it (0 on the ground)
+    uint8_t flags = 0;             // 1 on the ground, 2 handbrake
+    uint16_t impact = 0, landing = 0;
+    void Write(ByteWriter& w) const {
+        w.U8(index); w.F32(x); w.F32(y); w.F32(z); w.I16(yaw); w.U8(static_cast<uint8_t>(pitch)); w.U8(static_cast<uint8_t>(roll));
+        w.I16(speed); w.I16(slide); w.I16(vy); w.U8(static_cast<uint8_t>(steer)); w.I16(air); w.U8(flags); w.U16(impact); w.U16(landing);
+    }
+    bool Read(ByteReader& r) {
+        index = r.U8(); x = r.F32(); y = r.F32(); z = r.F32(); yaw = r.I16(); pitch = static_cast<int8_t>(r.U8()); roll = static_cast<int8_t>(r.U8());
+        speed = r.I16(); slide = r.I16(); vy = r.I16(); steer = static_cast<int8_t>(r.U8()); air = r.I16(); flags = r.U8(); impact = r.U16(); landing = r.U16();
+        return r.ok && index < kMaxVehicles && Finite(x) && Finite(y) && Finite(z) && flags <= 3;
+    }
 };
 
 // The host picks which place the match is played in (lobby only).
@@ -355,6 +392,30 @@ struct AllyNet {
     }
 };
 
+// A cart as clients see it. Who is in it is decided by the server; where it is comes from its driver's game (or the server's own physics when a
+// bot drives it or nobody does). Clients set it on their own ground and tilt it to fit; `air` is how high it is above that ground (a jump).
+struct VehicleNet {
+    static constexpr uint8_t kWrecked = 1, kGrounded = 2, kDrift = 4;
+    uint8_t index = 0;
+    float x = 0, y = 0, z = 0;
+    int16_t yaw = 0;
+    int16_t speed = 0;
+    int8_t steer = 0;              // hundredths of a radian
+    int16_t air = 0;
+    uint8_t hp = 255;              // health as a share of kCartHealth, 0..255
+    uint16_t driver = kNoPlayer16, passenger = kNoPlayer16;
+    uint8_t flags = kGrounded;
+    uint32_t Id() const { return kVehicleIdBase + index; }
+    void Write(ByteWriter& w) const {
+        w.U8(index); w.F32(x); w.F32(y); w.F32(z); w.I16(yaw); w.I16(speed); w.U8(static_cast<uint8_t>(steer)); w.I16(air); w.U8(hp); w.U16(driver); w.U16(passenger); w.U8(flags);
+    }
+    bool Read(ByteReader& r) {
+        index = r.U8(); x = r.F32(); y = r.F32(); z = r.F32(); yaw = r.I16(); speed = r.I16(); steer = static_cast<int8_t>(r.U8()); air = r.I16(); hp = r.U8();
+        driver = r.U16(); passenger = r.U16(); flags = r.U8();
+        return r.ok && index < kMaxVehicles && Finite(x) && Finite(y) && Finite(z) && flags <= 7;
+    }
+};
+
 struct Snapshot {
     static constexpr MsgType kType = MsgType::Snapshot;
     uint32_t tick = 0;       // server tick counter, kTickHz per second
@@ -366,6 +427,7 @@ struct Snapshot {
     std::vector<PlayerNet> players; // first entry is always the receiving client
     std::vector<BossNet> bosses;    // the mini bosses near this client
     std::vector<AllyNet> allies;    // the hireable allies near this client
+    std::vector<VehicleNet> vehicles;   // the carts near this client (and the one it is in)
     void Write(ByteWriter& w) const {
         w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch); w.U8(lobbyLeft);
         w.U8(static_cast<uint8_t>(players.size()));
@@ -374,6 +436,8 @@ struct Snapshot {
         for (const auto& b : bosses) b.Write(w);
         w.U8(static_cast<uint8_t>(allies.size()));
         for (const auto& a : allies) a.Write(w);
+        w.U8(static_cast<uint8_t>(vehicles.size()));
+        for (const auto& v : vehicles) v.Write(w);
     }
     bool Read(ByteReader& r) {
         tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8(); lobbyLeft = r.U8();
@@ -389,6 +453,10 @@ struct Snapshot {
         if (na > static_cast<size_t>(kAllyCount)) return false;
         allies.assign(na, {});
         for (auto& a : allies) if (!a.Read(r)) return false;
+        const size_t nv = r.U8();
+        if (nv > static_cast<size_t>(kMaxVehicles)) return false;
+        vehicles.assign(nv, {});
+        for (auto& v : vehicles) if (!v.Read(r)) return false;
         return r.ok;
     }
 };

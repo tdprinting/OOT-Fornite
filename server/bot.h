@@ -1,6 +1,7 @@
 #pragma once
 #include "../shared/anim.h"
 #include "../shared/props.h"
+#include "../shared/vehicle.h"
 #include "match.h"
 #include "nav.h"
 #include <cmath>
@@ -29,6 +30,11 @@ enum class BotDifficulty : uint8_t { Easy, Normal, Hard };
 // still reach it), sprints on the same stamina bar players have, jumps up ledges and onto climbing blocks and low boulders, drops off
 // small ledges and goes round cliffs and water. It uses the ground in a fight: it can't see or shoot through rocks and hills, so it takes
 // cover behind them to heal or to get away from a bow, and a bot with a bow likes to fight from higher ground.
+// It drives the carts too (shared/vehicle.h): a bot with a long way to go (out of the storm, running for its life, or just fond of driving) walks
+// to a parked cart and drives it, following a path across open ground, easing off for turns and backing out when it is stuck, and gets out
+// where it was going or when the cart is about to go up. An aggressive one runs people over. One that wants a lift climbs into the back of a
+// cart stopped next to it and shoots from the saddle, takes the reins if the driver gets out, and jumps off when the ride is over. Bots on foot
+// jump out of the way of a cart coming at them.
 // Each bot has its own personality (aggression, caution, greed) so they don't all behave alike. Difficulty changes how well
 // they aim, how fast they react, how far they see and how much they use abilities.
 class BotController {
@@ -89,6 +95,7 @@ class BotController {
                 }
                 if (air.airborne) { Glide(m, p, air, soon, dt); continue; }
                 if (state == MatchState::Countdown) continue;
+                if (StepRider(m, p, air, soon, dt)) { UpdateStamina(air, dt); continue; }
                 Act(m, p, soon, dt);
                 FollowGround(m, p, air, dt);
                 UpdateStamina(air, dt);
@@ -286,6 +293,24 @@ class BotController {
         Vec2 perch = {};               // higher ground to shoot from
         bool havePerch = false;
         float perchEvalAt = 0;
+        // carts
+        float cartLove = 0.5f;          // how keen it is on driving
+        int cartIdx = -1;               // the cart it is walking to (or riding)
+        Seat cartSeat = Seat::Driver;   // ... and which seat it wants
+        float cartEvalAt = 0;
+        bool riding = false;            // it was in a cart last tick (to notice getting out)
+        Vec2 cartGoal = {};             // where it is driving to
+        bool cartGoalSet = false;
+        uint32_t ramTarget = kNoPlayer; // someone it is running down
+        float ramUntil = 0;
+        float cartStuckAt = -1;         // driving but getting nowhere since then
+        Vec2 cartProgress = {};
+        float cartStillSince = -1;      // riding along in a cart that has stopped
+        float cartBoardedAt = 0;
+        std::vector<Vec2> cartPath;
+        Vec2 cartPathGoal = {};
+        size_t cartPathIdx = 0;
+        float cartRepathAt = 0;
     };
 
     Rng rng;
@@ -314,6 +339,7 @@ class BotController {
             mem.caution = 0.3f + 0.7f * static_cast<float>(rng.Unit());
             mem.greed = 0.3f + 0.7f * static_cast<float>(rng.Unit());
             mem.strafeDir = rng.Unit() < 0.5 ? -1.0f : 1.0f;
+            mem.cartLove = std::fmod(static_cast<float>(id) * 0.6180339f, 1.0f);   // (from the id, so the other draws stay as they were)
             it = memory.emplace(id, mem).first;
         }
         return it->second;
@@ -1198,6 +1224,8 @@ class BotController {
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
         if (AvoidHazards(m, p, mem, dt, tune)) return;
+        if (DodgeCarts(m, p, mem, tune)) return;
+        if (GoForCart(m, p, mem, s, foe, dist, soon, dt, tune)) return;
         // Hurt with a bow (or a slingshot, a bomb...) trained on it: get behind something first, then drink.
         if (foe && !s.outsideZone && WantsToDrink(p, s) && p.health > 1.2f && UnderFire(p, *foe, dist) && FindCover(m, p, mem, *foe) &&
             Distance(p.pos, mem.cover) > 35.0f) {
@@ -1439,6 +1467,207 @@ class BotController {
     }
 
     // Swing or shoot if the foe is in range and the weapon is ready. Accuracy falls off with distance for ranged weapons.
+    // ---- carts ---------------------------------------------------------------------------------------------------------------------
+
+    // A cart coming at it fast: jump (or step) out of its way, sideways to its path.
+    bool DodgeCarts(Match& m, PlayerState& p, Memory& mem, const Tuning& tune) {
+        for (const VehicleState& v : m.Vehicles()) {
+            if (v.gone || v.wrecked || std::fabs(v.body.speed) < 150.0f) continue;
+            const float fx = std::sin(v.body.yaw) * (v.body.speed > 0 ? 1.0f : -1.0f), fz = std::cos(v.body.yaw) * (v.body.speed > 0 ? 1.0f : -1.0f);
+            const float dx = p.pos.x - v.body.x, dz = p.pos.z - v.body.z;
+            const float ahead = dx * fx + dz * fz, across = dx * fz - dz * fx;
+            const float soon = std::fabs(v.body.speed) * 0.9f;
+            if (ahead < -40.0f || ahead > soon + 80.0f || std::fabs(across) > 115.0f) continue;   // (keeping well clear of its lane till it is by)
+            if (rng.Unit() > 0.35f + 0.6f * mem.skill) continue;   // didn't see it coming
+            const float side = across >= 0.0f ? 1.0f : -1.0f;
+            const float ax = fz * side, az = -fx * side;           // straight out of its path
+            if (m.CanRoll(p) && tune.dodge > 0 && RollToward(m, p, mem, ax, az)) { p.anim = static_cast<uint8_t>(Anim::Roll); return true; }
+            Advance(m, p, ax, az, kRunSpeed * kSprintMult / kTickHz);
+            p.rot = FaceAngle(p.pos, {p.pos.x + ax, p.pos.z + az});
+            p.anim = static_cast<uint8_t>(Anim::Sprint);
+            return true;
+        }
+        return false;
+    }
+
+    // Where a bot that is going somewhere far would like to be: out of the storm, away from a fight it is losing, or the middle of the zone.
+    static Vec2 TripGoal(const PlayerState& p, const Circle& soon) {
+        const float d = Distance(p.pos, soon.center);
+        if (d < 1.0f) return soon.center;
+        const float keep = soon.radius * 0.45f;   // well inside, on its own side of the circle
+        return d <= keep ? soon.center : Vec2{soon.center.x + (p.pos.x - soon.center.x) / d * keep, soon.center.z + (p.pos.z - soon.center.z) / d * keep};
+    }
+
+    // On foot: is a cart worth it? A long way to go (out of the storm, or a bot that likes driving with nothing better to do) or a fight to get
+    // away from. Then walk to the nearest free seat and climb in. Returns true while it is busy with that.
+    bool GoForCart(Match& m, PlayerState& p, Memory& mem, const Situation& s, const PlayerState* foe, float dist, const Circle& soon, float dt, const Tuning& tune) {
+        const float now = m.Clock();
+        if (m.Vehicles().empty() || m.State() != MatchState::InMatch) return false;
+        if (now >= mem.cartEvalAt) {
+            mem.cartEvalAt = now + 1.2f + static_cast<float>(rng.Unit());
+            mem.cartIdx = -1;
+            const float trip = Distance(p.pos, TripGoal(p, soon));
+            const bool fleeing = s.fleeing && foe && dist > 150.0f;
+            const bool longWay = (s.outsideZone && trip > 800.0f) || trip > 2200.0f - 1400.0f * mem.cartLove;
+            const bool idle = !foe && s.noFoeKnown && mem.cartLove > 0.4f;
+            const bool chase = foe && !fleeing && dist > 1500.0f - 500.0f * mem.cartLove && s.advantage >= 0.8f;   // a fight a long way off
+            if ((fleeing || longWay || idle || chase) && !(foe && !fleeing && dist < 450.0f)) {
+                const float reach = fleeing ? 700.0f : (std::min)(1400.0f, (std::max)(500.0f, trip * 0.45f) + 400.0f * mem.cartLove);
+                float best = reach;
+                for (const VehicleState& v : m.Vehicles()) {
+                    if (v.gone || v.wrecked || v.health < kCartHealth * 0.3f) continue;
+                    Seat want = Seat::None;
+                    const PlayerState* driver = m.Find(v.Driver());
+                    if (v.Driver() == kNoPlayer) want = Seat::Driver;
+                    else if (v.Passenger() == kNoPlayer && driver && std::fabs(v.body.speed) < 60.0f) want = Seat::Passenger;   // a lift
+                    if (want == Seat::None) continue;
+                    const float d = Distance(p.pos, ExitSpot(v.body, want));
+                    if (want == Seat::Passenger && d > 450.0f) continue;   // only a cart that has stopped right here
+                    if (foe && Distance(foe->pos, {v.body.x, v.body.z}) < d * 0.8f) continue;   // not past the enemy to get to it
+                    if (d < best) { best = d; mem.cartIdx = v.index; mem.cartSeat = want; }
+                }
+            }
+        }
+        const VehicleState* v = m.FindVehicle(mem.cartIdx);
+        if (!v || v->wrecked || v->gone || v->seat[static_cast<int>(mem.cartSeat)] != kNoPlayer) { mem.cartIdx = -1; return false; }
+        const Vec2 door = ExitSpot(v->body, mem.cartSeat);
+        if (Distance(p.pos, door) <= kEnterRange * 0.8f || Distance(p.pos, {v->body.x, v->body.z}) <= kEnterRange * 0.7f) {
+            if (m.EnterVehicle(p.id, mem.cartIdx, mem.cartSeat)) {
+                mem.riding = true;
+                mem.cartBoardedAt = now;
+                mem.cartGoalSet = false;
+                mem.cartStuckAt = -1;
+                mem.cartStillSince = -1;
+                mem.cartPath.clear();
+                return true;
+            }
+            mem.cartIdx = -1;
+            return false;
+        }
+        if (Distance(p.pos, door) > 400.0f) WantSprint(mem, tune, s.fleeing);
+        Steer(m, p, mem, door, dt);
+        return true;
+    }
+
+    // In a cart: drive it, or ride along. Returns false when it is on foot (and notices having just got out).
+    bool StepRider(Match& m, PlayerState& p, Memory& mem, const Circle& soon, float dt) {
+        int index; Seat seat;
+        if (!m.RidingIn(p.id, &index, &seat)) {
+            if (mem.riding) {   // just got out (or was thrown out): back on its feet
+                mem.riding = false;
+                mem.lift = 0; mem.vy = 0; mem.haveFloor = false;
+                mem.path.clear(); mem.cartIdx = -1; mem.cartEvalAt = m.Clock() + 6.0f;   // and doesn't jump straight back in
+            }
+            return false;
+        }
+        mem.riding = true;
+        VehicleState& v = m.MutableVehicles()[static_cast<size_t>(index)];
+        p.anim = static_cast<uint8_t>(Anim::Idle);
+        if (m.Stunned(p)) { if (seat == Seat::Driver) v.controls = {}; return true; }
+        if (seat == Seat::Driver) Drive(m, p, mem, v, soon, dt);
+        else Ride(m, p, mem, v, soon);
+        const float now = m.Clock();
+        if (now < mem.actUntil) p.anim = static_cast<uint8_t>(mem.actAnim);
+        return true;
+    }
+
+    void LeaveCart(Match& m, PlayerState& p, VehicleState& v, Memory& mem) {
+        if (v.Driver() == p.id) v.controls = {};
+        m.ExitVehicle(p.id);
+        mem.riding = false;
+        mem.lift = 0; mem.vy = 0; mem.haveFloor = false;
+        mem.path.clear(); mem.cartIdx = -1;
+        mem.cartEvalAt = m.Clock() + 6.0f;
+    }
+
+    void Drive(Match& m, PlayerState& p, Memory& mem, VehicleState& v, const Circle& soon, float dt) {
+        (void)dt;
+        const float now = m.Clock();
+        const Tuning tune = TuningFor(difficulty);
+        const Vec2 at = {v.body.x, v.body.z};
+        // Bail out of a cart about to go up, and don't sit in one that has stopped for good.
+        if (v.health < kCartHealth * 0.22f && rng.Unit() < 0.2f + 0.5f * mem.caution) { LeaveCart(m, p, v, mem); return; }
+        // Someone to run down: an aggressive bot with a healthy cart goes for a person on foot it can see close by.
+        PlayerState* foe = ChooseTarget(m, p, mem, tune.sight * 0.9f, m.Revealing(p));
+        if (foe && (m.RidingIn(foe->id) || m.StateTime() < CalmSeconds())) foe = nullptr;
+        if (foe && mem.aggression > 0.5f && v.health > kCartHealth * 0.4f && Distance(at, foe->pos) < 800.0f && now >= mem.ramUntil + 6.0f) {
+            mem.ramTarget = foe->id; mem.ramUntil = now + 7.0f;
+        }
+        PlayerState* prey = now < mem.ramUntil ? m.Find(mem.ramTarget) : nullptr;
+        if (prey && (!prey->alive || m.RidingIn(prey->id))) { prey = nullptr; mem.ramUntil = 0; }
+        // A fight on its doorstep it would rather take on foot (a good weapon, and it is not running anyway).
+        if (!prey && foe && Distance(at, foe->pos) < 320.0f && EffectiveDpsNow(p) >= kMinFightDps && Advantage(m, p, *foe) > 1.0f && std::fabs(v.body.speed) < 160.0f) {
+            LeaveCart(m, p, v, mem); return;
+        }
+        // Where to: out of the storm first, else wherever it set out for, else the middle of the zone.
+        if (!mem.cartGoalSet || !Circle{soon.center, soon.radius * 0.95f}.Contains(mem.cartGoal)) {
+            mem.cartGoal = TripGoal(p, soon);
+            if (nav) { Vec2 snapped; if (nav->Snap(mem.cartGoal, &snapped)) mem.cartGoal = snapped; }
+            mem.cartGoalSet = true;
+            mem.cartPath.clear();
+        }
+        // Somebody to fight a long way off: drive over and get out a little short of them.
+        const bool chasing = foe && !prey && Advantage(m, p, *foe) >= 0.8f && Circle{soon.center, soon.radius * 0.9f}.Contains(foe->pos);
+        if (chasing && Distance(at, foe->pos) < 450.0f) {
+            v.controls = DriveToward(v.body, foe->pos, 700.0f);
+            if (std::fabs(v.body.speed) < 60.0f) LeaveCart(m, p, v, mem);
+            return;
+        }
+        const Vec2 goal = prey ? prey->pos : chasing ? foe->pos : mem.cartGoal;
+        if (Distance(goal, mem.cartPathGoal) > 300.0f) { mem.cartPath.clear(); mem.cartPathGoal = goal; }
+        const float toGoal = Distance(at, goal);
+        if (!prey && toGoal < 350.0f) {   // there: stop and get out
+            v.controls = DriveToward(v.body, goal, 400.0f);
+            if (std::fabs(v.body.speed) < 40.0f) LeaveCart(m, p, v, mem);
+            return;
+        }
+        // Follow a path over open ground (a cart is too wide for the gaps a bot squeezes through), easing round its corners.
+        Vec2 aim = goal;
+        if (!prey && nav && toGoal > NavGrid::kCell * 3.0f) {
+            if ((mem.cartPathIdx >= mem.cartPath.size() || now >= mem.cartRepathAt) && repathBudget > 0) {
+                repathBudget--;
+                mem.cartRepathAt = now + 3.0f;
+                mem.cartPathIdx = 0;
+                if (!nav->FindPath(at, goal, mem.cartPath, false)) mem.cartPath.clear();
+            }
+            while (mem.cartPathIdx < mem.cartPath.size() && Distance(at, mem.cartPath[mem.cartPathIdx]) < 140.0f) mem.cartPathIdx++;
+            if (mem.cartPathIdx < mem.cartPath.size()) aim = mem.cartPath[mem.cartPathIdx];
+        }
+        const float boldness = 0.45f + 0.5f * mem.aggression * (0.6f + 0.4f * mem.skill);
+        v.controls = DriveToward(v.body, aim, prey ? 0.0f : 60.0f, boldness);
+        if (prey) { v.controls.brake = false; v.controls.throttle = (std::max)(v.controls.throttle, 0.6f); }   // full tilt at them
+        // Stuck against something: back up, turning, for a moment; still stuck after that, get out and walk.
+        if (mem.cartStuckAt < 0 || Distance(at, mem.cartProgress) > 120.0f) { mem.cartStuckAt = now; mem.cartProgress = at; }
+        const float stuckFor = now - mem.cartStuckAt;
+        if (stuckFor > 2.2f && stuckFor < 3.6f) { v.controls.throttle = -1.0f; v.controls.brake = false; v.controls.steer = mem.strafeDir; }
+        else if (stuckFor >= 3.6f && stuckFor < 4.0f) { mem.strafeDir = -mem.strafeDir; mem.cartPath.clear(); }
+        else if (stuckFor > 8.0f) { LeaveCart(m, p, v, mem); return; }
+        // Drift round the sharp corners at speed, if it is any good.
+        v.controls.handbrake = mem.skill > 0.6f && std::fabs(v.body.speed) > 260.0f && std::fabs(v.controls.steer) > 0.9f && rng.Unit() < 0.5f;
+        p.rot = YawToBinang(v.body.yaw);
+    }
+
+    void Ride(Match& m, PlayerState& p, Memory& mem, VehicleState& v, const Circle& soon) {
+        const float now = m.Clock();
+        const Tuning tune = TuningFor(difficulty);
+        if (v.health < kCartHealth * 0.22f && rng.Unit() < 0.25f) { LeaveCart(m, p, v, mem); return; }
+        // Nobody driving: take the reins.
+        if (v.Driver() == kNoPlayer && m.SwitchSeat(p.id)) { mem.cartGoalSet = false; mem.cartPath.clear(); return; }
+        // Shoot from the saddle at whoever is close (a passenger's job).
+        PlayerState* foe = ChooseTarget(m, p, mem, tune.sight, m.Revealing(p));
+        if (foe && m.StateTime() >= CalmSeconds() && foe->id != v.Driver()) {
+            const float d = Distance(p.pos, foe->pos);
+            if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; }
+            if (now - mem.acquiredAt >= mem.reaction) TryAttack(m, p, mem, *foe, d);
+        }
+        // The ride is over when the cart has stopped for a while, inside the zone, or the bot only came along to get away.
+        const bool stopped = std::fabs(v.body.speed) < 25.0f && v.body.grounded;
+        if (!stopped) mem.cartStillSince = -1;
+        else if (mem.cartStillSince < 0) mem.cartStillSince = now;
+        const bool safe = Circle{soon.center, soon.radius * 0.9f}.Contains(p.pos);
+        if (stopped && mem.cartStillSince >= 0 && now - mem.cartStillSince > (safe ? 2.0f : 6.0f) && now - mem.cartBoardedAt > 2.0f) LeaveCart(m, p, v, mem);
+    }
+
     void TryAttack(Match& m, PlayerState& p, Memory& mem, const PlayerState& foe, float dist) {
         const WeaponStats w = Match::StatsOf(p);
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
