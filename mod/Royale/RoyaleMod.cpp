@@ -157,6 +157,8 @@ float gWeatherDensity = 1.0f;       // the local option, 0 to 2
 royale::Vec2 gSignPos = {};         // where the sign in the middle of the map stands (once found)
 bool gSignKnown = false;
 float gClothScale = 1.0f;           // the local option: cloth and wind physics on the cap, tunic, sheath and glider, 0 (off) to 2
+bool gWindOn = true;                // the local option: a breeze that moves cloth, grass and trees (off: still air)
+float gWindScale = 1.0f;            // how strong the breeze is, 0 to 2 (the slider)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
 // The wind, worked out from the weather: a breeze always, more in rain, thunder, snow, ash and sand and in the storm itself, gusting and slowly
@@ -189,8 +191,9 @@ std::unordered_map<const Actor*, uint8_t> gAllyOf;
 
 
 void WindNow(float* wx, float* wz, float* strength) {
+    if (!gWindOn || gWindScale <= 0.01f) { *wx = *wz = *strength = 0.0f; return; }
     const float t = static_cast<float>(ImGui::GetTime());
-    float speed = 28.0f;
+    float speed = 62.0f;   // a steady breeze even on a fine day
     const float amount = gWeatherBlend * gWeatherShown.Strength();
     switch (gWeatherShown.sky) {
         case royale::Sky::Rain: speed += 120.0f * amount; break;
@@ -202,11 +205,12 @@ void WindNow(float* wx, float* wz, float* strength) {
         default: break;
     }
     speed += 170.0f * gStormWeather;
-    speed *= 0.75f + 0.25f * std::sin(t * 0.9f) + 0.12f * std::sin(t * 2.3f + 1.0f);
+    speed *= 0.7f + 0.3f * std::sin(t * 0.9f) + 0.16f * std::sin(t * 2.3f + 1.0f) + 0.08f * std::sin(t * 5.1f + 2.0f);   // gusts come and go
+    speed *= gWindScale;
     const float dir = 0.4f + t * 0.04f + static_cast<float>(static_cast<int>(gWeatherShown.season)) * 1.1f;
     *wx = std::cos(dir) * speed;
     *wz = std::sin(dir) * speed;
-    *strength = std::clamp(speed / 330.0f, 0.0f, 1.0f);
+    *strength = std::clamp(speed / 260.0f, 0.0f, 1.0f);
 }
 
 const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
@@ -2630,7 +2634,10 @@ void DrawFlora(PlayState* play) {
         const float reach = 700.0f + 650.0f * std::min(1.5f, gFoliage);
         const int c0x = static_cast<int>(std::floor((px - reach) / kGrassCell)), c1x = static_cast<int>(std::floor((px + reach) / kGrassCell));
         const int c0z = static_cast<int>(std::floor((pz - reach) / kGrassCell)), c1z = static_cast<int>(std::floor((pz + reach) / kGrassCell));
-        const float amp = 0.07f + 0.2f * wind, lean = 0.05f + 0.3f * wind;
+        Feat("wind on scenery");
+        // With the wind on, gust fronts roll across the ground along the wind: the plants in a front bend further, then spring back.
+        const float amp = 0.07f + 0.3f * wind, lean = 0.05f + 0.45f * wind;
+        const float along = 0.0035f, front = t * (1.4f + 1.2f * wind);
         const int theme = FloraTheme();
         const uint32_t grassSeason = theme == 4 ? 2u : static_cast<uint32_t>(season);   // the desert's grass is dry and golden whatever the season
         const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
@@ -2650,7 +2657,8 @@ void DrawFlora(PlayState* play) {
                 const GpuMesh* m = GpuMeshFor(royale::MeshKind::Grass, (FloraHash(cx, cz, 45) % 4) + 4u * grassSeason);
                 if (m == nullptr || m->dl.empty()) continue;
                 const float phase = t * (1.6f + 2.4f * wind) + x * 0.011f + z * 0.009f;
-                const float a = lean + std::sin(phase) * amp + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
+                const float gustFront = 0.55f + 0.45f * std::sin(front - (x * dx + z * dz) * along);
+                const float a = lean * gustFront + std::sin(phase) * amp * (0.5f + 0.5f * gustFront) + std::sin(phase * 2.3f + 1.0f) * amp * 0.35f;
                 const float k = 0.27f * (0.8f + 0.5f * Flora01(cx, cz, 46)) * fade(d, reach);
                 if (k > 0.01f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 47) * 6.2831853f, dz * a, -dx * a, k);
             }
@@ -2660,7 +2668,7 @@ void DrawFlora(PlayState* play) {
         const float treeCell = TreeCell();
         const int t0x = static_cast<int>(std::floor((px - treeReach) / treeCell)), t1x = static_cast<int>(std::floor((px + treeReach) / treeCell));
         const int t0z = static_cast<int>(std::floor((pz - treeReach) / treeCell)), t1z = static_cast<int>(std::floor((pz + treeReach) / treeCell));
-        const float tamp = 0.008f + 0.03f * wind;
+        const float tamp = 0.008f + 0.05f * wind;
         for (int cz = t0z; cz <= t1z; cz++)
             for (int cx = t0x; cx <= t1x; cx++) {
                 TreeSpot tr;
@@ -2669,7 +2677,8 @@ void DrawFlora(PlayState* play) {
                 if (d > treeReach || !inView(tr.x, tr.z, 260.0f * tr.scale)) continue;
                 const GpuMesh* m = GpuMeshFor(tr.kind, tr.variant);
                 if (m == nullptr || m->dl.empty()) continue;
-                const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) + wind * 0.02f;
+                const float gustFront = 0.55f + 0.45f * std::sin(front - (tr.x * dx + tr.z * dz) * along);
+                const float a = tamp * std::sin(t * (1.1f + wind) + tr.x * 0.004f) * (0.6f + 0.4f * gustFront) + wind * 0.035f * gustFront;
                 DrawFloraMesh(play, m, tr.x, tr.y - 2.0f, tr.z, tr.yaw, dz * a, -dx * a, tr.scale * std::max(0.01f, fade(d, treeReach)));
             }
     }
@@ -9829,6 +9838,7 @@ struct HatState {
     royale::ClothSwing skirt, sheath;          // the tunic's skirt (the waist limb) and the sheath
     float lx = 0, ly = 0, lz = 0;
     float lvx = 0, lvz = 0, lvy = 0;   // last velocity, to feel the acceleration
+    int16_t lyaw = 0;                  // last facing, to feel him turning
     double lastT = 0, seen = 0;
     bool have = false;
 };
@@ -9841,7 +9851,7 @@ HatState& StepClothes(const Player* pl) {
     const double now = ImGui::GetTime();
     HatState& h = gHats[pl];
     const float x = pl->actor.world.pos.x, y = pl->actor.world.pos.y, z = pl->actor.world.pos.z;
-    if (!h.have) { h.lx = x; h.ly = y; h.lz = z; h.lastT = now; h.have = true; }
+    if (!h.have) { h.lx = x; h.ly = y; h.lz = z; h.lastT = now; h.lyaw = pl->actor.shape.rot.y; h.have = true; }
     h.seen = now;
     const float dt = static_cast<float>(now - h.lastT);
     if (dt > 0.004f) {   // (the limbs are drawn more than once a frame sometimes: only step when time has passed)
@@ -9855,20 +9865,24 @@ HatState& StepClothes(const Player* pl) {
         // Link's own acceleration (in his frame) kicks the cloth the opposite way: it lags behind a start, and swings forward when he stops or lands.
         const float dvx = vx - h.lvx, dvz = vz - h.lvz, dvy = vy - h.lvy;
         h.lvx = vx; h.lvz = vz; h.lvy = vy;
+        // How fast he is turning (radians a second, positive to his left): the cap drags and rolls behind a turn and the skirt swings out.
+        const int16_t yawNow = pl->actor.shape.rot.y;
+        const float turn = std::clamp(static_cast<int16_t>(yawNow - h.lyaw) * (3.14159265f / 32768.0f) / dt, -14.0f, 14.0f) * gClothScale;
+        h.lyaw = yawNow;
         const float accSide = dvx * c - dvz * sn, accFore = dvx * sn + dvz * c;
         const float airX = (ax * c - az * sn) * gClothScale, airZ = (ax * sn + az * c) * gClothScale;
         const float step = std::min(dt, 0.1f), t = static_cast<float>(now);
         const float phase = static_cast<float>(reinterpret_cast<uintptr_t>(pl) % 61);
         h.spring.Step(step, airX, airZ, -vy * gClothScale, wind * gClothScale, t, phase,
-                      (accFore * 0.0035f + dvy * 0.0016f) * gClothScale, accSide * 0.0035f * gClothScale);
+                      (accFore * 0.0035f + dvy * 0.0016f) * gClothScale, accSide * 0.0035f * gClothScale, turn);
         // Ground speed drives the stride's flap. In the water or hanging on a ledge, the stride is not a run, so it doesn't flap.
         const bool stride = (pl->actor.bgCheckFlags & 1) && !(pl->stateFlags1 & (PLAYER_STATE1_IN_WATER | PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER));
         const float ground = stride ? std::sqrt(vx * vx + vz * vz) * gClothScale : 0.0f;
         const float fall = std::max(0.0f, -vy) * gClothScale;
         // A landing (a sudden stop in falling) throws the skirt up-and-forward too.
         const float landKick = std::max(0.0f, dvy) * 0.6f;
-        h.skirt.Step(royale::kSkirtSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase, (accFore - landKick) * gClothScale, accSide * gClothScale);
-        h.sheath.Step(royale::kSheathSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase + 2.0f, (accFore - landKick) * gClothScale, accSide * gClothScale);
+        h.skirt.Step(royale::kSkirtSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase, (accFore - landKick) * gClothScale, accSide * gClothScale, turn);
+        h.sheath.Step(royale::kSheathSwing, step, airX, airZ, ground, fall, wind * gClothScale, t, phase + 2.0f, (accFore - landKick) * gClothScale, accSide * gClothScale, turn);
     }
     return h;
 }
@@ -9882,6 +9896,7 @@ void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     gHatLastSwing = h.spring.fore * 57.2958f;
     rot[2] = static_cast<int16_t>(rot[2] + static_cast<int>(h.spring.fore * toBinary));   // fore and aft: the limb's pitch
     rot[1] = static_cast<int16_t>(rot[1] + static_cast<int>(h.spring.side * toBinary));   // sideways: its yaw
+    rot[0] = static_cast<int16_t>(rot[0] + static_cast<int>(h.spring.twist * toBinary));  // roll along its length, thrown by turning
 }
 
 // The tunic's skirt is part of the waist limb, which every other limb hangs from. So the waist is swung, and each limb hanging straight off it
@@ -10461,6 +10476,8 @@ struct UiState {
     int weatherDensity = 100;              // particles drawn on this screen, per cent (local)
     int foliage = 100;                     // grass and trees scattered around, per cent (local)
     bool clothOn = true;                   // cloth physics on hats and gliders at all (local)
+    bool windOn = true;                    // a breeze that moves cloth, grass and trees (local)
+    int windStrength = 100;                // how strong the breeze is, per cent (local)
     int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
@@ -10505,6 +10522,10 @@ UiState& Ui() {
         gFoliage = ui.foliage / 100.0f;
         ui.clothPhysics = std::clamp(CVarGetInteger(ROYALE_CVAR("ClothPhysics"), 100), 0, 200);
         ui.clothOn = CVarGetInteger(ROYALE_CVAR("ClothOn"), 1) != 0;
+        ui.windOn = CVarGetInteger(ROYALE_CVAR("WindOn"), 1) != 0;
+        ui.windStrength = std::clamp(CVarGetInteger(ROYALE_CVAR("WindStrength"), 100), 0, 200);
+        gWindOn = ui.windOn;
+        gWindScale = ui.windStrength / 100.0f;
         gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
@@ -10540,6 +10561,8 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("Foliage"), ui.foliage);
     CVarSetInteger(ROYALE_CVAR("ClothPhysics"), ui.clothPhysics);
     CVarSetInteger(ROYALE_CVAR("ClothOn"), ui.clothOn ? 1 : 0);
+    CVarSetInteger(ROYALE_CVAR("WindOn"), ui.windOn ? 1 : 0);
+    CVarSetInteger(ROYALE_CVAR("WindStrength"), ui.windStrength);
     CVarSetInteger(ROYALE_CVAR("MusicMode"), ui.musicMode);
     CVarSetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(SelectedTunic(ui)));
     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
@@ -10893,6 +10916,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
             if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
             ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
                                gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
+        }
+        if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
+        if (ui.windOn) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
         }
         static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
         ImGui::SetNextItemWidth(280);
