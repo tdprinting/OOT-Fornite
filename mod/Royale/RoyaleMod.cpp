@@ -18,6 +18,8 @@
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
+#include "convergence_layout.h"
+#include "convergence_model.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
@@ -259,7 +261,7 @@ const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 // (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
 bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
-           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || (gMapId == royale::kSandboxMapIndex) == gFortniteSandbox)));
+           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || gMapId == royale::fortnite::gTerrainMapId)));
 }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
@@ -568,6 +570,7 @@ bool HazardFloorAt(float x, float z) {
 }
 
 bool WalkableAt(royale::Vec2 p) {
+    if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -576,9 +579,9 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex) {   // the test map is a fixed arena: no measuring
+    if (gMapId == royale::kSandboxMapIndex || gMapId == royale::kConvergenceMapIndex) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
@@ -5209,8 +5212,8 @@ ImTextureID FortniteMinimapTexture() {
     static int texId = -1;
     static ImTextureID tex = nullptr;
     static int triedFor = -1;   // which ground the picture was made from (the island's or the Sandbox's)
-    if (triedFor != (royale::fortnite::gSandboxTerrain ? 1 : 0)) {
-        triedFor = royale::fortnite::gSandboxTerrain ? 1 : 0;
+    if (triedFor != royale::fortnite::gTerrainMapId) {
+        triedFor = royale::fortnite::gTerrainMapId;
         constexpr int n = royale::fortnite::kFine + 1;
         std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; i++) {
@@ -9623,6 +9626,55 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
 void FortniteTerrain_Update(Actor*, PlayState*) {}
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
+// Authored structures use the same geometry as the Blender source and scene collision.
+// Persistent buffers keep display-list pointers valid; spatial batches limit draw cost.
+void DrawConvergenceStructures(PlayState* play) {
+    if (royale::fortnite::gTerrainMapId != royale::kConvergenceMapIndex) return;
+    namespace cv = royale::convergence;
+    static std::vector<Vtx> vertices;
+    static std::vector<std::vector<Gfx>> lists;
+    if (vertices.empty()) {
+        vertices.resize(sizeof(cv::kDrawVertices)/sizeof(cv::kDrawVertices[0]));
+        for (size_t i=0;i<vertices.size();++i) {
+            const auto& v=cv::kDrawVertices[i];auto& dst=vertices[i].v;
+            dst.ob[0]=v.x;dst.ob[1]=v.y;dst.ob[2]=v.z;dst.flag=0;
+            dst.tc[0]=v.s;dst.tc[1]=v.t;
+            dst.cn[0]=v.r;dst.cn[1]=v.g;dst.cn[2]=v.b;dst.cn[3]=255;
+        }
+        lists.resize(sizeof(cv::kBatches)/sizeof(cv::kBatches[0]));
+        for (size_t i=0;i<lists.size();++i) {
+            const auto& batch=cv::kBatches[i];auto& dl=lists[i];
+            dl.resize(batch.count/3 + batch.count/30 + 3);Gfx* p=dl.data();
+            for (uint32_t first=0;first<batch.count;first+=30) {
+                const int n=static_cast<int>(std::min<uint32_t>(30,batch.count-first));
+                gSPVertex(p++,reinterpret_cast<uintptr_t>(&vertices[batch.first+first]),n,0);
+                for (int t=0;t<n;t+=3) gSP1Triangle(p++,t,t+1,t+2,0);
+            }
+            gSPEndDisplayList(p++);dl.resize(static_cast<size_t>(p-dl.data()));
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0,0,0,MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++,MATRIX_NEWMTX(play->state.gfxCtx),G_MTX_NOPUSH|G_MTX_LOAD|G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++,G_LIGHTING|G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++,0xFFFF,0xFFFF,0,G_TX_RENDERTILE,G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++,G_CC_MODULATEIDECALA,G_CC_PASS2);
+    int loaded=-1;
+    for (size_t i=0;i<lists.size();++i) {
+        const auto& batch=cv::kBatches[i];
+        if (std::hypot(play->view.eye.x-batch.x,play->view.eye.z-batch.z)>6500.0f) continue;
+        if (loaded!=batch.texture) {
+            gDPLoadTextureBlock(POLY_OPA_DISP++,cv::kTextures[batch.texture],G_IM_FMT_RGBA,G_IM_SIZ_16b,32,32,0,
+                G_TX_WRAP|G_TX_NOMIRROR,G_TX_WRAP|G_TX_NOMIRROR,5,5,G_TX_NOLOD,G_TX_NOLOD);
+            loaded=batch.texture;
+        }
+        gSPDisplayList(POLY_OPA_DISP++,lists[i].data());
+    }
+    gSPTexture(POLY_OPA_DISP++,0,0,0,G_TX_RENDERTILE,G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -9669,6 +9721,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
         }
     }
     CLOSE_DISPS(play->state.gfxCtx);
+    DrawConvergenceStructures(play);
 }
 
 int FortniteActorId() {
@@ -9703,7 +9756,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         gFortniteActor = nullptr;
     }
     if (!gSession.Joined()) return;
-    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && gFortniteSandbox != (gMapId == royale::kSandboxMapIndex)))) {
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && royale::fortnite::gTerrainMapId != gMapId))) {
         GoToField();   // the host changed the map: load the scene again with the right ground
         return;
     }
@@ -13845,7 +13898,8 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = std::min(royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0)), royale::kPlayableMapCount - 1);   // the Sandbox is never a lobby map
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), 0);
+        if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
         ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
@@ -14162,7 +14216,8 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         const char* current = royale::MapOf(ui.mapId).name;
         ImGui::SetNextItemWidth(300);
         if (ImGui::BeginCombo("Map##solo_map", current)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (!royale::IsPlayableMap(i)) continue;
                 if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -14302,10 +14357,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
     if (h.isHost) {
         UiState& ui = Ui();
-        if (h.mapId < royale::kPlayableMapCount) ui.mapId = h.mapId;
+        if (royale::IsPlayableMap(h.mapId)) ui.mapId = h.mapId;
         ImGui::SetNextItemWidth(260);
         if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (!royale::IsPlayableMap(i)) continue;
                 if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -15125,8 +15181,8 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
     const bool sandbox = gMapId == royale::kSandboxMapIndex;
-    if (sandbox != gFortniteSandbox || sandbox != royale::fortnite::gSandboxTerrain) {   // the other ground: the collision and the drawn mesh are made again from it
-        royale::fortnite::UseTerrain(sandbox);
+    if (gMapId != royale::fortnite::gTerrainMapId) {   // rebuild both collision and drawing on every custom-map change
+        royale::fortnite::UseTerrainForMap(gMapId);
         gFortniteSandbox = sandbox;
         gFortniteBuilt = false;
         gFortniteGpu.built = false;

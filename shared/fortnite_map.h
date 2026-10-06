@@ -2,6 +2,7 @@
 #include "fortnite_cover_data.h"
 #include "fortnite_map_data.h"
 #include "sandbox_terrain.h"
+#include "convergence_data.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -35,7 +36,9 @@ inline const uint8_t* gColourData = kColours;
 inline const char* gCoverData = kCover;
 inline float gSpawnX = kSpawnX, gSpawnZ = kSpawnZ;   // flat inland ground for the lobby
 inline bool gSandboxTerrain = false;
+inline int gTerrainMapId = kMapId;
 inline void UseTerrain(bool sandbox) {
+    gTerrainMapId = sandbox ? 6 : kMapId;
     gSandboxTerrain = sandbox;
     if (sandbox) {
         const sandbox::Data& t = sandbox::Terrain();
@@ -44,6 +47,14 @@ inline void UseTerrain(bool sandbox) {
     } else {
         gHeightData = kHeights; gColourData = kColours; gCoverData = kCover;
         gSpawnX = kSpawnX; gSpawnZ = kSpawnZ;
+    }
+}
+inline void UseTerrainForMap(int mapId) {
+    UseTerrain(mapId == 6);
+    gTerrainMapId = mapId;
+    if (mapId == 7) {
+        gHeightData = convergence::kHeights; gColourData = convergence::kColours; gCoverData = convergence::kCover;
+        gSpawnX = 0.0f; gSpawnZ = -600.0f;
     }
 }
 inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
@@ -102,6 +113,16 @@ inline int16_t Round16(float v) { return static_cast<int16_t>(std::lround(std::c
 // The collision triangles. The game keeps vertex numbers in 13 bits (8191), and 65 x 65 vertices is 4225, so they all fit.
 inline Mesh BuildCollision() {
     Mesh m;
+    if (gTerrainMapId == 7) {
+        for (const auto& v : convergence::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : convergence::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist});
+        m.lo = m.hi = m.verts.front();
+        for (const auto& v : m.verts) {
+            m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
+            m.hi = {std::max(m.hi.x,v.x),std::max(m.hi.y,v.y),std::max(m.hi.z,v.z)};
+        }
+        return m;
+    }
     m.verts.reserve(kVerts * kVerts);
     for (int j = 0; j < kVerts; j++)
         for (int i = 0; i < kVerts; i++) m.verts.push_back({ Round16(VertexX(i)), Round16(static_cast<float>(VertexHeight(i, j))), Round16(VertexZ(j)) });

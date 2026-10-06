@@ -23,7 +23,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 24; // 24: FartCloudRequest and EvFartCloud (Lilo's toxic cloud); 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); 22: original items on everyone; 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 25; // 25: Hyrule Convergence map ID and authored world; older clients cannot display its collision.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
