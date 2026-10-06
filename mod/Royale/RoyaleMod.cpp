@@ -10795,9 +10795,9 @@ void ReconcileCatPet(const royale::HudState& hud) {
 // ---- Avriella, the baby pet ----------------------------------------------------------------------------------------------------------
 // A second pet to pick instead of Lilo (the "Your pet" section of the Battle Royale menu): a baby girl in the N64 style, made in Blender
 // (tools/avriella/, assets/avriella/avriella.blend, about 1050 triangles, a 64x32 cloth and a 64x32 skin texture and five 32x32 face pictures, 23 bones,
-// twelve clips: idle, sit, crawl, wave, giggle, clap, roll, nap, stand, reach, babble and stack; shared/avriella_model.h). She is skinned on the CPU every
+// fifteen clips (rolling about, kicking and chewing among them); shared/avriella_model.h). She is skinned on the CPU every
 // frame exactly like Lilo (DrawLiloModel) and, like Lilo, is only for looks: no collision, no targeting, nothing the server knows about, nobody else sees her.
-// She crawls after you, sits when you stop, and then does baby things: waves, claps, babbles, giggles, stacks three tiny rocks, rolls over, stands up
+// She rolls after you, sits when you stop, and then does baby things: waves, claps, babbles, giggles, stacks three tiny rocks, rolls over, stands up
 // and wobbles, reaches for loot nearby, and falls asleep when you stand still for long. Stand still facing her and press A to talk: she sits and
 // babbles a line in the game's own text box. Her voice is Link's own child voice sounds played much higher (no recordings of a real baby).
 constexpr float kBabyScale = 0.62f;   // the model stands about 64 units tall at 1.0 (sitting about 54 with her tuft, crawling about 50); Link is about 60, so standing she comes up to about two thirds of him
@@ -10856,7 +10856,7 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
 }
 
 // Her voice: Link's child voice sounds, pitched way up and strung together into babble. Each coo is a few sounds a moment apart.
-enum BabyCoo { kCooBaba, kCooDada, kCooGiggle, kCooOoh, kCooYawn, kCooHi, kCooBoth, kCooCount };
+enum BabyCoo { kCooBaba, kCooDada, kCooGiggle, kCooOoh, kCooYawn, kCooHi, kCooBoth, kCooChew, kCooCount };
 struct PendingCoo { float at; u16 sfx; float pitch, volume; };
 std::vector<PendingCoo> gBabyCoos;
 
@@ -10875,13 +10875,16 @@ void BabyCoo(int kind) {
             for (int i = 0; i < 5; i++) add(0.14f * static_cast<float>(i), NA_SE_VO_LI_SWORD_N, 2.3f + 0.15f * static_cast<float>(i % 3), 0.6f);
             break;
         case kCooOoh: add(0.0f, NA_SE_VO_LI_SURPRISE, 1.8f); break;
+        case kCooChew:
+            for (int i = 0; i < 4; i++) add(0.2f * static_cast<float>(i), NA_SE_VO_LI_SWORD_N, 1.5f + 0.1f * static_cast<float>(i % 2), 0.35f);
+            break;
         case kCooYawn: add(0.0f, NA_SE_VO_LI_SWORD_L, 1.2f, 0.6f); break;
         case kCooHi: add(0.0f, NA_SE_VO_LI_SURPRISE, 2.1f); add(0.22f, NA_SE_VO_LI_SWORD_N, 2.3f); break;
         default: add(0.0f, NA_SE_VO_LI_SWORD_N, 2.0f); add(0.22f, NA_SE_VO_LI_AUTO_JUMP, 2.3f); add(0.46f, NA_SE_VO_LI_SWORD_N, 2.1f); add(0.7f, NA_SE_VO_LI_AUTO_JUMP, 2.2f); break;
     }
 }
 
-enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Talk };
+enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Kick, Chew, Talk };   // Crawl is how she gets about: she cannot crawl yet, so she rolls
 struct BabyBrain {
     Actor* actor = nullptr;
     BabyMood mood = BabyMood::Sit;
@@ -10960,7 +10963,8 @@ void Baby_Update(Actor* actor, PlayState* play) {
     if (talking && c.mood != BabyMood::Talk) {
         SetBabyMood(c, BabyMood::Talk);
         static const int kLineCoo[royale::kAvriellaPetLineCount] = { kCooBaba, kCooBaba, kCooDada, kCooOoh, kCooGiggle, kCooBoth,
-                                                                      kCooOoh, kCooYawn, kCooGiggle, kCooBaba, kCooHi, kCooBoth };
+                                                                      kCooOoh, kCooYawn, kCooGiggle, kCooBaba, kCooHi, kCooBoth,
+                                                                      kCooChew, kCooChew, kCooGiggle, kCooGiggle };
         BabyCoo(kLineCoo[c.line % royale::kAvriellaPetLineCount]);
     }
     if (!talking && c.mood == BabyMood::Talk) {   // done talking: she sits a while and has something new to say next time
@@ -10994,7 +10998,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
     int clip = A::kSit, face = A::kFaceSmile;
     float rate = 1.0f;
     auto follow = [&](float minSpeed) {   // crawl to her place: slowly when it is near, quickly when you have gone on ahead
-        c.speed += (std::clamp((d - 45.0f) * 2.4f, minSpeed, 240.0f) - c.speed) * 0.2f;
+        c.speed += (std::clamp((d - 45.0f) * 2.2f, minSpeed, 190.0f) - c.speed) * 0.2f;
         heading = std::atan2(dx, dz);
         c.x += std::sin(heading) * c.speed * dt;
         c.z += std::cos(heading) * c.speed * dt;
@@ -11005,9 +11009,10 @@ void Baby_Update(Actor* actor, PlayState* play) {
     switch (c.mood) {
         case BabyMood::Crawl: {
             if (d > 70.0f) {
-                follow(40.0f);
-                clip = A::kCrawl;
-                rate = std::clamp(c.speed / 85.0f, 0.5f, 2.4f);
+                follow(35.0f);
+                clip = A::kTumble;   // rolling over and over after you
+                face = A::kFaceGiggle;
+                rate = std::clamp(c.speed / 75.0f, 0.5f, 2.2f);
             } else {
                 c.speed *= 0.6f;
                 SetBabyMood(c, BabyMood::Sit);
@@ -11025,6 +11030,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
                 break;
             }
             if (c.sitT > 17.0f) face = A::kFaceHalf;   // heavy eyes first
+            else if (std::fmod(c.sitT, 6.0f) < 1.5f) face = A::kFaceGiggle;   // she smiles a lot
             if (c.moodT > c.nextAt) {
                 c.nextAt = 4.5f + Rand_ZeroOne() * 4.0f;
                 const Actor* loot = c.reachCool <= 0.0f ? NearestLootTo(c.x, c.z, 320.0f) : nullptr;
@@ -11034,13 +11040,15 @@ void Baby_Update(Actor* actor, PlayState* play) {
                     BabyCoo(kCooOoh);
                 } else {
                     const float r = Rand_ZeroOne();
-                    if (r < 0.17f) { SetBabyMood(c, BabyMood::Wave); BabyCoo(kCooHi); }
-                    else if (r < 0.32f) { SetBabyMood(c, BabyMood::Clap); BabyCoo(kCooBaba); }
-                    else if (r < 0.47f) { SetBabyMood(c, BabyMood::Babble); BabyCoo(kCooBoth); }
-                    else if (r < 0.59f) { SetBabyMood(c, BabyMood::Giggle); BabyCoo(kCooGiggle); }
-                    else if (r < 0.77f) { SetBabyMood(c, BabyMood::Stack); }
-                    else if (r < 0.90f) { SetBabyMood(c, BabyMood::Stand); BabyCoo(kCooOoh); }
-                    else { SetBabyMood(c, BabyMood::Roll); BabyCoo(kCooGiggle); }
+                    if (r < 0.12f) { SetBabyMood(c, BabyMood::Wave); BabyCoo(kCooHi); }
+                    else if (r < 0.22f) { SetBabyMood(c, BabyMood::Clap); BabyCoo(kCooBaba); }
+                    else if (r < 0.31f) { SetBabyMood(c, BabyMood::Babble); BabyCoo(kCooBoth); }
+                    else if (r < 0.43f) { SetBabyMood(c, BabyMood::Giggle); BabyCoo(kCooGiggle); }
+                    else if (r < 0.55f) { SetBabyMood(c, BabyMood::Stack); }
+                    else if (r < 0.61f) { SetBabyMood(c, BabyMood::Stand); BabyCoo(kCooOoh); }
+                    else if (r < 0.69f) { SetBabyMood(c, BabyMood::Roll); BabyCoo(kCooGiggle); }
+                    else if (r < 0.85f) { SetBabyMood(c, BabyMood::Kick); BabyCoo(kCooGiggle); }
+                    else { SetBabyMood(c, BabyMood::Chew); BabyCoo(kCooChew); }
                 }
             }
             break;
@@ -11101,7 +11109,21 @@ void Baby_Update(Actor* actor, PlayState* play) {
             clip = A::kReach;
             face = A::kFaceOh;
             heading = std::atan2(c.reachX - c.x, c.reachZ - c.z);
-            if (c.moodT > 2.4f) SetBabyMood(c, BabyMood::Sit);
+            if (c.moodT > 2.4f) { SetBabyMood(c, BabyMood::Chew); BabyCoo(kCooChew); }   // whatever she can get her hands on goes in her mouth
+            break;
+        }
+        case BabyMood::Kick: {   // on her back, kicking over and over
+            clip = A::kKick;
+            face = A::kFaceGiggle;
+            if (std::fmod(c.moodT, 1.4f) < dt) BabyCoo(kCooGiggle);
+            if (c.moodT > 4.8f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Chew: {   // gnawing on a tiny rock
+            clip = A::kChew;
+            face = A::kFaceSmile;
+            if (std::fmod(c.moodT, 1.2f) < dt) BabyCoo(kCooChew);
+            if (c.moodT > 4.8f) SetBabyMood(c, BabyMood::Sit);
             break;
         }
         case BabyMood::Stack: {   // three tiny rocks, one on top of the other, and then they fall over
@@ -11125,11 +11147,11 @@ void Baby_Update(Actor* actor, PlayState* play) {
         if (c.sparkleIn <= 0.0f) { BabySparkle(play, c.x, c.y + 24.0f, c.z); c.sparkleIn = 0.3f; }
     }
     // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
-    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && pspeed < 3.0f &&
+    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && c.mood != BabyMood::Kick && pspeed < 3.0f &&
         OfferTalk(actor, play, static_cast<u16>(kTextAvriellaPet + c.line), 110.0f))
         SetBabyMood(c, BabyMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)
-    if (!moving && c.mood != BabyMood::Reach && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && d < 400.0f) faceYou();
+    if (!moving && c.mood != BabyMood::Reach && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && d < 400.0f && c.mood != BabyMood::Kick) faceYou();
     {
         float diff = heading - c.yaw;
         while (diff > 3.14159265f) diff -= 6.2831853f;
@@ -12439,8 +12461,8 @@ void DrawPetOptions() {
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
     if (kind == 1)
-        ImGui::TextWrapped("Avriella crawls after you, sits when you stop, and waves, claps, babbles, giggles, stacks tiny rocks, rolls over, stands up and wobbles, "
-                           "reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
+        ImGui::TextWrapped("Avriella rolls after you (she cannot crawl yet), sits when you stop, and smiles a lot, kicks her legs, chews on tiny rocks, waves, claps, babbles, giggles, "
+                           "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
     else
         ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
     if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");

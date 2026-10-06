@@ -3657,7 +3657,7 @@ static void AvriellaTheBabyModel() {
     for (int i = 0; i < kClothW * kClothH; i++) CHECK(kClothTex[i * 2 + 1] & 1);
     for (int i = 0; i < kSkinW * kSkinH; i++) CHECK(kSkinTex[i * 2 + 1] & 1);
     CHECK(std::string(kClips[kIdle].name) == "idle" && std::string(kClips[kCrawl].name) == "crawl" && std::string(kClips[kNap].name) == "nap" &&
-          std::string(kClips[kRocks].name) == "rocks" && kClipCount == 12);
+          std::string(kClips[kRocks].name) == "rocks" && kClipCount == 15);
     for (int f = 0; f < kFrameCount * kBoneCount; f++) {
         const int16_t* q = &kPoses[f * 7];
         const float len = std::sqrt(static_cast<float>(q[0]) * q[0] + static_cast<float>(q[1]) * q[1] + static_cast<float>(q[2]) * q[2] + static_cast<float>(q[3]) * q[3]) / 32767.0f;
@@ -3740,6 +3740,21 @@ static void AvriellaTheBabyModel() {
     SampleClip(kCrawl, ClipSeconds(kCrawl) + 0.1f, a);
     SampleClip(kCrawl, 0.1f, b);
     CHECK(std::fabs(a.bone[8].q[0] - b.bone[8].q[0]) < 1e-4f);
+    // she cannot crawl yet: she rolls about, low on the floor, and kicks lying down
+    for (int c : { kTumble, kKick }) {
+        SampleClip(c, 0.3f, p);
+        bodyBounds(p, mn, mx);
+        CHECK(mn[1] > -8.0f && mx[1] < 35.0f);
+    }
+    SampleClip(kChew, 1.0f, p);
+    float chewLow = 1e30f;
+    for (int i = 0; i < kVertCount; i++) {
+        if (kVerts[i].b0 != kBoneCount - 3) continue;
+        float pos[3], nrm[3];
+        SkinVertex(p, kVerts[i], pos, nrm);
+        chewLow = std::min(chewLow, pos[1]);
+    }
+    CHECK(chewLow > 10.0f && chewLow < 50.0f);   // the rock she chews is up in her hand
     Animator an;
     an.Play(kRoll);
     CHECK(an.clip == kRoll && an.from == kIdle && !an.Done());
@@ -3750,8 +3765,8 @@ static void AvriellaTheBabyModel() {
     an.Update(-1.0f, std::nanf(""));
     an.Evaluate(p);
     CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
-    // her lines: a dozen, each fits a text box, and none is empty
-    CHECK(kAvriellaPetLineCount == 12 && std::string(kAvriellaName) == "Avriella");
+    // her lines: sixteen, each fits a text box, and none is empty
+    CHECK(kAvriellaPetLineCount == 16 && std::string(kAvriellaName) == "Avriella");
     for (int i = 0; i < kAvriellaPetLineCount; i++) CHECK(std::strlen(kAvriellaPetLines[i]) > 3 && std::strlen(kAvriellaPetLines[i]) < 120);
 }
 

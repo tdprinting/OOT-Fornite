@@ -710,6 +710,87 @@ def clip_clap(t, T):
     return p
 
 
+def clip_tumble(t, T):
+    """Rolling along the ground on her back and front, round and round: how she gets about (she cannot crawl yet). The body lies across her way."""
+    p = Pose()
+    ph = t / T
+    lay_pose(p, 1.0, froggy=0.5)
+    hide_rocks(p)
+    p.loc["root"] = (0.31, 0.0, 0.10)       # she lies along x, not y (the turn below), and rolls about her own middle
+    p.add("root", y=-ph * TAU, z=1.5708)
+    p.add("thigh.L", x=0.25 * math.sin(ph * TAU * 2))
+    p.add("thigh.R", x=-0.25 * math.sin(ph * TAU * 2))
+    p.add("head", x=0.0, z=0.0)
+    jiggle(p, ph * TAU, 1.0)
+    return p
+
+
+def clip_kick(t, T):
+    """On her back kicking her legs over and over, arms waving, laughing."""
+    p = Pose()
+    ph = t / T * TAU
+    lay_pose(p, 1.0, froggy=0.0)
+    hide_rocks(p)
+    for s, sx in SIDES:
+        a = ph * 4 + (0.0 if s == "L" else math.pi)
+        p.add("thigh." + s, x=-1.35 + 0.65 * math.sin(a), z=0.28 * sx)
+        p.add("shin." + s, x=0.6 + 0.65 * max(0.0, -math.sin(a)) + 0.3)
+        p.add("foot." + s, x=0.2 + 0.2 * math.sin(a))
+        p.add("upper_arm." + s, x=0.3 * math.sin(ph * 2 + sx), z=0.0)
+    p.add("chest", x=0.03 * math.sin(ph * 8))
+    p.add("head", z=0.2 * math.sin(ph * 2), x=0.1)
+    p.shift("root", 0, 0, 0.004 * abs(math.sin(ph * 4)))
+    jiggle(p, ph * 2, 1.5)
+    return p
+
+
+def chew_base(p):
+    sit_base(p, lean=0.1)
+    hide_rocks(p)
+    p.add("head", x=0.04)
+    return p
+
+
+CHEW_KEY = {}
+
+
+def mouth_world(pose):
+    apply_pose(RIG, pose)
+    bpy.context.view_layer.update()
+    pb = RIG.pose.bones["head"]
+    return (pb.matrix @ RIG.data.bones["head"].matrix_local.inverted()) @ Vector((-0.012, -0.108, 0.425))
+
+
+def chew_arm():
+    if not CHEW_KEY:
+        base = chew_base(Pose())
+        rest = (-0.30, 0.16, 0.0, -0.65)
+        CHEW_KEY["rest"] = (-0.30, -0.16, 0.0, -0.65)
+        CHEW_KEY["mouth"] = solve_arm("R", mouth_world(base), CHEW_KEY["rest"], chew_base)
+    return CHEW_KEY
+
+
+def clip_chew(t, T):
+    """Sitting and gnawing on a tiny rock held up to her mouth: the head bobs, the hand wiggles, a contented smile in between."""
+    ck = chew_arm()
+    ph = t / T * TAU
+    p = chew_base(Pose())
+    k = env(t, 0.0, 0.4, T - 0.45, T)
+    arm = tuple(ck["rest"][i] + (ck["mouth"][i] - ck["rest"][i]) * k for i in range(4))
+    arm_pose(p, "R", arm)
+    chomp = math.sin(ph * 6) * k
+    p.add("head", x=0.07 * chomp)
+    p.add("upper_arm.R", x=0.03 * chomp)
+    p.add("forearm.R", x=0.05 * chomp)
+    p.add("upper_arm.L", x=-0.4 * k, y=0.05)
+    p.add("forearm.L", x=-0.3 * k)
+    jiggle(p, ph, 0.8)
+    hand = hand_at(p, "R")
+    d = hand - ROCKS_REST["rock.1"] + Vector((0, -0.005, 0.0))
+    p.loc["rock.1"] = (d.x, d.y, d.z)
+    return p
+
+
 def clip_roll(t, T):
     """Tips over from sitting onto her back, rolls right over (a full turn) and sits up again."""
     sit = clip_sit(0.0, 3.0)
@@ -957,6 +1038,9 @@ CLIPS = [
     ("reach", 1.2, True, clip_reach),
     ("babble", 1.0, True, clip_babble),
     ("rocks", 3.4, True, clip_stack),
+    ("tumble", 1.4, True, clip_tumble),
+    ("kick", 1.2, True, clip_kick),
+    ("chew", 2.4, True, clip_chew),
 ]
 
 
