@@ -146,6 +146,7 @@ bool InGame() {
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+bool gFortniteSandbox = false;   // ...and its ground is the Sandbox test map's (shared/sandbox_terrain.h) rather than the island's
 bool gFortniteScene = false;   // the scene now loaded is Hyrule Field with the Fortnite map's collision (see "the Fortnite map" below)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
 royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
@@ -233,7 +234,7 @@ const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 // (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
 bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
-           (!gSession.Joined() || (gMapId == royale::fortnite::kMapId) == gFortniteScene);
+           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || (gMapId == royale::kSandboxMapIndex) == gFortniteSandbox)));
 }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
@@ -280,11 +281,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Fog", "Fog banks (low volumetric-style fog)" },
     { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
     { "IslandPuddles", "Fortnite Map standing puddles" },
+    { "Water", "Realistic water (waves, splashes, wakes, swim current, underwater look)" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgRagdoll };
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgWater, kDbgRagdoll };
 static_assert(kDbgRagdoll + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
@@ -531,6 +533,13 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
+    if (gMapId == royale::kSandboxMapIndex) {   // the test map is a fixed arena: no measuring
+        *out = royale::MapOf(gMapId).fallback;
+        gMedianFloorY = 0.0f;
+        gMapMeasured = true;
+        gMeasuredRadius = out->radius;
+        return true;
+    }
     std::vector<royale::Vec2> points;
     std::vector<float> heights;
     // The window is the scene's own collision bounds (the old fixed +-9000 box cut Hyrule Field, which runs from x -11000 to 6700 and z -1800 to 16500,
@@ -4062,6 +4071,7 @@ void DrawHeldFinds(PlayState* play) {
     }
 }
 
+void DrawWater(PlayState* play);   // the water section, further down
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     Feat("draw: sky");
@@ -4082,6 +4092,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
     if (DebugOn(kDbgWind)) DrawWindParticles(play);
     Feat("draw: tornado");
     if (DebugOn(kDbgTornado)) DrawTornado(play);
+    DrawWater(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
@@ -4483,6 +4494,7 @@ std::string ClockText(float seconds) {
 
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
+bool gSandboxGlide = false;   // the Sandbox's "glide from here" button: the skydive behaves as in the drop (glide, hold Z to dive) outside the drop
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
 bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see OnEmoteWheelInput), so it can't lock on and flatten the camera
 
@@ -4697,15 +4709,15 @@ ImTextureID UploadRgba(const uint8_t* rgba, int w, int h, int* idInOut) {
 ImTextureID FortniteMinimapTexture() {
     static int texId = -1;
     static ImTextureID tex = nullptr;
-    static bool tried = false;
-    if (!tried) {
-        tried = true;
+    static int triedFor = -1;   // which ground the picture was made from (the island's or the Sandbox's)
+    if (triedFor != (royale::fortnite::gSandboxTerrain ? 1 : 0)) {
+        triedFor = royale::fortnite::gSandboxTerrain ? 1 : 0;
         constexpr int n = royale::fortnite::kFine + 1;
         std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; i++) {
-            rgba[i * 4 + 0] = royale::fortnite::kColours[i * 3 + 0];
-            rgba[i * 4 + 1] = royale::fortnite::kColours[i * 3 + 1];
-            rgba[i * 4 + 2] = royale::fortnite::kColours[i * 3 + 2];
+            rgba[i * 4 + 0] = royale::fortnite::gColourData[i * 3 + 0];
+            rgba[i * 4 + 1] = royale::fortnite::gColourData[i * 3 + 1];
+            rgba[i * 4 + 2] = royale::fortnite::gColourData[i * 3 + 2];
             rgba[i * 4 + 3] = 255;
         }
         tex = UploadRgba(rgba.data(), n, n, &texId);
@@ -5983,6 +5995,7 @@ void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     gFloatingNumbers.erase(std::remove_if(gFloatingNumbers.begin(), gFloatingNumbers.end(), [&](const FloatingNumber& f) { return now - f.at > 1.0; }), gFloatingNumbers.end());
 }
 
+void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawOverlay() {
     DrawTitleLogo();
     DrawQuestLabel();
@@ -5991,6 +6004,7 @@ void DrawOverlay() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     ImFont* font = ImGui::GetFont();
     ImVec2 ds = ImGui::GetIO().DisplaySize;
+    DrawUnderwaterOverlay(dl, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
     const ImU32 white = IM_COL32(255, 255, 255, 255), gold = IM_COL32(255, 210, 70, 255), red = IM_COL32(255, 90, 90, 255),
                 green = IM_COL32(110, 230, 130, 255), grey = IM_COL32(190, 190, 190, 255);
@@ -6031,7 +6045,7 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
+    if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
     if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
@@ -8434,6 +8448,339 @@ void EnsureSolidScenery() {
     }
 }
 
+// ---- water ---------------------------------------------------------------------------------------------------------------------------
+// The game's own water is a flat sheet. This adds, on top of every water box (lakes, rivers) and the Fortnite map's sea:
+//   * a rolling surface: a coarse grid round the camera that rises and falls in waves (bigger in wind and storms), tinted from sea-green over
+//     shallows to deep blue by the depth beneath it, with foam bands where it gets shallow and a sun glint, lit by the time of day;
+//   * splashes (droplets, rings, foam) where players, bots and carts enter the water, a V-shaped wake while they move and ripples while they tread;
+//   * a gentle current that carries a swimming player (swim physics), and bubbles when diving;
+//   * an underwater look when the camera is below the surface: blue tint, drifting light shafts.
+// Everything is cosmetic and local (nothing is sent), apart from the swimmer's own drift. Debug switch "Water".
+bool WaterSurfaceAt(float x, float z, float* y) {
+    namespace fn = royale::fortnite;
+    if (OnIsland()) {
+        if (std::fabs(x) >= fn::kHalfX || std::fabs(z) >= fn::kHalfZ) return false;
+        *y = static_cast<float>(fn::kWaterY);
+        return true;
+    }
+    float s = 0;
+    WaterBox* box = nullptr;
+    if (WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &s, &box) == 0) return false;
+    *y = s;
+    return true;
+}
+
+float WaveHeight(float x, float z, float t, float amp) {
+    return amp * (3.2f * std::sin(x * 0.0042f + z * 0.0023f + t * 1.3f) + 2.2f * std::sin(-x * 0.0031f + z * 0.0057f + t * 1.7f + 1.3f) +
+                  1.2f * std::sin(x * 0.011f + z * 0.009f - t * 2.6f));
+}
+
+float WaveAmp() {
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    return 1.0f + 1.4f * std::clamp(wind, 0.0f, 1.0f);
+}
+
+// Daylight on the water, 0.38 at night to 1 at noon (the game's own clock).
+float WaterLight() {
+    const float f = std::sin((static_cast<float>(gSaveContext.dayTime) - 16384.0f) / 32768.0f * 3.14159265f);
+    return 0.38f + 0.62f * std::clamp(f * 1.4f, 0.0f, 1.0f);
+}
+
+// The current, in units a second: a slow wandering flow that differs from place to place, plus a little of the wind.
+void WaterCurrentAt(float x, float z, float t, float* cx, float* cz) {
+    const float a = std::sin(x * 0.0012f + t * 0.11f) + 0.8f * std::cos(z * 0.0009f - t * 0.07f);
+    const float ang = a * 1.7f + 0.6f;
+    const float m = 9.0f + 5.0f * std::sin(z * 0.0006f + x * 0.0004f);
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    *cx = std::cos(ang) * m + wx * 0.1f;
+    *cz = std::sin(ang) * m + wz * 0.1f;
+}
+
+struct WaterFx {
+    enum Kind : uint8_t { Drop, Ring, Foam, Bubble } kind = Drop;
+    float x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0, age = 0, life = 1, size = 4, surface = 0;
+};
+std::vector<WaterFx> gWaterFx;
+constexpr size_t kMaxWaterFx = 240;
+struct WaterTrack { float x = 0, y = 0, z = 0, ring = 0; bool in = false; int seen = 0; };
+std::unordered_map<const void*, WaterTrack> gWaterTrack;
+int gWaterFrame = 0;
+float gCamUnder = 0.0f;   // 0 above the surface .. 1 below it (eased), for the underwater overlay
+
+void AddWaterFx(WaterFx f) { if (gWaterFx.size() < kMaxWaterFx) gWaterFx.push_back(f); }
+
+void WaterSplash(float x, float z, float surface, float size, float strength) {
+    const int drops = static_cast<int>(6.0f + 10.0f * strength);
+    for (int i = 0; i < drops; i++) {
+        const float ang = static_cast<float>(i) * 2.399f + strength, r = (0.3f + 0.7f * Flora01(i, gWaterFrame, 501)) * size;
+        WaterFx d; d.kind = WaterFx::Drop; d.x = x + std::cos(ang) * r * 0.4f; d.z = z + std::sin(ang) * r * 0.4f; d.y = surface + 2.0f; d.surface = surface;
+        d.vx = std::cos(ang) * r * 2.2f; d.vz = std::sin(ang) * r * 2.2f; d.vy = 90.0f + 150.0f * strength * (0.5f + Flora01(i, gWaterFrame, 502));
+        d.life = 1.4f; d.size = 2.2f + 1.6f * Flora01(i, gWaterFrame, 503);
+        AddWaterFx(d);
+    }
+    for (int i = 0; i < 2; i++) { WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * (1.0f + 0.9f * i); r.life = 1.1f + 0.4f * i; r.age = -0.12f * i; AddWaterFx(r); }
+    for (int i = 0; i < 3; i++) {
+        const float ang = static_cast<float>(i) * 2.094f + 0.5f;
+        WaterFx f; f.kind = WaterFx::Foam; f.x = x + std::cos(ang) * size * 0.5f; f.z = z + std::sin(ang) * size * 0.5f; f.y = surface; f.surface = surface;
+        f.vx = std::cos(ang) * 14.0f; f.vz = std::sin(ang) * 14.0f; f.size = size * (0.55f + 0.3f * strength); f.life = 1.8f;
+        AddWaterFx(f);
+    }
+}
+
+// One body in the water this frame: a splash as it goes in, a wake while it moves, ripples while it treads, bubbles when the local player dives.
+void WaterBody(const void* key, float x, float y, float z, float size, float dt, bool local) {
+    WaterTrack& t = gWaterTrack[key];
+    float surface = 0, floorY = 0;
+    const bool have = WaterSurfaceAt(x, z, &surface);
+    bool in = have && y < surface + 8.0f && (!RawFloorAt(x, z, &floorY) || floorY < surface - 4.0f);
+    const float mx = x - t.x, mz = z - t.z, my = y - t.y;
+    const bool jumped = t.seen == 0 || std::hypot(mx, mz) > 500.0f || std::fabs(my) > 400.0f || dt <= 0.0001f;
+    const float speed = jumped ? 0.0f : std::hypot(mx, mz) / dt;
+    const float eyeD = std::hypot(x - gPlayState->view.eye.x, z - gPlayState->view.eye.z);
+    if (!jumped && eyeD < 5000.0f) {
+        if (in && !t.in) {
+            WaterSplash(x, z, surface, size, std::clamp(0.35f + std::max(0.0f, -my / dt) / 500.0f + speed / 400.0f, 0.3f, 1.5f));
+        } else if (in) {
+            t.ring -= dt;
+            if (speed > 25.0f && t.ring <= 0.0f) {
+                t.ring = std::clamp(0.14f - speed / 4000.0f, 0.05f, 0.14f);
+                const float inv = 1.0f / std::max(1.0f, speed), dx = mx / dt * inv, dz = mz / dt * inv;
+                WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * 0.7f; r.life = 0.9f; AddWaterFx(r);
+                for (int s = -1; s <= 1; s += 2) {   // the two arms of the V behind the body, drifting outwards
+                    WaterFx f; f.kind = WaterFx::Foam; f.x = x - dx * size * 0.6f - dz * s * size * 0.5f; f.z = z - dz * size * 0.6f + dx * s * size * 0.5f; f.y = surface; f.surface = surface;
+                    f.vx = -dz * s * 22.0f - dx * 8.0f; f.vz = dx * s * 22.0f - dz * 8.0f; f.size = size * 0.45f; f.life = 1.5f; AddWaterFx(f);
+                }
+                if (speed > 150.0f) {   // fast (a cart, a sprint): spray off the bow
+                    WaterFx d; d.kind = WaterFx::Drop; d.x = x; d.z = z; d.y = surface + 3.0f; d.surface = surface; d.vx = -dz * 40.0f; d.vz = dx * 40.0f; d.vy = 110.0f; d.life = 1.0f; d.size = 2.4f; AddWaterFx(d);
+                }
+            } else if (speed <= 25.0f && t.ring <= 0.0f) {   // treading water
+                t.ring = 0.75f;
+                WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * 0.6f; r.life = 1.4f; AddWaterFx(r);
+            }
+            if (local && y + 38.0f < surface && Flora01(gWaterFrame, 7, 504) < dt * 3.0f) {   // diving: bubbles
+                WaterFx b; b.kind = WaterFx::Bubble; b.x = x + (Flora01(gWaterFrame, 8, 505) - 0.5f) * 14.0f; b.z = z + (Flora01(gWaterFrame, 9, 506) - 0.5f) * 14.0f; b.y = y + 28.0f;
+                b.surface = surface; b.vy = 55.0f; b.life = 3.0f; b.size = 2.0f + 2.0f * Flora01(gWaterFrame, 10, 507); AddWaterFx(b);
+            }
+        } else if (t.in) {   // climbing out: a few drips
+            for (int i = 0; i < 4; i++) {
+                WaterFx d; d.kind = WaterFx::Drop; d.x = x; d.z = z; d.y = y + 10.0f + 6.0f * i; d.surface = surface; d.vx = (Flora01(i, gWaterFrame, 508) - 0.5f) * 30.0f; d.vz = (Flora01(i, gWaterFrame, 509) - 0.5f) * 30.0f;
+                d.vy = 20.0f; d.life = 0.9f; d.size = 2.0f; AddWaterFx(d);
+            }
+        }
+    }
+    t.x = x; t.y = y; t.z = z; t.in = in; t.seen = gWaterFrame;
+}
+
+void PushVtx(Vtx& o, float x, float y, float z, u8 r, u8 g, u8 b, u8 a) {
+    o.v.ob[0] = static_cast<s16>(std::lround(x)); o.v.ob[1] = static_cast<s16>(std::lround(y)); o.v.ob[2] = static_cast<s16>(std::lround(z));
+    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0; o.v.cn[0] = r; o.v.cn[1] = g; o.v.cn[2] = b; o.v.cn[3] = a;
+}
+
+void SetupWaterXlu(PlayState* play) {
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// The rolling, tinted surface: a 15x15 grid of squares that follows the camera, snapped to its own cells so the waves do not slide.
+void DrawWaterSheet(PlayState* play, float t, float light) {
+    constexpr int N = 15, V = N + 1;
+    const Vec3f eye = play->view.eye;
+    const float cell = OnIsland() ? 340.0f : 210.0f, half = N * 0.5f * cell;
+    const float cx = std::round(eye.x / cell) * cell, cz = std::round(eye.z / cell) * cell, amp = WaveAmp();
+    float anySurface = 0; bool any = false;
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(V) * V * sizeof(Vtx)));
+    if (v == nullptr) return;
+    for (int j = 0; j < V; j++) {
+        for (int i = 0; i < V; i++) {
+            const float lx = (i - N * 0.5f) * cell, lz = (j - N * 0.5f) * cell, wx = cx + lx, wz = cz + lz;
+            float surface = 0, floorY = -1.0e6f;
+            const bool have = WaterSurfaceAt(wx, wz, &surface);
+            if (have) { any = true; anySurface = surface; RawFloorAt(wx, wz, &floorY); }
+            const float depth = have ? surface - floorY : 0.0f;
+            float a = 0.0f, r = 0, g = 0, b = 0, y = have ? surface : anySurface;
+            if (have && depth > 2.0f) {
+                const float k = std::clamp(depth / 420.0f, 0.0f, 1.0f), ease = k * k * (3.0f - 2.0f * k);
+                const float d = std::hypot(wx - eye.x, wz - eye.z), fade = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
+                y += 4.0f + WaveHeight(wx, wz, t, amp) * std::min(1.0f, depth / 90.0f);
+                r = 96.0f + (14.0f - 96.0f) * ease; g = 196.0f + (62.0f - 196.0f) * ease; b = 200.0f + (122.0f - 200.0f) * ease;
+                const float glint = std::pow(std::max(0.0f, std::sin(wx * 0.021f + t * 2.1f) * std::sin(wz * 0.019f - t * 1.7f)), 4.0f);
+                r += 120.0f * glint * light; g += 120.0f * glint * light; b += 110.0f * glint * light;
+                a = (62.0f + 96.0f * ease + 40.0f * glint) * fade;
+                if (depth < 46.0f) {   // foam along the shallows, its edge washing in and out
+                    const float f = std::clamp(1.0f - depth / (30.0f + 16.0f * std::sin(t * 1.6f + wx * 0.03f + wz * 0.025f)), 0.0f, 1.0f);
+                    r += (240.0f - r) * f; g += (248.0f - g) * f; b += (250.0f - b) * f; a += (210.0f * fade - a) * f;
+                }
+                r *= light; g *= light; b *= light;
+            }
+            PushVtx(v[j * V + i], lx, y, lz, static_cast<u8>(std::clamp(r, 0.0f, 255.0f)), static_cast<u8>(std::clamp(g, 0.0f, 255.0f)), static_cast<u8>(std::clamp(b, 0.0f, 255.0f)),
+                    static_cast<u8>(std::clamp(a, 0.0f, 255.0f)));
+        }
+    }
+    if (!any) return;
+    SetupWaterXlu(play);
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(cx, 0.0f, cz, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    for (int j = 0; j < N; j++) {   // two rows of vertices (32) a time
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[j * V]), 2 * V, 0);
+        for (int i = 0; i < N; i++) gSP2Triangles(POLY_XLU_DISP++, i, i + 1, V + i + 1, 0, i, V + i + 1, V + i, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void DrawWaterFx(PlayState* play, float dt, float t, float light) {
+    if (gWaterFx.empty()) return;
+    const Vec3f eye = play->view.eye;
+    const float amp = WaveAmp();
+    size_t verts = 0;
+    for (size_t i = 0; i < gWaterFx.size();) {   // move them on, drop the finished
+        WaterFx& f = gWaterFx[i];
+        f.age += dt;
+        bool dead = f.age >= f.life;
+        if (f.age > 0.0f) {
+            f.x += f.vx * dt; f.z += f.vz * dt;
+            if (f.kind == WaterFx::Drop) {
+                f.vy -= 430.0f * dt; f.y += f.vy * dt;
+                if (f.y < f.surface) {
+                    dead = true;
+                    if (Flora01(static_cast<int>(f.x), static_cast<int>(f.z), 510) < 0.4f) { WaterFx r; r.kind = WaterFx::Ring; r.x = f.x; r.z = f.z; r.y = f.surface; r.surface = f.surface; r.size = 5.0f; r.life = 0.7f; AddWaterFx(r); }
+                }
+            } else if (f.kind == WaterFx::Bubble) {
+                f.y += f.vy * dt; f.x += std::sin(t * 3.0f + f.size * 7.0f) * 6.0f * dt;
+                if (f.y >= f.surface) dead = true;
+            } else if (f.kind == WaterFx::Foam) {
+                f.vx *= 1.0f - 0.8f * dt; f.vz *= 1.0f - 0.8f * dt;
+            }
+        }
+        if (dead) { gWaterFx[i] = gWaterFx.back(); gWaterFx.pop_back(); continue; }
+        verts += f.kind == WaterFx::Ring ? 24 : f.kind == WaterFx::Foam ? 9 : 8;
+        i++;
+    }
+    if (gWaterFx.empty()) return;
+    Vtx* base = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, verts * sizeof(Vtx)));
+    if (base == nullptr) return;
+    SetupWaterXlu(play);
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    Vtx* o = base;
+    const u8 lt = static_cast<u8>(255.0f * (0.55f + 0.45f * light));
+    for (const WaterFx& f : gWaterFx) {
+        if (f.age < 0.0f) continue;
+        const float u = f.age / f.life, rx = f.x - eye.x, rz = f.z - eye.z;
+        switch (f.kind) {
+            case WaterFx::Ring: {
+                const float rad = f.size * (0.4f + 3.2f * u), w = 0.16f * rad + 1.5f, ry = f.surface + 6.0f + WaveHeight(f.x, f.z, t, amp) - eye.y;
+                const u8 a = static_cast<u8>(150.0f * (1.0f - u) * (1.0f - u));
+                for (int s = 0; s < 12; s++) {
+                    const float ca = std::cos(s * 0.5236f), sa = std::sin(s * 0.5236f);
+                    PushVtx(o[s * 2], rx + ca * (rad - w), ry, rz + sa * (rad - w), lt, lt, lt, static_cast<u8>(a / 8));
+                    PushVtx(o[s * 2 + 1], rx + ca * (rad + w), ry, rz + sa * (rad + w), lt, lt, lt, a);
+                }
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 24, 0);
+                for (int s = 0; s < 12; s++) {
+                    const int n = (s + 1) % 12;
+                    gSP2Triangles(POLY_XLU_DISP++, s * 2, s * 2 + 1, n * 2 + 1, 0, s * 2, n * 2 + 1, n * 2, 0);
+                }
+                o += 24;
+                break;
+            }
+            case WaterFx::Foam: {
+                const float rad = f.size * (1.0f + 0.7f * u), ry = f.surface + 6.0f + WaveHeight(f.x, f.z, t, amp) - eye.y;
+                const u8 a = static_cast<u8>(190.0f * (1.0f - u) * std::min(1.0f, u * 8.0f + 0.25f));
+                PushVtx(o[0], rx, ry, rz, lt, lt, lt, a);
+                for (int s = 0; s < 8; s++) PushVtx(o[1 + s], rx + std::cos(s * 0.7854f) * rad, ry, rz + std::sin(s * 0.7854f) * rad, lt, lt, lt, 0);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 9, 0);
+                for (int s = 0; s < 8; s++) gSP1Triangle(POLY_XLU_DISP++, 0, 1 + s, 1 + (s + 1) % 8, 0);
+                o += 9;
+                break;
+            }
+            default: {   // a drop or a bubble: two crossed quads
+                const float s = f.size * (f.kind == WaterFx::Bubble ? 0.8f : 1.0f), ry = f.y - eye.y;
+                const bool bub = f.kind == WaterFx::Bubble;
+                const u8 r = bub ? 190 : 225, g = bub ? 230 : 240, b = 255, a = static_cast<u8>((bub ? 150.0f : 220.0f) * (1.0f - u * u));
+                PushVtx(o[0], rx - s, ry - s, rz, r, g, b, a); PushVtx(o[1], rx + s, ry - s, rz, r, g, b, a);
+                PushVtx(o[2], rx + s, ry + s, rz, r, g, b, a); PushVtx(o[3], rx - s, ry + s, rz, r, g, b, a);
+                PushVtx(o[4], rx, ry - s, rz - s, r, g, b, a); PushVtx(o[5], rx, ry - s, rz + s, r, g, b, a);
+                PushVtx(o[6], rx, ry + s, rz + s, r, g, b, a); PushVtx(o[7], rx, ry + s, rz - s, r, g, b, a);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 8, 0);
+                gSP2Triangles(POLY_XLU_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
+                gSP2Triangles(POLY_XLU_DISP++, 4, 5, 6, 0, 4, 6, 7, 0);
+                o += 8;
+                break;
+            }
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Drawn every frame with the other world effects (Projectile_Draw).
+void DrawWater(PlayState* play) {
+    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterFx.clear(); gWaterTrack.clear(); gCamUnder = 0.0f; return; }
+    Feat("draw: water");
+    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
+    gWaterFrame++;
+    gWaterFx.reserve(kMaxWaterFx + 16);   // so adding one while they are being moved on never moves the list
+    Player* player = GET_PLAYER(play);
+    if (player == nullptr) return;
+    WaterBody(player, player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z, 16.0f, dt, true);
+    for (const auto& [id, actor] : gActorOf) {
+        if (actor == nullptr || actor == &player->actor) continue;
+        WaterBody(actor, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, 16.0f * actor->scale.y / 0.01f, dt, false);
+    }
+    for (const auto& [index, c] : gCarts) {
+        if (c.actor == nullptr || c.wrecked) continue;
+        WaterBody(&c, c.body.x, c.body.y, c.body.z, 46.0f, dt, false);
+    }
+    for (auto it = gWaterTrack.begin(); it != gWaterTrack.end();) it = it->second.seen != gWaterFrame ? gWaterTrack.erase(it) : std::next(it);
+    // Is the camera under the surface?
+    float surface = 0, floorY = 0;
+    const Vec3f eye = play->view.eye;
+    const bool under = WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!RawFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
+    gCamUnder += ((under ? 1.0f : 0.0f) - gCamUnder) * std::min(1.0f, dt * 8.0f);
+    DrawWaterSheet(play, t, light);
+    DrawWaterFx(play, dt, t, light);
+}
+
+// The look from below the surface: the screen goes blue-green, darker with depth, with slow light shafts drifting down from above.
+void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds) {
+    if (!DebugOn(kDbgWater) || gCamUnder < 0.02f) return;
+    const float k = gCamUnder, t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
+    const auto a = [&](float v) { return static_cast<int>(std::clamp(v * k, 0.0f, 255.0f)); };
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(static_cast<int>(60 * light), static_cast<int>(170 * light), static_cast<int>(190 * light), a(105)),
+                                IM_COL32(static_cast<int>(60 * light), static_cast<int>(170 * light), static_cast<int>(190 * light), a(105)),
+                                IM_COL32(4, static_cast<int>(40 * light), static_cast<int>(95 * light), a(165)), IM_COL32(4, static_cast<int>(40 * light), static_cast<int>(95 * light), a(165)));
+    for (int i = 0; i < 6; i++) {   // light shafts
+        const float x = ds.x * (0.08f + 0.17f * i + 0.05f * std::sin(t * 0.35f + i * 1.9f)), w = ds.x * (0.025f + 0.02f * std::sin(t * 0.5f + i));
+        const float lean = ds.y * 0.28f;
+        dl->AddQuadFilled(ImVec2(x, 0), ImVec2(x + w, 0), ImVec2(x + w + lean, ds.y), ImVec2(x + lean * 0.9f, ds.y), IM_COL32(190, 255, 245, a(18.0f * light)));
+    }
+}
+
+// Swim physics, once per game update: in the water a current carries you along (so treading water drifts and swimming against it is slower),
+// and you bob with the swell. Only the local player's own body; the server and the others are unaffected.
+void ApplySwimPhysics(Player* player) {
+    if (!DebugOn(kDbgWater) || !InField() || player == nullptr) return;
+    Feat("swim physics");
+    if (!(player->stateFlags1 & PLAYER_STATE1_IN_WATER)) return;
+    const float t = static_cast<float>(ImGui::GetTime()), dt = 1.0f / royale::kTickHz;
+    float cx, cz, surface = 0;
+    WaterCurrentAt(player->actor.world.pos.x, player->actor.world.pos.z, t, &cx, &cz);
+    const float nx = player->actor.world.pos.x + cx * dt, nz = player->actor.world.pos.z + cz * dt;
+    float floorY = 0;
+    if (WaterSurfaceAt(nx, nz, &surface) && RawFloorAt(nx, nz, &floorY) && floorY < surface - 40.0f) {   // never drift a swimmer into the shore
+        player->actor.world.pos.x = nx;
+        player->actor.world.pos.z = nz;
+    }
+    player->actor.velocity.y += std::sin(t * 2.4f) * 0.04f * WaveAmp();
+}
+
 // ---- the Fortnite map ---------------------------------------------------------------------------------------------------------
 // The island (shared/fortnite_map.h) is played inside Hyrule Field's scene. patches/0013 lets us do three things there:
 //   * swap the scene's collision for the island's triangles when the scene loads (Royale_CustomCollision, at the end of this file), so everything
@@ -8585,7 +8932,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         gFortniteActor = nullptr;
     }
     if (!gSession.Joined()) return;
-    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && gFortniteScene != (gMapId == royale::fortnite::kMapId)) {
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && gFortniteSandbox != (gMapId == royale::kSandboxMapIndex)))) {
         GoToField();   // the host changed the map: load the scene again with the right ground
         return;
     }
@@ -8596,7 +8943,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
     if (hud.state != royale::MatchState::Lobby || gSkydiving) return;
     namespace fn = royale::fortnite;
     const float a = static_cast<float>(std::rand() % 628) / 100.0f, r = static_cast<float>(std::rand() % 220);
-    const float x = fn::kSpawnX + std::sin(a) * r, z = fn::kSpawnZ + std::cos(a) * r;
+    const float x = fn::gSpawnX + std::sin(a) * r, z = fn::gSpawnZ + std::cos(a) * r;
     float y = 0;
     if (!fn::GroundHeight(x, z, &y)) return;
     player->actor.world.pos = { x, y + 12.0f, z };
@@ -8919,7 +9266,8 @@ void SteerToSafeLanding(Player* player, const royale::HudState& hud, float dt) {
 void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
-    if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; return; }
+    if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
     const Input& in = gPlayState->state.input[0];
 
@@ -8936,10 +9284,10 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     }
 
     gGliderRoll += ((mag > 0.1f ? -sx / 80.0f * 0.5f : 0.0f) - gGliderRoll) * 0.12f;                  // bank into the turn
-    gGliderDiving = hud.state == royale::MatchState::Drop && gDiveHeld;
+    gGliderDiving = dropLike && gDiveHeld;
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
-    if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
+    if (dropLike) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = royale::kLateFallSpeed;           // the drop is over: land now
     SteerToSafeLanding(player, hud, dt);
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
@@ -8947,6 +9295,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (ground > -1.0e5f && y <= ground + 8.0f) {
         y = ground + 8.0f;
         gSkydiving = false;                                                       // touched down; normal gravity takes over
+        gSandboxGlide = false;
     }
     player->actor.world.pos.y = y;
     player->actor.prevPos = player->actor.world.pos;
@@ -9237,6 +9586,7 @@ void OnPlayerUpdate() {
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
+    ApplySwimPhysics(player);
 
     // The server moves everyone to spawn points when the match starts. It only knows x and z, so drop from above. This only
     // happens once the player has actually arrived in the field (they may still be loading in from the waiting room).
@@ -9709,13 +10059,26 @@ void DriveLobbyTimer(const royale::HudState& hud) {
 // has got, so the last circles are fought at dusk and in the dark. The player's own time of day is put back afterwards.
 bool gTimeTaken = false;
 u16 gSavedDayTime = 0;
+// What the Sandbox panel shows (the panel's own switches; the server's copies are set by the commands below). Reset whenever there is no sandbox.
+struct SandboxUi {
+    bool god = true, stormRuns = false, weatherFree = false, botsStill = false;
+    int season = 1, sky = 0, intensity = 60;   // the weather to set
+    int item = 0, rarity = 4;                  // the item to give
+    float day = 0.3f;                          // the time of day, 0 (morning) to 1 (night)
+    bool dayRuns = false;
+};
+SandboxUi gSbx;
 void DriveTimeOfDay(const royale::HudState& hud) {
     const bool on = gSession.Joined() && InField() && (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch) && gSession.Client();
     if (on) {
         if (!gTimeTaken) { gSavedDayTime = gSaveContext.dayTime; gTimeTaken = true; }
         float total = 0;
         for (const auto& ph : royale::kStormPhases) total += ph.waitSec + ph.closeSec;
-        const float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
+        float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
+        if (gSession.Sandbox()) {   // the test map: the slider decides the hour (and it can run by itself)
+            if (gSbx.dayRuns) gSbx.day = std::fmod(gSbx.day + 1.0f / (60.0f * 150.0f), 1.0f);
+            p = gSbx.day;
+        }
         int t = 0x5000 + static_cast<int>(p * 0x9000); // about 7:30 in the morning to about 9 at night
         const float dark = std::max(gStormWeather * 0.85f, royale::SkyDarkness(gWeatherShown) * gWeatherBlend);   // the storm zone and heavy weather both darken the sky
         if (t < 0xD400) t += static_cast<int>((0xD400 - t) * dark);
@@ -9725,6 +10088,69 @@ void DriveTimeOfDay(const royale::HudState& hud) {
         gSaveContext.dayTime = gSavedDayTime;
         gSaveContext.skyboxTime = gSavedDayTime;
         gTimeTaken = false;
+    }
+}
+
+
+// ---- the Sandbox test map ---------------------------------------------------------------------------------------------------------------
+// "Sandbox test map" in the Battle Royale menu: a flat test arena (shared/sandbox_terrain.h) with a match that has no countdown, no end and a frozen
+// storm. The host's panel (DrawSandboxPanel, under "MATCH IN PROGRESS") has a button for every feature: teleports to the places, carts, bots, bosses,
+// any item, the storm, the weather, the time of day and the glider. The server's side is in Match (SandboxBot, SandboxBoss, ...), and everything
+// the panel does goes through one queue, run on the game's thread (the menu draws on another).
+struct SandboxCmd {
+    enum Kind { Go, Cart, ClearCarts, Bot, ClearBots, FreezeBots, Boss, ClearBosses, Give, Heal, Revive, God, StormRuns, StormPhase, Supply, Weather, WeatherFree, Restock, Glide } kind = Go;
+    int a = 0, b = 0, c = 0;
+};
+std::mutex gSandboxLock;
+std::vector<SandboxCmd> gSandboxCmds;
+void SandboxDo(SandboxCmd::Kind kind, int a = 0, int b = 0, int c = 0) {
+    std::lock_guard<std::mutex> lock(gSandboxLock);
+    gSandboxCmds.push_back({kind, a, b, c});
+}
+
+void RunSandboxCommands(const royale::HudState& hud) {
+    Feat("sandbox commands");
+    royale::Match* m = gSession.SandboxMatch();
+    std::vector<SandboxCmd> cmds;
+    { std::lock_guard<std::mutex> lock(gSandboxLock); cmds.swap(gSandboxCmds); }
+    if (m == nullptr) { gSbx = SandboxUi(); gSandboxGlide = false; return; }
+    if (!hud.haveSelf || !InGame()) return;
+    Player* player = GET_PLAYER(gPlayState);
+    const uint32_t self = hud.selfId;
+    const royale::Vec2 at = { player->actor.world.pos.x, player->actor.world.pos.z };
+    const float facing = static_cast<float>(player->actor.shape.rot.y) * (3.14159265f / 32768.0f);
+    auto ahead = [&](float d) { return royale::Vec2{ at.x + std::sin(facing) * d, at.z + std::cos(facing) * d }; };
+    for (const SandboxCmd& c : cmds) {
+        switch (c.kind) {
+            case SandboxCmd::Go: m->SandboxTeleport(self, royale::SandboxZoneAt(c.a)); break;
+            case SandboxCmd::Cart: if (!m->SandboxCart(ahead(360.0f), facing)) Say("No room for another cart: take one away first"); break;
+            case SandboxCmd::ClearCarts: m->SandboxClearCarts(); break;
+            case SandboxCmd::Bot:
+                for (int i = 0; i < c.a; i++) m->SandboxBot(ahead(300.0f + 90.0f * static_cast<float>(i % 5) + 60.0f * static_cast<float>(i / 5)));
+                break;
+            case SandboxCmd::ClearBots: m->SandboxClearBots(); break;
+            case SandboxCmd::FreezeBots: if (royale::BotController* bots = gSession.SandboxBots()) bots->SetFrozen(c.a != 0); break;
+            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(c.a >= static_cast<int>(royale::BossKind::DragonFire) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
+            case SandboxCmd::ClearBosses: m->SandboxClearBosses(); break;
+            case SandboxCmd::Give: m->SandboxGive(self, static_cast<royale::ItemId>(c.a), static_cast<royale::Rarity>(c.b)); break;
+            case SandboxCmd::Heal: m->SandboxHeal(self); break;
+            case SandboxCmd::Revive: m->SandboxRevive(self); break;
+            case SandboxCmd::God: m->SandboxGod(c.a != 0); break;
+            case SandboxCmd::StormRuns: m->SandboxStormRuns(c.a != 0); break;
+            case SandboxCmd::StormPhase: m->SandboxStormPhase(c.a); break;
+            case SandboxCmd::Supply: m->SandboxSupplyDrop(ahead(500.0f)); break;
+            case SandboxCmd::Weather: m->SandboxWeather(static_cast<royale::Season>(c.a), static_cast<royale::Sky>(c.b), c.c); break;
+            case SandboxCmd::WeatherFree: m->SandboxWeatherFree(c.a != 0); break;
+            case SandboxCmd::Restock: Say("Put back " + std::to_string(m->SandboxRestock()) + " things on the plaza"); break;
+            case SandboxCmd::Glide:
+                if (InField() && !gSkydiving) {   // 1500 up (the safe-landing pull starts below that), then the skydive's own glider takes over
+                    gSkydiving = true;
+                    gSandboxGlide = true;
+                    player->actor.world.pos.y += 2200.0f;
+                    player->actor.prevPos = player->actor.world.pos;
+                }
+                break;
+        }
     }
 }
 
@@ -10540,7 +10966,11 @@ void ReconcileLilo(const royale::HudState& hud) {
         return;
     }
     if (gLiloActor != nullptr) return;
-    if (!gLiloKnown) { if (!FindLiloSpot(hud.map, &gLiloPos)) return; gLiloKnown = true; }
+    if (!gLiloKnown) {
+        if (gMapId == royale::kSandboxMapIndex) gLiloPos = { royale::sandbox::kSpawnX + 260.0f, royale::sandbox::kSpawnZ + 120.0f };   // the test map: beside the spawn pad
+        else if (!FindLiloSpot(hud.map, &gLiloPos)) return;
+        gLiloKnown = true;
+    }
     float y = 0;
     if (!FloorAt(gLiloPos.x, gLiloPos.z, &y)) return;
     Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, gLiloPos.x, y, gLiloPos.z, 0, 0x6000, 0, 0, false);
@@ -11420,6 +11850,7 @@ void OnGameFrameUpdate() {
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
     Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
+    RunSandboxCommands(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     Feat("projectiles"); ReconcileProjectileActor();
     Feat("storm alerts"); DriveStormAlerts(hud);
@@ -11622,7 +12053,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0));
+        ui.mapId = std::min(royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0)), royale::kPlayableMapCount - 1);   // the Sandbox is never a lobby map
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
         ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
@@ -11899,7 +12330,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         const char* current = royale::MapOf(ui.mapId).name;
         ImGui::SetNextItemWidth(300);
         if (ImGui::BeginCombo("Map##solo_map", current)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
+            for (int i = 0; i < royale::kPlayableMapCount; i++) {
                 if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -11923,6 +12354,20 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         }
     }
     ImGui::TextColored(kGrey, "Just you on the map chosen above, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
+    ImGui::Spacing();
+    if (ImGui::Button("Sandbox test map", ImVec2(300, 0))) {
+        ui.port = std::clamp(ui.port, 1024, 65535);
+        ui.error.clear();
+        SaveUi(ui);
+        gSession.ClearLastEnded();
+        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true, true)) {
+            ui.error = "Could not host: " + ui.error;
+        } else {
+            gSoloStartWanted = true;
+            RefreshLocalAddresses(ui, true);
+        }
+    }
+    ImGui::TextColored(kGrey, "A flat test arena with ramps, a cliff, a pond, a loot plaza with every item, a cart lot and a boss pad. No countdown, nothing hurts you, the storm waits, and a panel in this menu has a button for every feature: carts, bots, bosses, items, storm, weather, time of day, wind and the glider.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
@@ -11967,6 +12412,38 @@ void DrawRoster(const royale::HudState& h) {
     }
 }
 
+// The options that only change what your own screen shows: weather density, grass and trees, cloth, wind, the tornado and the match music. Shared by
+// the lobby page and the Sandbox panel.
+void DrawLocalEffects() {
+    UiState& ui = Ui();
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+    ImGui::SetNextItemWidth(280);
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::Checkbox("Cloth physics (caps, tunics and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+    if (ui.clothOn) {
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+        ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
+                           gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
+    }
+    if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
+    if (ui.windOn) {
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
+        if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
+        float wnx, wnz, wns;
+        WindNow(&wnx, &wnz, &wns);
+        ImGui::TextColored(kGrey, "Wind right now: %d%% (it gusts, and rain and thunder bring squalls)", static_cast<int>(wns * 100.0f));
+    }
+    { static bool tornado = false; if (ImGui::Checkbox("Tornado (easter egg, only you can see it)", &tornado)) gTornadoOn = tornado; }
+    static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
+}
+
 void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("LOBBY");
     ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
@@ -11993,10 +12470,10 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
     if (h.isHost) {
         UiState& ui = Ui();
-        ui.mapId = h.mapId;
+        if (h.mapId < royale::kPlayableMapCount) ui.mapId = h.mapId;
         ImGui::SetNextItemWidth(260);
         if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
+            for (int i = 0; i < royale::kPlayableMapCount; i++) {
                 if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -12074,35 +12551,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
-    {
-        UiState& ui = Ui();
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Checkbox("Cloth physics (caps, tunics and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
-        if (ui.clothOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
-            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
-                               gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
-        }
-        if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
-        if (ui.windOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
-            if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
-            float wnx, wnz, wns;
-            WindNow(&wnx, &wnz, &wns);
-            ImGui::TextColored(kGrey, "Wind right now: %d%% (it gusts, and rain and thunder bring squalls)", static_cast<int>(wns * 100.0f));
-        }
-        { static bool tornado = false; if (ImGui::Checkbox("Tornado (easter egg, only you can see it)", &tornado)) gTornadoOn = tornado; }
-        static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
-    }
+    DrawLocalEffects();
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");
@@ -12135,8 +12584,115 @@ void DrawCountdown(const royale::HudState& h) {
     if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
 }
 
+// Buttons that fill a line and wrap to the next one.
+struct ButtonFlow {
+    bool first = true;
+    bool Button(const char* label) {
+        const float w = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        if (!first) { ImGui::SameLine(); if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine(); }
+        first = false;
+        return ImGui::Button(label);
+    }
+};
+
+// The Sandbox panel: a button or switch for each feature, grouped. Only for the host's own sandbox game, shown in the Battle Royale menu while it is on.
+// (The newer features, water, fog, sky and the rest, get their own switches in the Debug section below it as they are added.)
+void DrawSandboxPanel(const royale::HudState& h) {
+    if (!gSession.Sandbox()) return;
+    Heading("SANDBOX: try every feature alone");
+    ImGui::TextColored(kGrey, "No countdown, no end, and the storm waits. Close this menu to play; open it again for more buttons.");
+    SandboxUi& sb = gSbx;
+    if (ImGui::CollapsingHeader("Go to a place", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ButtonFlow flow;
+        for (int i = 0; i < royale::sandbox::kZoneCount; i++) {
+            if (flow.Button(royale::sandbox::kZones[i].name)) SandboxDo(SandboxCmd::Go, i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", royale::sandbox::kZones[i].blurb);
+        }
+        ImGui::TextColored(kGrey, "Each place has what it is named for: ramps, a cliff, a pond, a loot plaza, a cart lot, a boss pad, stone steps, cover.");
+        if (ImGui::Button("Glide from here (3000 up, then hold Z to dive)")) SandboxDo(SandboxCmd::Glide);
+    }
+    if (ImGui::CollapsingHeader("Carts, bots and bosses")) {
+        ImGui::TextColored(kGold, "Carts (get in with A next to one; A go, B brake, R get out)");
+        if (ImGui::Button("Put a cart in front of me")) SandboxDo(SandboxCmd::Cart);
+        ImGui::SameLine();
+        if (ImGui::Button("Remove all carts")) SandboxDo(SandboxCmd::ClearCarts);
+        ImGui::TextColored(kGold, "Bots (they sprint, climb, take cover and use the ground, as in a match)");
+        { ButtonFlow flow;
+          if (flow.Button("1 bot")) SandboxDo(SandboxCmd::Bot, 1);
+          if (flow.Button("5 bots")) SandboxDo(SandboxCmd::Bot, 5);
+          if (flow.Button("Remove bots")) SandboxDo(SandboxCmd::ClearBots); }
+        if (ImGui::Checkbox("Bots stand still (a target dummy)", &sb.botsStill)) SandboxDo(SandboxCmd::FreezeBots, sb.botsStill ? 1 : 0);
+        ImGui::TextColored(kGold, "Bosses (they appear in front of you)");
+        ButtonFlow flow;
+        for (int i = 0; i < royale::kBossKindCount; i++) {
+            const std::string label = std::string(royale::BossOf(static_cast<royale::BossKind>(i)).name) + (i >= static_cast<int>(royale::BossKind::DragonFire) ? " (major)" : "");
+            if (flow.Button(label.c_str())) SandboxDo(SandboxCmd::Boss, i);
+        }
+        if (flow.Button("Remove bosses")) SandboxDo(SandboxCmd::ClearBosses);
+    }
+    if (ImGui::CollapsingHeader("Items and health")) {
+        if (ImGui::Checkbox("Nothing can hurt me", &sb.god)) SandboxDo(SandboxCmd::God, sb.god ? 1 : 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Heal and refill")) SandboxDo(SandboxCmd::Heal);
+        if (!h.selfAlive) { ImGui::SameLine(); if (ImGui::Button("Get back up")) SandboxDo(SandboxCmd::Revive); }
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::BeginCombo("Item##sbx_item", royale::kItems[std::clamp(sb.item, 0, royale::kItemCount - 1)].name)) {
+            for (int i = 0; i < royale::kItemCount; i++) {
+                if (static_cast<royale::ItemId>(i) == royale::ItemId::BasicSword) continue;
+                if (ImGui::Selectable(royale::kItems[i].name, sb.item == i)) sb.item = i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Rarity##sbx_rarity", RarityName(static_cast<royale::Rarity>(sb.rarity)))) {
+            for (int i = 0; i < royale::kRarityCount; i++) if (ImGui::Selectable(RarityName(static_cast<royale::Rarity>(i)), sb.rarity == i)) sb.rarity = i;
+            ImGui::EndCombo();
+        }
+        if (ImGui::Button("Give me this item")) SandboxDo(SandboxCmd::Give, sb.item, sb.rarity);
+        ImGui::SameLine();
+        if (ImGui::Button("Put the loot plaza back")) SandboxDo(SandboxCmd::Restock);
+        ImGui::TextColored(kGrey, "The loot plaza has every item in the game, in rows, and a chest of each rarity.");
+    }
+    if (ImGui::CollapsingHeader("Storm, supply drops and weather")) {
+        if (ImGui::Checkbox("The storm runs (it waits while this is off)", &sb.stormRuns)) SandboxDo(SandboxCmd::StormRuns, sb.stormRuns ? 1 : 0);
+        { ButtonFlow flow;
+          for (int i = 0; i < royale::kStormPhaseCount; i++) {
+              char label[40];
+              std::snprintf(label, sizeof(label), "Start of circle %d", i + 1);
+              if (flow.Button(label)) SandboxDo(SandboxCmd::StormPhase, i);
+          }
+          if (flow.Button("Storm all closed in")) SandboxDo(SandboxCmd::StormPhase, royale::kStormPhaseCount);
+          if (flow.Button("Back to the start")) SandboxDo(SandboxCmd::StormPhase, 0); }
+        if (ImGui::Button("Call a supply drop in front of me")) SandboxDo(SandboxCmd::Supply);
+        ImGui::Spacing();
+        ImGui::TextColored(kGold, "Weather");
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Season##sbx_season", royale::SeasonName(static_cast<royale::Season>(sb.season)))) {
+            for (int i = 0; i < royale::kSeasonCount; i++) if (ImGui::Selectable(royale::SeasonName(static_cast<royale::Season>(i)), sb.season == i)) sb.season = i;
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Sky##sbx_sky", royale::SkyName(static_cast<royale::Sky>(sb.sky)))) {
+            for (int i = 0; i < royale::kSkyCount; i++) if (ImGui::Selectable(royale::SkyName(static_cast<royale::Sky>(i)), sb.sky == i)) sb.sky = i;
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(260);
+        ImGui::SliderInt("How strong (%)##sbx_strength", &sb.intensity, 0, 100);
+        if (ImGui::Button("Set this weather")) { SandboxDo(SandboxCmd::Weather, sb.season, sb.sky, sb.intensity); if (sb.weatherFree) { sb.weatherFree = false; SandboxDo(SandboxCmd::WeatherFree, 0); } }
+        if (ImGui::Checkbox("Let the weather change by itself (it follows the storm's clock)", &sb.weatherFree)) SandboxDo(SandboxCmd::WeatherFree, sb.weatherFree ? 1 : 0);
+        ImGui::SetNextItemWidth(260);
+        ImGui::SliderFloat("Time of day (0 morning, 1 night)##sbx_day", &sb.day, 0.0f, 1.0f);
+        ImGui::Checkbox("Let the day pass (about 2 minutes to night)", &sb.dayRuns);
+        ImGui::TextColored(kGrey, "Wind, the tornado, cloth, grass and trees are just below, under \"What your screen shows\".");
+    }
+    if (ImGui::CollapsingHeader("What your screen shows (wind, tornado, cloth, grass)")) DrawLocalEffects();
+    DrawDebugSwitches();   // one switch per newer feature (water, fog, sky, scenery...): turn each on or off to try it alone
+    ImGui::Spacing();
+}
+
 void DrawInMatch(const royale::HudState& h) {
     Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
+    DrawSandboxPanel(h);
     DrawItemGuide();
     ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
     if (h.haveSelf) {
@@ -12698,8 +13254,15 @@ CollisionHeader* FortniteHeader() {
 // Called as every scene loads its collision: the island's, if this is Hyrule Field and the lobby's map is the Fortnite map; otherwise null (the scene's own).
 extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     gFortniteScene = false;
-    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || gMapId != royale::fortnite::kMapId) return nullptr;
+    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
+    const bool sandbox = gMapId == royale::kSandboxMapIndex;
+    if (sandbox != gFortniteSandbox || sandbox != royale::fortnite::gSandboxTerrain) {   // the other ground: the collision and the drawn mesh are made again from it
+        royale::fortnite::UseTerrain(sandbox);
+        gFortniteSandbox = sandbox;
+        gFortniteBuilt = false;
+        gFortniteGpu.built = false;
+    }
     return FortniteHeader();
 }
 extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }

@@ -259,12 +259,13 @@ class Match {
         if (state != MatchState::Lobby || players.empty()) return false;
         humans = static_cast<int>(players.size());
         uint32_t nextId = 1000;
-        while (!soloTest && static_cast<int>(players.size()) < playerLimit) {
+        while (!soloTest && !sandbox && static_cast<int>(players.size()) < playerLimit) {
             players.push_back(MakePlayer(nextId++, true));
             players.back().scene = static_cast<uint8_t>(MapOf(mapId).scene);
         }
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
+        if (sandbox) for (auto& p : players) p.pos = sandboxSpawn;
         SpawnBosses();
         SpawnAllies();
         SpawnVehicles();
@@ -273,6 +274,12 @@ class Match {
         replay = Replay{}; replayNextAt = 0;
         for (const auto& pl : players) replay.ids.push_back(static_cast<uint16_t>(pl.id));
         spell = -1; boltCount = 0; weather = Weather{PickSeason(wopt, seed), Sky::Clear, 0};
+        if (sandbox) {   // the test map has no countdown and no drop: you are on the ground and the match is on
+            stormTime = 0;
+            Enter(MatchState::InMatch);
+            SandboxWeather(Season::Summer, Sky::Clear, 0);
+            return true;
+        }
         Enter(MatchState::Countdown);
         return true;
     }
@@ -289,13 +296,13 @@ class Match {
                 if (stateTime >= kDropSec) Enter(MatchState::InMatch);
                 break;
             case MatchState::InMatch:
-                stormTime += dt;
+                if (!sandbox || sandboxStormRuns) stormTime += dt;
                 TickReplay();
                 TickWeather();
                 TickSupplyDrops();
                 for (auto& p : players) {
                     if (!p.alive) continue;
-                    float dps = storm.DamagePerSecond(p.pos, stormTime);
+                    float dps = sandbox && !sandboxStormRuns ? 0.0f : storm.DamagePerSecond(p.pos, stormTime);
                     if (dps > 0) Damage(p.id, dps * dt, kNoPlayer, DamageKind::Storm, false);
                     if (!p.alive) continue;
                     if (clock < p.burnUntil) Damage(p.id, p.burnDps * dt, p.burnBy, DamageKind::Fire, false);
@@ -307,7 +314,7 @@ class Match {
                 }
                 TickBosses(dt);
                 TickVehicles(dt);
-                if (Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
+                if (!sandbox && Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
             case MatchState::Lobby:
@@ -323,6 +330,7 @@ class Match {
         PlayerState* p = Find(id);
         if (!p || !p->alive || state == MatchState::Drop || hearts <= 0) return false;
         if (clock < p->invulnUntil) return false;
+        if (sandbox && sandboxGod && !p->isBot) return false;   // the test map: nothing hurts you until you switch it off
 
         const GearTotals g = TotalsOf(*p);
         float mult = g.damageTaken;
@@ -1328,7 +1336,7 @@ class Match {
     const Weather& CurrentWeather() const { return weather; }
     void TickWeather() {
         const int sp = SpellIndex(wopt, stormTime);
-        if (sp != spell) {
+        if (sp != spell && !(sandbox && !sandboxWeatherFree)) {
             spell = sp;
             weather = WeatherForSpell(wopt, seed, mapId, sp);
             MatchEvent e{MatchEvent::Type::Weather};
@@ -2203,6 +2211,194 @@ class Match {
     std::vector<PlayerState>& Players() { return players; }
     uint64_t Seed() const { return seed; }
 
+    // ---- the Sandbox test map (shared/sandbox_terrain.h) -------------------------------------------------------------------------------------
+    // A match with no countdown, no drop, no end and a frozen storm, so every feature can be tried alone. Everything below only works in one (the host's
+    // game sends these as buttons). The switches default to the quiet setting: you cannot be hurt, the storm waits, the weather stays where you set it.
+    bool SetSandbox(bool on) { if (state != MatchState::Lobby) return false; sandbox = on; return true; }
+    bool Sandbox() const { return sandbox; }
+    void SetSandboxSpawn(Vec2 at) { sandboxSpawn = at; }
+    void SetSandboxLootRoom(Circle room) { sandboxRoom = room; }
+    void SandboxGod(bool on) { sandboxGod = on; }
+    void SandboxStormRuns(bool on) { sandboxStormRuns = on; }
+    void SandboxWeatherFree(bool on) { sandboxWeatherFree = on; }
+    bool SandboxGodOn() const { return sandboxGod; }
+    bool SandboxStormOn() const { return sandboxStormRuns; }
+    bool SandboxWeatherIsFree() const { return sandboxWeatherFree; }
+    bool SandboxLive() const { return sandbox && state == MatchState::InMatch; }
+
+    // Seconds into the storm timeline at which a phase begins (kStormPhaseCount: when it is all over).
+    static float StormPhaseStart(int phase) {
+        float t = 0;
+        for (int i = 0; i < phase && i < kStormPhaseCount; i++) t += kStormPhases[static_cast<size_t>(i)].waitSec + kStormPhases[static_cast<size_t>(i)].closeSec;
+        return t;
+    }
+    // Jump the storm to the start of a phase (the circles are the real ones; run it with SandboxStormRuns).
+    bool SandboxStormPhase(int phase) {
+        if (!SandboxLive() || phase < 0 || phase > kStormPhaseCount) return false;
+        stormTime = StormPhaseStart(phase);
+        return true;
+    }
+    // Set the sky and keep it there (unless SandboxWeatherFree lets the schedule take over again).
+    void SandboxWeather(Season season, Sky sky, int intensity) {
+        weather = Weather{season, sky, static_cast<uint8_t>((std::max)(0, (std::min)(100, intensity)))};
+        MatchEvent e{MatchEvent::Type::Weather};
+        e.a = static_cast<uint32_t>(weather.season); e.item = static_cast<uint8_t>(weather.sky); e.amount = static_cast<float>(weather.intensity);
+        e.health = SpellSeconds(wopt);
+        events.push_back(e);
+        nextBolt = clock + 4.0f;
+    }
+    // A supply drop at a spot (it is announced and lands as in a real match).
+    bool SandboxSupplyDrop(Vec2 at) {
+        if (!SandboxLive()) return false;
+        pendingSupply.push_back({at, clock + kSupplyWarningSec});
+        MatchEvent e{MatchEvent::Type::SupplyDrop};
+        e.x = at.x; e.z = at.z; e.health = kSupplyWarningSec;
+        events.push_back(e);
+        return true;
+    }
+    bool SandboxTeleport(uint32_t id, Vec2 to) {
+        PlayerState* p = Find(id);
+        if (!SandboxLive() || !p || !p->alive) return false;
+        Teleport(*p, to);
+        return true;
+    }
+    void SandboxHeal(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!SandboxLive() || !p || !p->alive) return;
+        p->health = p->maxHealth;
+        p->armor = kMaxShield;
+        p->magic = kMaxMagic; p->magicStamp = clock;
+        p->abilityReadyAt = 0;
+        for (int k = 0; k < kAmmoKinds; k++) p->ammo[static_cast<size_t>(k)] = (std::max)(p->ammo[static_cast<size_t>(k)], AmmoCapOf(*p, static_cast<AmmoKind>(k)));
+        Cleanse(*p);
+    }
+    bool SandboxRevive(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!SandboxLive() || !p || p->alive) return false;
+        p->alive = true; p->health = p->maxHealth; p->placement = 0;
+        p->invulnUntil = clock + 2.0f;
+        p->dirty = true;
+        MatchEvent e{MatchEvent::Type::Revived};
+        e.a = p->id;
+        events.push_back(e);
+        return true;
+    }
+    // Put an item straight into a player's hands or bag, as if they had found it (at the rarity asked for, within what the item can be).
+    bool SandboxGive(uint32_t id, ItemId item, Rarity rarity) {
+        PlayerState* p = Find(id);
+        if (!SandboxLive() || !p || !p->alive || static_cast<int>(item) >= kItemCount) return false;
+        rarity = (std::max)(DefOf(item).minRarity, (std::min)(DefOf(item).maxRarity, rarity));
+        LootSpawn l = {p->pos, item, rarity, false, false};
+        if (item == ItemId::Rupees) l.amount = 100;
+        else if (item >= ItemId::ArrowAmmo) l.amount = 30;
+        const size_t index = AddLoot(l);
+        return PickUp(id, index, true);
+    }
+    // A cart standing at a spot (a gone one's place is used again).
+    bool SandboxCart(Vec2 at, float yaw) {
+        if (!SandboxLive()) return false;
+        size_t slot = vehicles.size();
+        for (size_t i = 0; i < vehicles.size(); i++) if (vehicles[i].gone) { slot = i; break; }
+        if (slot >= static_cast<size_t>(kMaxVehicles)) return false;
+        VehicleState v;
+        v.index = static_cast<uint8_t>(slot);
+        v.body.x = at.x; v.body.z = at.z; v.body.yaw = yaw;
+        SettleCart(v.body, vehicleWorld);
+        v.busyAt = clock;
+        if (slot == vehicles.size()) vehicles.push_back(v); else vehicles[slot] = v;
+        return true;
+    }
+    void SandboxClearCarts() { for (auto& v : vehicles) { v.gone = true; for (auto& who : v.seat) who = kNoPlayer; } }
+    // A bot standing at a spot (they play as in a match unless the bot brain is frozen: BotController::SetFrozen).
+    bool SandboxBot(Vec2 at) {
+        if (!SandboxLive() || static_cast<int>(players.size()) >= kMaxPlayers) return false;
+        uint32_t id = 1000;
+        for (const auto& p : players) if (p.isBot) id = (std::max)(id, p.id + 1);
+        PlayerState bot = MakePlayer(id, true);
+        bot.scene = static_cast<uint8_t>(MapOf(mapId).scene);
+        bot.pos = at;
+        players.push_back(bot);
+        return true;
+    }
+    void SandboxClearBots() { for (auto& p : players) if (p.isBot && p.alive) { p.alive = false; p.health = 0; } }
+    // A boss at a spot: a mini boss takes a free place among the first seven, a major boss is the dragon's one place (a second one replaces the first).
+    bool SandboxBoss(BossKind kind, Vec2 at) {
+        if (!SandboxLive()) return false;
+        const bool major = IsDragonKind(kind);
+        uint32_t id = kDragonId;
+        if (!major) {
+            id = 0;
+            for (int i = 0; i < kMaxBosses - 1 && id == 0; i++) {
+                bool used = false;
+                for (const auto& b : bosses) used = used || (b.id == kBossIdBase + static_cast<uint32_t>(i) && b.alive);
+                if (!used) id = kBossIdBase + static_cast<uint32_t>(i);
+            }
+            if (id == 0) return false;
+        }
+        bosses.erase(std::remove_if(bosses.begin(), bosses.end(), [&](const MiniBoss& b) { return b.id == id; }), bosses.end());
+        MiniBoss b;
+        b.id = id; b.kind = kind;
+        b.home = b.pos = at;
+        b.maxHealth = b.health = BossOf(kind).health;
+        if (major) {
+            b.y = BossOf(kind).altitude;
+            b.waypoint = at;
+            b.swoopReadyAt = clock + 8.0f;
+            b.specialReadyAt = clock + 6.0f;
+        }
+        bosses.push_back(b);
+        MatchEvent e{MatchEvent::Type::BossSpawned};
+        e.a = b.id; e.x = at.x; e.z = at.z;
+        events.push_back(e);
+        return true;
+    }
+    void SandboxClearBosses() { for (auto& b : bosses) { b.alive = false; b.health = 0; } }
+    // The loot plaza: every item in the game lying in rows, and chests along the back. Called when the map is built.
+    void SandboxStockLoot() {
+        loot.clear();
+        sandboxRestocked.clear();
+        const Vec2 c = sandboxRoom.center;
+        const int cols = 11;
+        const float spacing = 100.0f;
+        int n = 0;
+        for (int i = 0; i < kItemCount; i++) {
+            const ItemId item = static_cast<ItemId>(i);
+            if (item == ItemId::BasicSword) continue;
+            LootSpawn l = {{c.x - (cols - 1) * 0.5f * spacing + static_cast<float>(n % cols) * spacing, c.z - 500.0f + static_cast<float>(n / cols) * spacing},
+                           item, DefOf(item).maxRarity, false, false};
+            if (item == ItemId::Rupees) l.amount = 100;
+            else if (item >= ItemId::ArrowAmmo) l.amount = 30;
+            loot.push_back({l, false});
+            n++;
+        }
+        Rng rng(seed ^ 0x73626F78ull);   // "sbox"
+        static const Rarity tiers[5] = {Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary};
+        for (int k = 0; k < 5; k++) {   // one chest of each rarity
+            ItemId item;
+            if (!PickItem(rng, tiers[k], &item)) item = ItemId::MasterSword;
+            Rarity t = (std::max)(DefOf(item).minRarity, (std::min)(DefOf(item).maxRarity, tiers[k]));
+            loot.push_back({{{c.x - 400.0f + 200.0f * static_cast<float>(k), c.z + 540.0f}, item, t, true, true}, false});
+        }
+        LootSpawn heart = {{c.x + 520.0f, c.z + 540.0f}, ItemId::HeartContainer, Rarity::Legendary, true, true};
+        heart.special = true;
+        loot.push_back({heart, false});
+    }
+    // Put back everything on the plaza that has been picked up (the ones still lying there are left alone).
+    int SandboxRestock() {
+        if (!SandboxLive()) return 0;
+        sandboxRestocked.resize(loot.size(), 0);
+        int added = 0;
+        const size_t had = loot.size();
+        for (size_t i = 0; i < had; i++) {
+            if (!loot[i].taken || sandboxRestocked[i] || Distance(loot[i].spawn.pos, sandboxRoom.center) > sandboxRoom.radius) continue;
+            sandboxRestocked[i] = 1;
+            AddLoot(loot[i].spawn);
+            added++;
+        }
+        sandboxRestocked.resize(loot.size(), 0);
+        return added;
+    }
+
   private:
     void Enter(MatchState s) {
         if (s == MatchState::Ending) {
@@ -2566,6 +2762,10 @@ class Match {
     std::vector<PendingSupply> pendingSupply;
     int bossCount = 0;
     int mapId = 0;           // which place this is (shared/map.h): decides the bosses
+    bool sandbox = false, sandboxGod = true, sandboxStormRuns = false, sandboxWeatherFree = false;
+    Vec2 sandboxSpawn = {};
+    Circle sandboxRoom = {};
+    std::vector<uint8_t> sandboxRestocked;   // loot entries already put back by SandboxRestock
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };
 
