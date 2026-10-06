@@ -1,0 +1,247 @@
+diff --git a/Android/app/src/main/AndroidManifest.xml b/Android/app/src/main/AndroidManifest.xml
+index 907d70d..ac29566 100644
+--- a/Android/app/src/main/AndroidManifest.xml
++++ b/Android/app/src/main/AndroidManifest.xml
+@@ -53,6 +53,9 @@
+     <!-- Allow access to the vibrator -->
+     <uses-permission android:name="android.permission.VIBRATE" />
+ 
++    <!-- OOT Royale (patches/0018): the in-game updater hands downloaded builds to Android's installer -->
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
++
+     <!-- OOT Royale (patches/0005): multiplayer needs sockets. Without INTERNET Android refuses to open any socket, even to
+          127.0.0.1, so hosting fails with "could not listen on that port". -->
+     <uses-permission android:name="android.permission.INTERNET" />
+@@ -86,6 +89,17 @@
+         <meta-data android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK" android:value="0"/>
+          -->
+         <meta-data android:name="SDL_ENV.SDL_ANDROID_TRAP_BACK_BUTTON" android:value="1"/>
++
++        <!-- OOT Royale (patches/0018): shares the downloaded update with the installer (RoyaleUpdater.java) -->
++        <provider
++            android:name="androidx.core.content.FileProvider"
++            android:authorities="${applicationId}.updates"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data
++                android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/royale_update_paths" />
++        </provider>
+         <meta-data android:name="SDL_ENV.SDL_IOS_ORIENTATIONS" android:value="LandscapeLeft LandscapeRight"/>
+ 
+      
+diff --git a/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java b/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java
+new file mode 100644
+index 0000000..7dc10af
+--- /dev/null
++++ b/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java
+@@ -0,0 +1,198 @@
++package com.dishii.soh;
++
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++import android.os.Build;
++import android.os.Handler;
++import android.os.Looper;
++import android.provider.Settings;
++import android.util.Log;
++
++import androidx.core.content.FileProvider;
++
++import org.json.JSONArray;
++import org.json.JSONObject;
++
++import java.io.ByteArrayOutputStream;
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++
++// The in-game updater behind the "Game updates" part of the Battle Royale menu (mod/Royale/RoyaleMod.cpp, DrawUpdater).
++// Every build of the main branch is published by .github/workflows/game-build.yml as a GitHub release tagged "build-<number>" with
++// the APK attached. This asks GitHub for the newest one, downloads the APK into the app's cache and hands it to Android's installer.
++// The game polls the getters below every frame the menu is open; all work happens on a background thread.
++public final class RoyaleUpdater {
++    private static final String TAG = "RoyaleUpdater";
++    private static final String LATEST_URL = "https://api.github.com/repos/tdprinting/OOT-Fornite/releases/latest";
++    private static final String TAG_PREFIX = "build-";
++
++    // States, mirrored in RoyaleMod.cpp
++    public static final int IDLE = 0, CHECKING = 1, CHECKED = 2, DOWNLOADING = 3, NEED_PERMISSION = 4, INSTALLING = 5, ERROR = 6;
++
++    private static volatile int state = IDLE;
++    private static volatile int latestBuild = -1;
++    private static volatile String latestName = "";
++    private static volatile String apkUrl = "";
++    private static volatile long apkSize = 0;
++    private static volatile long downloaded = 0;
++    private static volatile String message = "";
++    private static volatile File apkFile = null;
++
++    private RoyaleUpdater() {}
++
++    public static int getState() { return state; }
++    public static int getLatestBuild() { return latestBuild; }
++    public static String getLatestName() { return latestName; }
++    public static String getMessage() { return message; }
++    // 0-100, or -1 while the size is unknown
++    public static int getProgress() { return apkSize > 0 ? (int) Math.min(100, downloaded * 100 / apkSize) : -1; }
++    public static long getDownloadedKb() { return downloaded / 1024; }
++    public static long getSizeKb() { return apkSize / 1024; }
++
++    private static boolean busy() { return state == CHECKING || state == DOWNLOADING; }
++
++    // Ask GitHub which build is the newest.
++    public static void check(Context context) {
++        if (busy()) return;
++        state = CHECKING;
++        message = "Asking GitHub for the newest build...";
++        new Thread(() -> {
++            try {
++                JSONObject release = new JSONObject(readText(LATEST_URL));
++                String tag = release.optString("tag_name", "");
++                if (!tag.startsWith(TAG_PREFIX)) throw new Exception("the newest release (" + tag + ") is not a game build");
++                int build = Integer.parseInt(tag.substring(TAG_PREFIX.length()));
++                JSONArray assets = release.optJSONArray("assets");
++                String url = "";
++                long size = 0;
++                for (int i = 0; assets != null && i < assets.length(); i++) {
++                    JSONObject a = assets.getJSONObject(i);
++                    if (a.optString("name", "").endsWith(".apk")) {
++                        url = a.optString("browser_download_url", "");
++                        size = a.optLong("size", 0);
++                        break;
++                    }
++                }
++                if (url.isEmpty()) throw new Exception("build " + build + " has no APK attached yet");
++                latestName = release.optString("name", "Build 0." + build);
++                apkUrl = url;
++                apkSize = size;
++                latestBuild = build;
++                message = "";
++                state = CHECKED;
++            } catch (Throwable t) {
++                fail("Could not check for updates: " + describe(t));
++            }
++        }, "RoyaleUpdateCheck").start();
++    }
++
++    // Download the build found by check(), then install it.
++    public static void download(Context context) {
++        if (busy() || apkUrl.isEmpty()) return;
++        state = DOWNLOADING;
++        downloaded = 0;
++        message = "Downloading " + latestName + "...";
++        final Context app = context.getApplicationContext();
++        final String url = apkUrl;
++        new Thread(() -> {
++            try {
++                File dir = new File(app.getCacheDir(), "updates");
++                if (!dir.isDirectory() && !dir.mkdirs()) throw new Exception("could not make " + dir);
++                File[] old = dir.listFiles();
++                if (old != null) for (File f : old) //noinspection ResultOfMethodCallIgnored
++                    f.delete();
++                File out = new File(dir, "TDawgsBattleRoyale-update.apk");
++                HttpURLConnection c = open(url, "application/octet-stream");
++                long length = c.getContentLengthLong();
++                if (length > 0) apkSize = length;
++                try (InputStream in = c.getInputStream(); OutputStream os = new FileOutputStream(out)) {
++                    byte[] buf = new byte[64 * 1024];
++                    int n;
++                    while ((n = in.read(buf)) > 0) {
++                        os.write(buf, 0, n);
++                        downloaded += n;
++                    }
++                } finally {
++                    c.disconnect();
++                }
++                if (apkSize > 0 && downloaded != apkSize) throw new Exception("the download stopped early (" + downloaded / 1024 + " of " + apkSize / 1024 + " KB)");
++                apkFile = out;
++                install(app);
++            } catch (Throwable t) {
++                fail("Download failed: " + describe(t));
++            }
++        }, "RoyaleUpdateDownload").start();
++    }
++
++    // Hand the downloaded APK to Android's installer, asking for the "install unknown apps" permission first if needed.
++    public static void install(Context context) {
++        final File file = apkFile;
++        if (file == null || !file.isFile()) { fail("Nothing downloaded yet. Tap Download again."); return; }
++        final Context app = context.getApplicationContext();
++        new Handler(Looper.getMainLooper()).post(() -> {
++            try {
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !app.getPackageManager().canRequestPackageInstalls()) {
++                    state = NEED_PERMISSION;
++                    message = "Android needs your OK first: turn on \"Allow from this source\" on the screen that opened, go back to the game, then tap Install.";
++                    Intent ask = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + app.getPackageName()));
++                    ask.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++                    app.startActivity(ask);
++                    return;
++                }
++                Uri uri = FileProvider.getUriForFile(app, app.getPackageName() + ".updates", file);
++                Intent intent = new Intent(Intent.ACTION_VIEW);
++                intent.setDataAndType(uri, "application/vnd.android.package-archive");
++                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
++                app.startActivity(intent);
++                state = INSTALLING;
++                message = "Android's installer is open. Tap Update (or Install). The game closes while it installs; open it again afterwards.";
++            } catch (Throwable t) {
++                fail("Could not open the installer: " + describe(t));
++            }
++        });
++    }
++
++    private static void fail(String text) {
++        Log.w(TAG, text);
++        message = text;
++        state = ERROR;
++    }
++
++    private static String describe(Throwable t) {
++        String m = t.getMessage();
++        if (t instanceof java.net.UnknownHostException) return "no internet connection (" + m + ")";
++        return m == null || m.isEmpty() ? t.getClass().getSimpleName() : m;
++    }
++
++    private static HttpURLConnection open(String url, String accept) throws Exception {
++        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
++        c.setConnectTimeout(15000);
++        c.setReadTimeout(30000);
++        c.setInstanceFollowRedirects(true);
++        c.setRequestProperty("User-Agent", "TDawgsBattleRoyale-updater");
++        c.setRequestProperty("Accept", accept);
++        int code = c.getResponseCode();
++        if (code == 404) throw new Exception("no builds are published yet (GitHub said 404)");
++        if (code == 403 || code == 429) throw new Exception("GitHub is limiting requests from this network; try again in a few minutes");
++        if (code / 100 != 2) throw new Exception("GitHub answered " + code);
++        return c;
++    }
++
++    private static String readText(String url) throws Exception {
++        HttpURLConnection c = open(url, "application/vnd.github+json");
++        try (InputStream in = c.getInputStream()) {
++            ByteArrayOutputStream out = new ByteArrayOutputStream();
++            byte[] buf = new byte[16 * 1024];
++            int n;
++            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
++            return out.toString("UTF-8");
++        } finally {
++            c.disconnect();
++        }
++    }
++}
+diff --git a/Android/app/src/main/res/xml/royale_update_paths.xml b/Android/app/src/main/res/xml/royale_update_paths.xml
+new file mode 100644
+index 0000000..e83590a
+--- /dev/null
++++ b/Android/app/src/main/res/xml/royale_update_paths.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Where RoyaleUpdater.java saves downloaded builds (the app's cache folder) -->
++<paths>
++    <cache-path name="updates" path="updates/" />
++</paths>
