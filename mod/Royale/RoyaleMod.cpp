@@ -16,6 +16,7 @@
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "fortnite_puddles.h"
+#include "ground_patches.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -174,6 +175,9 @@ bool gSkyStars = true;              // the local option: stars in the night sky
 bool gSkyBodies = true;             // the local option: the sun and the moon
 float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (none) to 2
 float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
+bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
+bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
+float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
 int gWaterDetail = 1;               // the local option: how fine the water surface is, 0 low, 1 normal, 2 high
 float gWaterWaves = 1.0f;           // the local option: how high the swell is, 0 (flat) to 2
 bool gWaterFxOn = true;             // the local option: the game's own splashes, ripples and bubbles
@@ -292,7 +296,7 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Carts", "Lon Lon Buggy carts" },
     { "Weather", "Weather (the game's rain, snow, lightning, fog, sand)" },
     { "StormWall", "Storm wall" },
-    { "Foliage", "Foliage, snow cover and puddles" },
+    { "Foliage", "Foliage (grass, trees and the small things on the ground)" },
     { "Cloth", "Cloth physics (caps, tunics, sheaths, gliders)" },
     { "Music", "Custom match and lobby music" },
     { "Terrain", "Custom rocks, trees and platforms" },
@@ -308,14 +312,14 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Sky", "Sky: gradient, stars, sun, moon and clouds" },
     { "Fog", "Fog banks (low volumetric-style fog)" },
     { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
-    { "IslandPuddles", "Fortnite Map standing puddles" },
+    { "GroundPatches", "Ground patches (puddles, snow, frost, leaves and blossom)" },
     { "Water", "Realistic water (waves, splashes, wakes, reflections, swim current, underwater look)" },
     { "Avriella", "Avriella the baby pet (the pet picker)" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgWater, kDbgAvriella, kDbgRagdoll };
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll };
 static_assert(kDbgRagdoll + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
@@ -2654,6 +2658,7 @@ uint32_t FloraHash(int a, int b, int salt) {
 }
 float Flora01(int a, int b, int salt) { return static_cast<float>(FloraHash(a, b, salt) & 0xFFFF) / 65535.0f; }
 
+constexpr int kGroundSpotKind = 8;   // FloraSpotAt kinds from here are ground patches (below)
 struct FloraSpot { bool ok; float y; float sx = 0.0f, sz = 0.0f; };   // sx, sz: how the ground slopes (puddles lie along it)
 std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
 int gFloraScene = -1;
@@ -2663,6 +2668,8 @@ int gFloraBudget = 0;
 // (Decor), 6 a town's clutter (cell = the town and the piece), 7 a piece of the Fortnite Map's scenery (fortnite_scenery.h: any slope is fine).
 // nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
+    // Ground patches (kinds 8 and up, one per royale::ground::Kind: puddle, snow, frost, leaves, blossom) are measured by the rule of an older kind.
+    static const int kPatchRule[royale::ground::kKinds] = { 3, 2, 2, 5, 5 };
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
     auto it = gFloraSpots.find(key);
     if (it != gFloraSpots.end()) return &it->second;
@@ -2670,6 +2677,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     gFloraBudget--;
     FloraSpot spot = { false, 0.0f };
     float y = 0, y2 = 0, y3 = 0;
+    if (kind >= kGroundSpotKind) kind = kPatchRule[kind - kGroundSpotKind];
     if (RawFloorAt(x, z, &y) && !WaterAt(x, z, y) && !OnExitFloor(x, z)) {
         spot.ok = true;
         spot.y = y;
@@ -2704,7 +2712,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
-constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kSnowCell = 125.0f, kBlanketCell = 210.0f, kPuddleCell = 260.0f, kDecorCell = 170.0f;
+constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kDecorCell = 170.0f;
 // The Fortnite Map's trees stand where its texture has them painted (fortnite::CoverAt): thick in the woods, a lone one here and there on the
 // meadows, none on the roads or in the towns. Its cells are smaller, so the woods can be dense.
 constexpr float kIslandTreeCell = 200.0f;
@@ -2776,47 +2784,17 @@ void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z,
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
-// Something lying flat on (possibly gently sloping) ground, drawn see-through with `alpha` (0-255). Expects the XLU setup DrawFlora makes.
-void DrawGroundXlu(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float scale, int alpha) {
-    OPEN_DISPS(play->state.gfxCtx);
-    Matrix_Translate(x, y, z, MTXMODE_NEW);
-    Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
-    Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
-    Matrix_RotateY(yaw, MTXMODE_APPLY);
-    Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
-    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, static_cast<u8>(std::clamp(alpha, 0, 255)));
-    gSPDisplayList(POLY_XLU_DISP++, const_cast<Gfx*>(m->dl.data()));
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
 int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.season) & 3) : 1; }
+
+// A new scene, or a new world from the host (new towns and scenery): forget which ground was clear of them, and every ground patch worked out from it.
+void RefreshFloraWorld(PlayState* play);
+void ForgetFloraGround();
 
 void DrawFlora(PlayState* play) {
     if (!InField() || gPlayState == nullptr) return;
-    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
-    {   // a new world from the host (new towns and scenery): forget which ground was clear of them
-        static float lastSig = 0.0f;
-        float sig = 0.0f;
-        if (gSession.Client()) {
-            const auto& pois = gSession.Client()->Pois();
-            sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
-        }
-        if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); }
-    }
-    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    RefreshFloraWorld(play);
+    if (gFoliage <= 0.01f) return;
     const int season = FloraSeason();
-    const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
-    const bool rainSky = gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder;
-    const float rainNow = std::max(rainSky ? WeatherAmount() : 0.0f, gStormWeather * 0.8f);   // the same rain DriveRealWeather lets fall
-    const bool raining = rainNow > 0.12f;
-    if (snowing) gSnowCover = std::min(1.0f, gSnowCover + dt / 45.0f * (0.5f + WeatherAmount()));
-    else if (raining) gSnowCover = std::max(0.0f, gSnowCover - dt / 40.0f * (0.5f + rainNow));   // rain washes the snow away
-    else gSnowCover = std::max(season == 3 ? 0.3f : 0.0f, gSnowCover - dt / 150.0f);   // it melts slowly (winter keeps a little)
-    if (raining) gPuddleCover = std::min(1.0f, gPuddleCover + dt / 40.0f * (0.5f + rainNow));
-    else gPuddleCover = std::max(0.0f, gPuddleCover - dt / (snowing ? 25.0f : 120.0f));   // they dry up slowly, or the snow covers them
-    const bool snowOn = gSnowCover > 0.02f, puddlesOn = gPuddleCover > 0.02f;
-    if (gFoliage <= 0.01f && !snowOn && !puddlesOn) return;
 
     Player* pl = GET_PLAYER(play);
     const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
@@ -2842,43 +2820,6 @@ void DrawFlora(PlayState* play) {
     if (cull) { vx /= vl; vz /= vl; }
     auto inView = [&](float x, float z, float size) { return !cull || (x - eye.x) * vx + (z - eye.z) * vz > -size; };
     const bool island = OnIsland();
-
-    if (snowOn) {   // mounds of snow, thicker the longer it has snowed
-        const float reach = 1000.0f;
-        const int c0x = static_cast<int>(std::floor((px - reach) / kSnowCell)), c1x = static_cast<int>(std::floor((px + reach) / kSnowCell));
-        const int c0z = static_cast<int>(std::floor((pz - reach) / kSnowCell)), c1z = static_cast<int>(std::floor((pz + reach) / kSnowCell));
-        for (int cz = c0z; cz <= c1z; cz++)
-            for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx, cz, 31) > gSnowCover * 0.92f) continue;
-                const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 32)) * kSnowCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 33)) * kSnowCell;
-                const float d = std::hypot(x - px, z - pz);
-                if (d > reach || !inView(x, z, 70.0f)) continue;
-                const FloraSpot* spot = FloraSpotAt(2, cx, cz, x, z);
-                if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, FloraHash(cx, cz, 34) % 4);
-                if (m == nullptr || m->dl.empty()) continue;
-                const float k = (0.75f + 0.5f * gSnowCover) * (0.85f + 0.5f * Flora01(cx, cz, 35)) * fade(d, reach);
-                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.5f, z, Flora01(cx, cz, 36) * 6.2831853f, 0, 0, k);
-            }
-    }
-    if (gSnowCover > 0.35f) {   // deep snow: broad, low blankets fill the ground between the mounds
-        const float reach = 1000.0f, deep = (gSnowCover - 0.35f) / 0.65f;
-        const int c0x = static_cast<int>(std::floor((px - reach) / kBlanketCell)), c1x = static_cast<int>(std::floor((px + reach) / kBlanketCell));
-        const int c0z = static_cast<int>(std::floor((pz - reach) / kBlanketCell)), c1z = static_cast<int>(std::floor((pz + reach) / kBlanketCell));
-        for (int cz = c0z; cz <= c1z; cz++)
-            for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx, cz, 71) > deep * 0.9f) continue;
-                const float x = (static_cast<float>(cx) + 0.25f + 0.5f * Flora01(cx, cz, 72)) * kBlanketCell, z = (static_cast<float>(cz) + 0.25f + 0.5f * Flora01(cx, cz, 73)) * kBlanketCell;
-                const float d = std::hypot(x - px, z - pz);
-                if (d > reach || !inView(x, z, 120.0f)) continue;
-                const FloraSpot* spot = FloraSpotAt(4, cx, cz, x, z);   // any ground, like the mounds, in cells of its own
-                if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::SnowPatch, 4u + FloraHash(cx, cz, 74) % 4);
-                if (m == nullptr || m->dl.empty()) continue;
-                const float k = (0.7f + 0.3f * deep) * (0.85f + 0.35f * Flora01(cx, cz, 75)) * fade(d, reach);
-                if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 76) * 6.2831853f, 0, 0, k);
-            }
-    }
 
     if (gFoliage > 0.01f) {
         // grass: patches (blocks of cells that are grassy) of tufts, leaning and swaying in the wind
@@ -3010,47 +2951,301 @@ void DrawFlora(PlayState* play) {
                     if (k > 0.004f) DrawFloraMesh(play, m, x, y, z, t * (1.3f + Flora01(id, 3, 106)) + j, std::sin(t * 4.0f + j) * 1.2f, std::cos(t * 3.3f + j * 0.7f) * 1.2f, k);
                 }
     }
+}
 
-    if (puddlesOn) {   // puddles on level ground, see-through at the edge, growing with the rain; each drop that lands rings out across them
-        const GpuMesh* ripple = GpuMeshFor(royale::MeshKind::Ripple, 0);
-        {
-            OPEN_DISPS(play->state.gfxCtx);
-            Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-            gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
-            gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
-            gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies 1 unit above
-            CLOSE_DISPS(play->state.gfxCtx);
+// ---- ground patches: puddles, snow, frost, leaves and blossom ---------------------------------------------------------------------------------
+// One system for everything the weather and the seasons leave lying on the ground (shared/ground_patches.h, meshes made in Blender, shared/ground_model.h).
+// Every cell may hold a patch of each kind; the weather's cover (how wet, how snowy, how frosty, how autumnal, how springlike) says how many show and how
+// big they are. Patches that touch run into one: a field in the rain has a few big puddles, not a heap of small ones on top of each other, and deep
+// snow lies in long drifts. Where each is comes from the map and a hash of its cell, so nothing is sent; only the ones near the player are drawn.
+royale::ground::Field gGround;   // the patches worked out so far, forgotten when the world changes (ForgetFloraGround)
+
+void ForgetFloraGround() { gGround.Clear(); }
+
+void RefreshFloraWorld(PlayState* play) {
+    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gGround.Clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
+    static float lastSig = 0.0f;
+    float sig = 0.0f;
+    if (gSession.Client()) {
+        const auto& pois = gSession.Client()->Pois();
+        sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
+    }
+    if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); gGround.Clear(); }
+}
+
+// Something lying on (possibly gently sloping) ground: stretched `a` along its long axis and `b` across it, `rise` as tall as it is wide, turned by `yaw`.
+// `alpha` < 0 draws it solid, otherwise see-through with that alpha (0-255).
+void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float a, float rise, float b, int alpha, Gfx* dl = nullptr) {
+    OPEN_DISPS(play->state.gfxCtx);
+    if (dl == nullptr) dl = const_cast<Gfx*>(m->dl.data());
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
+    Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(a / royale::ground::kMeshRadius, rise, b / royale::ground::kMeshRadius, MTXMODE_APPLY);
+    if (alpha < 0) {
+        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPDisplayList(POLY_OPA_DISP++, dl);
+    } else {
+        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 255, 255, 255, static_cast<u8>(std::clamp(alpha, 0, 255)));
+        gSPDisplayList(POLY_XLU_DISP++, dl);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// ---- walking through the patches ----------------------------------------------------------------------------------------------------------
+// Whoever walks through snow presses it down (the pile's mesh is dented under their feet and keeps a trail that fills in again, quickly while it
+// snows), and whoever walks through a puddle splashes it and sends rings out across it. The walkers are the local player, everyone else's actors and
+// the carts, the same set the water uses.
+struct Walker { const void* key; float x, y, z, size, speed; };
+struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0; };
+struct SnowDent { float x, z, birth; };
+struct PuddleRing { float x, y, z, birth, size; };
+std::unordered_map<const void*, WalkTrack> gWalkTrack;
+std::vector<SnowDent> gSnowDents;
+std::vector<PuddleRing> gPuddleRings;
+uint32_t gWalkFrame = 0;
+void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add);   // (the carts are known further down)
+constexpr float kDentReach = 34.0f, kDentDepth = 9.0f;   // how wide and how deep a foot goes into snow
+
+// A copy of a snow patch's mesh with the snow pushed down where the dents are (`dents`: x, z, depth 0-1 in the world). nullptr when there is no memory this frame.
+Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<SnowDent>& dents, const std::vector<float>& depth) {
+    const size_t n = m->vtx.size();
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, n * sizeof(Vtx)));
+    if (v == nullptr) return nullptr;
+    const size_t batches = (n / 3 + 9) / 10;
+    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (n / 3 + batches + 1) * sizeof(Gfx)));
+    if (dl == nullptr) return nullptr;
+    const float sa = a / royale::ground::kMeshRadius, sb = b / royale::ground::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
+    for (size_t i = 0; i < n; i++) {
+        v[i] = m->vtx[i];
+        const float lx = m->vtx[i].v.ob[0] * sa, lz = m->vtx[i].v.ob[2] * sb;
+        const float wx = x + lx * c + lz * sn, wz = z - lx * sn + lz * c, h = m->vtx[i].v.ob[1] * rise;
+        float sink = 0.0f;
+        for (size_t k = 0; k < dents.size(); k++) {
+            const float d = std::hypot(wx - dents[k].x, wz - dents[k].z);
+            if (d < kDentReach) { const float f = 1.0f - d / kDentReach; sink = std::max(sink, kDentDepth * depth[k] * f * f * (3.0f - 2.0f * f)); }
         }
-        const float reach = 950.0f, rippleReach = 650.0f;
-        const int c0x = static_cast<int>(std::floor((px - reach) / kPuddleCell)), c1x = static_cast<int>(std::floor((px + reach) / kPuddleCell));
-        const int c0z = static_cast<int>(std::floor((pz - reach) / kPuddleCell)), c1z = static_cast<int>(std::floor((pz + reach) / kPuddleCell));
+        if (sink <= 0.0f) continue;
+        const float ny = std::max(0.4f, h - sink);
+        v[i].v.ob[1] = static_cast<s16>(std::lround(ny / std::max(0.05f, rise)));
+        const float k = std::min(1.0f, (h - ny) / kDentDepth) * 0.7f;   // the pressed snow goes a shade bluer
+        v[i].v.cn[0] = static_cast<u8>(v[i].v.cn[0] * (1.0f - k) + 168.0f * k);
+        v[i].v.cn[1] = static_cast<u8>(v[i].v.cn[1] * (1.0f - k) + 188.0f * k);
+        v[i].v.cn[2] = static_cast<u8>(v[i].v.cn[2] * (1.0f - k) + 224.0f * k);
+    }
+    Gfx* g = dl;
+    for (size_t first = 0; first < n; first += 30) {
+        const size_t count = std::min<size_t>(30, n - first);
+        gSPVertex(g++, reinterpret_cast<uintptr_t>(&v[first]), static_cast<int>(count), 0);
+        for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+    }
+    gSPEndDisplayList(g++);
+    return dl;
+}
+
+void DrawGroundPatches(PlayState* play) {
+    namespace gp = royale::ground;
+    if (!InField() || gPlayState == nullptr) return;
+    RefreshFloraWorld(play);
+    const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    const int season = FloraSeason();
+    const bool snowing = gWeatherShown.sky == royale::Sky::Snow && WeatherAmount() > 0.15f;
+    const bool rainSky = gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder;
+    const float rainNow = std::max(rainSky ? WeatherAmount() : 0.0f, gStormWeather * 0.8f);   // the same rain DriveRealWeather lets fall
+    const bool raining = rainNow > 0.12f;
+    // How snowy and how wet the ground is: snow builds up while it snows and melts slowly (winter keeps a little), rain washes it away and fills the
+    // puddles, which dry up slowly or are covered over by snow.
+    if (snowing) gSnowCover = std::min(1.0f, gSnowCover + dt / 45.0f * (0.5f + WeatherAmount()));
+    else if (raining) gSnowCover = std::max(0.0f, gSnowCover - dt / 40.0f * (0.5f + rainNow));
+    else gSnowCover = std::max(season == 3 ? 0.3f : 0.0f, gSnowCover - dt / 150.0f);
+    if (raining) gPuddleCover = std::min(1.0f, gPuddleCover + dt / 40.0f * (0.5f + rainNow));
+    else gPuddleCover = std::max(0.0f, gPuddleCover - dt / (snowing ? 25.0f : 120.0f));
+    const bool island = OnIsland();
+    const int theme = FloraTheme();
+    const bool mild = island || theme <= 2;   // not the desert or the mountain: frost, leaves and blossom belong to the seasons
+    const float covered = std::clamp(1.0f - gSnowCover * 2.5f, 0.0f, 1.0f);   // snow hides what lies under it
+    const float amount = gGroundAmount;
+    const bool frozen = season == 3 || gSnowCover > 0.25f;
+    struct Layer { gp::Kind kind; bool on; float cover; float reach; };
+    const Layer layers[gp::kKinds] = {
+        { gp::Kind::Snow,    gGroundSnow,    gSnowCover * amount,                                        1000.0f },
+        { gp::Kind::Leaves,  gGroundLeaves,  mild && season == 2 ? 0.8f * covered * (raining ? 0.5f : 1.0f) * amount : 0.0f, 650.0f },
+        { gp::Kind::Petals,  gGroundLeaves,  mild && season == 0 ? 0.75f * covered * (raining ? 0.4f : 1.0f) * amount : 0.0f, 650.0f },
+        { gp::Kind::Frost,   gGroundFrost,   mild && season == 3 ? 0.85f * covered * amount : 0.0f,     800.0f },
+        { gp::Kind::Puddle,  gGroundPuddles, std::max(gPuddleCover, island ? 0.12f : 0.0f) * amount,     950.0f },   // (the island's standing water is always there)
+    };
+    bool any = false;
+    for (const Layer& l : layers) any = any || (l.on && l.cover > 0.02f);
+    if (!any) return;
+    gGround.SetJoin(gGroundMerge ? gp::kJoin : 0.0f);
+
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
+    const float t = static_cast<float>(ImGui::GetTime());
+    gFloraBudget = 48;
+    // Who is walking where (tracked frame to frame for speed), and the trail the snow keeps.
+    gWalkFrame++;
+    const bool paused = play->pauseCtx.state != 0;
+    std::vector<Walker> walkers;
+    {
+        auto add = [&](const void* key, float x, float y, float z, float size) {
+            WalkTrack& tr = gWalkTrack[key];
+            const float mx = x - tr.x, mz = z - tr.z;
+            const bool jumped = tr.seen == 0 || std::hypot(mx, mz) > 500.0f || dt <= 0.0001f || paused;
+            walkers.push_back({ key, x, y, z, size, jumped ? 0.0f : std::hypot(mx, mz) / dt });
+        };
+        add(pl, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 16.0f);
+        for (const auto& [id, actor] : gActorOf)
+            if (actor != nullptr && actor != &pl->actor) add(actor, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, 16.0f * actor->scale.y / 0.01f);
+        CollectCartWalkers(add);
+    }
+    const float nowT = t;
+    const float dentLife = snowing ? 8.0f : 30.0f;
+    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > dentLife) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    int fxBudget = paused ? 0 : 3;   // the game's own splashes and ripples this frame (its effect table is shared)
+    // The ground says whether a seed may lie where it is: on level ground for water, off the water and the steep for the rest, and the island's
+    // meadows and woods for what grows or falls there. Water that stands all the time (the wet places of the Fortnite Map) has an onset below zero.
+    auto probe = [&](gp::Kind k, int cx, int cz, gp::Seed& s) -> int {
+        const FloraSpot* spot = FloraSpotAt(kGroundSpotKind + static_cast<int>(k), cx, cz, s.x, s.z);
+        if (spot == nullptr) return -1;
+        if (!spot->ok) return 0;
+        if (island) {
+            const royale::fortnite::Cover c = royale::fortnite::CoverAt(s.x, s.z);
+            if ((k == gp::Kind::Leaves || k == gp::Kind::Petals) && c != royale::fortnite::Cover::Meadow && (k == gp::Kind::Petals || c != royale::fortnite::Cover::Woods)) return 0;
+            if (k == gp::Kind::Puddle || k == gp::Kind::Frost) {   // never inside a town
+                if (gSession.Client())
+                    for (const royale::Poi& poi : gSession.Client()->Pois())
+                        if (std::hypot(poi.center.x - s.x, poi.center.z - s.z) < poi.radius * 0.8f) return 0;
+            }
+            if (k == gp::Kind::Puddle && gp::Hash01(cx, cz, 7) < royale::fortnite::PuddleWetness(s.x, s.z)) s.onset = -0.3f;
+        }
+        return 1;
+    };
+
+    {   // the solid patches first, then the see-through ones
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Opa(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+        Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies on
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;   // not when looking steeply down (the skydive): then all round is in view
+    if (cull) { vx /= vl; vz /= vl; }
+    const GpuMesh* ripple = GpuMeshFor(royale::MeshKind::Ripple, 0);
+
+    for (const Layer& layer : layers) {
+        if (!layer.on || layer.cover <= 0.02f) continue;
+        const bool seeThrough = !gp::Info(layer.kind).opaque;
+        const int c0x = static_cast<int>(std::floor((px - layer.reach) / gp::kCell)), c1x = static_cast<int>(std::floor((px + layer.reach) / gp::kCell));
+        const int c0z = static_cast<int>(std::floor((pz - layer.reach) / gp::kCell)), c1z = static_cast<int>(std::floor((pz + layer.reach) / gp::kCell));
         for (int cz = c0z; cz <= c1z; cz++)
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx, cz, 51) > 0.15f + 0.45f * gPuddleCover) continue;   // the first puddles show early, more join as it soaks in
-                const float x = (static_cast<float>(cx) + 0.2f + 0.6f * Flora01(cx, cz, 52)) * kPuddleCell, z = (static_cast<float>(cz) + 0.2f + 0.6f * Flora01(cx, cz, 53)) * kPuddleCell;
-                const float d = std::hypot(x - px, z - pz);
-                if (d > reach || !inView(x, z, 90.0f)) continue;
-                const FloraSpot* spot = FloraSpotAt(3, cx, cz, x, z);
+                gp::Patch patch;
+                if (gGround.Lead(layer.kind, cx, cz, probe, &patch) != 1) continue;
+                const gp::Shape sh = gp::Evaluate(patch, layer.cover);
+                if (!sh.shown) continue;
+                const float x = patch.x + sh.dx, z = patch.z + sh.dz, d = std::hypot(x - px, z - pz);
+                if (d > layer.reach || (cull && (x - eye.x) * vx + (z - eye.z) * vz < -std::max(sh.a, 90.0f))) continue;
+                const FloraSpot* spot = FloraSpotAt(kGroundSpotKind + static_cast<int>(layer.kind), patch.cx, patch.cz, patch.x, patch.z);
                 if (spot == nullptr || !spot->ok) continue;
-                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, FloraHash(cx, cz, 54) % 4 + (season == 3 ? 4u : 0u));   // frozen over in winter
+                const GpuMesh* m = GpuMeshFor(royale::MeshKind::Ground, gp::MeshVariant(patch, frozen));
                 if (m == nullptr || m->dl.empty()) continue;
-                const float size = (0.35f + 0.75f * gPuddleCover) * (0.7f + 0.6f * Flora01(cx, cz, 55));
-                const float f = fade(d, reach);
-                if (f < 0.02f) continue;
-                const float yaw = Flora01(cx, cz, 56) * 6.2831853f;
-                DrawGroundXlu(play, m, x, spot->y + 1.0f, z, spot->sx, spot->sz, yaw, size, static_cast<int>(215.0f * f * std::min(1.0f, gPuddleCover * 3.0f)));
-                if (!raining || season == 3 || ripple == nullptr || ripple->dl.empty() || d > rippleReach) continue;
-                const int rings = 1 + static_cast<int>(rainNow * 3.0f);
-                for (int j = 0; j < rings; j++) {   // each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle
-                    const float phase = t / 0.8f + Flora01(cx, cz, 60 + j);
+                const float f = std::clamp((layer.reach - d) / (layer.reach * 0.25f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
+                if (fade < 0.02f) continue;
+                const float y = spot->y + spot->sx * sh.dx + spot->sz * sh.dz;
+                const float shrink = layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * fade : fade;   // heaps sink into the ground at a distance, flat things fade out
+                // Is anyone inside this patch? (an ellipse: along its long axis `a`, across it `b`)
+                const float ys = std::sin(sh.yaw), yc = std::cos(sh.yaw);
+                auto inside = [&](const Walker& w, float grow) {
+                    const float ex = w.x - x, ez = w.z - z, lx = ex * yc - ez * ys, lz = ex * ys + ez * yc;
+                    const float ra = sh.a * shrink + grow, rb = sh.b * shrink + grow;
+                    return lx * lx / (ra * ra) + lz * lz / (rb * rb) < 1.0f && w.y < y + 40.0f;
+                };
+                if (!seeThrough) {
+                    Gfx* dented = nullptr;
+                    if (layer.kind == gp::Kind::Snow && !paused && (!gSnowDents.empty() || !walkers.empty())) {
+                        const float reachD = std::max(sh.a, sh.b) * shrink + kDentReach;
+                        std::vector<SnowDent> dents;
+                        std::vector<float> depth;
+                        for (const SnowDent& dn : gSnowDents)
+                            if (std::hypot(dn.x - x, dn.z - z) < reachD) { dents.push_back(dn); depth.push_back(std::clamp(1.0f - (nowT - dn.birth) / dentLife, 0.0f, 1.0f)); }
+                        for (const Walker& w : walkers) {
+                            if (!inside(w, kDentReach * 0.6f)) continue;
+                            dents.push_back({ w.x, w.z, nowT }); depth.push_back(1.0f);   // under their feet right now
+                            WalkTrack& tr = gWalkTrack[w.key];
+                            if (w.y < y + 14.0f && w.speed > 10.0f && std::hypot(w.x - tr.x, w.z - tr.z) + tr.sinceDent >= 26.0f && gSnowDents.size() < 160) {
+                                gSnowDents.push_back({ w.x, w.z, nowT });
+                                tr.sinceDent = 0.0f;
+                            } else tr.sinceDent += std::hypot(w.x - tr.x, w.z - tr.z);
+                        }
+                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, dents, depth);
+                    }
+                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, -1, dented);
+                    continue;
+                }
+                if (layer.kind == gp::Kind::Puddle && !frozen) {   // wading through: a splash on the way in, rings while moving
+                    for (const Walker& w : walkers) {
+                        if (!inside(w, 0.0f) || w.y > y + 14.0f) continue;
+                        WalkTrack& tr = gWalkTrack[w.key];
+                        tr.inPuddle = true;
+                        const float pk = std::clamp(0.4f + w.speed / 300.0f, 0.4f, 1.4f);
+                        if (!tr.wasPuddle && w.speed > 20.0f) {
+                            if (fxBudget >= 2) { fxBudget -= 2; Vec3f sp = { w.x, y + 1.0f, w.z }; EffectSsGSplash_Spawn(gPlayState, &sp, nullptr, nullptr, 0, static_cast<s16>(std::clamp(300.0f * pk * w.size / 16.0f, 220.0f, 900.0f))); }
+                            if (gPuddleRings.size() < 48) gPuddleRings.push_back({ w.x, y + 1.8f, w.z, nowT, w.size / 16.0f * pk });
+                            tr.ring = 0.0f;
+                        } else if (w.speed > 25.0f) {
+                            tr.ring -= dt;
+                            if (tr.ring <= 0.0f) {
+                                tr.ring = std::clamp(0.4f - w.speed / 1200.0f, 0.12f, 0.4f);
+                                if (gPuddleRings.size() < 48) gPuddleRings.push_back({ w.x, y + 1.8f, w.z, nowT, w.size / 16.0f * pk * 0.8f });
+                                if (w.speed > 140.0f && fxBudget >= 1) { fxBudget--; Vec3f sp = { w.x, y + 1.0f, w.z }; EffectSsGRipple_Spawn(gPlayState, &sp, static_cast<s16>(60.0f * pk), static_cast<s16>(300.0f * pk), 0); }
+                            }
+                        }
+                    }
+                }
+                const int alpha = static_cast<int>((layer.kind == gp::Kind::Puddle ? 225.0f : 190.0f) * fade);
+                DrawGroundPatch(play, m, x, y + 1.0f, z, spot->sx, spot->sz, sh.yaw, sh.a, 1.0f, sh.b, alpha);
+                if (layer.kind != gp::Kind::Puddle || !raining || frozen || ripple == nullptr || ripple->dl.empty() || d > 650.0f) continue;
+                // Every drop that lands on a puddle rings out across it: each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle.
+                const int rings = std::clamp(static_cast<int>((1.0f + rainNow * 3.0f) * std::sqrt(sh.a * sh.b) / 90.0f), 1, 6);
+                for (int j = 0; j < rings; j++) {
+                    const float phase = t / 0.8f + Flora01(patch.cx, patch.cz, 60 + j);
                     const int drop = static_cast<int>(std::floor(phase));
                     const float age = phase - static_cast<float>(drop);
-                    const float ang = Flora01(cx * 31 + j, cz + drop, 61) * 6.2831853f, rr = 55.0f * size * std::sqrt(Flora01(cx + drop, cz * 17 + j, 62));
-                    const float ox = std::cos(ang) * rr, oz = std::sin(ang) * rr;
-                    DrawGroundXlu(play, ripple, x + ox, spot->y + 1.6f + spot->sx * ox + spot->sz * oz, z + oz, spot->sx, spot->sz, 0.0f,
-                                  0.35f + 1.3f * age, static_cast<int>(190.0f * (1.0f - age) * f));
+                    const float ang = Flora01(patch.cx * 31 + j, patch.cz + drop, 61) * 6.2831853f, rr = std::sqrt(Flora01(patch.cx + drop, patch.cz * 17 + j, 62)) * 0.6f;
+                    const float lx = std::cos(ang) * rr * sh.a, lz = std::sin(ang) * rr * sh.b;   // along and across the puddle's long axis
+                    const float ox = lx * yc + lz * ys, oz = -lx * ys + lz * yc;
+                    DrawGroundPatch(play, ripple, x + ox, y + 1.6f + spot->sx * ox + spot->sz * oz, z + oz, spot->sx, spot->sz, 0.0f,
+                                    40.0f + 130.0f * age, 1.0f, 40.0f + 130.0f * age, static_cast<int>(190.0f * (1.0f - age) * fade));
                 }
             }
+    }
+    // The rings the walkers left in the puddles, spreading and fading over a moment.
+    if (ripple != nullptr && !ripple->dl.empty())
+        for (size_t i = 0; i < gPuddleRings.size();) {
+            const PuddleRing& r = gPuddleRings[i];
+            const float age = (nowT - r.birth) / 0.9f;
+            if (age >= 1.0f || age < 0.0f) { gPuddleRings.erase(gPuddleRings.begin() + i); continue; }
+            const float sz = (30.0f + 110.0f * age) * std::max(0.6f, r.size);
+            DrawGroundPatch(play, ripple, r.x, r.y, r.z, 0.0f, 0.0f, 0.0f, sz, 1.0f, sz, static_cast<int>(200.0f * (1.0f - age)));
+            i++;
+        }
+    for (auto it = gWalkTrack.begin(); it != gWalkTrack.end();) {
+        WalkTrack& tr = it->second;
+        bool live = false;
+        for (const Walker& w : walkers) if (w.key == it->first) { tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true; break; }
+        tr.wasPuddle = tr.inPuddle;
+        tr.inPuddle = false;
+        it = live ? std::next(it) : gWalkTrack.erase(it);
     }
 }
 
@@ -3106,48 +3301,6 @@ void DrawIslandScenery(PlayState* play) {
                                  : (pc.kind == SceneryKind::Oak || pc.kind == SceneryKind::Hedge) ? tamp * std::sin(t * (1.1f + wind) + pc.x * 0.004f) + wind * 0.02f : 0.0f;
             const float sink = pc.kind == SceneryKind::Cliff ? 14.0f * pc.scale : pc.kind == SceneryKind::Boulder ? 6.0f : 1.0f;   // rock sits in the ground, not on it
             DrawFloraMesh(play, m, pc.x, spot->y - sink, pc.z, pc.yaw, dz * a, -dx * a, pc.scale * fade);
-        }
-}
-
-// The Fortnite Map's standing puddles (shared/fortnite_puddles.h): pools in the dips of level ground, in the boggy fields and by the water, there all
-// the time. They use the weather puddles' mesh (frozen over in winter) and grow a little in the rain.
-void DrawIslandPuddles(PlayState* play) {
-    if (!OnIsland() || gPlayState == nullptr) return;
-    Player* pl = GET_PLAYER(play);
-    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z, reach = royale::fortnite::kPuddleReach, cellSize = royale::fortnite::kPuddleCellSize;
-    const int season = FloraSeason();
-    {
-        OPEN_DISPS(play->state.gfxCtx);
-        Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
-        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
-        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies 1 unit above
-        CLOSE_DISPS(play->state.gfxCtx);
-    }
-    const Vec3f eye = play->view.eye;
-    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
-    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
-    const bool cull = vl > 1.0f && vl > vy * 0.5f;
-    if (cull) { vx /= vl; vz /= vl; }
-    const int c0x = static_cast<int>(std::floor((px - reach) / cellSize)), c1x = static_cast<int>(std::floor((px + reach) / cellSize));
-    const int c0z = static_cast<int>(std::floor((pz - reach) / cellSize)), c1z = static_cast<int>(std::floor((pz + reach) / cellSize));
-    for (int cz = c0z; cz <= c1z; cz++)
-        for (int cx = c0x; cx <= c1x; cx++) {
-            royale::fortnite::PuddlePiece pc;
-            if (!royale::fortnite::PuddleIn(cx, cz, &pc)) continue;
-            const float d = std::hypot(pc.x - px, pc.z - pz);
-            if (d > reach || (cull && (pc.x - eye.x) * vx + (pc.z - eye.z) * vz < -140.0f)) continue;
-            if (gSession.Client()) {   // not inside a town
-                bool inTown = false;
-                for (const royale::Poi& poi : gSession.Client()->Pois())
-                    if (std::hypot(poi.center.x - pc.x, poi.center.z - pc.z) < poi.radius * 0.8f) { inTown = true; break; }
-                if (inTown) continue;
-            }
-            const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, pc.shape + (season == 3 ? 4u : 0u));
-            if (m == nullptr || m->dl.empty()) continue;
-            const float f = std::clamp((reach - d) / (reach * 0.3f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
-            if (fade < 0.02f) continue;
-            DrawGroundXlu(play, m, pc.x, pc.y, pc.z, pc.sx, pc.sz, pc.yaw, pc.size * (1.0f + 0.35f * gPuddleCover), static_cast<int>(225.0f * fade));
         }
 }
 
@@ -4132,12 +4285,12 @@ void Projectile_Draw(Actor*, PlayState* play) {
     if (DebugOn(kDbgSky)) DrawSky(play);
     Feat("draw: fog banks");
     if (DebugOn(kDbgFog)) DrawFogBanks(play);
-    Feat("draw: foliage and puddles");
+    Feat("draw: foliage");
     if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: island scenery");
     if (DebugOn(kDbgScenery)) DrawIslandScenery(play);
-    Feat("draw: island puddles");
-    if (DebugOn(kDbgIslandPuddles)) DrawIslandPuddles(play);
+    Feat("draw: ground patches");
+    if (DebugOn(kDbgGroundPatches)) DrawGroundPatches(play);
     Feat("draw: storm wall");
     if (DebugOn(kDbgStormWall)) DrawStormWall(play);
     Feat("draw: weather particles");
@@ -9025,6 +9178,11 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
 }
 
 // Drawn every frame with the other world effects (Projectile_Draw).
+void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add) {
+    for (const auto& [index, c] : gCarts)
+        if (c.actor != nullptr && !c.wrecked) add(&c, c.body.x, c.body.y, c.body.z, 46.0f);
+}
+
 void DrawWater(PlayState* play) {
     if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCamUnder = 0.0f; return; }
     Feat("draw: water");
@@ -12976,6 +13134,12 @@ UiState& Ui() {
         gSkyBodies = CVarGetInteger(ROYALE_CVAR("SkyBodies"), 1) != 0;
         gSkyClouds = std::clamp(CVarGetInteger(ROYALE_CVAR("SkyClouds"), 100), 0, 200) / 100.0f;
         gFogAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("FogAmount"), 100), 0, 200) / 100.0f;
+        gGroundPuddles = CVarGetInteger(ROYALE_CVAR("GroundPuddles"), 1) != 0;
+        gGroundSnow = CVarGetInteger(ROYALE_CVAR("GroundSnow"), 1) != 0;
+        gGroundFrost = CVarGetInteger(ROYALE_CVAR("GroundFrost"), 1) != 0;
+        gGroundLeaves = CVarGetInteger(ROYALE_CVAR("GroundLeaves"), 1) != 0;
+        gGroundMerge = CVarGetInteger(ROYALE_CVAR("GroundMerge"), 1) != 0;
+        gGroundAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundAmount"), 100), 0, 200) / 100.0f;
         gWaterDetail = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterDetail"), 1), 0, 2);
         gWaterWaves = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterWaves"), 100), 0, 200) / 100.0f;
         gWaterFxOn = CVarGetInteger(ROYALE_CVAR("WaterFx"), 1) != 0;
@@ -14068,9 +14232,9 @@ void DrawGraphicsUi() {
         GfxSwitch("StormWall", "Storm wall around the safe zone");
         ImGui::PopID();
     }
-    if (GfxSection("Grass, trees, snow and puddles", "Foliage")) {
+    if (GfxSection("Grass and trees", "Foliage")) {
         ImGui::PushID("foliage");
-        if (GfxSwitch("Foliage", "Grass, trees, snow cover and puddles")) {
+        if (GfxSwitch("Foliage", "Grass, trees and the small things on the ground")) {
             ImGui::SetNextItemWidth(280);
             if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
         }
@@ -14117,7 +14281,20 @@ void DrawGraphicsUi() {
         ImGui::PopID();
     }
     if (GfxSection("Fortnite Map scenery", "Scenery")) { ImGui::PushID("scenery"); GfxSwitch("Scenery", "Oaks, cliffs, crags and flowers on the Fortnite Map"); ImGui::PopID(); }
-    if (GfxSection("Fortnite Map puddles", "IslandPuddles")) { ImGui::PushID("ipud"); GfxSwitch("IslandPuddles", "Standing puddles on the Fortnite Map"); ImGui::PopID(); }
+    if (GfxSection("Puddles, snow and seasonal ground", "GroundPatches")) {
+        ImGui::PushID("ground");
+        if (GfxSwitch("GroundPatches", "Puddles, snow piles, frost, fallen leaves and blossom")) {
+            static int amount = -1;
+            if (amount < 0) amount = static_cast<int>(gGroundAmount * 100.0f + 0.5f);
+            GfxCheck("Puddles (rain, and the wet places of the Fortnite Map)", "GroundPuddles", &gGroundPuddles);
+            GfxCheck("Snow piles and drifts", "GroundSnow", &gGroundSnow);
+            GfxCheck("Frost in winter", "GroundFrost", &gGroundFrost);
+            GfxCheck("Fallen leaves in autumn, blossom in spring", "GroundLeaves", &gGroundLeaves);
+            if (GfxCheck("Patches that touch run into one bigger patch", "GroundMerge", &gGroundMerge)) ForgetFloraGround();
+            if (GfxPercent("How many patches (%, 0 = none)", "GroundAmount", &amount)) gGroundAmount = amount / 100.0f;
+        }
+        ImGui::PopID();
+    }
     if (GfxSection("Effects", "BossFx")) {
         ImGui::PushID("fx");
         GfxSwitch("BossFx", "Boss effects in the world");

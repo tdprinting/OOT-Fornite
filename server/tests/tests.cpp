@@ -10,6 +10,7 @@
 #include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
 #include "../../shared/fortnite_puddles.h"
+#include "../../shared/ground_patches.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -2729,24 +2730,95 @@ static void IslandScenery() {
     CHECK(fn::SceneryRadius(fn::SceneryKind::Oak, 1.0f) > 0 && fn::SceneryRadius(fn::SceneryKind::FlowersWhite, 1.0f) == 0);
 }
 
+// The ground patches (puddles, snow, frost, leaves, blossom) are placed the same for everyone, seeds that touch run into one patch (each seed in at
+// most one, hardly any lost), the patch grows with the cover, and a patch waits for ground that has not been measured yet instead of guessing.
+static void GroundPatches() {
+    namespace gp = royale::ground;
+    auto allGround = [](gp::Kind, int, int, gp::Seed&) { return 1; };
+    for (int k = 0; k < gp::kKinds; k++) {
+        const gp::Kind kind = static_cast<gp::Kind>(k);
+        gp::Field merged, apart(0.0f), again;
+        int seeds = 0, leadersMerged = 0, leadersApart = 0, members = 0, bigPatches = 0;
+        std::set<std::pair<int, int>> taken;
+        for (int cz = -40; cz <= 40; cz++)
+            for (int cx = -40; cx <= 40; cx++) {
+                if (gp::SeedAt(kind, cx, cz).ok) seeds++;
+                gp::Patch a, b, c;
+                const int ra = merged.Lead(kind, cx, cz, allGround, &a), rb = apart.Lead(kind, cx, cz, allGround, &b), rc = again.Lead(kind, cx, cz, allGround, &c);
+                CHECK(ra >= 0 && rb >= 0 && ra == rc);
+                if (ra == 1) {
+                    CHECK(a.x == c.x && a.n == c.n && a.n >= 1 && a.n <= gp::kMaxMembers);
+                    leadersMerged++;
+                    for (int i = 0; i < a.n; i++) {
+                        const std::pair<int, int> cell = i == 0 ? std::make_pair(cx, cz) : std::make_pair(static_cast<int>(std::floor((a.x + a.m[i].dx) / gp::kCell)), static_cast<int>(std::floor((a.z + a.m[i].dz) / gp::kCell)));
+                        CHECK(taken.insert(cell).second);   // no seed is in two patches
+                        members++;
+                    }
+                    if (a.n >= 2) bigPatches++;
+                }
+                if (rb == 1) { leadersApart++; CHECK(b.n == 1); }
+            }
+        CHECK(leadersApart == seeds);                       // with merging off every seed stands alone
+        CHECK(leadersMerged < seeds && bigPatches > 20);    // with it on seeds run together
+        CHECK(members * 100 >= seeds * 97);                 // and hardly any are lost
+    }
+    // A patch grows with the cover: nothing before its first seed starts, then bigger and bigger, never past the limit.
+    gp::Field f;
+    int checked = 0;
+    for (int cz = -20; cz <= 20 && checked < 40; cz++)
+        for (int cx = -20; cx <= 20 && checked < 40; cx++) {
+            gp::Patch p;
+            if (f.Lead(gp::Kind::Snow, cx, cz, allGround, &p) != 1 || p.n < 3) continue;
+            checked++;
+            CHECK(!gp::Evaluate(p, 0.0f).shown);
+            float last = 0.0f;
+            for (float cover = 0.0f; cover <= 1.001f; cover += 0.05f) {
+                const gp::Shape sh = gp::Evaluate(p, cover);
+                if (!sh.shown) continue;
+                CHECK(sh.a >= sh.b && sh.b > 0.0f && sh.a <= gp::kMaxRadius && std::isfinite(sh.yaw) && std::isfinite(sh.dx));
+                CHECK(sh.a * sh.b >= last * 0.98f);
+                last = sh.a * sh.b;
+            }
+            CHECK(last > 0.0f);
+        }
+    CHECK(checked > 10);
+    // Ground that is not measured yet holds a patch back (-1) and the patch comes out the same once it is.
+    gp::Field slow, whole;
+    int blocked = 0, agree = 0, total = 0;
+    for (int cz = -12; cz <= 12; cz++)
+        for (int cx = -12; cx <= 12; cx++) {
+            int budget = 0;
+            auto stingy = [&](gp::Kind, int, int, gp::Seed&) { return budget-- > 0 ? 1 : -1; };
+            gp::Patch a, b;
+            int r;
+            for (int tries = 0; (r = slow.Lead(gp::Kind::Puddle, cx, cz, stingy, &a)) < 0 && tries < 400; tries++) { blocked++; budget = 3; }
+            const int w = whole.Lead(gp::Kind::Puddle, cx, cz, allGround, &b);
+            total++;
+            agree += r == w && (r != 1 || (a.n == b.n && a.x == b.x));
+        }
+    CHECK(blocked > 0 && agree == total);
+}
+
 // The Fortnite Map's standing puddles lie on level land (never in the sea, on a road or in a wood), are the same for everyone, and there are plenty;
 // and the ground is walkable inland: no steep ground away from the coast.
 static void IslandPuddles() {
     namespace fn = royale::fortnite;
+    namespace gp = royale::ground;
     int n = 0, bad = 0, mud = 0;
     for (int cz = -45; cz <= 45; cz++)
         for (int cx = -45; cx <= 45; cx++) {
-            fn::PuddlePiece p, q;
-            const bool has = fn::PuddleIn(cx, cz, &p);
-            CHECK(has == fn::PuddleIn(cx, cz, &q) && (!has || (p.x == q.x && p.size == q.size)));
-            if (!has) continue;
+            const gp::Seed s = gp::SeedAt(gp::Kind::Puddle, cx, cz);
+            if (!s.ok) continue;
+            const float w = fn::PuddleWetness(s.x, s.z);
+            CHECK(w == fn::PuddleWetness(s.x, s.z));
+            if (gp::Hash01(cx, cz, 7) >= w) continue;   // (the game rolls its own dice; any roll will do for the check)
             n++;
             float y;
-            const fn::Cover c = fn::CoverAt(p.x, p.z);
-            if (!fn::GroundHeight(p.x, p.z, &y) || y < fn::kWaterY || (c != fn::Cover::Meadow && c != fn::Cover::Dirt) || fn::GroundUp(p.x, p.z) < 0.98f || p.size < 0.5f || p.size > 2.2f) bad++;
+            const fn::Cover c = fn::CoverAt(s.x, s.z);
+            if (!fn::GroundHeight(s.x, s.z, &y) || y < fn::kWaterY || (c != fn::Cover::Meadow && c != fn::Cover::Dirt) || fn::GroundUp(s.x, s.z) < 0.98f) bad++;
             if (c == fn::Cover::Dirt) mud++;
         }
-    CHECK(n > 150 && n < 900 && bad == 0 && mud > 5);
+    CHECK(n > 100 && n < 900 && bad == 0 && mud > 5);
     int steepInland = 0, land = 0;   // away from the water, the ground can be stood on
     for (float z = -fn::kHalfZ + 10; z < fn::kHalfZ; z += 90)
         for (float x = -fn::kHalfX + 10; x < fn::kHalfX; x += 90) {
@@ -2929,7 +3001,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
-            if (static_cast<MeshKind>(k) == MeshKind::Puddle) CHECK(mx[1] < 2.0f && mx[0] - mn[0] > 140 && mx[0] - mn[0] < 320);   // lies flat on the ground
+            if (static_cast<MeshKind>(k) == MeshKind::Ground) CHECK(mx[0] - mn[0] > 40 && mx[0] - mn[0] < 340 && mx[2] - mn[2] > 40 && mx[1] < 70.0f);   // a patch of ground, not a tower
             if (static_cast<MeshKind>(k) == MeshKind::Ripple) CHECK(mx[1] < 0.01f && mx[0] - mn[0] > 35 && mx[0] - mn[0] < 45);
             if (static_cast<MeshKind>(k) == MeshKind::Grenade) CHECK(mx[1] > 26 && mx[1] < 34 && mx[0] - mn[0] < 36);   // a bomb-sized ball
             if (static_cast<MeshKind>(k) == MeshKind::Roof) CHECK(mn[1] >= 199.0f && mx[1] > 300 && mx[0] - mn[0] > 400 && mx[2] - mn[2] > 330);
@@ -2969,12 +3041,6 @@ static void CustomMeshes() {
         BuildMesh(MeshKind::Dragon, 0).Bounds(upMn, upMx);
         BuildMesh(MeshKind::Dragon, 2).Bounds(dnMn, dnMx);
         CHECK(upMx[1] > dnMx[1] + 200.0f);
-    }
-    for (uint32_t variant = 4; variant < 8; variant++) {   // snow blankets: broad, low sheets for deep snow
-        const MeshData m = BuildMesh(MeshKind::SnowPatch, variant);
-        float mn[3], mx[3];
-        m.Bounds(mn, mx);
-        CHECK(m.Triangles() >= 12 && mn[1] >= -0.01f && mx[1] < 10.0f && mx[0] - mn[0] > 220);
     }
     const MeshData r0 = BuildMesh(MeshKind::Rock, 0), r1 = BuildMesh(MeshKind::Rock, 1);
     bool differ = false;
@@ -4282,7 +4348,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
