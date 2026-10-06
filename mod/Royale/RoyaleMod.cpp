@@ -270,11 +270,13 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Minimap", "Minimap switching" },
     { "Wind", "Wind streaks in the air" },
     { "Tornado", "Tornado easter egg" },
+    { "Sky", "Sky: gradient, stars, sun, moon and clouds" },
+    { "Fog", "Fog banks (low volumetric-style fog)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado };
-static_assert(kDbgTornado + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog };
+static_assert(kDbgFog + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -3026,6 +3028,317 @@ void DrawWeatherParticles(PlayState* play) {
 }
 
 
+// ---- the sky and the fog ------------------------------------------------------------------------------------------------------
+// A gradient sky dome (night, dawn, day and dusk colours, greyed by the weather), a field of stars that fades in at dusk and out at dawn, a sun
+// and a moon, drifting clouds, and low banks of fog. Nothing here is real volume rendering (that is far too heavy for a phone): a cloud or a
+// fog bank is a stack of soft flat discs, brighter on top and darker underneath, whose edges fade out; where the discs overlap they build up
+// into something that reads as a lit, thick body. All of it is drawn as translucent triangles round the camera and is switched on and off
+// with the "Sky" and "Fog" Debug switches. The game's own distance fog (DriveRealWeather) still does the close-in thickening.
+struct SkyLight {
+    float sunH;       // the sine of the sun's height: 1 at noon, 0 at dawn and dusk, -1 at midnight
+    float day;        // 0 night to 1 day
+    float night;      // 1 - day, but with a longer dark
+    float twilight;   // 1 at the moment of sunrise or sunset
+    bool morning;
+};
+SkyLight SkyLightNow() {
+    SkyLight l;
+    const float d = static_cast<float>(gSaveContext.dayTime) / 65536.0f;   // 0 midnight, 0.5 noon
+    l.sunH = -std::cos(d * 6.2831853f);
+    auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+    l.day = smooth(-0.12f, 0.35f, l.sunH);
+    l.night = smooth(0.12f, -0.3f, l.sunH);
+    l.twilight = std::clamp(1.0f - std::fabs(l.sunH) / 0.3f, 0.0f, 1.0f);
+    l.morning = d < 0.5f;
+    return l;
+}
+
+// How overcast the sky is, 0 to 1, from the weather and the storm; and the colour the overcast pulls it to.
+float SkyOvercast(float tint[3]) {
+    const float w = WeatherAmount();
+    float c = 0.0f;
+    tint[0] = 120.0f; tint[1] = 126.0f; tint[2] = 138.0f;
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Rain: c = 0.8f * w; break;
+        case royale::Sky::Thunder: c = 1.0f * w; tint[0] = 82; tint[1] = 88; tint[2] = 108; break;
+        case royale::Sky::Fog: c = 0.6f * w; tint[0] = 170; tint[1] = 176; tint[2] = 184; break;
+        case royale::Sky::Snow: c = 0.75f * w; tint[0] = 176; tint[1] = 184; tint[2] = 198; break;
+        case royale::Sky::Ash: c = 0.95f * w; tint[0] = 74; tint[1] = 52; tint[2] = 46; break;
+        case royale::Sky::Sandstorm: c = 0.8f * w; tint[0] = 196; tint[1] = 156; tint[2] = 100; break;
+        default: break;
+    }
+    if (gStormWeather > c) { c = gStormWeather * 0.9f; tint[0] = 80; tint[1] = 52; tint[2] = 120; }
+    return std::clamp(c, 0.0f, 1.0f);
+}
+
+void SetVtx(Vtx& o, float x, float y, float z, float r, float g, float b, float a) {
+    o.v.ob[0] = static_cast<s16>(std::lround(x)); o.v.ob[1] = static_cast<s16>(std::lround(y)); o.v.ob[2] = static_cast<s16>(std::lround(z));
+    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+    o.v.cn[0] = static_cast<u8>(std::clamp(r, 0.0f, 255.0f)); o.v.cn[1] = static_cast<u8>(std::clamp(g, 0.0f, 255.0f));
+    o.v.cn[2] = static_cast<u8>(std::clamp(b, 0.0f, 255.0f)); o.v.cn[3] = static_cast<u8>(std::clamp(a, 0.0f, 255.0f));
+}
+
+// The state every sky and fog layer is drawn with: translucent, vertex colour and alpha, no lighting, no fog, no culling, centred on the camera.
+void SkyBegin(PlayState* play) {
+    const Vec3f eye = play->view.eye;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Soft discs: a centre and an 8-point rim (9 vertices each). Three go in one vertex load.
+struct DiscSet {
+    Vtx* v = nullptr;
+    int n = 0, cap = 0;
+    bool Init(PlayState* play, int count) {
+        cap = count; n = 0;
+        v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
+        return v != nullptr;
+    }
+    // A lumpy, slightly stretched disc at (x,y,z), centre colour/alpha `c`, rim colour with alpha `ra`.
+    void Add(float x, float y, float z, float r, const float c[4], const float rim[3], float ra, int seed) {
+        if (v == nullptr || n >= cap) return;
+        Vtx* q = &v[n * 9];
+        SetVtx(q[0], x, y, z, c[0], c[1], c[2], c[3]);
+        for (int k = 0; k < 8; k++) {
+            const float a = 6.2831853f * k / 8.0f + Flora01(seed, 3, 701) * 1.5f;
+            const float rr = r * (0.8f + 0.4f * Flora01(seed, k, 702));
+            SetVtx(q[1 + k], x + std::cos(a) * rr * 1.15f, y, z + std::sin(a) * rr, rim[0], rim[1], rim[2], ra);
+        }
+        n++;
+    }
+    void Draw(PlayState* play) {
+        if (v == nullptr || n == 0) return;
+        OPEN_DISPS(play->state.gfxCtx);
+        for (int first = 0; first < n; first += 3) {
+            const int count = std::min(3, n - first);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[first * 9]), count * 9, 0);
+            for (int d = 0; d < count; d++) {
+                const int o = d * 9;
+                for (int k = 0; k < 8; k++) gSP1Triangle(POLY_XLU_DISP++, o, o + 1 + k, o + 1 + (k + 1) % 8, 0);
+            }
+        }
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+};
+
+// A flat quad facing the camera's centre, in the direction (dx,dy,dz) at distance R, `size` wide.
+void SkyQuad(Vtx* q, float dx, float dy, float dz, float R, float size, float r, float g, float b, float a) {
+    const float len = std::max(0.001f, std::sqrt(dx * dx + dy * dy + dz * dz));
+    dx /= len; dy /= len; dz /= len;
+    float ux = -dz, uz = dx;                                           // a horizontal axis across the view
+    const float ul = std::max(0.001f, std::hypot(ux, uz));
+    ux /= ul; uz /= ul;
+    const float h = std::max(0.001f, std::hypot(dx, dz));
+    const float ax = ux * size, az = uz * size;
+    const float bx = -dy * uz * size, by = h * size, bz = dy * ux * size;   // up the sky, across the direction and the first axis
+    const float cx = dx * R, cy = dy * R, cz = dz * R;
+    SetVtx(q[0], cx - ax - bx, cy - by, cz - az - bz, r, g, b, a);
+    SetVtx(q[1], cx + ax - bx, cy - by, cz + az - bz, r, g, b, a);
+    SetVtx(q[2], cx + ax + bx, cy + by, cz + az + bz, r, g, b, a);
+    SetVtx(q[3], cx - ax + bx, cy + by, cz - az + bz, r, g, b, a);
+}
+
+void DrawSky(PlayState* play) {
+    if (!InField()) return;
+    constexpr float kR = 7000.0f;
+    const SkyLight L = SkyLightNow();
+    float tint[3];
+    const float ov = SkyOvercast(tint);
+    const float t = static_cast<float>(ImGui::GetTime());
+    auto mix = [](float a, float b, float k) { return a + (b - a) * k; };
+    // Palette: night, day, then the glow of sunrise and sunset on the horizon, then the weather greys it all.
+    float zen[3], hor[3];
+    const float nz[3] = { 5, 8, 30 }, nh[3] = { 22, 28, 66 }, dz[3] = { 62, 122, 224 }, dh[3] = { 168, 206, 242 };
+    const float glow[3] = { 255, 128, 62 }, glowZ[3] = { 96, 78, 150 };
+    const float dim = 1.0f - 0.55f * ov * L.day;
+    for (int i = 0; i < 3; i++) {
+        zen[i] = mix(nz[i], dz[i], L.day); hor[i] = mix(nh[i], dh[i], L.day);
+        zen[i] = mix(zen[i], glowZ[i], L.twilight * 0.55f); hor[i] = mix(hor[i], glow[i], L.twilight * 0.8f);
+        const float grey = tint[i] * (0.25f + 0.75f * L.day);
+        zen[i] = mix(zen[i], grey * 0.8f, ov * 0.85f) * dim; hor[i] = mix(hor[i], grey, ov * 0.85f) * dim;
+    }
+    SkyBegin(play);
+    // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
+    constexpr int kSegs = 14, kRings = 8;
+    static const float kElev[kRings] = { -0.12f, 0.0f, 0.07f, 0.16f, 0.30f, 0.52f, 0.78f, 1.0f };   // the sine of each ring's height
+    Vtx* dv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
+    if (dv == nullptr) return;
+    const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * 6.2831853f;
+    for (int r = 0; r < kRings; r++) {
+        const float s = kElev[r], c = std::sqrt(std::max(0.0f, 1.0f - s * s));
+        const float k = std::pow(std::clamp(s, 0.0f, 1.0f), 0.6f);
+        for (int j = 0; j <= kSegs; j++) {
+            const float a = 6.2831853f * j / kSegs;
+            // the glow sits toward the sun's side of the horizon
+            const float toSun = 0.5f + 0.5f * std::cos(a - 0.6f);
+            const float g = L.twilight * (0.35f + 0.65f * toSun) * (1.0f - k) * (1.0f - ov * 0.7f);
+            float col[3];
+            for (int i = 0; i < 3; i++) col[i] = mix(mix(hor[i], zen[i], k), glow[i], g * 0.35f);
+            SetVtx(dv[r * (kSegs + 1) + j], std::cos(a) * c * kR, s * kR, std::sin(a) * c * kR, col[0], col[1], col[2], r == 0 ? 255.0f : 232.0f);
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    for (int r = 0; r + 1 < kRings; r++) {
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&dv[r * (kSegs + 1)]), 2 * (kSegs + 1), 0);
+        for (int j = 0; j < kSegs; j++) gSP2Triangles(POLY_XLU_DISP++, j, j + 1, kSegs + 1 + j, 0, j + 1, kSegs + 2 + j, kSegs + 1 + j, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+
+    // Stars: a field that turns slowly through the night, twinkling, fading in as the sun sets and out as it rises (and behind cloud).
+    const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
+    if (starA > 0.03f) {
+        constexpr int kStars = 220;
+        Vtx* sv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
+        if (sv != nullptr) {
+            for (int i = 0; i < kStars; i++) {
+                const float a = Flora01(i, 5, 711) * 6.2831853f + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
+                const float c = std::sqrt(1.0f - s * s), big = Flora01(i, 13, 713);
+                const float tw = 0.65f + 0.35f * std::sin(t * (1.5f + 3.0f * Flora01(i, 17, 714)) + i * 2.3f);
+                const float fade = std::min(1.0f, s * 6.0f);   // dim near the horizon
+                const float warm = Flora01(i, 21, 715);        // blue-white to yellow
+                const float size = (9.0f + 20.0f * big * big) * (0.9f + 0.1f * tw);
+                SkyQuad(&sv[i * 4], std::cos(a) * c, s, std::sin(a) * c, kR * 0.97f, size, 205 + 50 * (1 - warm), 215 + 30 * (1 - warm), 255 - 70 * warm,
+                        255.0f * starA * tw * fade * (0.45f + 0.55f * big));
+            }
+            OPEN_DISPS(play->state.gfxCtx);
+            for (int first = 0; first < kStars; first += 8) {
+                const int count = std::min(8, kStars - first);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&sv[first * 4]), count * 4, 0);
+                for (int k = 0; k < count; k++) gSP2Triangles(POLY_XLU_DISP++, k * 4, k * 4 + 1, k * 4 + 2, 0, k * 4, k * 4 + 2, k * 4 + 3, 0);
+            }
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+    }
+
+    // The sun and the moon, opposite each other, hidden by thick cloud.
+    {
+        const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
+        const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
+        Vtx* qv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, 8 * sizeof(Vtx)));
+        if (qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
+            const float warm = L.twilight;
+            SkyQuad(&qv[0], std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c, kR * 0.96f, 330.0f, 255, mix(244, 160, warm), mix(205, 90, warm), 255.0f * sunA);
+            SkyQuad(&qv[4], -std::cos(0.6f) * c, -L.sunH, -std::sin(0.6f) * c, kR * 0.96f, 250.0f, 226, 232, 245, 245.0f * moonA);
+            OPEN_DISPS(play->state.gfxCtx);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(qv), 8, 0);
+            gSP2Triangles(POLY_XLU_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
+            gSP2Triangles(POLY_XLU_DISP++, 4, 5, 6, 0, 4, 6, 7, 0);
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+    }
+
+    // Clouds: puffs of stacked soft discs that drift with the wind, wrapping round a box that follows the camera. More of them, and darker,
+    // the more overcast it is; lit warm at sunrise and sunset, dim blue at night.
+    const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
+    const int puffs = std::min(48, static_cast<int>((12.0f + 36.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity))));
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dxw = wx / wl, dzw = wz / wl;
+    constexpr int kLayers = 5;
+    static const float kProfile[kLayers] = { 0.62f, 1.0f, 0.92f, 0.66f, 0.34f }, kLift[kLayers] = { 0.0f, 0.14f, 0.28f, 0.42f, 0.56f };
+    DiscSet cd;
+    if (!cd.Init(play, puffs * kLayers)) return;
+    const Vec3f eye = play->view.eye;
+    constexpr float kBox = 10000.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    for (int i = 0; i < puffs; i++) {
+        const float h1 = Flora01(i, 7, 721), h2 = Flora01(i, 11, 722), h3 = Flora01(i, 13, 723), h4 = Flora01(i, 17, 724);
+        const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
+        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float d = std::hypot(x, z);
+        const float edge = std::clamp((5000.0f - d) / 1800.0f, 0.0f, 1.0f) * std::clamp((d - 900.0f) / 900.0f, 0.0f, 1.0f);
+        if (edge <= 0.01f) continue;
+        const float y = 1150.0f + 950.0f * h3 - 160.0f * ov;
+        const float width = (650.0f + 800.0f * h4) * (1.0f + 0.5f * ov), thick = width * (0.34f + 0.2f * ov);
+        for (int k = 0; k < kLayers; k++) {
+            const float up = static_cast<float>(k) / (kLayers - 1);   // 0 underside, 1 top
+            float lit[3], shade[3];
+            for (int ch = 0; ch < 3; ch++) {
+                const float dayc = mix(250.0f, tint[ch], ov * 0.8f);
+                float c = mix(40.0f + ch * 6.0f, dayc, L.day);
+                c = mix(c, ch == 0 ? 255.0f : (ch == 1 ? 150.0f : 120.0f), L.twilight * 0.55f * (1.0f - ov * 0.6f));
+                lit[ch] = c; shade[ch] = c * (0.5f + 0.2f * (1.0f - ov));
+            }
+            float col[4], rim[3];
+            for (int ch = 0; ch < 3; ch++) { col[ch] = mix(shade[ch], lit[ch], up); rim[ch] = col[ch]; }
+            col[3] = (60.0f + 70.0f * (0.4f + 0.6f * ov)) * edge * (k == 0 ? 0.7f : 1.0f);
+            cd.Add(x, y + kLift[k] * thick * 2.0f, z, width * kProfile[k], col, rim, 0.0f, i * 8 + k);
+        }
+    }
+    cd.Draw(play);
+}
+
+// Fog banks: wide, low drifts of fog lying on the ground round the camera, thicker in fog, sandstorms, ash, rain and the storm, as a mist at dawn,
+// and pooled low over water. The game's own distance fog (DriveRealWeather) hazes the far view; these give the near ground its depth.
+void DrawFogBanks(PlayState* play) {
+    if (!InField()) return;
+    const SkyLight L = SkyLightNow();
+    const float w = WeatherAmount();
+    float dens = 0.0f, col[3] = { 214, 220, 228 };
+    auto kind = [&](float a, float d, float r, float g, float b) { if (a * d > dens) { dens = a * d; col[0] = r; col[1] = g; col[2] = b; } };
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Fog: kind(w, 1.0f, 214, 220, 228); break;
+        case royale::Sky::Rain: kind(w, 0.35f, 150, 158, 170); break;
+        case royale::Sky::Thunder: kind(w, 0.45f, 110, 116, 134); break;
+        case royale::Sky::Snow: kind(w, 0.4f, 226, 232, 244); break;
+        case royale::Sky::Ash: kind(w, 0.6f, 84, 66, 62); break;
+        case royale::Sky::Sandstorm: kind(w, 0.75f, 214, 176, 118); break;
+        default: break;
+    }
+    kind(gStormWeather, 0.7f, 100, 64, 150);
+    const float mist = L.morning ? std::clamp(1.0f - std::fabs(L.sunH - 0.05f) / 0.3f, 0.0f, 1.0f) * (gWeatherShown.season == royale::Season::Autumn ? 0.5f : 0.28f) : 0.0f;
+    if (mist > dens) { dens = mist; col[0] = 218; col[1] = 222; col[2] = 232; }
+    const bool island = OnIsland();
+    const bool lake = gMapId == 1;
+    const float baseWater = island ? 0.22f : (lake ? 0.14f : 0.0f);   // sea mist and lake mist hang low all the time
+    dens = std::min(1.0f, dens * std::min(1.5f, std::max(0.3f, gWeatherDensity)));
+    if (dens + baseWater < 0.04f) return;
+    const float light = 0.35f + 0.65f * L.day;   // fog is lit by the sky: dim at night
+    const Vec3f eye = play->view.eye;
+    const float t = static_cast<float>(ImGui::GetTime());
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dxw = wx / wl, dzw = wz / wl;
+    const int banks = std::min(22, static_cast<int>(6.0f + 16.0f * std::min(1.0f, dens + baseWater)));
+    constexpr int kLayers = 3;
+    DiscSet fd;
+    if (!fd.Init(play, banks * kLayers)) return;
+    SkyBegin(play);
+    constexpr float kBox = 5200.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    for (int i = 0; i < banks; i++) {
+        const float h1 = Flora01(i, 7, 731), h2 = Flora01(i, 11, 732), h3 = Flora01(i, 13, 733);
+        const float drift = t * (8.0f + 0.12f * wl) * (0.6f + 0.8f * h3);
+        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float d = std::hypot(x, z);
+        const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 150.0f) / 450.0f, 0.0f, 1.0f);
+        if (edge <= 0.01f) continue;
+        float gy = 0.0f;
+        if (!RawFloorAt(eye.x + x, eye.z + z, &gy)) { if (!island) continue; gy = static_cast<float>(royale::fortnite::kWaterY); }
+        float local = dens;
+        if (island) {   // lower ground and the sea's edge hold more mist
+            const float low = std::clamp(1.0f - (gy - static_cast<float>(royale::fortnite::kWaterY)) / 260.0f, 0.0f, 1.0f);
+            local = std::min(1.0f, dens + baseWater * low);
+            gy = std::max(gy, static_cast<float>(royale::fortnite::kWaterY));
+        } else local = std::min(1.0f, dens + baseWater);
+        if (local < 0.03f) continue;
+        const float width = 520.0f + 520.0f * h3 + 300.0f * local;
+        for (int k = 0; k < kLayers; k++) {
+            const float up = static_cast<float>(k) / (kLayers - 1);
+            float c[4] = { col[0] * light * (0.82f + 0.18f * up), col[1] * light * (0.82f + 0.18f * up), col[2] * light * (0.82f + 0.18f * up), (40.0f + 60.0f * local) * edge * (1.0f - 0.35f * up) };
+            const float rim[3] = { c[0], c[1], c[2] };
+            fd.Add(x, gy - eye.y + 14.0f + k * 55.0f * (0.6f + 0.6f * local), z, width * (1.0f - 0.2f * up), c, rim, 0.0f, i * 4 + k);
+        }
+    }
+    fd.Draw(play);
+}
+
 // ---- wind streaks and the tornado --------------------------------------------------------------------------------------------------
 // Wind streaks: thin pale lines that drift through the air round the camera along the wind, longer, quicker and more of them as it picks up
 // (so a storm's squalls show), which is how you see which way it blows. Ash and sand have their own specks, so those skies skip this.
@@ -3504,6 +3817,10 @@ void DrawHeldFinds(PlayState* play) {
 
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    Feat("draw: sky");
+    if (DebugOn(kDbgSky)) DrawSky(play);
+    Feat("draw: fog banks");
+    if (DebugOn(kDbgFog)) DrawFogBanks(play);
     Feat("draw: foliage and puddles");
     if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: storm wall");
