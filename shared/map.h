@@ -55,7 +55,14 @@ inline const char* const kPoiNames[] = {
     "Snobby Shores Doors",     "Shifty Shafts Crafts",  "Flush Factory Trick-tory", "Fatal Fields Yields",
     "Lucky Landing Standing",  "Haunted Hills Chills",  "Junk Junction Function",  "Moisty Mire Choir",
     "Anarchy Acres Makers",    "Wailing Woods Goods",   "Tomato Town Crown",       "Paradise Palms Calms",
-    "Risky Reels Wheels",      "Lazy Links Drinks",     "Frosty Flights Heights",  "Sweaty Sands Bands",};
+    "Risky Reels Wheels",      "Lazy Links Drinks",     "Frosty Flights Heights",  "Sweaty Sands Bands",
+    // Sandbox (the test map: the first twelve are its zones, shared/sandbox_terrain.h kZones)
+    "Spawn Pad",               "Loot Plaza",            "Cart Lot",                "Boss Pad",
+    "Glider Hill",             "Test Pond",             "Ramp Row",                "Cliff Edge",
+    "Block Course",            "Cover Yard",            "Grove",                   "Plateau",
+    "Test Spot 13",            "Test Spot 14",          "Test Spot 15",            "Test Spot 16",
+    "Test Spot 17",            "Test Spot 18",          "Test Spot 19",            "Test Spot 20",
+    "Test Spot 21",            "Test Spot 22",          "Test Spot 23",            "Test Spot 24",};
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
 // the centre of the walkable ground and a radius that holds most of it. The host's game still measures the live scene when a match starts.
@@ -84,6 +91,10 @@ constexpr MapDef kMaps[] = {
     // The Fortnite Map is played inside Hyrule Field's scene, with the scene's collision swapped for the island (shared/fortnite_map.h). Its circle holds
     // the whole island, coast to coast (the middle of its land and nearly all of it); the host's game measures the live ground when a match starts.
     {"Fortnite Map", "A big island of towns, woods, lakes and hills: drop in, loot up and be the last one standing", 0x51, {{72.0f, -524.0f}, 7000.0f}, 7400.0f, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    // The Sandbox is a test map (shared/sandbox_terrain.h): the Fortnite Map's mesh with a flat arena and a test course on it. It is only offered by its own
+    // menu button, never as a lobby map. No bosses of its own: you spawn them where you like.
+    {"Sandbox", "A test arena with ramps, cliffs, water, a loot plaza and a button for everything", 0x51, {{0.0f, 0.0f}, 3300.0f}, 3400.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
@@ -128,8 +139,11 @@ inline constexpr const char* kAvriellaPetLines[kAvriellaPetLineCount] = {
 };
 
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
+constexpr int kSandboxMapIndex = 6;   // the test map (it has the island's terrain machinery, with its own ground)
+constexpr int kPlayableMapCount = 6;  // the places a lobby can be played on: the Sandbox is not one of them
+constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex; }   // played in Hyrule Field's scene with swapped collision
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
-static_assert(kFortniteMapIndex < kMapCount, "the Fortnite Map is the sixth place");
+static_assert(kFortniteMapIndex < kMapCount && kSandboxMapIndex < kMapCount && kSandboxMapIndex == kPlayableMapCount, "the Fortnite Map is the sixth place, the Sandbox the seventh");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
 

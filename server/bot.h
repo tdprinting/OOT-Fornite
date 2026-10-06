@@ -77,6 +77,9 @@ class BotController {
     std::vector<std::pair<uint32_t, size_t>> DrainSmashes() { std::vector<std::pair<uint32_t, size_t>> out; out.swap(smashes); return out; }
     bool HasNav() const { return nav != nullptr; }
     void SetDifficulty(BotDifficulty d) { difficulty = d; memory.clear(); } // bots re-roll their personalities
+    // The Sandbox test map: bots that stand where they are put (they neither move nor act) for trying things out on.
+    void SetFrozen(bool on) { frozen = on; }
+    bool Frozen() const { return frozen; }
     BotDifficulty Difficulty() const { return difficulty; }
 
     void Step(Match& m, float dt) {
@@ -87,6 +90,7 @@ class BotController {
         StepAllies(m, dt);
         for (auto& p : m.Players()) {
             if (p.isBot && p.alive) {
+                if (frozen) continue;
                 Memory& air = Mem(p.id);
                 if (!air.started) {   // a bot that is there from the countdown or the drop starts in the sky, like the players
                     air.started = true;
@@ -315,6 +319,7 @@ class BotController {
 
     Rng rng;
     BotDifficulty difficulty = BotDifficulty::Normal;
+    bool frozen = false;   // the Sandbox test map: bots stand still (SetFrozen)
     std::shared_ptr<const NavGrid> nav;
     std::unordered_map<uint32_t, Memory> memory;
     int repathBudget = 0;
@@ -766,6 +771,14 @@ class BotController {
             urgency = (std::min)(urgency, 0.3f);
             const float side = off >= 0 ? 1.0f : -1.0f;               // leave the cone by the nearer edge
             away.x += std::cos(face) * side; away.z += -std::sin(face) * side;
+        }
+        for (const Match::FartCloud& c : m.FartClouds()) {   // Lilo's toxic cloud: walk out of it
+            if (now >= c.until || Distance(p.pos, c.at) > kFartCloudRadius) continue;
+            inDanger = true;
+            urgency = (std::min)(urgency, 2.0f);
+            const float dx = p.pos.x - c.at.x, dz = p.pos.z - c.at.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+            away.x += dx / d; away.z += dz / d;
+            if (d < 2.0f) { away.x += 1.0f; }
         }
         if (!inDanger) { mem.hazardNoticeAt = -1; return false; }
         if (mem.hazardNoticeAt < 0) mem.hazardNoticeAt = now + mem.reaction * 0.6f;

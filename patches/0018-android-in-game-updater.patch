@@ -32,10 +32,10 @@ index 907d70d..ac29566 100644
       
 diff --git a/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java b/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java
 new file mode 100644
-index 0000000..7dc10af
+index 0000000..0000000
 --- /dev/null
 +++ b/Android/app/src/main/java/com/dishii/soh/RoyaleUpdater.java
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,221 @@
 +package com.dishii.soh;
 +
 +import android.content.Context;
@@ -67,6 +67,8 @@ index 0000000..7dc10af
 +public final class RoyaleUpdater {
 +    private static final String TAG = "RoyaleUpdater";
 +    private static final String LATEST_URL = "https://api.github.com/repos/tdprinting/OOT-Fornite/releases/latest";
++    // Test builds are pre-releases, which "latest" never returns, so the test channel reads the newest few releases instead
++    private static final String RECENT_URL = "https://api.github.com/repos/tdprinting/OOT-Fornite/releases?per_page=30";
 +    private static final String TAG_PREFIX = "build-";
 +
 +    // States, mirrored in RoyaleMod.cpp
@@ -94,39 +96,60 @@ index 0000000..7dc10af
 +
 +    private static boolean busy() { return state == CHECKING || state == DOWNLOADING; }
 +
-+    // Ask GitHub which build is the newest.
-+    public static void check(Context context) {
++    // Ask GitHub which build is the newest. Normal builds only.
++    public static void check(Context context) { check(false); }
++
++    // The same, but also considering test builds (builds of branches that are not merged yet).
++    public static void checkWithTests(Context context) { check(true); }
++
++    private static void check(boolean includeTests) {
 +        if (busy()) return;
 +        state = CHECKING;
 +        message = "Asking GitHub for the newest build...";
 +        new Thread(() -> {
 +            try {
-+                JSONObject release = new JSONObject(readText(LATEST_URL));
-+                String tag = release.optString("tag_name", "");
-+                if (!tag.startsWith(TAG_PREFIX)) throw new Exception("the newest release (" + tag + ") is not a game build");
-+                int build = Integer.parseInt(tag.substring(TAG_PREFIX.length()));
-+                JSONArray assets = release.optJSONArray("assets");
-+                String url = "";
-+                long size = 0;
-+                for (int i = 0; assets != null && i < assets.length(); i++) {
-+                    JSONObject a = assets.getJSONObject(i);
-+                    if (a.optString("name", "").endsWith(".apk")) {
-+                        url = a.optString("browser_download_url", "");
-+                        size = a.optLong("size", 0);
-+                        break;
++                JSONObject best = null;
++                int bestBuild = -1;
++                if (includeTests) {
++                    JSONArray all = new JSONArray(readText(RECENT_URL));
++                    for (int i = 0; i < all.length(); i++) {
++                        JSONObject r = all.getJSONObject(i);
++                        int b = buildNumber(r.optString("tag_name", ""));
++                        if (b > bestBuild && !r.optBoolean("draft", false) && apkOf(r) != null) { best = r; bestBuild = b; }
 +                    }
++                    if (best == null) throw new Exception("no builds are published yet");
++                } else {
++                    best = new JSONObject(readText(LATEST_URL));
++                    bestBuild = buildNumber(best.optString("tag_name", ""));
++                    if (bestBuild < 0) throw new Exception("the newest release (" + best.optString("tag_name", "") + ") is not a game build");
 +                }
-+                if (url.isEmpty()) throw new Exception("build " + build + " has no APK attached yet");
-+                latestName = release.optString("name", "Build 0." + build);
-+                apkUrl = url;
-+                apkSize = size;
-+                latestBuild = build;
++                JSONObject apk = apkOf(best);
++                if (apk == null) throw new Exception("build " + bestBuild + " has no APK attached yet");
++                latestName = best.optString("name", "Build 0." + bestBuild);
++                apkUrl = apk.optString("browser_download_url", "");
++                apkSize = apk.optLong("size", 0);
++                latestBuild = bestBuild;
 +                message = "";
 +                state = CHECKED;
 +            } catch (Throwable t) {
 +                fail("Could not check for updates: " + describe(t));
 +            }
 +        }, "RoyaleUpdateCheck").start();
++    }
++
++    // "build-123" -> 123, or -1 for any other tag
++    private static int buildNumber(String tag) {
++        if (!tag.startsWith(TAG_PREFIX)) return -1;
++        try { return Integer.parseInt(tag.substring(TAG_PREFIX.length())); } catch (NumberFormatException e) { return -1; }
++    }
++
++    private static JSONObject apkOf(JSONObject release) throws Exception {
++        JSONArray assets = release.optJSONArray("assets");
++        for (int i = 0; assets != null && i < assets.length(); i++) {
++            JSONObject a = assets.getJSONObject(i);
++            if (a.optString("name", "").endsWith(".apk")) return a;
++        }
++        return null;
 +    }
 +
 +    // Download the build found by check(), then install it.

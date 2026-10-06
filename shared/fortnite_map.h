@@ -1,6 +1,7 @@
 #pragma once
 #include "fortnite_cover_data.h"
 #include "fortnite_map_data.h"
+#include "sandbox_terrain.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -27,7 +28,25 @@ inline constexpr float kCellZ = 2.0f * kHalfZ / kCells;
 
 inline float VertexX(int i) { return -kHalfX + kCellX * i; }
 inline float VertexZ(int j) { return -kHalfZ + kCellZ * j; }
-inline int VertexHeight(int i, int j) { return kHeights[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
+// Which ground is live: the island's (the default) or the Sandbox test map's (shared/sandbox_terrain.h), which has the same size and squares.
+// The pointers are switched when a scene is loaded (UseTerrain), never while it is being played.
+inline const int16_t* gHeightData = kHeights;
+inline const uint8_t* gColourData = kColours;
+inline const char* gCoverData = kCover;
+inline float gSpawnX = kSpawnX, gSpawnZ = kSpawnZ;   // flat inland ground for the lobby
+inline bool gSandboxTerrain = false;
+inline void UseTerrain(bool sandbox) {
+    gSandboxTerrain = sandbox;
+    if (sandbox) {
+        const sandbox::Data& t = sandbox::Terrain();
+        gHeightData = t.heights.data(); gColourData = t.colours.data(); gCoverData = t.cover.data();
+        gSpawnX = sandbox::kSpawnX; gSpawnZ = sandbox::kSpawnZ;
+    } else {
+        gHeightData = kHeights; gColourData = kColours; gCoverData = kCover;
+        gSpawnX = kSpawnX; gSpawnZ = kSpawnZ;
+    }
+}
+inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
 
 // Ground height under (x, z), exactly on the collision's triangles. False outside the map (there is nothing there).
 inline bool GroundHeight(float x, float z, float* y) {
@@ -64,7 +83,7 @@ inline Cover CoverAt(float x, float z) {
     if (x <= -kHalfX || x >= kHalfX || z <= -kHalfZ || z >= kHalfZ) return Cover::Water;
     const int i = std::min(kCoverCells - 1, static_cast<int>((x + kHalfX) / (2.0f * kHalfX) * kCoverCells));
     const int j = std::min(kCoverCells - 1, static_cast<int>((z + kHalfZ) / (2.0f * kHalfZ) * kCoverCells));
-    return static_cast<Cover>(kCover[j * kCoverCells + i] - '0');
+    return static_cast<Cover>(gCoverData[j * kCoverCells + i] - '0');
 }
 
 // ---- collision ------------------------------------------------------------------------------------------------------------------------
@@ -130,7 +149,7 @@ inline DrawVert FineVertex(int fi, int fj) {   // fine vertex (fi, fj), 0..kFine
     const float h01 = static_cast<float>(VertexHeight(ci, cj + 1)), h11 = static_cast<float>(VertexHeight(ci + 1, cj + 1));
     float y = u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
     y = std::max(y, static_cast<float>(kWaterY));
-    const uint8_t* c = &kColours[(static_cast<size_t>(fj) * (kFine + 1) + fi) * 3];
+    const uint8_t* c = &gColourData[(static_cast<size_t>(fj) * (kFine + 1) + fi) * 3];
     return { Round16(-kHalfX + kCellX * fi / kSub), Round16(y), Round16(-kHalfZ + kCellZ * fj / kSub), c[0], c[1], c[2] };
 }
 

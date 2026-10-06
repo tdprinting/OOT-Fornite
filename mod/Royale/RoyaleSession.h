@@ -109,7 +109,8 @@ class RoyaleSession {
 
     // Start a match server on `port` and join it as the host's own player (through 127.0.0.1, like everyone else).
     // `soloTest` makes it a test environment on the selected map: no bots, no lobby timer, and the match goes on with one player.
-    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false) {
+    // `sandbox` makes it the Sandbox test map (shared/sandbox_layout.h): a solo test with no countdown and a button for every feature.
+    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false, bool sandbox = false) {
         Leave();
         std::string err;
         hostTransport = net::ENetTransport::Host(port, kMaxPlayers, &err);
@@ -127,9 +128,15 @@ class RoyaleSession {
             server->SetSoloTest(true);
             server->SetAutoStart(0);
         }
-        const int map = selectedMap;
-        if (map != 0) server->SelectMap(map);
+        if (sandbox) {
+            server->SetSandbox(true);
+            server->SelectMap(kSandboxMapIndex);
+        } else {
+            const int map = selectedMap;
+            if (map != 0) server->SelectMap(map);
+        }
         solo = soloTest;
+        isSandbox = sandbox;
         // A secret only this process knows: the server uses it to recognise the host's own player.
         uint64_t token = (static_cast<uint64_t>(rd()) << 32) ^ rd();
         if (token == 0) token = 1;
@@ -162,6 +169,7 @@ class RoyaleSession {
         server.reset();
         hostTransport.reset();
         solo = false;
+        isSandbox = false;
         mode = Mode::Idle;
     }
 
@@ -179,6 +187,7 @@ class RoyaleSession {
     // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
     void ReportNpcHit(float hearts) { if (Joined()) client->ReportNpcHit(hearts); }
     void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
+    void ReportFartCloud(float x, float z) { if (Joined()) client->ReportFartCloud(x, z); }
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void HireAlly(int index) { if (client) client->HireAlly(index); }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
@@ -187,6 +196,10 @@ class RoyaleSession {
 
     // Host presses Start. Needs at least one human in the lobby; the rest of the 32 slots fill with bots.
     bool SoloTest() const { return solo && mode == Mode::Hosting; }
+    // The Sandbox test map's match, for its panel (host only; null otherwise). The panel runs on the game's own thread.
+    bool Sandbox() const { return isSandbox && mode == Mode::Hosting && server; }
+    Match* SandboxMatch() { return Sandbox() ? &server->Sim().match : nullptr; }
+    BotController* SandboxBots() { return Sandbox() ? &server->Sim().bots : nullptr; }
     bool StartMatch() { return mode == Mode::Hosting && server && server->StartMatch(); }
 
     // Call once per rendered frame with the real elapsed time. The server steps itself at a fixed 20 Hz inside.
@@ -366,6 +379,7 @@ class RoyaleSession {
     int playerLimit = kMaxPlayers;
     int selectedMap = 0;
     bool solo = false;
+    bool isSandbox = false;
     bool majorBoss = true;
     WeatherOptions weatherOptions;
     float autoStart = kLobbyAutoStartSec;
