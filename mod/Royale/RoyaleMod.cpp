@@ -3018,6 +3018,7 @@ void DrawFlora(PlayState* play) {
             Gfx_SetupDL_25Xlu(play->state.gfxCtx);
             gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
             gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+            gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies 1 unit above
             CLOSE_DISPS(play->state.gfxCtx);
         }
         const float reach = 950.0f, rippleReach = 650.0f;
@@ -3120,6 +3121,7 @@ void DrawIslandPuddles(PlayState* play) {
         Gfx_SetupDL_25Xlu(play->state.gfxCtx);
         gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
         gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies 1 unit above
         CLOSE_DISPS(play->state.gfxCtx);
     }
     const Vec3f eye = play->view.eye;
@@ -9105,6 +9107,7 @@ struct FortniteGpu {
     bool built = false;
 };
 FortniteGpu gFortniteGpu;
+uint8_t gFortniteLod[FortniteGpu::kChunks * FortniteGpu::kChunks] = {};   // the level of detail each chunk was last drawn at
 Actor* gFortniteActor = nullptr;
 bool gFortniteArrived = false;   // the local player has been put on the island since this scene loaded
 
@@ -9201,8 +9204,17 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
                 const float hx = fx / flat, hz = fz / flat, ahead = dx * hx + dz * hz, side = std::fabs(dx * hz - dz * hx);
                 if (side - r > std::max(0.0f, ahead + r) * 2.4f) continue;
             }
+            // A chunk keeps its level of detail until the camera is clearly past the limit, so it does not flip back and forth at the edge while you
+            // move or the camera swings.
             const float dist = std::hypot(dx, dz);
-            const int lod = dist < 2300.0f ? 0 : dist < 5000.0f ? 1 : 2;
+            uint8_t& held = gFortniteLod[c];
+            constexpr float kNear = 2300.0f, kFar = 5000.0f, kSlack = 220.0f;
+            int lod = dist < kNear ? 0 : dist < kFar ? 1 : 2;
+            if (lod != held) {
+                const float edge = std::min(lod, static_cast<int>(held)) == 0 ? kNear : kFar;
+                if (std::fabs(dist - edge) < kSlack && std::abs(lod - static_cast<int>(held)) == 1) lod = held;
+            }
+            held = static_cast<uint8_t>(lod);
             gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][c].data()));
         }
     }
