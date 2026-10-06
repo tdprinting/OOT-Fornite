@@ -736,7 +736,7 @@ index 2b045bc..160b2f4 100644
  
      public void openFilePicker() {
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index 1277ce4..1c6496e 100644
+index 1277ce4..99ff1fa 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
 @@ -47,8 +47,12 @@
@@ -877,8 +877,8 @@ index 1277ce4..1c6496e 100644
 +}
 +extern "C" void SohLoading_Done(void) {
 +}
-+#endif
-+
+ #endif
+ 
 +// Pauses the loading screen's "stuck" warning while a message box waits for the player.
 +struct WaitingForPlayer {
 +    WaitingForPlayer() {
@@ -900,9 +900,9 @@ index 1277ce4..1c6496e 100644
 +#else
 +    ShowErrorBox(title, text);
 +    exit(1);
- #endif
++#endif
 +}
- 
++
  void Extractor::ShowErrorBox(const char* title, const char* text) {
 +    WaitingForPlayer waiting;
  #ifdef _WIN32
@@ -1051,14 +1051,14 @@ index 1277ce4..1c6496e 100644
 +    // copy failed. The copy itself reports its own progress.
 +    while (fileDialogOpen) {
 +        SDL_Delay(100);
-     }
--    SDL_Log("%s",javaRomPath);
--    selection.push_back(javaRomPath);
++    }
 +    std::string picked;
 +    {
 +        std::lock_guard<std::mutex> lock(javaRomPathMutex);
 +        picked = javaRomPath;
-+    }
+     }
+-    SDL_Log("%s",javaRomPath);
+-    selection.push_back(javaRomPath);
 +    SDL_Log("Picked rom: %s", picked.c_str());
  
 -    if (selection.empty()) {
@@ -1182,7 +1182,7 @@ index 1277ce4..1c6496e 100644
  #endif
      // create 6 random alphanumeric characters
      static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-@@ -687,7 +849,26 @@ std::string Extractor::Mkdtemp() {
+@@ -687,7 +849,60 @@ std::string Extractor::Mkdtemp() {
  }
  
  extern "C" int zapd_main(int argc, char** argv);
@@ -1205,11 +1205,45 @@ index 1277ce4..1c6496e 100644
 +    }
 +}
 +
++#ifdef __ANDROID__
++// std::filesystem::copy can leave a file short or missing on Android's external storage. Compare every copied file
++// with its source and redo the ones that differ with a plain read/write copy, so ZAPD never starts on a bad file.
++static void VerifyCopiedAssets(const std::string& from, const std::string& to) {
++    std::error_code ec;
++    size_t total = 0, fixed = 0;
++    for (const auto& entry : std::filesystem::recursive_directory_iterator(from, ec)) {
++        if (!entry.is_regular_file(ec)) {
++            continue;
++        }
++        total++;
++        std::filesystem::path dest = std::filesystem::path(to) / std::filesystem::relative(entry.path(), from, ec);
++        uintmax_t want = entry.file_size(ec);
++        std::error_code destError;
++        bool ok = std::filesystem::is_regular_file(dest, destError) && std::filesystem::file_size(dest, destError) == want;
++        if (!ok) {
++            fixed++;
++        }
++        for (int attempt = 0; !ok && attempt < 3; attempt++) {
++            std::filesystem::create_directories(dest.parent_path(), ec);
++            std::ifstream in(entry.path(), std::ios::binary);
++            std::ofstream out(dest, std::ios::binary | std::ios::trunc);
++            out << in.rdbuf();
++            out.close();
++            ok = std::filesystem::is_regular_file(dest, destError) && std::filesystem::file_size(dest, destError) == want;
++        }
++        if (!ok) {
++            throw std::runtime_error("Could not copy " + dest.string() + ". The storage may be full or unreliable.");
++        }
++    }
++    SDL_Log("Verified %zu extractor files (%zu needed a second copy)", total, fixed);
++}
++#endif
++
 +// Returns true when the game archive (oot.otr or oot-mq.otr) was written to exportdir. On failure, shows why.
  bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      constexpr int argc = 18;
      char xmlPath[1024];
-@@ -697,72 +878,110 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
+@@ -697,72 +912,113 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      const char* version = GetZapdVerStr();
      const char* otrFile = IsMasterQuest() ? "oot-mq.otr" : "oot.otr";
  
@@ -1242,6 +1276,9 @@ index 1277ce4..1c6496e 100644
 -                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
 +        std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
 +                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
++#ifdef __ANDROID__
++        VerifyCopiedAssets(installPath + "/assets", tempdir + "/assets");
++#endif
  #else
 -    std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
 +        std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
