@@ -143,6 +143,25 @@ inline constexpr const char* kAvriellaPetLines[kAvriellaPetLineCount] = {
     "Ba ba BAAA! (She swirls a little green cap round and round. It looks a lot like yours.)",
 };
 
+// Maya companion dialogue; original map Maya remains available.
+inline constexpr int kMayaCompanionLineCount = 14;
+inline constexpr const char* kMayaCompanionLines[kMayaCompanionLineCount] = {
+    "Hi Daddy! Ready for an adventure? I will follow you!",
+    "Can we play Roblox on my iPad after this?",
+    "This place would be fun to build in Minecraft!",
+    "Look! I am drawing our adventure in my sketchbook.",
+    "Pizza break! Adventures make me hungry.",
+    "My electric scooter is super speedy. Watch me catch up!",
+    "What is inside that chest? I love learning new things!",
+    "Can we build a castle with lots of secret rooms?",
+    "I drew you, Avriella, Lilo and me. Our adventure team!",
+    "You did it, Daddy! High five!",
+    "Was that Mom, or did a Goron just sit on a trumpet?",
+    "Mom calls it a breeze. I call it a fart tornado!",
+    "If Mom farts again, my scooter needs turbo mode!",
+    "Mom! That was louder than a creeper explosion!",
+};
+
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 constexpr int kSandboxMapIndex = 6;   // the test map (it has the island's terrain machinery, with its own ground)
 constexpr int kPlayableMapCount = 6;  // the places a lobby can be played on: the Sandbox is not one of them
