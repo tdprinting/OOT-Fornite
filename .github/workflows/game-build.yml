@@ -57,7 +57,8 @@ jobs:
         run: |
           # Fails the build (instead of shipping an APK that cannot update the last one) if the key did not take.
           APK=$(ls third_party/Shipwright-Android/Android/app/build/outputs/apk/release/*.apk | head -1)
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" | tee /tmp/certs.txt
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt
           WANT=$(keytool -list -keystore scripts/royale-debug.keystore -storepass android | grep -o 'SHA-256): .*' | sed 's/SHA-256): //;s/://g' | tr A-Z a-z)
           grep -qi "certificate SHA-256 digest: $WANT" /tmp/certs.txt
       - uses: actions/upload-artifact@v4
