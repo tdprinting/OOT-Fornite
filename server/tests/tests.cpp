@@ -1226,12 +1226,29 @@ static void ClothAndWind() {
     for (int i = 0; i < 120; i++) run.Step(1.0f / 60.0f, 0, -300, 0, 0.0f, 0.0f, 0);   // air streaming back past him at 300 a second
     HatSpring stand;
     for (int i = 0; i < 120; i++) stand.Step(1.0f / 60.0f, 0, 300, 0, 0.0f, 0.0f, 0);  // the opposite direction
-    CHECK(run.fore > 0.3f && stand.fore < -0.3f && run.fore <= 0.7f);
+    CHECK(run.fore > 0.3f && stand.fore < -0.3f && run.fore <= 1.1f);
     for (int i = 0; i < 240; i++) run.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
     CHECK(std::fabs(run.fore) < 0.06f);
     HatSpring junk;
     junk.Step(10.0f, 1e9f, -1e9f, 1e9f, 9.0f, 1e9f, 5);
-    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::fabs(junk.fore) <= 0.7f + 1e-4f);
+    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::fabs(junk.fore) <= 1.1f + 1e-4f && std::fabs(junk.twist) <= 0.6f + 1e-4f);
+    junk.Step(NAN, NAN, NAN, NAN, NAN, NAN, 0, NAN, NAN, NAN);
+    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::isfinite(junk.twist));
+    // Turning drags the cap out to the other side and rolls it, then it settles; a hard turn throws it further than a gentle one.
+    HatSpring left, gentle, none;
+    float leftMax = 0, gentleMax = 0, twistMax = 0, noneMax = 0;
+    for (int i = 0; i < 90; i++) {
+        left.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 8.0f); gentle.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 2.0f); none.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+        leftMax = (std::max)(leftMax, left.side); gentleMax = (std::max)(gentleMax, gentle.side); twistMax = (std::max)(twistMax, left.twist); noneMax = (std::max)(noneMax, std::fabs(none.side));
+    }
+    CHECK(leftMax > 0.25f && leftMax > gentleMax * 1.5f && twistMax > 0.1f && noneMax < 0.02f);
+    for (int i = 0; i < 300; i++) left.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+    CHECK(std::fabs(left.side) < 0.05f && std::fabs(left.twist) < 0.05f);
+    // The skirt swings out in a turn too.
+    ClothSwing spin;
+    float spinMax = 0;
+    for (int i = 0; i < 90; i++) { spin.Step(kSkirtSwing, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 8.0f); spinMax = (std::max)(spinMax, spin.side); }
+    CHECK(spinMax > 0.03f);
     // The wind spins the cap more in a gale than a breeze.
     float breeze = 0, gale = 0;
     HatSpring h1, h2;

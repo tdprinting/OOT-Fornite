@@ -156,12 +156,19 @@ struct HatSpring {
     // looser spring for the floppy tip, which whips a little beyond the base when the base moves and settles after it.
     float fore = 0, side = 0, vFore = 0, vSide = 0;
     float baseFore = 0, baseSide = 0, tipFore = 0, tipSide = 0, vTipFore = 0, vTipSide = 0;
+    // The cap's tail is a chain of three joints (base, middle, tip), each following the one before it more loosely, so a movement ripples down it
+    // like a real floppy tail. The game's cap is a single piece, so the chain is added up into the one turn the limb can take: the whip at the
+    // tip is exaggerated on purpose. `twist` is the roll about the tail's own length, thrown by turning.
+    float midFore = 0, midSide = 0, vMidFore = 0, vMidSide = 0;
+    float twist = 0, vTwist = 0;
     // kickFore/kickSide: a sudden push from Link's own acceleration (starting, stopping, landing, a hit), added to the spring's speed.
-    void Step(float dt, float airX, float airZ, float airY, float wind01, float time, float phase, float kickFore = 0.0f, float kickSide = 0.0f) {
-        const float k = 34.0f, damp = 3.6f;
+    // `turn`: how fast Link is turning (radians per second, positive to his left): the tail drags behind a turn, swings out and rolls.
+    void Step(float dt, float airX, float airZ, float airY, float wind01, float time, float phase, float kickFore = 0.0f, float kickSide = 0.0f, float turn = 0.0f) {
+        const float k = 30.0f, damp = 2.6f;
+        turn = std::isfinite(turn) ? std::clamp(turn, -14.0f, 14.0f) : 0.0f;
         float targetFore = std::clamp(-airZ * 0.0016f - airY * 0.0007f, -0.55f, 0.55f);    // forward speed and falling both lift the tail up and back
-        float targetSide = std::clamp(-airX * 0.0016f, -0.5f, 0.5f);
-        const float flutter = (0.04f + 0.22f * wind01) * (0.4f + (std::min)(1.0f, std::sqrt(airX * airX + airZ * airZ) / 300.0f));
+        float targetSide = std::clamp(-airX * 0.0016f + turn * 0.09f, -0.7f, 0.7f);          // a turn drags the tail out to the other side
+        const float flutter = (0.07f + 0.34f * wind01) * (0.4f + (std::min)(1.0f, std::sqrt(airX * airX + airZ * airZ) / 300.0f));
         targetFore += std::sin(time * 9.0f + phase) * flutter + std::sin(time * 14.3f + phase * 0.6f) * flutter * 0.35f;
         targetSide += std::sin(time * 6.3f + phase * 1.7f) * flutter * 0.8f;
         if (std::isfinite(kickFore)) vFore += std::clamp(kickFore, -6.0f, 6.0f);
@@ -173,16 +180,26 @@ struct HatSpring {
             vSide += ((targetSide - baseSide) * k - vSide * damp) * h;
             baseFore += vFore * h;
             baseSide += vSide * h;
-            vTipFore += ((baseFore - tipFore) * 70.0f - vTipFore * 3.2f) * h;   // the tip chases the base, loosely
-            vTipSide += ((baseSide - tipSide) * 70.0f - vTipSide * 3.2f) * h;
+            vMidFore += ((baseFore - midFore) * 90.0f - vMidFore * 3.4f) * h;   // the middle chases the base...
+            vMidSide += ((baseSide - midSide) * 90.0f - vMidSide * 3.4f) * h;
+            midFore += vMidFore * h;
+            midSide += vMidSide * h;
+            vTipFore += ((midFore - tipFore) * 60.0f - vTipFore * 2.6f) * h;    // ...and the tip chases the middle, looser still
+            vTipSide += ((midSide - tipSide) * 60.0f - vTipSide * 2.6f) * h;
             tipFore += vTipFore * h;
             tipSide += vTipSide * h;
+            vTwist += ((turn * 0.05f - twist) * 26.0f - vTwist * 2.8f) * h;
+            twist += vTwist * h;
         }
-        baseFore = std::clamp(baseFore, -0.7f, 0.7f);
-        baseSide = std::clamp(baseSide, -0.6f, 0.6f);
-        if (!std::isfinite(baseFore) || !std::isfinite(baseSide) || !std::isfinite(tipFore) || !std::isfinite(tipSide)) { baseFore = baseSide = tipFore = tipSide = vFore = vSide = vTipFore = vTipSide = 0; }
-        fore = std::clamp(baseFore + 0.5f * (baseFore - tipFore), -0.7f, 0.7f);
-        side = std::clamp(baseSide + 0.5f * (baseSide - tipSide), -0.6f, 0.6f);
+        twist = std::clamp(twist, -0.6f, 0.6f);
+        baseFore = std::clamp(baseFore, -0.8f, 0.8f);
+        baseSide = std::clamp(baseSide, -0.8f, 0.8f);
+        if (!std::isfinite(baseFore) || !std::isfinite(baseSide) || !std::isfinite(tipFore) || !std::isfinite(tipSide) || !std::isfinite(midFore) || !std::isfinite(midSide) || !std::isfinite(twist)) {
+            baseFore = baseSide = tipFore = tipSide = midFore = midSide = vFore = vSide = vTipFore = vTipSide = vMidFore = vMidSide = twist = vTwist = 0;
+        }
+        // The chain added up: the base's turn, plus how far the middle and the tip lag behind it (the lag is what makes it look like a tail).
+        fore = std::clamp(baseFore * 1.35f + 0.9f * (baseFore - midFore) + 0.9f * (midFore - tipFore), -1.1f, 1.1f);
+        side = std::clamp(baseSide * 1.35f + 0.9f * (baseSide - midSide) + 0.9f * (midSide - tipSide), -1.0f, 1.0f);
     }
 };
 
@@ -194,10 +211,11 @@ struct SwingTune {
     float flutter;            // wind flutter at full gale
     float stride;             // flap per (unit per second) of running speed, at the stride's rhythm
     float kick;               // how much a sudden start, stop or landing throws it
+    float turn;               // how hard turning on the spot throws it sideways (radians of swing per radian per second of turning)
 };
 // The tunic's skirt: heavy cloth, swings a little and slowly. The sheath: a stiff thing on a strap, a smaller, quicker bob.
-constexpr SwingTune kSkirtSwing = {22.0f, 4.2f, 0.00055f, 0.2f, 0.16f, 0.06f, 0.00016f, 0.0026f};
-constexpr SwingTune kSheathSwing = {38.0f, 5.5f, 0.0004f, 0.22f, 0.18f, 0.04f, 0.00022f, 0.0032f};
+constexpr SwingTune kSkirtSwing = {18.0f, 3.0f, 0.0011f, 0.34f, 0.3f, 0.11f, 0.00034f, 0.0048f, 0.16f};
+constexpr SwingTune kSheathSwing = {30.0f, 4.0f, 0.0006f, 0.3f, 0.26f, 0.07f, 0.00034f, 0.0048f, 0.1f};
 
 struct ClothSwing {
     float fore = 0, side = 0;                         // what the limb is turned by
@@ -207,7 +225,7 @@ struct ClothSwing {
     // A spring carries the slow part (trailing in the airflow, lagging a start, swinging past a stop); the stride's flap and the wind's
     // flutter ride on top of it, so they stay lively instead of being smoothed away by the heavy spring.
     void Step(const SwingTune& t, float dt, float airX, float airZ, float speed, float fall, float wind01, float time, float phase,
-              float accFore = 0.0f, float accSide = 0.0f) {
+              float accFore = 0.0f, float accSide = 0.0f, float turn = 0.0f) {
         if (!std::isfinite(dt) || dt <= 0.0f) return;
         dt = (std::min)(dt, 0.1f);
         auto safe = [](float v, float lim) { return std::isfinite(v) ? std::clamp(v, -lim, lim) : 0.0f; };
@@ -220,6 +238,8 @@ struct ClothSwing {
         // His own acceleration throws the cloth the other way: it lags a start and swings on past a stop.
         vFore += std::clamp(accFore * t.kick, -4.0f, 4.0f);
         vSide += std::clamp(accSide * t.kick, -4.0f, 4.0f);
+        // Turning drags the cloth round behind him: it lags the turn and swings out to the other side.
+        if (std::isfinite(turn)) vSide += std::clamp(turn * t.turn, -2.0f, 2.0f) * (std::min)(1.0f, dt * 30.0f);
         const int steps = (std::max)(1, (std::min)(6, static_cast<int>(dt / (1.0f / 120.0f) + 0.5f)));
         const float h = dt / steps;
         for (int s = 0; s < steps; s++) {
