@@ -30,10 +30,10 @@ struct BossActor {
     float modeAge = 0;           // seconds since the mode (or its variant) last changed
     bool modeFresh = false;      // the mode changed this frame
     bool initialised = false;
-    SkelAnime sk;                // the game's own model
+    SkelAnime sk = {};           // the game's own model (zeroed: the game reads the old animation when it changes one)
     bool skReady = false;
     const void* playing = nullptr;
-    SkelAnime hand[2];           // Bongo Bongo's two hands; the Dead Hand's grabbing hands use the first
+    SkelAnime hand[2] = {};      // Bongo Bongo's two hands; the Dead Hand's grabbing hands use the first
     bool handsReady = false;
     const void* handPlaying[2] = { nullptr, nullptr };
     float hurtAge = 10.0f;       // seconds since it was last hurt

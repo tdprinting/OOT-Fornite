@@ -108,7 +108,7 @@ class RoyaleSession {
     enum class Mode : uint8_t { Idle, Hosting, Joined };
 
     // Start a match server on `port` and join it as the host's own player (through 127.0.0.1, like everyone else).
-    // `soloTest` makes it a test environment on the Fortnite Map: no bots, no lobby timer, and the match goes on with one player.
+    // `soloTest` makes it a test environment on the selected map: no bots, no lobby timer, and the match goes on with one player.
     bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false) {
         Leave();
         std::string err;
@@ -127,7 +127,7 @@ class RoyaleSession {
             server->SetSoloTest(true);
             server->SetAutoStart(0);
         }
-        const int map = soloTest ? kFortniteMapIndex : selectedMap;   // the test does not change the map remembered for the next lobby
+        const int map = selectedMap;
         if (map != 0) server->SelectMap(map);
         solo = soloTest;
         // A secret only this process knows: the server uses it to recognise the host's own player.
