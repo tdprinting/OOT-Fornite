@@ -17,7 +17,7 @@ struct MeshVertex {
     uint8_t r, g, b;
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, SnowPatch, CatBody, CatHead, CatTailSeg, CatLeg, Puddle, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -1018,6 +1018,176 @@ inline MeshData ThemeTree(uint32_t variant) {
     return b.mesh;
 }
 
+// ---- Hyrule Field's scenery for the Fortnite Map ----------------------------------------------------------------------------------------
+// Painted after the Ocarina of Time field artwork: round, glossy oaks with sunlit tops, flowering hedges, warm red-brown rock that catches pink
+// light, strata cliffs with a grassy lip, pink-lit snow crags, drifts of small white, yellow and pink flowers, and cattails at the water.
+// `variant` = item (0-7) + 8 * season (spring, summer, autumn, winter, as in FloraSeason):
+//   0 a lone field oak   1 a flowering hedge   2 a boulder with its pebbles   3 a strata cliff slab   4 a snow-capped crag
+//   5 white and yellow flowers   6 pink flowers with tall spikes   7 cattails and reeds
+struct SceneSeason { Rgb dark, light, grass, tip, petalA, petalB, petalC; bool snow; };
+inline const SceneSeason& SceneSeasonOf(uint32_t season) {
+    static const SceneSeason t[4] = {
+        {{70, 156, 56}, {176, 230, 96}, {120, 200, 66}, {184, 234, 100}, {250, 248, 240}, {252, 226, 70}, {238, 110, 150}, false},    // spring
+        {{52, 134, 48}, {150, 216, 84}, {104, 180, 58}, {170, 224, 92}, {248, 246, 236}, {250, 214, 60}, {236, 92, 128}, false},     // summer
+        {{176, 90, 36}, {248, 190, 70}, {170, 156, 64}, {224, 196, 96}, {230, 130, 50}, {200, 70, 40}, {244, 200, 80}, false},       // autumn
+        {{92, 124, 96}, {164, 192, 152}, {232, 238, 246}, {244, 246, 250}, {236, 240, 248}, {220, 226, 240}, {240, 240, 250}, true},  // winter
+    };
+    return t[season & 3];
+}
+inline float SceneSmooth(float e0, float e1, float x) { const float u = (std::min)(1.0f, (std::max)(0.0f, (x - e0) / (e1 - e0))); return u * u * (3 - 2 * u); }
+
+// The paint for a round crown or hedge: dark underneath and in the hollows, sunlit yellow-green on top, and snow on the tops in winter.
+inline auto SceneLeafPaint(const SceneSeason& s) {
+    return [=](float h, V3 n, V3) {
+        Rgb c = Mix(s.dark, s.light, (std::min)(1.0f, (std::max)(0.0f, 0.2f + 0.55f * h + 0.35f * n.y)));
+        c = Mix(c, s.tip, SceneSmooth(0.6f, 1.0f, n.y) * 0.35f);
+        if (s.snow) c = Mix(c, {244, 246, 252}, SceneSmooth(0.45f, 0.8f, n.y) * 0.9f);
+        return Rgb{c.r * 1.2f, c.g * 1.2f, c.b * 1.2f};
+    };
+}
+// The paint for warm rock: red-brown with leaning bands, pink where the sun catches it, lilac in the shade, a grassy (or snowy) cap and a dark foot.
+inline auto SceneRockPaint(const SceneSeason& s, Lcg& rng, bool capped) {
+    const float ph = rng.Next() * 6.2831853f;
+    return [=](float h, V3 n, V3 q) {
+        Rgb c = Mix({158, 108, 90}, {216, 160, 126}, h);
+        const float band = std::sin(q.y * 0.11f + q.x * 0.03f + ph);
+        c = Mix(c, band > 0 ? Rgb{232, 180, 146} : Rgb{128, 90, 84}, 0.2f * std::fabs(band));
+        const float lit = SceneSmooth(0.0f, 0.8f, -n.x * 0.6f + n.y * 0.5f + n.z * 0.3f);
+        c = Mix(c, {214, 150, 150}, lit * 0.28f);                                       // pink where the light catches it
+        c = Mix(c, {110, 92, 120}, SceneSmooth(0.2f, 0.9f, n.x * 0.7f - n.y * 0.2f) * 0.3f);   // lilac in the shade
+        if (capped) c = Mix(c, s.grass, 0.85f * SceneSmooth(0.5f, 0.8f, n.y) * SceneSmooth(0.45f, 0.7f, h));
+        c = Mix(c, {104, 76, 68}, 1.0f - SceneSmooth(0.03f, 0.22f, h));
+        return Rgb{c.r * 1.3f, c.g * 1.28f, c.b * 1.26f};   // the baked light takes about a third off: paint it up to match the sunlit artwork
+    };
+}
+inline void SceneBloom(Builder& b, V3 at, float r, Rgb col) {   // a little four-sided bud sitting on a surface
+    b.inside = {at.x, at.y - r, at.z};
+    const V3 p[4] = {{at.x + r, at.y, at.z}, {at.x, at.y, at.z + r}, {at.x - r, at.y, at.z}, {at.x, at.y, at.z - r}};
+    for (int i = 0; i < 4; i++) b.Tri(p[i], p[(i + 1) % 4], {at.x, at.y + r * 0.8f, at.z}, i % 2 ? col : Mix(col, {255, 255, 255}, 0.25f));
+}
+inline void SceneTuft(Builder& b, Lcg& rng, int blades, float tall, float spread, Rgb root, Rgb tip, float w) {
+    for (int i = 0; i < blades; i++) {
+        const float a = (i + rng.Next() * 0.7f) / blades * 6.2831853f, r = spread * rng.Next();
+        decor_detail::Blade(b, {std::cos(a) * r, 0, std::sin(a) * r}, tall * (0.7f + 0.5f * rng.Next()), a + (rng.Next() - 0.5f), tall * (0.15f + 0.3f * rng.Next()), w, root, tip);
+    }
+}
+
+inline MeshData Scenery(uint32_t variant) {
+    using namespace decor_detail;
+    const int item = static_cast<int>(variant % 8);
+    const SceneSeason& s = SceneSeasonOf(variant / 8);
+    Builder b;
+    Lcg rng(3000 + variant * 13);
+    const Rgb bark = {104, 72, 52}, barkDark = {78, 54, 42};
+    switch (item) {
+        case 0: {   // a lone field oak: a stout trunk with roots, a big round crown and two lobes
+            Prism(b, 0, 0, 0, 24, 26, 20, 8, barkDark);
+            Prism(b, 0, 0, 20, 100, 19, 12, 8, bark);
+            Prism(b, 26, 0, 70, 120, 7, 5, 6, bark);   // a bough
+            Stone(b.mesh, {0, 78, 0}, V3{108, 70, 104}, 0.0f, 1, 2, rng, SceneLeafPaint(s));
+            Stone(b.mesh, {78, 66, 30}, V3{60, 40, 58}, 0.0f, 0, 1, rng, SceneLeafPaint(s));
+            Stone(b.mesh, {-70, 70, -30}, V3{64, 42, 60}, 0.0f, 0, 1, rng, SceneLeafPaint(s));
+            break;
+        }
+        case 1: {   // a flowering hedge: three lumps, studded with blooms
+            Stone(b.mesh, {0, 0, 0}, V3{34, 22, 30}, 0.0f, 1, 2, rng, SceneLeafPaint(s));
+            Stone(b.mesh, {34, 0, 8}, V3{24, 16, 22}, 0.0f, 0, 1, rng, SceneLeafPaint(s));
+            Stone(b.mesh, {-30, 0, -10}, V3{26, 17, 24}, 0.0f, 0, 1, rng, SceneLeafPaint(s));
+            const int blooms = s.snow ? 0 : 11;
+            const Rgb col[3] = {s.petalA, s.petalB, s.petalC};
+            for (int i = 0; i < blooms; i++) {
+                const float a = rng.Next() * 6.2831853f, r = 8.0f + 30.0f * rng.Next();
+                SceneBloom(b, {std::cos(a) * r, 24.0f - r * 0.45f + 8.0f * rng.Next(), std::sin(a) * r * 0.9f}, 4.5f, col[i % 3]);
+            }
+            break;
+        }
+        case 2: {   // a boulder with pebbles at its foot, its crown grassed over
+            Stone(b.mesh, {0, 0, 0}, V3{70, 56, 62}, 0.05f, 1, 2, rng, SceneRockPaint(s, rng, true));
+            Stone(b.mesh, {72, 0, 24}, V3{38, 28, 34}, -0.1f, 1, 1, rng, SceneRockPaint(s, rng, true));
+            Stone(b.mesh, {-58, 0, 40}, V3{26, 18, 24}, 0.0f, 0, 1, rng, SceneRockPaint(s, rng, false));
+            SceneTuft(b, rng, 6, 20, 80, Mix(s.grass, {0, 0, 0}, 0.45f), s.tip, 3);
+            break;
+        }
+        case 3: {   // a cliff slab: bands of warm rock under a grassy lip, front facing +z
+            const int N = 12, L = 4;
+            const float H[L + 1] = {0, 44, 90, 132, 166}, W0 = 150.0f, D0 = 56.0f;
+            const Rgb band[L] = {{170, 124, 108}, {232, 178, 178}, {204, 150, 126}, {240, 196, 156}};
+            float jit[L + 1][12];
+            for (int i = 0; i <= L; i++) for (int k = 0; k < N; k++) jit[i][k] = 0.9f + 0.2f * rng.Next();
+            auto ring = [&](int i, int k, float y) {
+                const float a = 6.2831853f * k / N, c = std::cos(a), sn = std::sin(a), inset = 1.0f - 0.05f * i;
+                const float x = W0 * inset * jit[i][k] * (c < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(c), 0.55f);
+                const float z = D0 * (1.0f - 0.1f * i) * jit[i][k] * (sn < 0 ? -1.0f : 1.0f) * std::pow(std::fabs(sn), 0.55f);
+                return V3{x, y, z};
+            };
+            for (int i = 0; i < L; i++) {
+                b.inside = {0, (H[i] + H[i + 1]) * 0.5f, 0};
+                for (int k = 0; k < N; k++) {
+                    const Rgb col = i == 0 ? Mix(band[0], s.grass, 0.25f * rng.Next()) : Mix(band[i], {255, 255, 255}, 0.08f * rng.Next());
+                    b.Quad(ring(i, k, H[i]), ring(i, (k + 1) % N, H[i]), ring(i + 1, (k + 1) % N, H[i + 1]), ring(i + 1, k, H[i + 1]), col);
+                }
+            }
+            b.inside = {0, H[L], 0};
+            for (int k = 0; k < N; k++) {   // the lip: a slightly proud, rounded band of turf (or snow), then the flat top
+                const V3 a = ring(L, k, H[L] - 6), c = ring(L, (k + 1) % N, H[L] - 6), a2 = ring(L, k, H[L] + 8), c2 = ring(L, (k + 1) % N, H[L] + 8);
+                const V3 pa = {a.x * 1.06f, a.y, a.z * 1.12f}, pc = {c.x * 1.06f, c.y, c.z * 1.12f};
+                b.Quad(pa, pc, c2, a2, Mix(s.grass, {0, 0, 0}, 0.12f));
+                b.Tri(a2, c2, {0, H[L] + 10, 0}, Mix(s.grass, s.tip, 0.4f * rng.Next()));
+            }
+            SceneTuft(b, rng, 5, 22, 60, Mix(s.grass, {0, 0, 0}, 0.4f), s.tip, 3);
+            break;
+        }
+        case 4: {   // a crag: three spires, grey-lilac rock below and snow above, pink on the sunward faces
+            const float spec[3][4] = {{0, 0, 62, 250}, {64, 26, 44, 180}, {-52, -30, 40, 150}};
+            for (const auto& sp : spec) {
+                const float cx = sp[0], cz = sp[1], r0 = sp[2], h = sp[3];
+                const float yy[4] = {0, h * 0.4f, h * 0.75f, h}, rr[3] = {r0, r0 * 0.66f, r0 * 0.36f};
+                const int sides = 6;
+                float ang[6];
+                for (int k = 0; k < sides; k++) ang[k] = 6.2831853f * (k + 0.3f * rng.Next()) / sides;
+                auto at = [&](int level, int k) { const float f = level < 3 ? rr[level] * (0.85f + 0.3f * ((k * 7 + level * 3) % 5) / 4.0f) : 0.0f; return V3{cx + std::cos(ang[k % sides]) * f, yy[level], cz + std::sin(ang[k % sides]) * f}; };
+                b.inside = {cx, h * 0.4f, cz};
+                for (int k = 0; k < sides; k++) {
+                    const Rgb rock = k % 2 ? Rgb{226, 186, 206} : Rgb{190, 158, 186}, snow = k % 3 == 0 ? Rgb{255, 224, 238} : Rgb{255, 250, 255};
+                    b.Quad(at(0, k), at(0, k + 1), at(1, k + 1), at(1, k), Mix(rock, snow, 0.2f));
+                    b.Quad(at(1, k), at(1, k + 1), at(2, k + 1), at(2, k), Mix(rock, snow, 0.92f));
+                    b.Tri(at(2, k), at(2, k + 1), {cx, h, cz}, snow);
+                }
+            }
+            break;
+        }
+        case 5: {   // white and yellow flowers in the grass
+            SceneTuft(b, rng, s.snow ? 5 : 8, 22, 30, Mix(s.grass, {0, 0, 0}, 0.5f), s.tip, 3);
+            const int n = s.snow ? 3 : 11;
+            const Rgb col[3] = {s.petalA, s.petalB, s.petalA};
+            for (int i = 0; i < n; i++) { const float a = rng.Next() * 6.2831853f, r = 32.0f * rng.Next(); Flower(b, {std::cos(a) * r, 14 + 12 * rng.Next(), std::sin(a) * r}, 5.5f, col[i % 3]); }
+            break;
+        }
+        case 6: {   // pink flowers, with a few tall spikes of bloom
+            SceneTuft(b, rng, s.snow ? 5 : 8, 24, 30, Mix(s.grass, {0, 0, 0}, 0.5f), s.tip, 3);
+            const int n = s.snow ? 2 : 7;
+            for (int i = 0; i < n; i++) { const float a = rng.Next() * 6.2831853f, r = 30.0f * rng.Next(); Flower(b, {std::cos(a) * r, 14 + 10 * rng.Next(), std::sin(a) * r}, 5.5f, i % 2 ? s.petalC : s.petalB); }
+            if (!s.snow) for (int i = 0; i < 3; i++) {
+                const float a = rng.Next() * 6.2831853f, r = 8.0f + 20.0f * rng.Next(), x = std::cos(a) * r, z = std::sin(a) * r, h = 58.0f + 20.0f * rng.Next();
+                Blade(b, {x, 0, z}, h, a, 4, 1.6f, {50, 110, 40}, {90, 160, 60});
+                for (int k = 0; k < 3; k++) SceneBloom(b, {x + std::cos(a) * 1.5f, h * (0.55f + 0.2f * k), z + std::sin(a) * 1.5f}, 4.5f - k, s.petalC);
+            }
+            break;
+        }
+        default: {   // cattails and reeds for the water's edge
+            const Rgb root = s.snow ? Rgb{150, 140, 110} : Rgb{54, 104, 50}, tip = s.snow ? Rgb{226, 214, 170} : s.tip;
+            for (int i = 0; i < 10; i++) {
+                const float a = rng.Next() * 6.2831853f, r = 18.0f * rng.Next(), h = 60.0f + 50.0f * rng.Next(), x = std::cos(a) * r, z = std::sin(a) * r;
+                Blade(b, {x, 0, z}, h, a, 8, 2.8f, root, tip);
+                if (i % 3 == 0) Prism(b, x + std::cos(a) * 3, z + std::sin(a) * 3, h * 0.62f, h * 0.8f, 3.5f, 3.5f, 5, {112, 72, 44});
+            }
+            break;
+        }
+    }
+    for (MeshVertex& v : b.mesh.v) v.y = (std::max)(0.0f, v.y);
+    return b.mesh;
+}
+
 // A low mound of snow, 200 across and a little over a hand tall: scattered close together they read as a snowy ground. Variants 4-7 are a
 // blanket instead: a broad, nearly flat sheet about 300 across with a soft hump, laid between the mounds once the snow lies deep.
 inline MeshData SnowBlanket(uint32_t variant);
@@ -1384,6 +1554,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Decor: return mesh_detail::Decor(variant);
         case MeshKind::Clutter: return mesh_detail::Clutter(variant);
         case MeshKind::ThemeTree: return mesh_detail::ThemeTree(variant);
+        case MeshKind::Scenery: return mesh_detail::Scenery(variant);
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);

@@ -7,6 +7,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/fortnite_scenery.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -2427,6 +2428,51 @@ static void CustomObjModels() {
     CHECK(neg.ok && neg.triangles == 1);
 }
 
+// The Fortnite Map's Hyrule Field scenery: every model (eight pieces in four seasons) is a few hundred triangles at most and the same every time,
+// and the placement follows the ground: cliffs on steep ground facing downhill, nothing in the water or on the towns' paving, a bit of every kind.
+static void IslandScenery() {
+    namespace fn = royale::fortnite;
+    for (uint32_t variant = 0; variant < kMeshVariantSlots; variant++) {
+        const MeshData m = BuildMesh(MeshKind::Scenery, variant), again = BuildMesh(MeshKind::Scenery, variant);
+        float mn[3], mx[3];
+        m.Bounds(mn, mx);
+        CHECK(m.Triangles() >= 25 && m.Triangles() <= 260 && mn[1] >= -0.01f && mx[1] > 20 && mx[0] - mn[0] < 700 && mx[2] - mn[2] < 700);
+        bool same = again.v.size() == m.v.size();
+        for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].g == m.v[i].g;
+        CHECK(same);
+    }
+    float mn[3], mx[3];
+    BuildMesh(MeshKind::Scenery, 1 * 8 + 3).Bounds(mn, mx);
+    CHECK(mx[1] > 150 && mx[0] - mn[0] > 250);                                  // a cliff slab is wide and tall
+    BuildMesh(MeshKind::Scenery, 1 * 8 + 4).Bounds(mn, mx);
+    CHECK(mx[1] > 220);                                                         // and a crag is the tallest thing there
+    int count[static_cast<int>(fn::SceneryKind::Count)] = {}, total = 0, offGround = 0, steepCliffs = 0, downhill = 0, cliffs = 0, onTown = 0, none = 0;
+    for (int cz = -52; cz <= 52; cz++)
+        for (int cx = -52; cx <= 52; cx++) {
+            fn::SceneryPiece p, q;
+            const bool has = fn::SceneryIn(cx, cz, 1.0f, &p);
+            CHECK(has == fn::SceneryIn(cx, cz, 1.0f, &q) && (!has || (p.x == q.x && p.kind == q.kind && p.yaw == q.yaw)));   // the same for everyone
+            if (fn::SceneryIn(cx, cz, 0.0f, &q)) none++;
+            if (!has) continue;
+            total++;
+            count[static_cast<int>(p.kind)]++;
+            float y;
+            if (!fn::GroundHeight(p.x, p.z, &y) || y < fn::kWaterY || std::fabs(y - p.y) > 0.01f) offGround++;
+            if (fn::CoverAt(p.x, p.z) == fn::Cover::Paving) onTown++;
+            if (p.kind == fn::SceneryKind::Cliff) {   // faces downhill: the ground a little way in front is lower than behind
+                cliffs++;
+                if (fn::GroundUp(p.x, p.z) < 0.84f) steepCliffs++;
+                float front, back;
+                if (fn::GroundHeight(p.x + std::sin(p.yaw) * 60, p.z + std::cos(p.yaw) * 60, &front) && fn::GroundHeight(p.x - std::sin(p.yaw) * 60, p.z - std::cos(p.yaw) * 60, &back) && front < back) downhill++;
+            }
+        }
+    CHECK(total > 800 && total < 5000);
+    for (int k = 0; k < static_cast<int>(fn::SceneryKind::Count); k++) CHECK(count[k] > 0);
+    CHECK(offGround == 0 && onTown == 0 && none == 0);
+    CHECK(cliffs > 50 && steepCliffs == cliffs && downhill * 10 >= cliffs * 9);
+    CHECK(fn::SceneryRadius(fn::SceneryKind::Oak, 1.0f) > 0 && fn::SceneryRadius(fn::SceneryKind::FlowersWhite, 1.0f) == 0);
+}
+
 static void BouldersAndFormations() {
     // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
     // budget, and each map's stone a different colour.
@@ -3804,7 +3850,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
