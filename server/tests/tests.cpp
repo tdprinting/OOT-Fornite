@@ -288,7 +288,7 @@ static void PotionRules() {
     PlayerState* p = m.Find(1000);
     CHECK(!m.UsePotion(1000));                     // none carried
     p->potions = {{ItemId::BluePotion, Rarity::Epic}, {ItemId::GreenPotion, Rarity::Common}};
-    p->health = 2.5f;                              // missing 0.5: the small potion is enough, keep the big one
+    p->health = kMaxHealth - 0.5f;                             // missing 0.5: the small potion is enough, keep the big one
     CHECK(m.UsePotion(1000));
     CHECK(p->health == kMaxHealth && p->potions.size() == 1 && p->potions[0].item == ItemId::BluePotion);
     CHECK(!m.UsePotion(1000));                     // full health
@@ -628,10 +628,37 @@ static void PickupRulesForEveryKind() {
     for (auto& e : m.Loot()) takenAfter += e.taken;
     CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(kMaxPotions));
 
+    // Everyone starts with 7 hearts; opening a chest spills a few rupees, and some Rare chests hold a Piece of Heart.
+    {
+        Simulation chestSim = Duel(1, {1500, 0}, {0, 0});
+        Match& cm = chestSim.match;
+        CHECK(kMaxHealth == 7.0f && cm.Find(1000)->maxHealth == 7.0f && cm.Find(1000)->health == 7.0f);
+        cm.ClearLoot();
+        LootSpawn chest = {{0, 0}, ItemId::BasicSword, Rarity::Common, true, true};
+        chest.item = ItemId::RecoveryHeart;
+        const size_t idx = cm.AddLoot(chest);
+        const size_t before = cm.Loot().size();
+        cm.Find(1000)->pos = {0, 0};
+        cm.Find(1000)->health = 1.0f;
+        CHECK(cm.PickUp(1000, idx));
+        const size_t spilled = cm.Loot().size() - before;
+        int money = 0;
+        for (size_t i = before; i < cm.Loot().size(); i++) money += cm.Loot()[i].spawn.item == ItemId::Rupees && !cm.Loot()[i].spawn.container;
+        CHECK(spilled >= 2 && spilled <= 3 && static_cast<size_t>(money) == spilled);
+        int pieces = 0, rare = 0;
+        for (uint64_t sd = 1; sd <= 40; sd++) {
+            Simulation s2 = Duel(sd, {1500, 0}, {0, 0});
+            s2.match.RegenerateLoot(300, 0.5f);
+            for (const auto& e : s2.match.Loot()) if (e.spawn.container && !e.spawn.special && e.spawn.rarity == Rarity::Rare) { rare++; pieces += e.spawn.item == ItemId::HeartPiece; }
+        }
+        CHECK(rare > 100 && pieces > 0 && pieces < rare / 4);
+    }
+
     // Instant: a heart at full health is left on the ground, and used once you are hurt.
     CHECK(!grab(ItemId::RecoveryHeart, Rarity::Common));
     p->health = 1.0f;
     CHECK(grab(ItemId::RecoveryHeart, Rarity::Common) && std::abs(p->health - 2.0f) < 0.001f);
+    p->health = p->maxHealth - 0.5f;
     CHECK(grab(ItemId::RecoveryHeart, Rarity::Legendary) && p->health == p->maxHealth);   // capped
 
     // Pieces of Heart: four make a container, and the cap is respected.

@@ -537,7 +537,7 @@ static void PickupAndPotionOverTheWire() {
     CHECK(rig.server.GetStats().rejectedActions == 2);
     CHECK(a.Self() && a.Self()->weapon == static_cast<uint8_t>(ItemId::MasterSword) && a.Self()->potions == 1);
 
-    rig.M().Find(1)->health = 1.0f;
+    rig.M().Find(1)->health = kMaxHealth - 1.0f;
     a.RequestUsePotion();
     rig.Run(0.5f);
     CHECK(rig.M().Find(1)->health == kMaxHealth && rig.M().Find(1)->potions.empty());
