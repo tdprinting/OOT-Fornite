@@ -108,6 +108,7 @@ void Player_UseItem(PlayState* play, Player* player, s32 item);
 s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
+extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 }
@@ -6882,6 +6883,19 @@ void LeaveSeatPose(Player* player) {
     if (player->actor.draw == LocalRide_Draw) player->actor.draw = Player_Draw;
 }
 
+// The camera follows Link's feet on the ground under the saddle, so in the saddle it sits as low as a walking Link's and the front of the cart
+// blocks the road. While seated, the view is lifted by how high he is drawn above his feet, plus a little more to see over the nose.
+constexpr float kRideCamExtra = 30.0f;
+float gCamLiftNow = 0.0f;
+void UpdateRideCamera(Player* player) {
+    const float scale = std::max(0.001f, player->actor.scale.y);
+    const bool seated = gRide.seated && player->actor.draw == LocalRide_Draw;
+    const float target = seated ? std::max(0.0f, player->actor.shape.yOffset * scale) + kRideCamExtra : 0.0f;
+    gCamLiftNow += (target - gCamLiftNow) * 0.12f;   // eased, so getting on and off glides the view up and down
+    if (std::fabs(gCamLiftNow) < 0.05f && target == 0.0f) gCamLiftNow = 0.0f;
+    gRoyaleCamLift = gCamLiftNow;
+}
+
 // On foot, a cart is solid: you are pushed out of it to its nearest side (as the rocks push you, ApplyRocks).
 void PushOutOfCarts(Player* player) {
     Vec3f& p = player->actor.world.pos;
@@ -9577,7 +9591,7 @@ void CancelGameDeath(Player* player) {
 void OnPlayerUpdate() {
     Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
-    if (!gSession.Joined() || !InGame()) return;
+    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
@@ -9638,6 +9652,7 @@ void OnPlayerUpdate() {
     UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
     UpdateLocalRide(player, hud);
+    UpdateRideCamera(player);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
