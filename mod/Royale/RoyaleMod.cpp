@@ -164,6 +164,10 @@ float gClothScale = 1.0f;           // the local option: cloth and wind physics 
 bool gWindOn = true;                // the local option: a breeze that moves cloth, grass and trees (off: still air)
 float gWindScale = 1.0f;            // how strong the breeze is, 0 to 2 (the slider)
 bool gWindStreaks = true;           // the local option: streaks in the air that show which way the wind blows
+bool gSkyStars = true;              // the local option: stars in the night sky
+bool gSkyBodies = true;             // the local option: the sun and the moon
+float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (none) to 2
+float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
 bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
@@ -3319,7 +3323,7 @@ void DrawSky(PlayState* play) {
 
     // Stars: a field that turns slowly through the night, twinkling, fading in as the sun sets and out as it rises (and behind cloud).
     const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
-    if (starA > 0.03f) {
+    if (starA > 0.03f && gSkyStars) {
         constexpr int kStars = 220;
         Vtx* sv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
         if (sv != nullptr) {
@@ -3348,7 +3352,7 @@ void DrawSky(PlayState* play) {
         const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
         const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
         Vtx* qv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, 8 * sizeof(Vtx)));
-        if (qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
+        if (gSkyBodies && qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
             const float warm = L.twilight;
             SkyQuad(&qv[0], std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c, kR * 0.96f, 330.0f, 255, mix(244, 160, warm), mix(205, 90, warm), 255.0f * sunA);
             SkyQuad(&qv[4], -std::cos(0.6f) * c, -L.sunH, -std::sin(0.6f) * c, kR * 0.96f, 250.0f, 226, 232, 245, 245.0f * moonA);
@@ -3362,8 +3366,9 @@ void DrawSky(PlayState* play) {
 
     // Clouds: puffs of stacked soft discs that drift with the wind, wrapping round a box that follows the camera. More of them, and darker,
     // the more overcast it is; lit warm at sunrise and sunset, dim blue at night.
+    if (gSkyClouds <= 0.01f) return;
     const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
-    const int puffs = std::min(48, static_cast<int>((12.0f + 36.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity))));
+    const int puffs = std::min(64, static_cast<int>((12.0f + 36.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity)) * gSkyClouds));
     float wx, wz, wind;
     WindNow(&wx, &wz, &wind);
     const float wl = std::max(1.0f, std::hypot(wx, wz)), dxw = wx / wl, dzw = wz / wl;
@@ -3423,8 +3428,8 @@ void DrawFogBanks(PlayState* play) {
     if (mist > dens) { dens = mist; col[0] = 218; col[1] = 222; col[2] = 232; }
     const bool island = OnIsland();
     const bool lake = gMapId == 1;
-    const float baseWater = island ? 0.22f : (lake ? 0.14f : 0.0f);   // sea mist and lake mist hang low all the time
-    dens = std::min(1.0f, dens * std::min(1.5f, std::max(0.3f, gWeatherDensity)));
+    const float baseWater = (island ? 0.22f : (lake ? 0.14f : 0.0f)) * gFogAmount;   // sea mist and lake mist hang low all the time
+    dens = std::min(1.0f, dens * std::min(1.5f, std::max(0.3f, gWeatherDensity)) * gFogAmount);
     if (dens + baseWater < 0.04f) return;
     const float light = 0.35f + 0.65f * L.day;   // fog is lit by the sky: dim at night
     const Vec3f eye = play->view.eye;
@@ -11518,6 +11523,10 @@ UiState& Ui() {
         gWindOn = ui.windOn;
         gWindScale = ui.windStrength / 100.0f;
         gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
+        gSkyStars = CVarGetInteger(ROYALE_CVAR("SkyStars"), 1) != 0;
+        gSkyBodies = CVarGetInteger(ROYALE_CVAR("SkyBodies"), 1) != 0;
+        gSkyClouds = std::clamp(CVarGetInteger(ROYALE_CVAR("SkyClouds"), 100), 0, 200) / 100.0f;
+        gFogAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("FogAmount"), 100), 0, 200) / 100.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
@@ -12343,6 +12352,144 @@ void DrawRoyaleUi() {
     DrawDebug(ui);
 }
 
+// ---- the Graphics page ---------------------------------------------------------------------------------------------------------
+// One collapsible section per graphics feature: an on/off switch (the feature's Debug switch, so the two always agree) and, where it makes
+// sense, its sliders. Everything is local and saved at once. A section whose Debug switch does not exist in this build is left out, so
+// features added later show up here as soon as they have a switch.
+int DebugIndex(const char* key) {
+    for (int i = 0; i < kDebugCount; i++)
+        if (std::strcmp(kDebugSwitches[i].key, key) == 0) return i;
+    return -1;
+}
+
+void SaveGfx() { Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame(); }
+
+// The on/off box of a section; returns whether the feature is on (the sliders below it only show then).
+bool GfxSwitch(const char* debugKey, const char* label) {
+    const int i = DebugIndex(debugKey);
+    if (i < 0) return true;
+    if (!gDebugLoaded) LoadDebugSwitches();
+    bool on = gDebugOn[i];
+    const std::string id = std::string(label) + "##gfxsw" + debugKey;
+    if (ImGui::Checkbox(id.c_str(), &on)) {
+        gDebugOn[i] = on;
+        const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + debugKey;
+        CVarSetInteger(key.c_str(), on ? 1 : 0);
+        SaveGfx();
+    }
+    return on;
+}
+
+bool GfxCheck(const char* label, const char* cvar, bool* value) {
+    if (!ImGui::Checkbox(label, value)) return false;
+    CVarSetInteger((std::string(CVAR_SETTING("Royale.")) + cvar).c_str(), *value ? 1 : 0);
+    SaveGfx();
+    return true;
+}
+
+// A per-cent slider kept in a CVar. Returns true when it moved.
+bool GfxPercent(const char* label, const char* cvar, int* value) {
+    ImGui::SetNextItemWidth(280);
+    if (!ImGui::SliderInt(label, value, 0, 200)) return false;
+    CVarSetInteger((std::string(CVAR_SETTING("Royale.")) + cvar).c_str(), *value);
+    SaveGfx();
+    return true;
+}
+
+// A section is left out when its Debug switch is not in this build.
+bool GfxSection(const char* title, const char* debugKey) {
+    if (DebugIndex(debugKey) < 0) return false;
+    return ImGui::CollapsingHeader(title);
+}
+
+void DrawGraphicsUi() {
+    UiState& ui = Ui();
+    Heading("GRAPHICS");
+    ImGui::TextColored(kGrey, "One section for each look of the game. Open one to switch it on or off and set how strong it is. Only you see these, and they are saved.");
+    ImGui::Spacing();
+
+    if (GfxSection("Cloth physics", "Cloth")) {
+        ImGui::PushID("cloth");
+        if (GfxSwitch("Cloth", "Cloth physics (caps, tunics, sheaths, gliders)")) {
+            if (ImGui::Checkbox("Cloth moves", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+            if (ui.clothOn) {
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+            }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Wind", "Wind")) {
+        ImGui::PushID("wind");
+        if (GfxSwitch("Wind", "Wind streaks in the air")) {
+            if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
+            if (ui.windOn) {
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
+                if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
+            }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Tornado", "Tornado")) {
+        ImGui::PushID("tornado");
+        if (GfxSwitch("Tornado", "Allow the tornado")) {
+            bool on = gTornadoOn;
+            if (ImGui::Checkbox("Show the tornado (easter egg, only you can see it)", &on)) gTornadoOn = on;
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Weather", "Weather")) {
+        ImGui::PushID("weather");
+        if (GfxSwitch("Weather", "Weather (rain, snow, ash, sand and the fog they bring)")) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+            ImGui::TextColored(kGrey, "The host picks the season and how strong the weather is, in the lobby.");
+        }
+        GfxSwitch("StormWall", "Storm wall around the safe zone");
+        ImGui::PopID();
+    }
+    if (GfxSection("Grass, trees, snow and puddles", "Foliage")) {
+        ImGui::PushID("foliage");
+        if (GfxSwitch("Foliage", "Grass, trees, snow cover and puddles")) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Sky", "Sky")) {
+        ImGui::PushID("sky");
+        if (GfxSwitch("Sky", "Sky (gradient dome, stars, sun, moon, clouds)")) {
+            static int clouds = -1;
+            if (clouds < 0) clouds = static_cast<int>(gSkyClouds * 100.0f + 0.5f);
+            GfxCheck("Stars at night", "SkyStars", &gSkyStars);
+            GfxCheck("Sun and moon", "SkyBodies", &gSkyBodies);
+            if (GfxPercent("Clouds (%, 0 = none)", "SkyClouds", &clouds)) gSkyClouds = clouds / 100.0f;
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Fog", "Fog")) {
+        ImGui::PushID("fog");
+        if (GfxSwitch("Fog", "Fog banks (low mist on the ground)")) {
+            static int fog = -1;
+            if (fog < 0) fog = static_cast<int>(gFogAmount * 100.0f + 0.5f);
+            if (GfxPercent("Fog thickness (%, 0 = none)", "FogAmount", &fog)) gFogAmount = fog / 100.0f;
+        }
+        ImGui::PopID();
+    }
+    // Features that arrive in other changes get their section here once they have a Debug switch in the build.
+    if (GfxSection("Water", "Water")) { ImGui::PushID("water"); GfxSwitch("Water", "Water (waves, splashes, wakes, underwater look)"); ImGui::PopID(); }
+    if (GfxSection("Fortnite Map scenery", "Scenery")) { ImGui::PushID("scenery"); GfxSwitch("Scenery", "Oaks, cliffs, crags and flowers on the Fortnite Map"); ImGui::PopID(); }
+    if (GfxSection("Fortnite Map puddles", "IslandPuddles")) { ImGui::PushID("ipud"); GfxSwitch("IslandPuddles", "Standing puddles on the Fortnite Map"); ImGui::PopID(); }
+    if (GfxSection("Effects", "BossFx")) {
+        ImGui::PushID("fx");
+        GfxSwitch("BossFx", "Boss effects in the world");
+        GfxSwitch("Projectiles", "Arrows, bombs and chest reveals");
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+}
+
 // Adds a top-level "Battle Royale" entry to the port menu (opened with F1 on Windows, Back/Select on Android) through the
 // fork's own menu registration hook, so no patch to the fork's menu code is needed.
 void RegisterRoyaleMenu() {
@@ -12351,6 +12498,9 @@ void RegisterRoyaleMenu() {
     WidgetPath path = { "Battle Royale", "Play", SECTION_COLUMN_1 };
     mSohMenu->AddSidebarEntry("Battle Royale", path.sidebarName, 1);
     mSohMenu->AddWidget(path, "OOT Royale##royale_ui", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawRoyaleUi(); });
+    WidgetPath gfx = { "Battle Royale", "Graphics", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", gfx.sidebarName, 1);
+    mSohMenu->AddWidget(gfx, "Royale graphics##royale_gfx", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawGraphicsUi(); });
 }
 
 RegisterMenuInitFunc royaleMenuInit(RegisterRoyaleMenu);
