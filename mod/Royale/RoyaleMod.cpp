@@ -14,6 +14,7 @@
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
+#include "fortnite_puddles.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -259,11 +260,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Projectiles", "Arrows, bombs and chest reveals" },
     { "Minimap", "Minimap switching" },
     { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
+    { "IslandPuddles", "Fortnite Map standing puddles" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgScenery };
-static_assert(kDbgScenery + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgScenery, kDbgIslandPuddles };
+static_assert(kDbgIslandPuddles + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -2897,6 +2899,47 @@ void DrawIslandScenery(PlayState* play) {
         }
 }
 
+// The Fortnite Map's standing puddles (shared/fortnite_puddles.h): pools in the dips of level ground, in the boggy fields and by the water, there all
+// the time. They use the weather puddles' mesh (frozen over in winter) and grow a little in the rain.
+void DrawIslandPuddles(PlayState* play) {
+    if (!OnIsland() || gPlayState == nullptr) return;
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z, reach = royale::fortnite::kPuddleReach, cellSize = royale::fortnite::kPuddleCellSize;
+    const int season = FloraSeason();
+    {
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;
+    if (cull) { vx /= vl; vz /= vl; }
+    const int c0x = static_cast<int>(std::floor((px - reach) / cellSize)), c1x = static_cast<int>(std::floor((px + reach) / cellSize));
+    const int c0z = static_cast<int>(std::floor((pz - reach) / cellSize)), c1z = static_cast<int>(std::floor((pz + reach) / cellSize));
+    for (int cz = c0z; cz <= c1z; cz++)
+        for (int cx = c0x; cx <= c1x; cx++) {
+            royale::fortnite::PuddlePiece pc;
+            if (!royale::fortnite::PuddleIn(cx, cz, &pc)) continue;
+            const float d = std::hypot(pc.x - px, pc.z - pz);
+            if (d > reach || (cull && (pc.x - eye.x) * vx + (pc.z - eye.z) * vz < -140.0f)) continue;
+            if (gSession.Client()) {   // not inside a town
+                bool inTown = false;
+                for (const royale::Poi& poi : gSession.Client()->Pois())
+                    if (std::hypot(poi.center.x - pc.x, poi.center.z - pc.z) < poi.radius * 0.8f) { inTown = true; break; }
+                if (inTown) continue;
+            }
+            const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, pc.shape + (season == 3 ? 4u : 0u));
+            if (m == nullptr || m->dl.empty()) continue;
+            const float f = std::clamp((reach - d) / (reach * 0.3f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
+            if (fade < 0.02f) continue;
+            DrawGroundXlu(play, m, pc.x, pc.y, pc.z, pc.sx, pc.sz, pc.yaw, pc.size * (1.0f + 0.35f * gPuddleCover), static_cast<int>(225.0f * fade));
+        }
+}
+
 // Trunks are solid: stand against one and you are pushed out of it (the same sort of local solidity the climbing blocks have).
 void ApplyTrees(Player* player) {
     if (!InField() || gFoliage <= 0.01f) return;
@@ -3391,6 +3434,8 @@ void Projectile_Draw(Actor*, PlayState* play) {
     if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: island scenery");
     if (DebugOn(kDbgScenery)) DrawIslandScenery(play);
+    Feat("draw: island puddles");
+    if (DebugOn(kDbgIslandPuddles)) DrawIslandPuddles(play);
     Feat("draw: storm wall");
     if (DebugOn(kDbgStormWall)) DrawStormWall(play);
     Feat("draw: weather particles");
@@ -7796,19 +7841,18 @@ void BuildFortniteGpu() {
         for (int ci = 0; ci < kChunks; ci++) {
             for (int lod = 0; lod < fn::kLods; lod++) {
                 std::vector<Gfx>& dl = g.dl[lod][cj * kChunks + ci];
-                dl.assign(kChunk * kChunk * (1 + fn::kSub * fn::kSub * 2) + 1, Gfx{});
+                dl.assign(kChunk * kChunk * fn::kSub * (1 + fn::kSub * 2) + 1, Gfx{});   // a block loads its vertices a strip (two rows) at a time: the chip takes 32 at once
                 Gfx* p = dl.data();
                 for (int bj = cj * kChunk; bj < (cj + 1) * kChunk; bj++) {
                     for (int bi = ci * kChunk; bi < (ci + 1) * kChunk; bi++) {
                         const int use = fn::BlockIsOpenWater(bi, bj) ? fn::kLods - 1 : lod;   // open water is a flat square at any distance
                         const int n = fn::LodSquares(use), row = n + 1;
                         const Vtx* base = &g.vtx[use][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(use)];
-                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), fn::LodVerts(use), 0);
                         for (int b = 0; b < n; b++) {
+                            gSPVertex(p++, reinterpret_cast<uintptr_t>(base + b * row), 2 * row, 0);   // rows b and b + 1
                             for (int a = 0; a < n; a++) {
-                                const int v = b * row + a;
-                                gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
-                                gSP1Triangle(p++, v, v + row + 1, v + row, 0);
+                                gSP1Triangle(p++, a, a + 1, a + row + 1, 0);
+                                gSP1Triangle(p++, a, a + row + 1, a + row, 0);
                             }
                         }
                     }
@@ -7860,7 +7904,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
                 if (side - r > std::max(0.0f, ahead + r) * 2.4f) continue;
             }
             const float dist = std::hypot(dx, dz);
-            const int lod = dist < 2600.0f ? 0 : dist < 5200.0f ? 1 : 2;
+            const int lod = dist < 2300.0f ? 0 : dist < 5000.0f ? 1 : 2;
             gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][c].data()));
         }
     }

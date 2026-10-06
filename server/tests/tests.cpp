@@ -8,6 +8,7 @@
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
 #include "../../shared/fortnite_scenery.h"
+#include "../../shared/fortnite_puddles.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -2473,6 +2474,39 @@ static void IslandScenery() {
     CHECK(fn::SceneryRadius(fn::SceneryKind::Oak, 1.0f) > 0 && fn::SceneryRadius(fn::SceneryKind::FlowersWhite, 1.0f) == 0);
 }
 
+// The Fortnite Map's standing puddles lie on level land (never in the sea, on a road or in a wood), are the same for everyone, and there are plenty;
+// and the ground is walkable inland: no steep ground away from the coast.
+static void IslandPuddles() {
+    namespace fn = royale::fortnite;
+    int n = 0, bad = 0, mud = 0;
+    for (int cz = -45; cz <= 45; cz++)
+        for (int cx = -45; cx <= 45; cx++) {
+            fn::PuddlePiece p, q;
+            const bool has = fn::PuddleIn(cx, cz, &p);
+            CHECK(has == fn::PuddleIn(cx, cz, &q) && (!has || (p.x == q.x && p.size == q.size)));
+            if (!has) continue;
+            n++;
+            float y;
+            const fn::Cover c = fn::CoverAt(p.x, p.z);
+            if (!fn::GroundHeight(p.x, p.z, &y) || y < fn::kWaterY || (c != fn::Cover::Meadow && c != fn::Cover::Dirt) || fn::GroundUp(p.x, p.z) < 0.98f || p.size < 0.5f || p.size > 2.2f) bad++;
+            if (c == fn::Cover::Dirt) mud++;
+        }
+    CHECK(n > 150 && n < 900 && bad == 0 && mud > 5);
+    int steepInland = 0, land = 0;   // away from the water, the ground can be stood on
+    for (float z = -fn::kHalfZ + 10; z < fn::kHalfZ; z += 90)
+        for (float x = -fn::kHalfX + 10; x < fn::kHalfX; x += 90) {
+            float y, q;
+            if (!fn::GroundHeight(x, z, &y) || y < fn::kWaterY + 2) continue;
+            bool coast = false;
+            for (const float d : {200.0f, -200.0f})
+                coast = coast || (fn::GroundHeight(x + d, z, &q) && q < fn::kWaterY + 20) || (fn::GroundHeight(x, z + d, &q) && q < fn::kWaterY + 20);
+            if (coast) continue;
+            land++;
+            if (fn::GroundUp(x, z) < 0.8f) steepInland++;
+        }
+    CHECK(land > 10000 && steepInland * 100 < land);   // under one percent of the inland is too steep to stand on
+}
+
 static void BouldersAndFormations() {
     // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
     // budget, and each map's stone a different colour.
@@ -3850,7 +3884,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
