@@ -231,6 +231,10 @@ int gTravelCooldown = 0; // game frames (20 per second) before another travel re
 
 bool gOurTravel = false; // a scene change we asked for ourselves (see SealExits)
 void Trace(const char* step);   // the crash breadcrumb trail, defined with the music code
+// The feature that is running right now, for the crash report. Every feature's per-frame code starts with Feat("name"), so when the game
+// dies the report names the last feature that started (a string literal, so the crash handler can read it safely).
+const char* volatile gFeature = "(none yet)";
+inline void Feat(const char* name) { gFeature = name; }
 
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
@@ -1325,6 +1329,7 @@ Look PuppetLook(const royale::PuppetState& s) {
 }
 
 void Puppet_Update(Actor* actor, PlayState* play) {
+    Feat("other players: update");
     Player* player = (Player*)actor;
     auto idIt = gPuppetOf.find(actor);
     auto stIt = idIt == gPuppetOf.end() ? gState.end() : gState.find(idIt->second);
@@ -1558,6 +1563,7 @@ void ApplyLocalTunic(bool on) {
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme); // with the other custom models, below
 
 void Puppet_Draw(Actor* actor, PlayState* play) {
+    Feat("other players: draw");
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
@@ -1646,6 +1652,7 @@ float WrapAngle(float a) {
 }
 
 void Corpse_Update(Actor* actor, PlayState* play) {
+    Feat("corpses: update");
     auto of = gCorpseOf.find(actor);
     if (of == gCorpseOf.end()) { Actor_Kill(actor); return; }
     Corpse& c = gCorpses[of->second];
@@ -1801,6 +1808,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
 }
 
 void Corpse_Draw(Actor* actor, PlayState* play) {
+    Feat("corpses: draw");
     auto of = gCorpseOf.find(actor);
     if (of == gCorpseOf.end()) return;
     const Corpse& c = gCorpses[of->second];
@@ -3255,10 +3263,15 @@ void DrawHeldFinds(PlayState* play) {
 
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    Feat("draw: foliage and puddles");
     DrawFlora(play);
+    Feat("draw: storm wall");
     DrawStormWall(play);
+    Feat("draw: weather particles");
     DrawWeatherParticles(play);
+    Feat("draw: held finds");
     DrawHeldFinds(play);
+    Feat("draw: chest reveals and projectiles");
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -6504,8 +6517,8 @@ void CrashHandler(int sig, siginfo_t* info, void*) {
         busy = 1;
         const int fd = open(gCrashPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) {
-            CrashLine(fd, "Version %s\nSignal %d code %d fault address %p thread %ld\nLast step: %s\n", ROYALE_BUILD_VERSION, sig, info ? info->si_code : 0,
-                      info ? info->si_addr : nullptr, static_cast<long>(syscall(SYS_gettid)), gTraceLast);
+            CrashLine(fd, "Version %s\nSignal %d code %d fault address %p thread %ld\nFeature running: %s\nLast step: %s\n", ROYALE_BUILD_VERSION, sig, info ? info->si_code : 0,
+                      info ? info->si_addr : nullptr, static_cast<long>(syscall(SYS_gettid)), gFeature, gTraceLast);
             CrashStack st;
             st.n = 0;
             _Unwind_Backtrace(CrashUnwind, &st);
@@ -8329,6 +8342,7 @@ void CancelGameDeath(Player* player) {
 }
 
 void OnPlayerUpdate() {
+    Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     if (!gSession.Joined() || !InGame()) return;
     Player* player = GET_PLAYER(gPlayState);
@@ -9860,6 +9874,7 @@ HatState& StepClothes(const Player* pl) {
 }
 
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
+    Feat("cap cloth");
     gHatHookCalls++;
     if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
     HatState& h = StepClothes(static_cast<const Player*>(playerPtr));
@@ -9910,6 +9925,7 @@ bool SheathHasChildren(const Player* pl) {
 }
 
 void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
+    Feat("tunic and sheath cloth");
     if (limbIndex == PLAYER_LIMB_WAIST) {
         gClothLimbCalls++;
         gWaistSwing.active = false;
@@ -10250,41 +10266,41 @@ void SyncPauseInventory(const royale::HudState& hud) {
 void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
-    gSession.Update(1.0f / royale::kTickHz);
+    Feat("session update"); gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
-    UpdateSongMelody();
+    Feat("song melody"); UpdateSongMelody();
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
-    if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
-    DriveStorm(hud);
-    DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
-    ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
+    Feat("platforms, rocks and trees"); if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    Feat("storm"); DriveStorm(hud);
+    Feat("weather"); DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
+    Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
-    SyncPauseInventory(hud);
-    UpdateChickenMusic();
-    if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
-    UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
-    DriveLobbyTimer(hud);
-    DriveTimeOfDay(hud);
-    UpdateBossWorldFx();
-    ReconcileSign(hud);
-    RegisterRoyaleMessages();
-    ReconcileMaya(hud);
-    ReconcileLilo(hud);
-    ReconcileCatPet(hud);
-    UpdateLiloFx();
-    ReconcileAllies(hud);
-    ReconcileCarts(hud);
+    Feat("pause inventory"); SyncPauseInventory(hud);
+    Feat("chicken music"); UpdateChickenMusic();
+    Feat("music scan"); if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
+    Feat("lobby and match music"); UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
+    Feat("lobby timer"); DriveLobbyTimer(hud);
+    Feat("time of day"); DriveTimeOfDay(hud);
+    Feat("boss effects"); UpdateBossWorldFx();
+    Feat("sign"); ReconcileSign(hud);
+    Feat("messages"); RegisterRoyaleMessages();
+    Feat("Maya"); ReconcileMaya(hud);
+    Feat("Lilo"); ReconcileLilo(hud);
+    Feat("cat pet"); ReconcileCatPet(hud);
+    Feat("Lilo effects"); UpdateLiloFx();
+    Feat("allies"); ReconcileAllies(hud);
+    Feat("carts"); ReconcileCarts(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
-    ReconcileProjectileActor();
-    DriveStormAlerts(hud);
+    Feat("projectiles"); ReconcileProjectileActor();
+    Feat("storm alerts"); DriveStormAlerts(hud);
     gStateNow = hud.state;
-    SealExits(hud);
-    DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
+    Feat("sealed exits"); SealExits(hud);
+    Feat("minimap switch"); DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
@@ -10326,15 +10342,17 @@ void OnGameFrameUpdate() {
         gLastCountdownShown = left;
     }
 
-    DriveStart(hud);
-    ReportEvents(hud);
-    ReconcilePuppets(hud.state);
-    ReconcileLoot(hud);
-    ReconcileProps(hud);
-    ReconcileBosses(hud);
+    Feat("match start"); DriveStart(hud);
+    Feat("match events"); ReportEvents(hud);
+    Feat("other players"); ReconcilePuppets(hud.state);
+    Feat("loot"); ReconcileLoot(hud);
+    Feat("props"); ReconcileProps(hud);
+    Feat("bosses"); ReconcileBosses(hud);
+    Feat("between updates");
 }
 
 void OnSceneInit(int16_t) {
+    Feat("scene init");
     Trace("scene: init");
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
