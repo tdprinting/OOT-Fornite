@@ -368,6 +368,15 @@ class GameServer {
                 if (!SmashProp(c->playerId, m.index)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::FartCloudRequest: {
+                net::FartCloudRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.StartFartCloud(c->playerId, {m.x, m.z})) { stats.rejectedActions++; break; }
+                net::EvFartCloud ev;
+                ev.by = static_cast<uint16_t>(c->playerId); ev.x = m.x; ev.z = m.z;
+                Broadcast(ev);
+                break;
+            }
             case net::MsgType::SelectMapRequest: {
                 net::SelectMapRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }

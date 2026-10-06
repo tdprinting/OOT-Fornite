@@ -23,7 +23,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 23; // 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); 22: original items on everyone; 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 24; // 24: FartCloudRequest and EvFartCloud (Lilo's toxic cloud); 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); 22: original items on everyone; 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -34,10 +34,10 @@ constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "use
 
 enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13, NpcHitRequest = 14,
-    VehicleRequest = 15, VehicleDrive = 16,
+    VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -128,6 +128,15 @@ struct PropSmashRequest {
     uint16_t index = 0;
     void Write(ByteWriter& w) const { w.U16(index); }
     bool Read(ByteReader& r) { index = r.U16(); return r.ok && index < kMaxProps; }
+};
+
+// Lilo made a cloud at (x, z), beside the player who sends this. The server checks the match is on, that the player is alive and near it, and that
+// they have not just made one, then starts the damaging cloud and tells everyone with EvFartCloud.
+struct FartCloudRequest {
+    static constexpr MsgType kType = MsgType::FartCloudRequest;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) { x = r.F32(); z = r.F32(); return r.ok && Finite(x) && Finite(z); }
 };
 
 // Pay the ally with this index (0 to kAllyCount - 1) to join you. You must be standing next to it.
@@ -568,6 +577,15 @@ struct EvPropBroken {
     uint16_t amount = 0;
     void Write(ByteWriter& w) const { w.U16(index); w.U16(by); w.U8(item); w.U16(amount); }
     bool Read(ByteReader& r) { index = r.U16(); by = r.U16(); item = r.U8(); amount = r.U16(); return r.ok && index < kMaxProps && (item == 255 || item < static_cast<uint8_t>(ItemId::Count)) && amount <= 5000; }
+};
+
+// A toxic cloud has started at (x, z), made by `by` (Lilo's owner); it lasts kFartCloudSeconds and hurts whoever stays in it.
+struct EvFartCloud {
+    static constexpr MsgType kType = MsgType::EvFartCloud;
+    uint16_t by = kNoPlayer16;
+    float x = 0, z = 0;
+    void Write(ByteWriter& w) const { w.U16(by); w.F32(x); w.F32(z); }
+    bool Read(ByteReader& r) { by = r.U16(); x = r.F32(); z = r.F32(); return r.ok && Finite(x) && Finite(z); }
 };
 
 // A blast is coming: a ring at (x, z) that goes off `delay` seconds from now (the dragon's fireballs, meteors and dive).

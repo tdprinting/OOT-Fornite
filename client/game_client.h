@@ -15,7 +15,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction, FartCloud } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
     float amount = 0;    // Damaged: hearts
@@ -199,6 +199,7 @@ class GameClient {
     const std::vector<Poi>& Pois() const { return pois; }
     // Host only (the server ignores anyone else): start another match with everyone who is connected.
     void RequestRematch() { SendIfJoined(net::RematchRequest{}); }
+    void ReportFartCloud(float x, float z) { net::FartCloudRequest m; m.x = x; m.z = z; SendIfJoined(m); } // Lilo made a toxic cloud here
     void ReportSmash(size_t index) { net::PropSmashRequest m; m.index = static_cast<uint16_t>(index); SendIfJoined(m); } // I broke a rock or cut a bush
     const std::set<size_t>& BrokenProps() const { return brokenProps; }
     // The magic meter now: what the server said, plus the refill since then.
@@ -476,6 +477,14 @@ class GameClient {
                 brokenProps.insert(m.index);
                 ClientEvent e{ClientEvent::Type::PropBroken};
                 e.index = m.index; e.id = m.by; e.item = m.item; e.count = m.amount;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvFartCloud: {
+                net::EvFartCloud m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::FartCloud};
+                e.id = m.by; e.x = m.x; e.z = m.z;
                 events.push_back(e);
                 break;
             }
