@@ -1746,6 +1746,10 @@ static void StartingSwordAndAmmo() {
         const int before = h->ammo[static_cast<int>(AmmoKind::Arrows)];
         const AttackResult shot = m.Attack(1, 1000, true);
         CHECK(shot.hit && h->ammo[static_cast<int>(AmmoKind::Arrows)] == before - 1 && shot.damage > bash.damage * 1.2f);
+        h->attackReadyAt = 0;
+        const int beforeMiss = h->ammo[static_cast<int>(AmmoKind::Arrows)];
+        CHECK(m.ShootAtNothing(1).ok && h->ammo[static_cast<int>(AmmoKind::Arrows)] == beforeMiss - 1);   // a shot at nothing still spends an arrow
+        CHECK(!m.ShootAtNothing(1).ok && h->ammo[static_cast<int>(AmmoKind::Arrows)] == beforeMiss - 1);  // and the cooldown applies
         LootSpawn pile = {{0, 0}, ItemId::ArrowAmmo, Rarity::Common, false, false};
         pile.amount = 50;
         const size_t big = m.AddLoot(pile);

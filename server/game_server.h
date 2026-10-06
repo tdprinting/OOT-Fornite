@@ -372,7 +372,9 @@ class GameServer {
             case net::MsgType::AttackReport: {
                 net::AttackReport m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.Attack(c->playerId, m.target, m.hit, static_cast<AttackStyle>(m.style)).ok) stats.rejectedActions++;
+                const bool ok = m.target == net::kNoPlayer16 ? sim.match.ShootAtNothing(c->playerId).ok   // a shot at nothing: it only spends the ammo
+                                                             : sim.match.Attack(c->playerId, m.target, m.hit, static_cast<AttackStyle>(m.style)).ok;
+                if (!ok) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PickupRequest: {

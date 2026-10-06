@@ -77,6 +77,8 @@ extern "C" {
 #include "variables.h"
 #include "functions.h"
 #include "src/overlays/actors/ovl_En_Box/z_en_box.h" // the treasure chest actor
+#include "src/overlays/actors/ovl_En_Bom/z_en_bom.h" // the bomb (its fuse)
+#include "src/overlays/actors/ovl_En_Bom_Chu/z_en_bom_chu.h" // the bombchu (its fuse)
 #include "src/overlays/actors/ovl_Magic_Fire/z_magic_fire.h" // Din's Fire (its collider and screen tint, for other players' casts)
 #include "src/overlays/effects/ovl_Effect_Ss_HitMark/z_eff_ss_hitmark.h" // the game's hit sparks (a blow ringing off a shield)
 #include "objects/gameplay_keep/gameplay_keep.h" // Link's animation assets (gPlayerAnim_*)
@@ -1500,7 +1502,12 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         auto fl = gFlinchFrames.find(s.id);
         const bool busy = royale::IsStrike(s.anim) || royale::IsDodge(s.anim) || OneShotAnim(s.anim);
         if (sw != gSwingFrames.end() && sw->second > 0) {
-            if (!busy) { want = static_cast<uint8_t>(Anim::Attack); forced = sw->second == 10; }
+            if (!busy) {   // the blow was struck with what they hold: a shot or a throw for a slingshot, bow or bomb, a swing only for a blade or hammer
+                const royale::WeaponStats ws = royale::WeaponOf(s.weapon);
+                const royale::AmmoKind ak = royale::AmmoUsedBy(s.weapon);
+                want = static_cast<uint8_t>(!ws.ranged ? Anim::Attack : (ak == royale::AmmoKind::Arrows || ak == royale::AmmoKind::Seeds) ? Anim::Shoot : Anim::Throw);
+                forced = sw->second == 10;
+            }
             sw->second--;
         } else if (fl != gFlinchFrames.end() && fl->second > 0) {
             if (!busy && s.alive) { want = static_cast<uint8_t>(Anim::Hurt); forced = fl->second == 8; }
@@ -9089,6 +9096,8 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
+    // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
+    if (hasAmmo && ammoKind != royale::AmmoKind::None) gSession.ReportAttack(royale::net::kNoPlayer16, false);
     HitNpcInFront(player, w);
     SmashPropInFront(player, w);
 }
@@ -9414,6 +9423,14 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
     player->currentMask = mask;
 }
 
+// A bomb or bombchu in Link's hands burns down like a thrown one (a bomb in 70 frames, a bombchu in 120) and blows up in his hands. Here you carry your
+// weapon until you throw it, so the fuse is held where it started for as long as he holds it; it starts the moment he lets go.
+void HoldFuse(Player* player) {
+    Actor* held = player->heldActor;
+    if (held == nullptr || held->parent != &player->actor) return;
+    if (held->id == ACTOR_EN_BOM) reinterpret_cast<EnBom*>(held)->timer = 70;
+    else if (held->id == ACTOR_EN_BOM_CHU) reinterpret_cast<EnBomChu*>(held)->timer = 120;
+}
 int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     ApplyItemCvars(gSession.Joined() && IsLive(hud));
@@ -9427,6 +9444,7 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     const u8 item = RealItemFor(hud.weapon);
     if (!gLocalLookApplied) { gSavedButtonItem0 = gSaveContext.equips.buttonItems[0]; gLocalLookApplied = true; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
     SyncRealAmmo(hud);
+    HoldFuse(player);
     gSaveContext.equips.buttonItems[0] = item;
     // The interface puts the bow, slingshot and bombchu back from this value when it refreshes the B button, so it must name the same item.
     gSaveContext.buttonStatus[0] = item;
@@ -9434,6 +9452,7 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     const bool free = !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_START_CHANGING_HELD_ITEM | PLAYER_STATE1_SHIELDING)) &&
                       player->stateFlags2 == (player->stateFlags2 & ~PLAYER_STATE2_OCARINA_PLAYING);
     const s8 want = Player_ItemToItemAction(item);
+    if (hud.weapon != gLocalWeaponShown && player->heldItemAction == want) gLocalWeaponShown = hud.weapon;   // same real item (slingshot and triple slingshot, bombchus and homing ones): using it again would fire it
     if (hud.weapon != gLocalWeaponShown || player->heldItemAction != want) {
         if (!free) return;
         if (gUseRetry > 0) { gUseRetry--; return; }
