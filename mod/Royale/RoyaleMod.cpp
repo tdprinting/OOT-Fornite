@@ -175,7 +175,7 @@ struct AllyActor {
     float actAge = 10.0f;      // seconds since it attacked or healed
     bool init = false;
     // The game's own NPC model: its skeleton and animation state (see AllyNpc below)
-    SkelAnime sk;
+    SkelAnime sk = {};   // zeroed like an actor's memory: the game reads the old animation when it changes one
     Vec3s joint[32] = {};
     Vec3s morph[32] = {};
     bool skReady = false;
@@ -236,6 +236,44 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 // dies the report names the last feature that started (a string literal, so the crash handler can read it safely).
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
+
+// ---- debug switches ----------------------------------------------------------------------------------------------------------
+// A temporary Debug section in the Battle Royale menu: each newer feature can be switched off to find out which one causes a crash or glitch.
+// They are all on by default and remembered between runs. Remove this section (and the DebugOn checks) once the features are trusted.
+struct DebugSwitch { const char* key; const char* label; };
+constexpr DebugSwitch kDebugSwitches[] = {
+    { "Carts", "Lon Lon Buggy carts" },
+    { "Weather", "Weather (the game's rain, snow, lightning, fog, sand)" },
+    { "StormWall", "Storm wall" },
+    { "Foliage", "Foliage, snow cover and puddles" },
+    { "Cloth", "Cloth physics (caps, tunics, sheaths, gliders)" },
+    { "Music", "Custom match and lobby music" },
+    { "Terrain", "Custom rocks, trees and platforms" },
+    { "TimeOfDay", "Time of day changes" },
+    { "Allies", "Maya, Lilo, the cat pet and allies" },
+    { "BossFx", "Boss effects in the world" },
+    { "Loot", "Loot and chests in the world" },
+    { "Props", "Map props" },
+    { "Projectiles", "Arrows, bombs and chest reveals" },
+    { "Minimap", "Minimap switching" },
+};
+constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
+enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap };
+static_assert(kDbgMinimap + 1 == kDebugCount, "one switch per DebugId");
+bool gDebugOn[kDebugCount];
+bool gDebugLoaded = false;
+void LoadDebugSwitches() {
+    for (int i = 0; i < kDebugCount; i++) {
+        const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+        gDebugOn[i] = CVarGetInteger(key.c_str(), 1) != 0;
+    }
+    gDebugLoaded = true;
+}
+inline bool DebugOn(int id) {
+    if (!gDebugLoaded) LoadDebugSwitches();
+    return gDebugOn[id];
+}
 
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
@@ -3266,14 +3304,15 @@ void DrawHeldFinds(PlayState* play) {
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     Feat("draw: foliage and puddles");
-    DrawFlora(play);
+    if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: storm wall");
-    DrawStormWall(play);
+    if (DebugOn(kDbgStormWall)) DrawStormWall(play);
     Feat("draw: weather particles");
-    DrawWeatherParticles(play);
+    if (DebugOn(kDbgWeather)) DrawWeatherParticles(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
+    if (!DebugOn(kDbgProjectiles)) return;
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -6651,6 +6690,81 @@ void ScanMusicFolder() {
     Trace("music scan: done");
 }
 
+// A WAV reader of our own. The SDL on the phone aborts the whole game on some perfectly good .wav files (a format chunk bigger than it
+// expects, as in WAVE_FORMAT_EXTENSIBLE files, makes its fortified read stop the process), and a game that dies while loading a song is no use.
+// This reads the chunks with every size checked against the file, understands 8, 16, 24 and 32-bit PCM and 32-bit float in mono or stereo (more
+// channels: the first two), and gives back 16-bit samples the way SDL_LoadWAV does (free the result with SDL_FreeWAV). Returns nullptr and sets
+// the SDL error text when the file is not usable.
+Uint8* SafeLoadWav(const std::string& path, SDL_AudioSpec* spec, Uint8** audioBuf, Uint32* audioLen) {
+    constexpr uintmax_t kMaxWavBytes = 400u * 1024u * 1024u;
+    std::error_code ec;
+    const uintmax_t fileSize = std::filesystem::file_size(path, ec);
+    if (ec) { SDL_SetError("cannot open the file"); return nullptr; }
+    if (fileSize < 44 || fileSize > kMaxWavBytes) { SDL_SetError("the file is empty or too big"); return nullptr; }
+    std::vector<uint8_t> file(static_cast<size_t>(fileSize));
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in || !in.read(reinterpret_cast<char*>(file.data()), static_cast<std::streamsize>(file.size()))) { SDL_SetError("cannot read the file"); return nullptr; }
+    }
+    auto u16 = [&](size_t at) -> uint32_t { return at + 2 <= file.size() ? static_cast<uint32_t>(file[at] | (file[at + 1] << 8)) : 0u; };
+    auto u32 = [&](size_t at) -> uint32_t { return at + 4 <= file.size() ? u16(at) | (u16(at + 2) << 16) : 0u; };
+    if (std::memcmp(file.data(), "RIFF", 4) != 0 || std::memcmp(file.data() + 8, "WAVE", 4) != 0) { SDL_SetError("not a RIFF WAVE file"); return nullptr; }
+    uint32_t tag = 0, channels = 0, rate = 0, bits = 0;
+    size_t dataAt = 0, dataLen = 0;
+    bool haveFmt = false, haveData = false;
+    size_t pos = 12;
+    while (pos + 8 <= file.size() && !haveData) {
+        const size_t size = u32(pos + 4);
+        const size_t body = pos + 8;
+        const size_t avail = file.size() - body;
+        if (std::memcmp(file.data() + pos, "fmt ", 4) == 0 && size >= 16 && avail >= 16) {
+            tag = u16(body); channels = u16(body + 2); rate = u32(body + 4); bits = u16(body + 14);
+            if (tag == 0xFFFE && size >= 26 && avail >= 26) tag = u16(body + 24);   // WAVE_FORMAT_EXTENSIBLE: the real format is in the sub-format
+            haveFmt = true;
+        } else if (std::memcmp(file.data() + pos, "data", 4) == 0) {
+            dataAt = body; dataLen = std::min(size, avail); haveData = true;
+        }
+        const size_t next = body + size + (size & 1);
+        if (next <= pos || next > file.size()) break;   // a chunk that claims to run past the end of the file ends the walk
+        pos = next;
+    }
+    if (!haveFmt || !haveData) { SDL_SetError("no format or no sound data in the file"); return nullptr; }
+    const bool pcm = tag == 1 && (bits == 8 || bits == 16 || bits == 24 || bits == 32);
+    const bool flt = tag == 3 && bits == 32;
+    if (!pcm && !flt) { SDL_SetError("unsupported sample format"); return nullptr; }
+    if (channels < 1 || channels > 8 || rate < 4000 || rate > 192000) { SDL_SetError("unsupported channel count or sample rate"); return nullptr; }
+    const size_t bytesPer = bits / 8;
+    const size_t frames = dataLen / (bytesPer * channels);
+    if (frames == 0) { SDL_SetError("no sound data in the file"); return nullptr; }
+    const uint32_t outChannels = channels >= 2 ? 2 : 1;
+    const size_t outBytes = frames * outChannels * sizeof(int16_t);
+    Uint8* out = static_cast<Uint8*>(SDL_malloc(outBytes));
+    if (out == nullptr) { SDL_SetError("out of memory"); return nullptr; }
+    int16_t* dst = reinterpret_cast<int16_t*>(out);
+    for (size_t f = 0; f < frames; f++) {
+        for (uint32_t c = 0; c < outChannels; c++) {
+            const uint8_t* src = file.data() + dataAt + (f * channels + c) * bytesPer;
+            int16_t v = 0;
+            if (flt) {
+                float x;
+                std::memcpy(&x, src, 4);
+                v = static_cast<int16_t>(std::clamp(x, -1.0f, 1.0f) * 32767.0f);
+            } else if (bits == 8) v = static_cast<int16_t>((static_cast<int>(src[0]) - 128) << 8);
+            else if (bits == 16) v = static_cast<int16_t>(src[0] | (src[1] << 8));
+            else v = static_cast<int16_t>(src[bytesPer - 2] | (src[bytesPer - 1] << 8));   // 24 and 32-bit: the top 16 bits
+            *dst++ = v;
+        }
+    }
+    *spec = SDL_AudioSpec();
+    spec->freq = static_cast<int>(rate);
+    spec->format = AUDIO_S16SYS;
+    spec->channels = static_cast<Uint8>(outChannels);
+    spec->samples = 4096;
+    *audioBuf = out;
+    *audioLen = static_cast<Uint32>(outBytes);
+    return out;
+}
+
 bool LoadNextTrack() {
     Trace("song load: start");
     LobbyMusic& m = gLobbyMusic;
@@ -6659,7 +6773,7 @@ bool LoadNextTrack() {
         SDL_AudioSpec spec = {};
         Uint8* buf = nullptr;
         Uint32 len = 0;
-        if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) {
+        if (SafeLoadWav(file.string(), &spec, &buf, &len) == nullptr) {
             m.status = "Could not read " + file.filename().string() + ": " + SDL_GetError() + " (use a 16-bit PCM .wav)";
             continue;
         }
@@ -6846,7 +6960,7 @@ bool LoadWavMono22k(const std::filesystem::path& file, std::vector<float>& out, 
     SDL_AudioSpec spec = {};
     Uint8* buf = nullptr;
     Uint32 len = 0;
-    if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
+    if (SafeLoadWav(file.string(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
     SDL_AudioCVT cvt;
     if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_F32SYS, 1, 22050) < 0) { SDL_FreeWAV(buf); why = SDL_GetError(); return false; }
     std::vector<Uint8> work(static_cast<size_t>(len) * static_cast<size_t>(cvt.len_mult > 0 ? cvt.len_mult : 1) + 16);
@@ -9992,6 +10106,7 @@ HatState& StepClothes(const Player* pl) {
 
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     Feat("cap cloth");
+    if (!DebugOn(kDbgCloth)) return;
     gHatHookCalls++;
     if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame()) return;
     HatState& h = StepClothes(static_cast<const Player*>(playerPtr));
@@ -10043,6 +10158,7 @@ bool SheathHasChildren(const Player* pl) {
 
 void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
     Feat("tunic and sheath cloth");
+    if (!DebugOn(kDbgCloth)) return;
     if (limbIndex == PLAYER_LIMB_WAIST) {
         gClothLimbCalls++;
         gWaistSwing.active = false;
@@ -10385,39 +10501,39 @@ void OnGameFrameUpdate() {
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     Feat("session update"); gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
-    Feat("song melody"); UpdateSongMelody();
+    Feat("song melody"); if (DebugOn(kDbgMusic)) UpdateSongMelody();
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
-    Feat("platforms, rocks and trees"); if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    Feat("platforms, rocks and trees"); if (DebugOn(kDbgTerrain) && joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
     Feat("storm"); DriveStorm(hud);
-    Feat("weather"); DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
+    Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     Feat("pause inventory"); SyncPauseInventory(hud);
-    Feat("chicken music"); UpdateChickenMusic();
+    Feat("chicken music"); if (DebugOn(kDbgMusic)) UpdateChickenMusic();
     Feat("music scan"); if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
-    Feat("lobby and match music"); UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
+    Feat("lobby and match music"); if (DebugOn(kDbgMusic)) UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     Feat("lobby timer"); DriveLobbyTimer(hud);
-    Feat("time of day"); DriveTimeOfDay(hud);
-    Feat("boss effects"); UpdateBossWorldFx();
+    Feat("time of day"); if (DebugOn(kDbgTimeOfDay)) DriveTimeOfDay(hud);
+    Feat("boss effects"); if (DebugOn(kDbgBossFx)) UpdateBossWorldFx();
     Feat("sign"); ReconcileSign(hud);
     Feat("messages"); RegisterRoyaleMessages();
-    Feat("Maya"); ReconcileMaya(hud);
-    Feat("Lilo"); ReconcileLilo(hud);
-    Feat("cat pet"); ReconcileCatPet(hud);
-    Feat("Lilo effects"); UpdateLiloFx();
-    Feat("allies"); ReconcileAllies(hud);
-    Feat("carts"); ReconcileCarts(hud);
+    Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
+    Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
+    Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    Feat("Lilo effects"); if (DebugOn(kDbgAllies)) UpdateLiloFx();
+    Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
+    Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     Feat("projectiles"); ReconcileProjectileActor();
     Feat("storm alerts"); DriveStormAlerts(hud);
     gStateNow = hud.state;
     Feat("sealed exits"); SealExits(hud);
-    Feat("minimap switch"); DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
+    Feat("minimap switch"); if (DebugOn(kDbgMinimap)) DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
@@ -10462,8 +10578,8 @@ void OnGameFrameUpdate() {
     Feat("match start"); DriveStart(hud);
     Feat("match events"); ReportEvents(hud);
     Feat("other players"); ReconcilePuppets(hud.state);
-    Feat("loot"); ReconcileLoot(hud);
-    Feat("props"); ReconcileProps(hud);
+    Feat("loot"); if (DebugOn(kDbgLoot)) ReconcileLoot(hud);
+    Feat("props"); if (DebugOn(kDbgProps)) ReconcileProps(hud);
     Feat("bosses"); ReconcileBosses(hud);
     Feat("between updates");
 }
@@ -10781,6 +10897,43 @@ void DrawCustomize(UiState& ui) {
     ImGui::Spacing();
 }
 
+// The temporary Debug section: one switch per newer feature (see kDebugSwitches). Changes apply at once and are saved.
+void DrawDebugSwitches() {
+    if (!ImGui::CollapsingHeader("Debug: turn features on or off (temporary)")) return;
+    if (!gDebugLoaded) LoadDebugSwitches();
+    ImGui::TextColored(kGrey, "If the game crashes or glitches, switch features off one at a time to find the one causing it. Everything is on by default.");
+    bool changed = false;
+    for (int i = 0; i < kDebugCount; i++) {
+        bool on = gDebugOn[i];
+        const std::string id = std::string(kDebugSwitches[i].label) + "##dbg" + kDebugSwitches[i].key;
+        if (ImGui::Checkbox(id.c_str(), &on)) {
+            gDebugOn[i] = on;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), on ? 1 : 0);
+            changed = true;
+        }
+    }
+    if (ImGui::Button("Turn everything on")) {
+        for (int i = 0; i < kDebugCount; i++) {
+            gDebugOn[i] = true;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), 1);
+        }
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Turn everything off")) {
+        for (int i = 0; i < kDebugCount; i++) {
+            gDebugOn[i] = false;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), 0);
+        }
+        changed = true;
+    }
+    if (changed) Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    ImGui::Spacing();
+}
+
 void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     Heading("OOT ROYALE");
     ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
@@ -10810,6 +10963,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
     }
     ImGui::Spacing();
+    DrawDebugSwitches();
 
     ImGui::BeginDisabled(!InGame());
 
@@ -10832,7 +10986,23 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     }
     ImGui::Spacing();
 
-    if (ImGui::Button("Fortnite Map: solo test", ImVec2(220, 0))) {
+    {
+        // Which map the solo test (and the next lobby you host) is played on
+        const char* current = royale::MapOf(ui.mapId).name;
+        ImGui::SetNextItemWidth(300);
+        if (ImGui::BeginCombo("Map##solo_map", current)) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
+                    ui.mapId = i;
+                    gSession.SelectMap(i);
+                    SaveUi(ui);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    const std::string soloLabel = std::string("Solo test: ") + royale::MapOf(ui.mapId).name;
+    if (ImGui::Button(soloLabel.c_str(), ImVec2(300, 0))) {
         ui.port = std::clamp(ui.port, 1024, 65535);
         ui.error.clear();
         SaveUi(ui);
@@ -10844,7 +11014,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
             RefreshLocalAddresses(ui, true);
         }
     }
-    ImGui::TextColored(kGrey, "Just you on the Fortnite Map, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
+    ImGui::TextColored(kGrey, "Just you on the map chosen above, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
