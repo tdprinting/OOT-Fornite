@@ -1303,11 +1303,11 @@ static void TheSignInTheMiddle() {
     float cmn[3], cmx[3];
     lilo.Bounds(cmn, cmx);
     CHECK(lilo.Triangles() >= 200 && cmx[1] > 70 && cmx[1] < 90 && cmx[0] - cmn[0] < 50 && cmx[2] - cmn[2] > 60);
-    const std::vector<int16_t> fart = BuildFart();
-    CHECK(fart.size() == static_cast<size_t>(kFartSeconds * kTuneRate) && BuildFart() == fart);
+    // Her accident, a real recording: about a second and a half, audible, never clipping, and ending quietly.
+    const lilo_snd::Clip& fart = lilo_snd::kFart;
     int peak = 0; double energy = 0;
-    for (int16_t v : fart) { peak = std::max(peak, std::abs(static_cast<int>(v))); energy += static_cast<double>(v) * v; }
-    CHECK(peak > 6000 && peak < 32000 && energy / fart.size() > 1.0e6 && std::abs(static_cast<int>(fart.back())) < 300);   // audible, never clipping, ends quietly
+    for (int i = 0; i < fart.count; i++) { peak = std::max(peak, std::abs(static_cast<int>(fart.data[i]))); energy += static_cast<double>(fart.data[i]) * fart.data[i]; }
+    CHECK(fart.count > lilo_snd::kRate && fart.count < lilo_snd::kRate * 2 && peak > 6000 && peak < 32000 && energy / fart.count > 1.0e6 && std::abs(static_cast<int>(fart.data[fart.count - 1])) < 300);
     // Lilo's seven recorded mews: short, audible, never clipping, and fading out to nothing at the end.
     CHECK(sizeof(lilo_snd::kClips) / sizeof(lilo_snd::kClips[0]) == 7);
     for (const lilo_snd::Clip& clip : lilo_snd::kClips) {

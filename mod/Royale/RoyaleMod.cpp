@@ -10092,14 +10092,16 @@ void DriveMinimapSwitch(bool on) {
 
 // ---- storm alerts ------------------------------------------------------------------------------------------------------------
 // A jingle (with a banner) whenever the storm changes phase, a siren fifteen and five seconds before the zone starts to close, and a siren every
-// few seconds while you are standing in the storm. The sounds are synthesised in shared/tune.h and played on a small audio stream of their own.
+// few seconds while you are standing in the storm. The storm sounds are synthesised in shared/tune.h; Lilo's accident is a real recording
+// (shared/lilo_sounds.h). All of them play on a small audio stream of their own.
 void PlayOneShot(int kind) {   // 0 the storm warning, 1 the storm jingle, 2 Lilo's accident
     static const auto jingle = std::make_shared<const std::vector<int16_t>>(royale::BuildStormJingle());
     static const auto warning = std::make_shared<const std::vector<int16_t>>(royale::BuildStormWarning());
-    static const auto fart = std::make_shared<const std::vector<int16_t>>(royale::BuildFart());
+    static const auto fart = std::make_shared<const std::vector<int16_t>>(royale::lilo_snd::kFart.data, royale::lilo_snd::kFart.data + royale::lilo_snd::kFart.count);
     const float volume = GameVolume(false);
     if (volume < 0.01f) return;
-    StartVoice(kVoiceOneShot, kind == 1 ? jingle : kind == 2 ? fart : warning, false, royale::kTuneRate, false, volume);
+    if (kind == 2) StartVoice(kVoiceOneShot, fart, false, royale::lilo_snd::kRate, false, volume);
+    else StartVoice(kVoiceOneShot, kind == 1 ? jingle : warning, false, royale::kTuneRate, false, volume);
 }
 
 void DriveStormAlerts(const royale::HudState& hud) {
