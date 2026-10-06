@@ -2,6 +2,54 @@
 import bpy, math, os, json
 from collections import defaultdict
 from mathutils import Vector
+import numpy as np
+
+def native_texture(im):
+    """Area filtering keeps fine mortar/roof seams visible in the 32px game texture."""
+    w,h=im.size
+    pixels=np.asarray(im.pixels[:],dtype=np.float32).reshape(h,w,4)
+    rgb=pixels.reshape(32,h//32,32,w//32,4).mean(axis=(1,3))[:,:,:3]
+    q=np.rint(np.clip(rgb,0,1)*31).astype(np.uint16)
+    return ((q[:,:,0]<<11)|(q[:,:,1]<<6)|(q[:,:,2]<<1)|1).ravel().tolist()
+
+def refresh_native_textures(root):
+    names=['grass','forest','sand','basalt','snow','stone','plaster','wood','roof','blue_roof','moss','path','gold','water','linen','rug','ceramic','pages','iron']
+    path=os.path.join(root,'shared','convergence_model.h')
+    with open(path) as f:content=f.read()
+    start=content.index('alignas(8) inline constexpr uint16_t kTextures[][1024] = {')
+    textures='alignas(8) inline constexpr uint16_t kTextures[][1024] = {\n'
+    for name in names:
+        mat=bpy.data.materials.get(name)
+        im=next(n.image for n in mat.node_tree.nodes if n.type=='TEX_IMAGE') if mat else bpy.data.images.load(os.path.join(root,'assets','maps','hyrule_convergence',name+'.png'))
+        textures+='{'+','.join(map(str,native_texture(im)))+'},\n'
+    with open(path,'w') as f:f.write(content[:start]+textures+'};\n} }\n')
+
+def refresh_export(root):
+    """Re-export an edited saved source without rebuilding or re-rendering the artwork."""
+    out=os.path.join(root,'assets','maps','hyrule_convergence')
+    with open(os.path.join(out,'placement.json')) as f:placement=json.load(f)
+    cols={n:bpy.data.collections[n] for n in ['Terrain','Architecture','Foliage','Props','Water']}
+    terrain=bpy.data.objects['Island terrain'];grid=np.array([v.co.z for v in terrain.data.vertices]).reshape(65,65)[::-1]
+    def height(x,y):
+        fx=max(0,min(64,(x+74.1253)/148.2506*64));fz=max(0,min(64,(77.0572-y)/154.1144*64))
+        i=min(63,int(fx));j=min(63,int(fz));u=fx-i;v=fz-j
+        a,b,c,d=grid[j,i],grid[j,i+1],grid[j+1,i],grid[j+1,i+1]
+        return float(a+u*(b-a)+v*(d-b) if u>=v else a+u*(d-c)+v*(c-a))
+    image=next(n.image for n in terrain.data.materials[0].node_tree.nodes if n.type=='TEX_IMAGE')
+    w,h=image.size;pixels=np.array(image.pixels[:]).reshape(h,w,4)
+    def ground_colour(x,y):
+        i=max(0,min(w-1,round((x+74.1253)/148.2506*(w-1))));j=max(0,min(h-1,round((y+77.0572)/154.1144*(h-1))))
+        return tuple(float(c) for c in pixels[j,i,:3])
+    names=['grass','forest','sand','basalt','snow','stone','plaster','wood','roof','blue_roof','moss','path','gold','water','linen','rug','ceramic','pages','iron']
+    mats={}
+    for name in names:
+        m=bpy.data.materials.get(name)
+        if m is None:
+            m=bpy.data.materials.new(name);m.use_nodes=True;n=m.node_tree.nodes.new('ShaderNodeTexImage');n.image=bpy.data.images.load(os.path.join(out,name+'.png'))
+        mats[name]=m
+    pois=[(p['name'],*p['blender_xy'],'grass',p['boss_kind']) for p in placement['pois']]
+    export(root,out,cols,pois,placement['markers'],placement['buildings'],height,lambda x,y:'grass',mats,ground_colour)
+
 def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour):
     # Roofs must face outwards so Link can land on them, as well as see them.
     flipped=False
@@ -37,14 +85,15 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         if o!=terrain:
             lo=[min(p[i] for p in verts) for i in range(3)];hi=[max(p[i] for p in verts) for i in range(3)]
             # Vertical obstacles only. Floors, thresholds and overhead beams stay navigable.
-            if hi[2]-lo[2]>.7 and lo[2]<height((lo[0]+hi[0])/2,(lo[1]+hi[1])/2)+1.8:
+            base=height((lo[0]+hi[0])/2,(lo[1]+hi[1])/2)
+            if hi[2]>base+.4 and lo[2]<base+1.8:
                 obstacles.append((round(lo[0]*100),round(hi[0]*100),round(-hi[1]*100),round(-lo[1]*100)))
     collision(terrain)
     for key in ['Architecture','Props','Foliage']:
         for o in cols[key].objects:
             if o.type!='MESH':continue
             solid=o.get('collision',False) or 'pitched roof' in o.name or any(n in o.name for n in ['bed frame','Pantry shelf','Hearth back','table','Quarry forge','Ranch hay bale'])
-            if solid:collision(o,simple=key=='Props' or 'spire tower' in o.name)
+            if solid:collision(o,simple=key=='Props')
     assert len(cv)<8192,('Collision exceeds 13-bit vertex limit',len(cv))
     assert len(cp)<65536
     # Grid coordinates follow the existing island machinery. Blender Y is the negative game Z.
@@ -72,8 +121,8 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint16_t a,b,c; int16_t nx,ny,nz,dist; };\n')
         array(f,'Vertex','kCollisionVertices',cv);array(f,'Triangle','kCollisionTriangles',cp)
         f.write('struct Obstacle { float x0,x1,z0,z1; };\n');array(f,'Obstacle','kObstacles',obstacles)
-        f.write('struct Building { float x,z,halfWidth,halfDepth; };\n')
-        array(f,'Building','kBuildings',[(round(b['center_blender'][0]*100),round(-b['center_blender'][1]*100),b['size_blender'][0]*50,b['size_blender'][1]*50) for b in buildings])
+        f.write('struct Building { float x,z,halfWidth,halfDepth,floorY; };\n')
+        array(f,'Building','kBuildings',[(round(b['center_blender'][0]*100),round(-b['center_blender'][1]*100),b['size_blender'][0]*50,b['size_blender'][1]*50,round((b['center_blender'][2]+.11)*100)) for b in buildings])
         f.write('struct Point { float x,z; };\n');array(f,'Point','kLootSites',[(round(m['game_position'][0]),round(m['game_position'][2])) for m in markers if m['kind']=='loot'])
         f.write('struct Region { const char* name; float x,z; int boss; };\ninline constexpr Region kRegions[] = {\n')
         kinds={'Stone':0,'Lava':1,'Frost':2,'Moss':3,'Tide':4,'Shade':5,'Dune':6}
@@ -102,10 +151,7 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('struct Batch { uint32_t first,count; uint16_t texture; int16_t x,z; };\n');array(f,'Batch','kBatches',batches)
         f.write('alignas(8) inline constexpr uint16_t kTextures[][1024] = {\n')
         for name in names:
-            im=next(n.image for n in mats[name].node_tree.nodes if n.type=='TEX_IMAGE');pix=list(im.pixels);vals=[]
-            for y in range(32):
-                for x in range(32):
-                    idx=((y*8+4)*256+x*8+4)*4;r,g,b=[round(max(0,min(1,pix[idx+k]))*31) for k in range(3)];vals.append((r<<11)|(g<<6)|(b<<1)|1)
+            im=next(n.image for n in mats[name].node_tree.nodes if n.type=='TEX_IMAGE');vals=native_texture(im)
             f.write('{'+','.join(map(str,vals))+'},\n')
         f.write('};\n} }\n')
     report={'collision_vertices':len(cv),'collision_triangles':len(cp),'draw_triangles':len(draw)//3,'draw_batches':len(batches),'navigation_obstacles':len(obstacles),'loading_zone_surfaces':0,'texture_count':len(names)}

@@ -451,6 +451,11 @@ bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
+    if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
+        return true;
+    }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
     Vec3f pos = { x, 4000.0f, z };
     for (int tries = 0; tries < 6; tries++) {

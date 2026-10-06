@@ -2,7 +2,7 @@
 #include "convergence_data.h"
 #include "poi.h"
 namespace royale {
-inline float ConvergenceGroundHeight(Vec2 p) {
+inline float ConvergenceTerrainHeight(Vec2 p) {
     const float x = std::clamp((p.x+7412.53f)/14825.06f*64.0f,0.0f,63.999f);
     const float z = std::clamp((p.z+7705.72f)/15411.44f*64.0f,0.0f,63.999f);
     const int i=static_cast<int>(x),j=static_cast<int>(z); const float u=x-i,v=z-j;
@@ -10,10 +10,16 @@ inline float ConvergenceGroundHeight(Vec2 p) {
     const float a=h[j*65+i],b=h[j*65+i+1],c=h[(j+1)*65+i],d=h[(j+1)*65+i+1];
     return u>=v ? a+u*(b-a)+v*(d-b) : a+u*(d-c)+v*(c-a);
 }
+inline float ConvergenceGroundHeight(Vec2 p) {
+    float y=ConvergenceTerrainHeight(p);
+    for (const auto& b:convergence::kBuildings)
+        if (std::fabs(p.x-b.x)<=b.halfWidth && std::fabs(p.z-b.z)<=b.halfDepth) y=std::max(y,b.floorY);
+    return y;
+}
 inline bool ConvergenceDryGround(Vec2 p) {
-    if (std::fabs(p.x)>=7412.53f || std::fabs(p.z)>=7705.72f || ConvergenceGroundHeight(p)<-212) return false;
-    const float sx=(ConvergenceGroundHeight({p.x+15,p.z})-ConvergenceGroundHeight({p.x-15,p.z}))/30;
-    const float sz=(ConvergenceGroundHeight({p.x,p.z+15})-ConvergenceGroundHeight({p.x,p.z-15}))/30;
+    if (std::fabs(p.x)>=7412.53f || std::fabs(p.z)>=7705.72f || ConvergenceTerrainHeight(p)<-212) return false;
+    const float sx=(ConvergenceTerrainHeight({p.x+15,p.z})-ConvergenceTerrainHeight({p.x-15,p.z}))/30;
+    const float sz=(ConvergenceTerrainHeight({p.x,p.z+15})-ConvergenceTerrainHeight({p.x,p.z-15}))/30;
     return 1/std::sqrt(1+sx*sx+sz*sz)>=.8f;
 }
 inline bool ConvergenceObstacleAt(Vec2 p, float margin = 22.0f) {

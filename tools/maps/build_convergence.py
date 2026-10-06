@@ -248,8 +248,10 @@ disc('Lake Lantern pool',49,13,4.8,'water',-2.27)
 box('Lake jetty',(44,12,height(38,8)),(12,2.5,.3),'wood')
 for x in range(40,49,2):box('Jetty support',(x,12,-.3),(.3,.3,3),'wood')
 # Ranch fencing with large breaks for buggy traffic.
-for x in [-31,-13]:
-    for y in [-30,-27,-21,-18]:box('Ranch fence',(x,y,height(x,y)+.65),(.2,2.8,.2),'wood')
+for x in [-38,-6]:
+    for y in [-30,-27,-21,-18]:
+        box('Ranch fence',(x,y,height(x,y)+.65),(.2,2.8,.2),'wood')
+        box('Ranch fence post',(x,y-1.4,height(x,y)+.65),(.24,.24,1.3),'wood')
 for i in range(220):
     x=random.uniform(-61,61);y=random.uniform(-61,61)
     if math.hypot(x,y)>62 or height(x,y)<0 or min(math.hypot(x-p[1],y-p[2]) for p in POIS)<15:continue
@@ -265,6 +267,10 @@ marker('Link height reference 180 units',8,0,height(8,0),'scale_reference')
 scene.world.use_nodes=True
 bg=scene.world.node_tree.nodes.get('Background');bg.inputs['Color'].default_value=(.46,.57,.72,1);bg.inputs['Strength'].default_value=.45
 bpy.ops.object.light_add(type='SUN',location=(0,0,70));sun=bpy.context.object;sun.rotation_euler=(.65,-.8,-.6);sun.data.energy=2.8;sun.data.color=(1,.76,.48);sun.data.angle=.12;move(sun,'Presentation')
+import sys
+sys.path.insert(0,os.path.dirname(__file__))
+import preview_lighting
+preview_lighting.apply(scene,buildings)
 def camera(name,loc,target,ortho=None):
     bpy.ops.object.camera_add(location=loc);o=bpy.context.object;o.name=name;o.rotation_euler=(Vector(target)-o.location).to_track_quat('-Z','Y').to_euler();o.data.clip_end=600
     if ortho:o.data.type='ORTHO';o.data.ortho_scale=ortho

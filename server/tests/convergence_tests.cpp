@@ -29,11 +29,16 @@ int main() {
         }
     }
     float y=0;CHECK(fortnite::GroundHeight(-900,700,&y));
-    CHECK(std::fabs(y-ConvergenceGroundHeight({-900,700}))<.01f);
+    CHECK(std::fabs(y-ConvergenceTerrainHeight({-900,700}))<.01f);
+    CHECK(ConvergenceGroundHeight({-900,700})>y+15);
+    CHECK(ConvergenceObstacleAt({-900-230,700-130})); // the bed footprint cannot be walked through
     for (const auto& batch:convergence::kBatches) {
         CHECK(batch.count%3==0 && batch.first+batch.count<=sizeof(convergence::kDrawVertices)/sizeof(convergence::kDrawVertices[0]));
         CHECK(batch.texture<sizeof(convergence::kTextures)/sizeof(convergence::kTextures[0]));
     }
+    // Area filtering must preserve the mortar line instead of sampling between seams.
+    auto brightness=[](uint16_t c) { return ((c>>11)&31)+((c>>6)&31)+((c>>1)&31); };
+    CHECK(brightness(convergence::kTextures[5][0])+5 < brightness(convergence::kTextures[5][4*32+4]));
     auto layout=GenerateConvergenceLayout();CHECK(layout.pois.size()==10 && layout.bossSpots.size()==7 && layout.lootSpots.size()>=30);
     for (int seed=1;seed<=8;++seed) {
         net::LoopbackNetwork network; auto& host=network.Server();
