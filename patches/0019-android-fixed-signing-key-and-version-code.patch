@@ -8,7 +8,7 @@ index eb2d4b5..4aebe90 100644
          targetSdkVersion 33
 -        versionCode 8
 +        // OOT Royale (patches/0019): every CI build gets a higher number than the last, so Android always sees an update.
-+        versionCode (System.getenv("ROYALE_VERSION_CODE") ?: "8").toInteger()
++        versionCode Integer.parseInt(System.getenv("ROYALE_VERSION_CODE") ?: "8")
          versionName "9.0.2"
      }
 +    // OOT Royale (patches/0019): one fixed signing key for every build, so each build installs over the previous one.
