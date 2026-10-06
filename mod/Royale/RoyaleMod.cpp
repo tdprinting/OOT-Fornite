@@ -12542,6 +12542,32 @@ void RegisterRoyaleMod() {
         }
     });
 
+    // The kill above runs before the field's actors have started up, and killing only stops an actor's update and draw: its init still ran
+    // afterwards (the drawbridge spawned its chains, and registered its collision, after being "killed"). So on the island the field's own
+    // actors are refused their init altogether: scenery, doors/grottos, switches, NPCs, horses, spawners and the like never come to life.
+    // Our own actors (ids from the actor database, above ACTOR_ID_MAX), the player, and the few vanilla ones the mod spawns pass.
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
+        if (!OnIsland()) return;
+        Actor* a = (Actor*)actorRef;
+        if (a->id >= ACTOR_ID_MAX || a->id == ACTOR_PLAYER || a->id == ACTOR_EN_OE2 || a->id == ACTOR_EN_ISHI || a->id == ACTOR_EN_KUSA ||
+            a->id == ACTOR_EN_ITEM00 || a->id == ACTOR_EN_BOX || a->id == ACTOR_OBJECT_KANKYO) return;
+        switch (a->category) {
+            case ACTORCAT_SWITCH: case ACTORCAT_BG: case ACTORCAT_NPC: case ACTORCAT_PROP: case ACTORCAT_BOSS: case ACTORCAT_DOOR: case ACTORCAT_CHEST:
+                *should = false; return;
+            default: break;
+        }
+        switch (a->id) {   // the field's spawners and ambience that sit in the item-action / misc lists
+            case ACTOR_OBJ_MURE: case ACTOR_OBJ_MURE2: case ACTOR_OBJ_MURE3: case ACTOR_OBJ_HANA: case ACTOR_EN_WONDER_ITEM:
+            case ACTOR_EN_ENCOUNT1: case ACTOR_DEMO_KANKYO: case ACTOR_EN_VIEWER: case ACTOR_EN_EX_RUPPY: case ACTOR_EN_BUTTE: case ACTOR_EN_INSECT:
+                *should = false; break;
+            default: break;
+        }
+    });
+    // ...and no "Hyrule Field" place-name card on arrival at the island.
+    REGISTER_VB_SHOULD(VB_SHOW_TITLE_CARD, {
+        if (OnIsland()) *should = false;
+    });
+
     // No enemies spawn while in a lobby or match.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
         Actor* actor = (Actor*)actorRef;
