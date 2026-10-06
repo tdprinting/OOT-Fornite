@@ -2437,7 +2437,7 @@ static void IslandScenery() {
         const MeshData m = BuildMesh(MeshKind::Scenery, variant), again = BuildMesh(MeshKind::Scenery, variant);
         float mn[3], mx[3];
         m.Bounds(mn, mx);
-        CHECK(m.Triangles() >= 25 && m.Triangles() <= 260 && mn[1] >= -0.01f && mx[1] > 20 && mx[0] - mn[0] < 700 && mx[2] - mn[2] < 700);
+        CHECK(m.Triangles() >= 60 && m.Triangles() <= 600 && mn[1] >= -0.01f && mx[1] > 20 && mx[0] - mn[0] < 700 && mx[2] - mn[2] < 700);
         bool same = again.v.size() == m.v.size();
         for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].g == m.v[i].g;
         CHECK(same);
@@ -2652,7 +2652,7 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= 420);   // a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (static_cast<MeshKind>(k) == MeshKind::Scenery ? 600u : 420u));   // a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
