@@ -10,6 +10,7 @@
 #include "cloth.h"
 #include "build_version.h"
 #include "lilo_anim.h"
+#include "lilo_sounds.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -50,6 +51,7 @@
 #include <unistd.h>
 #include <unwind.h>
 #include <sys/syscall.h>
+#include <jni.h>
 #endif
 
 #include "soh/ShipInit.hpp"
@@ -178,7 +180,7 @@ struct AllyActor {
     float actAge = 10.0f;      // seconds since it attacked or healed
     bool init = false;
     // The game's own NPC model: its skeleton and animation state (see AllyNpc below)
-    SkelAnime sk;
+    SkelAnime sk = {};   // zeroed like an actor's memory: the game reads the old animation when it changes one
     Vec3s joint[32] = {};
     Vec3s morph[32] = {};
     bool skReady = false;
@@ -246,6 +248,46 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 // dies the report names the last feature that started (a string literal, so the crash handler can read it safely).
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
+
+// ---- debug switches ----------------------------------------------------------------------------------------------------------
+// A temporary Debug section in the Battle Royale menu: each newer feature can be switched off to find out which one causes a crash or glitch.
+// They are all on by default and remembered between runs. Remove this section (and the DebugOn checks) once the features are trusted.
+struct DebugSwitch { const char* key; const char* label; };
+constexpr DebugSwitch kDebugSwitches[] = {
+    { "Carts", "Lon Lon Buggy carts" },
+    { "Weather", "Weather (the game's rain, snow, lightning, fog, sand)" },
+    { "StormWall", "Storm wall" },
+    { "Foliage", "Foliage, snow cover and puddles" },
+    { "Cloth", "Cloth physics (caps, tunics, sheaths, gliders)" },
+    { "Music", "Custom match and lobby music" },
+    { "Terrain", "Custom rocks, trees and platforms" },
+    { "TimeOfDay", "Time of day changes" },
+    { "Allies", "Maya, Lilo, the cat pet and allies" },
+    { "BossFx", "Boss effects in the world" },
+    { "Loot", "Loot and chests in the world" },
+    { "Props", "Map props" },
+    { "Projectiles", "Arrows, bombs and chest reveals" },
+    { "Minimap", "Minimap switching" },
+    { "Wind", "Wind streaks in the air" },
+    { "Tornado", "Tornado easter egg" },
+};
+constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
+enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado };
+static_assert(kDbgTornado + 1 == kDebugCount, "one switch per DebugId");
+bool gDebugOn[kDebugCount];
+bool gDebugLoaded = false;
+void LoadDebugSwitches() {
+    for (int i = 0; i < kDebugCount; i++) {
+        const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+        gDebugOn[i] = CVarGetInteger(key.c_str(), 1) != 0;
+    }
+    gDebugLoaded = true;
+}
+inline bool DebugOn(int id) {
+    if (!gDebugLoaded) LoadDebugSwitches();
+    return gDebugOn[id];
+}
 
 bool TravelTo(int entrance) {
     if (!InGame() || gTravelCooldown > 0 || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return false;
@@ -1977,6 +2019,7 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below,
 void PlayOneShot(int kind);
 void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale); // below, with the skydive
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale);   // below, with Lilo
 bool LiloNear();
 void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
@@ -3462,18 +3505,19 @@ void DrawHeldFinds(PlayState* play) {
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     Feat("draw: foliage and puddles");
-    DrawFlora(play);
+    if (DebugOn(kDbgFoliage)) DrawFlora(play);
     Feat("draw: storm wall");
-    DrawStormWall(play);
+    if (DebugOn(kDbgStormWall)) DrawStormWall(play);
     Feat("draw: weather particles");
-    DrawWeatherParticles(play);
+    if (DebugOn(kDbgWeather)) DrawWeatherParticles(play);
     Feat("draw: wind streaks");
-    DrawWindParticles(play);
+    if (DebugOn(kDbgWind)) DrawWindParticles(play);
     Feat("draw: tornado");
-    DrawTornado(play);
+    if (DebugOn(kDbgTornado)) DrawTornado(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
+    if (!DebugOn(kDbgProjectiles)) return;
     for (size_t i = 0; i < gReveals.size();) {
         Reveal& r = gReveals[i];
         r.age += dt;
@@ -5482,6 +5526,7 @@ void DrawOverlay() {
     DrawSign(dl, font, ds, scale);
     DrawMaya(dl, font, ds, scale);
     DrawLilo(dl, font, ds, scale);
+    DrawFartReactions(dl, font, scale);
     DrawAllyLabels(dl, font, ds, scale, h);
     DrawCartHud(dl, font, ds, scale);
     DrawMinimap(dl, ds, scale, h);
@@ -5738,11 +5783,11 @@ void OnEmoteWheelInput() {
 }
 
 // ---- the mod's own sounds, mixed into the game's audio ------------------------------------------------------------------------------
-// Everything the mod plays (the music folder's songs, the chicken dance tune, the storm and Lilo sounds) is mixed into each buffer the game's own
+// Everything the mod plays (the music folder's songs, the chicken dance tune, the storm sounds, Lilo's mews and her accident) is mixed into each buffer the game's own
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -6850,6 +6895,81 @@ void ScanMusicFolder() {
     Trace("music scan: done");
 }
 
+// A WAV reader of our own. The SDL on the phone aborts the whole game on some perfectly good .wav files (a format chunk bigger than it
+// expects, as in WAVE_FORMAT_EXTENSIBLE files, makes its fortified read stop the process), and a game that dies while loading a song is no use.
+// This reads the chunks with every size checked against the file, understands 8, 16, 24 and 32-bit PCM and 32-bit float in mono or stereo (more
+// channels: the first two), and gives back 16-bit samples the way SDL_LoadWAV does (free the result with SDL_FreeWAV). Returns nullptr and sets
+// the SDL error text when the file is not usable.
+Uint8* SafeLoadWav(const std::string& path, SDL_AudioSpec* spec, Uint8** audioBuf, Uint32* audioLen) {
+    constexpr uintmax_t kMaxWavBytes = 400u * 1024u * 1024u;
+    std::error_code ec;
+    const uintmax_t fileSize = std::filesystem::file_size(path, ec);
+    if (ec) { SDL_SetError("cannot open the file"); return nullptr; }
+    if (fileSize < 44 || fileSize > kMaxWavBytes) { SDL_SetError("the file is empty or too big"); return nullptr; }
+    std::vector<uint8_t> file(static_cast<size_t>(fileSize));
+    {
+        std::ifstream in(path, std::ios::binary);
+        if (!in || !in.read(reinterpret_cast<char*>(file.data()), static_cast<std::streamsize>(file.size()))) { SDL_SetError("cannot read the file"); return nullptr; }
+    }
+    auto u16 = [&](size_t at) -> uint32_t { return at + 2 <= file.size() ? static_cast<uint32_t>(file[at] | (file[at + 1] << 8)) : 0u; };
+    auto u32 = [&](size_t at) -> uint32_t { return at + 4 <= file.size() ? u16(at) | (u16(at + 2) << 16) : 0u; };
+    if (std::memcmp(file.data(), "RIFF", 4) != 0 || std::memcmp(file.data() + 8, "WAVE", 4) != 0) { SDL_SetError("not a RIFF WAVE file"); return nullptr; }
+    uint32_t tag = 0, channels = 0, rate = 0, bits = 0;
+    size_t dataAt = 0, dataLen = 0;
+    bool haveFmt = false, haveData = false;
+    size_t pos = 12;
+    while (pos + 8 <= file.size() && !haveData) {
+        const size_t size = u32(pos + 4);
+        const size_t body = pos + 8;
+        const size_t avail = file.size() - body;
+        if (std::memcmp(file.data() + pos, "fmt ", 4) == 0 && size >= 16 && avail >= 16) {
+            tag = u16(body); channels = u16(body + 2); rate = u32(body + 4); bits = u16(body + 14);
+            if (tag == 0xFFFE && size >= 26 && avail >= 26) tag = u16(body + 24);   // WAVE_FORMAT_EXTENSIBLE: the real format is in the sub-format
+            haveFmt = true;
+        } else if (std::memcmp(file.data() + pos, "data", 4) == 0) {
+            dataAt = body; dataLen = std::min(size, avail); haveData = true;
+        }
+        const size_t next = body + size + (size & 1);
+        if (next <= pos || next > file.size()) break;   // a chunk that claims to run past the end of the file ends the walk
+        pos = next;
+    }
+    if (!haveFmt || !haveData) { SDL_SetError("no format or no sound data in the file"); return nullptr; }
+    const bool pcm = tag == 1 && (bits == 8 || bits == 16 || bits == 24 || bits == 32);
+    const bool flt = tag == 3 && bits == 32;
+    if (!pcm && !flt) { SDL_SetError("unsupported sample format"); return nullptr; }
+    if (channels < 1 || channels > 8 || rate < 4000 || rate > 192000) { SDL_SetError("unsupported channel count or sample rate"); return nullptr; }
+    const size_t bytesPer = bits / 8;
+    const size_t frames = dataLen / (bytesPer * channels);
+    if (frames == 0) { SDL_SetError("no sound data in the file"); return nullptr; }
+    const uint32_t outChannels = channels >= 2 ? 2 : 1;
+    const size_t outBytes = frames * outChannels * sizeof(int16_t);
+    Uint8* out = static_cast<Uint8*>(SDL_malloc(outBytes));
+    if (out == nullptr) { SDL_SetError("out of memory"); return nullptr; }
+    int16_t* dst = reinterpret_cast<int16_t*>(out);
+    for (size_t f = 0; f < frames; f++) {
+        for (uint32_t c = 0; c < outChannels; c++) {
+            const uint8_t* src = file.data() + dataAt + (f * channels + c) * bytesPer;
+            int16_t v = 0;
+            if (flt) {
+                float x;
+                std::memcpy(&x, src, 4);
+                v = static_cast<int16_t>(std::clamp(x, -1.0f, 1.0f) * 32767.0f);
+            } else if (bits == 8) v = static_cast<int16_t>((static_cast<int>(src[0]) - 128) << 8);
+            else if (bits == 16) v = static_cast<int16_t>(src[0] | (src[1] << 8));
+            else v = static_cast<int16_t>(src[bytesPer - 2] | (src[bytesPer - 1] << 8));   // 24 and 32-bit: the top 16 bits
+            *dst++ = v;
+        }
+    }
+    *spec = SDL_AudioSpec();
+    spec->freq = static_cast<int>(rate);
+    spec->format = AUDIO_S16SYS;
+    spec->channels = static_cast<Uint8>(outChannels);
+    spec->samples = 4096;
+    *audioBuf = out;
+    *audioLen = static_cast<Uint32>(outBytes);
+    return out;
+}
+
 bool LoadNextTrack() {
     Trace("song load: start");
     LobbyMusic& m = gLobbyMusic;
@@ -6858,7 +6978,7 @@ bool LoadNextTrack() {
         SDL_AudioSpec spec = {};
         Uint8* buf = nullptr;
         Uint32 len = 0;
-        if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) {
+        if (SafeLoadWav(file.string(), &spec, &buf, &len) == nullptr) {
             m.status = "Could not read " + file.filename().string() + ": " + SDL_GetError() + " (use a 16-bit PCM .wav)";
             continue;
         }
@@ -7045,7 +7165,7 @@ bool LoadWavMono22k(const std::filesystem::path& file, std::vector<float>& out, 
     SDL_AudioSpec spec = {};
     Uint8* buf = nullptr;
     Uint32 len = 0;
-    if (SDL_LoadWAV(file.string().c_str(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
+    if (SafeLoadWav(file.string(), &spec, &buf, &len) == nullptr) { why = SDL_GetError(); return false; }
     SDL_AudioCVT cvt;
     if (SDL_BuildAudioCVT(&cvt, spec.format, spec.channels, spec.freq, AUDIO_F32SYS, 1, 22050) < 0) { SDL_FreeWAV(buf); why = SDL_GetError(); return false; }
     std::vector<Uint8> work(static_cast<size_t>(len) * static_cast<size_t>(cvt.len_mult > 0 ? cvt.len_mult : 1) + 16);
@@ -9353,6 +9473,81 @@ int LiloEyes(float seconds, int wanted) {
     return std::fmod(seconds, 3.7f) < 0.13f ? royale::lilo::kEyesShut : royale::lilo::kEyesOpen;
 }
 
+// -- Lilo's voice and her accidents (shared by the pet and the Lilo on the map) --
+// Her mews are seven short recordings of the real Lilo (assets/lilo/sounds, shared/lilo_sounds.h), on a mixer voice of their own so a mew never
+// cuts off a storm siren. Which one plays depends on what she is doing:
+enum LiloMew { kMewChirp, kMewLong, kMewTrail, kMewShort, kMewAsk, kMewFall, kMewLoud };   // the clips in order (cat_01, 03, 04, 05, 06, 07, 10)
+void PlayMeow(int clip, float gain = 0.7f) {
+    namespace S = royale::lilo_snd;
+    constexpr int kClipCount = sizeof(S::kClips) / sizeof(S::kClips[0]);
+    static std::shared_ptr<const std::vector<int16_t>> cache[kClipCount];
+    const float volume = GameVolume(false) * gain;
+    if (clip < 0 || clip >= kClipCount || volume < 0.01f) return;
+    if (!cache[clip]) cache[clip] = std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data, S::kClips[clip].data + S::kClips[clip].count);
+    StartVoice(kVoiceCat, cache[clip], false, S::kRate, false, volume);
+}
+
+// A little greenish cloud (a few brown puffs among it) that drifts up and thins out; called every tick while the cloud lasts.
+void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs) {
+    for (int i = 0; i < puffs; i++) {
+        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, by + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
+        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
+        const bool brown = Rand_ZeroOne() < 0.35f;
+        Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
+        Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
+        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 260 + static_cast<int>(Rand_ZeroOne() * 160.0f), 40);
+    }
+}
+
+// Everybody close enough to smell it (bots and other players you can see, and you) gags for a moment: a little word floats up from their head and
+// a puff of green hangs there. Purely a joke on your screen: nothing the server knows about.
+struct FartReaction { uint16_t id; double start; float x, y, z; };
+std::vector<FartReaction> gFartReactions;
+constexpr uint16_t kFartSelf = 0xFFFF;
+constexpr float kFartSmellRange = 420.0f;
+void FartReact(float x, float z) {
+    if (gPlayState == nullptr) return;
+    const double now = ImGui::GetTime();
+    auto add = [&](uint16_t id, float px, float py, float pz) {
+        gFartReactions.push_back({ id, now, px, py, pz });
+        FartCloudStep(gPlayState, px, py - 12.0f, pz, 1);
+    };
+    Player* me = GET_PLAYER(gPlayState);
+    if (me != nullptr && std::hypot(me->actor.world.pos.x - x, me->actor.world.pos.z - z) < kFartSmellRange)
+        add(kFartSelf, me->actor.world.pos.x, me->actor.world.pos.y, me->actor.world.pos.z);
+    for (const auto& [id, st] : gState) {
+        if (!st.alive || st.scene != gPlayState->sceneNum || royale::IsBossId(id)) continue;
+        if (me != nullptr && std::hypot(st.x - me->actor.world.pos.x, st.z - me->actor.world.pos.z) < 4.0f) continue;   // that is you
+        if (std::hypot(st.x - x, st.z - z) < kFartSmellRange) add(id, st.x, st.y, st.z);
+    }
+}
+
+void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale) {
+    static const char* const words[] = { "*cough*", "Ew!", "*gag*", "LILO!", "*sniff* ...ugh", "Who did that?!" };
+    const double now = ImGui::GetTime();
+    for (size_t i = 0; i < gFartReactions.size();) {
+        const FartReaction& r = gFartReactions[i];
+        const float age = static_cast<float>(now - r.start);
+        if (age > 2.4f || gPlayState == nullptr) { gFartReactions.erase(gFartReactions.begin() + static_cast<long>(i)); continue; }
+        float x = r.x, y = r.y, z = r.z;
+        if (r.id != kFartSelf) {   // follow the puppet while it moves
+            auto it = gState.find(r.id);
+            if (it == gState.end() || !it->second.alive) { gFartReactions.erase(gFartReactions.begin() + static_cast<long>(i)); continue; }
+            x = it->second.x; y = it->second.y; z = it->second.z;
+        } else if (Player* me = GET_PLAYER(gPlayState)) { x = me->actor.world.pos.x; y = me->actor.world.pos.y; z = me->actor.world.pos.z; }
+        ImVec2 at;
+        if (WorldToScreen(x, y + 85.0f + age * 14.0f, z, &at)) {
+            const float fade = std::clamp((2.4f - age) / 0.6f, 0.0f, 1.0f);
+            const char* label = words[(r.id == kFartSelf ? 3u : r.id) % (sizeof(words) / sizeof(words[0]))];
+            const float size = 21.0f * scale;
+            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+            dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 40, 10, static_cast<int>(220 * fade)), label);
+            dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(190, 235, 110, static_cast<int>(255 * fade)), label);
+        }
+        i++;
+    }
+}
+
 // -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
 // Her moods pick her animation clip; the clips cross-fade, so walking, sitting, grooming and curling up to sleep blend instead of snapping. Stand
 // still facing her and press A to talk: she sits and mews her line in the game's own text box.
@@ -9367,6 +9562,9 @@ struct CatBrain {
     size_t pickups = 0;
     bool placed = false;
     int line = 0;    // what she says next (royale::kLiloPetLines)
+    CatMood seen = CatMood::Follow;            // the mood last tick, to mew when it changes
+    float meowIn = 25.0f, fartIn = 70.0f;      // seconds until a mew of her own, and until her next accident
+    float afterFartMew = -1.0f, cloudT = 0.0f; // the mew that follows an accident, and how long her cloud keeps drifting
     int eyes = 0;
     royale::lilo::Animator anim;
 };
@@ -9409,6 +9607,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     if (!talking && c.mood == CatMood::Talk) {   // done talking: she stays sitting a while, and has something new to say next time
         SetMood(c, CatMood::Sit);
         c.sitT = 0; c.nextAt = 4.0f;
+        if (c.line == royale::kLiloPetLineCount - 1) c.fartIn = 0.9f;   // she said she smelled one, and now she has made one
         c.line = (c.line + 1) % royale::kLiloPetLineCount;
     }
     if (c.mood != CatMood::Talk) {
@@ -9417,6 +9616,45 @@ void Cat_Update(Actor* actor, PlayState* play) {
         // you jump, she jumps
         if ((c.mood == CatMood::Follow || c.mood == CatMood::Stand) && !(pl->actor.bgCheckFlags & 1) && pl->actor.velocity.y > 4.0f && d < 400.0f)
             SetMood(c, CatMood::Jump);
+    }
+
+    // Her voice: a mew for what she has just started doing, one now and then of her own, and her accidents.
+    if (c.mood != c.seen) {
+        static const int kLineMew[royale::kLiloPetLineCount] = { kMewShort, kMewAsk, kMewLong, kMewLoud, kMewTrail, kMewFall };
+        switch (c.mood) {
+            case CatMood::Talk: PlayMeow(kLineMew[c.line % royale::kLiloPetLineCount]); break;
+            case CatMood::Happy: PlayMeow(kMewChirp); break;
+            case CatMood::Jump: PlayMeow(kMewChirp, 0.45f); break;
+            case CatMood::Pounce: PlayMeow(kMewLoud, 0.5f); break;
+            case CatMood::Stretch: PlayMeow(kMewFall, 0.5f); break;
+            default: break;
+        }
+        c.seen = c.mood;
+    }
+    if (c.mood != CatMood::Talk) {
+        c.meowIn -= dt;
+        if (c.meowIn <= 0.0f) {
+            static const int kIdleMew[3] = { kMewChirp, kMewShort, kMewAsk };
+            if (c.mood == CatMood::Follow || c.mood == CatMood::Stand || c.mood == CatMood::Sit) PlayMeow(kIdleMew[static_cast<int>(Rand_ZeroOne() * 2.99f)], 0.45f);
+            c.meowIn = 25.0f + Rand_ZeroOne() * 30.0f;
+        }
+        c.fartIn -= dt;
+        if (c.fartIn <= 0.0f && c.mood != CatMood::Pounce) {   // she farts a lot: now and then, wherever she is
+            PlayOneShot(2);
+            c.cloudT = 2.0f;
+            FartReact(c.x, c.z);
+            c.afterFartMew = 1.0f;
+            c.fartIn = 55.0f + Rand_ZeroOne() * 75.0f;
+            if (c.mood == CatMood::Sit || c.mood == CatMood::Stand || c.mood == CatMood::Loaf) SetMood(c, CatMood::Happy);   // so pleased with herself
+        }
+    }
+    if (c.afterFartMew >= 0.0f) {
+        c.afterFartMew -= dt;
+        if (c.afterFartMew < 0.0f) PlayMeow(kMewFall, 0.5f);
+    }
+    if (c.cloudT > 0.0f) {   // the cloud, behind her
+        c.cloudT -= dt;
+        FartCloudStep(play, c.x - std::sin(c.yaw) * 48.0f, c.y, c.z - std::cos(c.yaw) * 48.0f, 2);
     }
 
     const float tm = static_cast<float>(play->gameplayFrames) * dt;
@@ -9571,7 +9809,7 @@ royale::Vec2 gLiloPos = {};
 bool gLiloKnown = false;
 double gLiloTalkStart = -100.0;
 bool gLiloFarted = true, gLiloHeard = false;
-double gFartCloudUntil = 0;
+double gFartCloudUntil = 0, gLiloMewAt = -1.0;
 royale::lilo::Animator gLiloAnim;
 int gLiloEyes = 0;
 
@@ -9654,6 +9892,7 @@ bool LiloNear() {
 
 // The talk itself is the game's text box (Lilo_Update); this arms the accident for when it closes.
 void TalkToLilo() {
+    PlayMeow(kMewLong);
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
     gLiloHeard = false;
@@ -9669,19 +9908,14 @@ void UpdateLiloFx() {
             gLiloFarted = true;
             gFartCloudUntil = now + 2.6;
             PlayOneShot(2);
+            FartReact(gLiloPos.x, gLiloPos.z);
+            gLiloMewAt = now + 1.0;
         }
     }
+    if (gLiloMewAt > 0.0 && now >= gLiloMewAt) { gLiloMewAt = -1.0; PlayMeow(kMewFall, 0.6f); }   // a satisfied mew once the air has cleared a little
     if (now < gFartCloudUntil) {
         const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
-        const float bx = gLiloPos.x - std::sin(yaw) * 48.0f, bz = gLiloPos.z - std::cos(yaw) * 48.0f;   // behind her
-        for (int i = 0; i < 3; i++) {
-            Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, gLiloActor->world.pos.y + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
-            Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
-            const bool brown = Rand_ZeroOne() < 0.35f;
-            Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
-            Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
-            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 260 + static_cast<int>(Rand_ZeroOne() * 160.0f), 40);
-        }
+        FartCloudStep(gPlayState, gLiloPos.x - std::sin(yaw) * 48.0f, gLiloActor->world.pos.y, gLiloPos.z - std::cos(yaw) * 48.0f, 3);   // behind her
     }
 }
 
@@ -10090,6 +10324,7 @@ bool IsBotActor(const void* actor) {
 
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     Feat("cap cloth");
+    if (!DebugOn(kDbgCloth)) return;
     gHatHookCalls++;
     if (gClothScale <= 0.01f || playerPtr == nullptr || !InGame() || IsBotActor(playerPtr)) return;
     HatState& h = StepClothes(static_cast<const Player*>(playerPtr));
@@ -10142,6 +10377,7 @@ bool SheathHasChildren(const Player* pl) {
 
 void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
     Feat("tunic and sheath cloth");
+    if (!DebugOn(kDbgCloth)) return;
     if (limbIndex == PLAYER_LIMB_WAIST) {
         gClothLimbCalls++;
         gWaistSwing.active = false;
@@ -10484,40 +10720,40 @@ void OnGameFrameUpdate() {
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     Feat("session update"); gSession.Update(1.0f / royale::kTickHz);
     if (gTravelCooldown > 0) gTravelCooldown--;
-    Feat("song melody"); UpdateSongMelody();
+    Feat("song melody"); if (DebugOn(kDbgMusic)) UpdateSongMelody();
 
     royale::HudState hud = gSession.Hud();
     bool joined = gSession.Joined();
     if (joined) gMapId = royale::ClampMap(hud.mapId);
 
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
-    Feat("platforms, rocks and trees"); if (joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
-    Feat("tornado"); if (gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
+    Feat("platforms, rocks and trees"); if (DebugOn(kDbgTerrain) && joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
+    Feat("tornado"); if (DebugOn(kDbgTornado) && gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
     Feat("storm"); DriveStorm(hud);
-    Feat("weather"); DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
+    Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
     NoticeRoyaleFile();
     Feat("pause inventory"); SyncPauseInventory(hud);
-    Feat("chicken music"); UpdateChickenMusic();
+    Feat("chicken music"); if (DebugOn(kDbgMusic)) UpdateChickenMusic();
     Feat("music scan"); if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
-    Feat("lobby and match music"); UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
+    Feat("lobby and match music"); if (DebugOn(kDbgMusic)) UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     Feat("lobby timer"); DriveLobbyTimer(hud);
-    Feat("time of day"); DriveTimeOfDay(hud);
-    Feat("boss effects"); UpdateBossWorldFx();
+    Feat("time of day"); if (DebugOn(kDbgTimeOfDay)) DriveTimeOfDay(hud);
+    Feat("boss effects"); if (DebugOn(kDbgBossFx)) UpdateBossWorldFx();
     Feat("sign"); ReconcileSign(hud);
     Feat("messages"); RegisterRoyaleMessages();
-    Feat("Maya"); ReconcileMaya(hud);
-    Feat("Lilo"); ReconcileLilo(hud);
-    Feat("cat pet"); ReconcileCatPet(hud);
-    Feat("Lilo effects"); UpdateLiloFx();
-    Feat("allies"); ReconcileAllies(hud);
-    Feat("carts"); ReconcileCarts(hud);
+    Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
+    Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
+    Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    Feat("Lilo effects"); if (DebugOn(kDbgAllies)) UpdateLiloFx();
+    Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
+    Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     Feat("projectiles"); ReconcileProjectileActor();
     Feat("storm alerts"); DriveStormAlerts(hud);
     gStateNow = hud.state;
     Feat("sealed exits"); SealExits(hud);
-    Feat("minimap switch"); DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
+    Feat("minimap switch"); if (DebugOn(kDbgMinimap)) DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());
 
     // Just joined a lobby: head for the waiting room if the player wants that.
     if (joined && !gWasJoined) {
@@ -10562,8 +10798,8 @@ void OnGameFrameUpdate() {
     Feat("match start"); DriveStart(hud);
     Feat("match events"); ReportEvents(hud);
     Feat("other players"); ReconcilePuppets(hud.state);
-    Feat("loot"); ReconcileLoot(hud);
-    Feat("props"); ReconcileProps(hud);
+    Feat("loot"); if (DebugOn(kDbgLoot)) ReconcileLoot(hud);
+    Feat("props"); if (DebugOn(kDbgProps)) ReconcileProps(hud);
     Feat("bosses"); ReconcileBosses(hud);
     Feat("between updates");
 }
@@ -10893,6 +11129,43 @@ void DrawCustomize(UiState& ui) {
     ImGui::Spacing();
 }
 
+// The temporary Debug section: one switch per newer feature (see kDebugSwitches). Changes apply at once and are saved.
+void DrawDebugSwitches() {
+    if (!ImGui::CollapsingHeader("Debug: turn features on or off (temporary)")) return;
+    if (!gDebugLoaded) LoadDebugSwitches();
+    ImGui::TextColored(kGrey, "If the game crashes or glitches, switch features off one at a time to find the one causing it. Everything is on by default.");
+    bool changed = false;
+    for (int i = 0; i < kDebugCount; i++) {
+        bool on = gDebugOn[i];
+        const std::string id = std::string(kDebugSwitches[i].label) + "##dbg" + kDebugSwitches[i].key;
+        if (ImGui::Checkbox(id.c_str(), &on)) {
+            gDebugOn[i] = on;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), on ? 1 : 0);
+            changed = true;
+        }
+    }
+    if (ImGui::Button("Turn everything on")) {
+        for (int i = 0; i < kDebugCount; i++) {
+            gDebugOn[i] = true;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), 1);
+        }
+        changed = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Turn everything off")) {
+        for (int i = 0; i < kDebugCount; i++) {
+            gDebugOn[i] = false;
+            const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
+            CVarSetInteger(key.c_str(), 0);
+        }
+        changed = true;
+    }
+    if (changed) Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    ImGui::Spacing();
+}
+
 void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     Heading("OOT ROYALE");
     ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
@@ -10922,6 +11195,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
     }
     ImGui::Spacing();
+    DrawDebugSwitches();
 
     ImGui::BeginDisabled(!InGame());
 
@@ -10944,7 +11218,23 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
     }
     ImGui::Spacing();
 
-    if (ImGui::Button("Fortnite Map: solo test", ImVec2(220, 0))) {
+    {
+        // Which map the solo test (and the next lobby you host) is played on
+        const char* current = royale::MapOf(ui.mapId).name;
+        ImGui::SetNextItemWidth(300);
+        if (ImGui::BeginCombo("Map##solo_map", current)) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
+                    ui.mapId = i;
+                    gSession.SelectMap(i);
+                    SaveUi(ui);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    const std::string soloLabel = std::string("Solo test: ") + royale::MapOf(ui.mapId).name;
+    if (ImGui::Button(soloLabel.c_str(), ImVec2(300, 0))) {
         ui.port = std::clamp(ui.port, 1024, 65535);
         ui.error.clear();
         SaveUi(ui);
@@ -10956,7 +11246,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
             RefreshLocalAddresses(ui, true);
         }
     }
-    ImGui::TextColored(kGrey, "Just you on the Fortnite Map, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
+    ImGui::TextColored(kGrey, "Just you on the map chosen above, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
@@ -11316,6 +11606,140 @@ void DrawResults(const royale::HudState& h) {
     if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
 }
 
+// ---- in-game updater (Android) --------------------------------------------------------------------------------------------------
+// "Game updates" on the Battle Royale page: asks GitHub for the newest published build (RoyaleUpdater.java, patches/0018), downloads it
+// and opens Android's installer. The game build workflow publishes every main-branch build as a release tagged "build-<number>", and our
+// version is "0.<number>", so the numbers compare directly.
+#ifdef __ANDROID__
+enum UpdaterState { kUpdIdle = 0, kUpdChecking, kUpdChecked, kUpdDownloading, kUpdNeedPermission, kUpdInstalling, kUpdError };
+
+// The build number in ROYALE_BUILD_VERSION ("0.123" -> 123); 0 for a developer build ("dev").
+int OwnBuildNumber() {
+    const char* dot = std::strchr(ROYALE_BUILD_VERSION, '.');
+    return dot != nullptr ? std::atoi(dot + 1) : 0;
+}
+
+// RoyaleUpdater, found through the activity's class loader (FindClass on the game thread only sees Android's own classes).
+jclass UpdaterClass(JNIEnv* env) {
+    static jclass cls = nullptr;
+    if (cls != nullptr) return cls;
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (activity == nullptr) return nullptr;
+    jclass activityCls = env->GetObjectClass(activity);
+    jobject loader = env->CallObjectMethod(activity, env->GetMethodID(activityCls, "getClassLoader", "()Ljava/lang/ClassLoader;"));
+    jclass loaderCls = env->FindClass("java/lang/ClassLoader");
+    jstring name = env->NewStringUTF("com.dishii.soh.RoyaleUpdater");
+    jobject found = env->CallObjectMethod(loader, env->GetMethodID(loaderCls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"), name);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); found = nullptr; }
+    if (found != nullptr) cls = static_cast<jclass>(env->NewGlobalRef(found));
+    env->DeleteLocalRef(name);
+    env->DeleteLocalRef(loaderCls);
+    env->DeleteLocalRef(loader);
+    env->DeleteLocalRef(activityCls);
+    env->DeleteLocalRef(activity);
+    if (found != nullptr) env->DeleteLocalRef(found);
+    return cls;
+}
+
+jint UpdaterInt(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return -1;
+    const jint v = env->CallStaticIntMethod(cls, env->GetStaticMethodID(cls, method, "()I"));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return -1; }
+    return v;
+}
+
+jlong UpdaterLong(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return 0;
+    const jlong v = env->CallStaticLongMethod(cls, env->GetStaticMethodID(cls, method, "()J"));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    return v;
+}
+
+std::string UpdaterString(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return "";
+    jstring s = static_cast<jstring>(env->CallStaticObjectMethod(cls, env->GetStaticMethodID(cls, method, "()Ljava/lang/String;")));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return ""; }
+    if (s == nullptr) return "";
+    const char* chars = env->GetStringUTFChars(s, nullptr);
+    std::string out = chars != nullptr ? chars : "";
+    if (chars != nullptr) env->ReleaseStringUTFChars(s, chars);
+    env->DeleteLocalRef(s);
+    return out;
+}
+
+// check / download / install, each taking the activity as its Context
+void UpdaterCall(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (cls == nullptr || activity == nullptr) return;
+    env->CallStaticVoidMethod(cls, env->GetStaticMethodID(cls, method, "(Landroid/content/Context;)V"), activity);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(activity);
+}
+
+void DrawUpdater() {
+    if (!ImGui::CollapsingHeader("Game updates")) return;
+    const int state = UpdaterInt("getState");
+    if (state < 0) {
+        ImGui::TextColored(kRed, "The updater is missing from this build.");
+        return;
+    }
+    const int own = OwnBuildNumber();
+    const int latest = UpdaterInt("getLatestBuild");
+    const std::string message = UpdaterString("getMessage");
+    ImGui::TextColored(kGrey, "You have version %s. New builds are published on GitHub each time a change is merged.", ROYALE_BUILD_VERSION);
+
+    switch (state) {
+        case kUpdIdle:
+        case kUpdError:
+            if (state == kUpdError) ImGui::TextColored(kRed, "%s", message.c_str());
+            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall("check");
+            break;
+        case kUpdChecking:
+            ImGui::Text("%s", message.c_str());
+            break;
+        case kUpdChecked:
+            if (latest > own) {
+                ImGui::TextColored(kGold, "Version 0.%d is ready (%lld MB).", latest, static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
+                if (ImGui::Button("Download and install", ImVec2(260, 0))) UpdaterCall("download");
+            } else {
+                ImGui::Text("You have the newest build (0.%d is the newest on GitHub).", latest);
+                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall("check");
+                ImGui::SameLine();
+                if (ImGui::Button("Reinstall it anyway", ImVec2(260, 0))) UpdaterCall("download");
+            }
+            break;
+        case kUpdDownloading: {
+            const int pct = UpdaterInt("getProgress");
+            const long long kb = UpdaterLong("getDownloadedKb");
+            ImGui::Text("%s", message.c_str());
+            char label[64];
+            std::snprintf(label, sizeof(label), "%lld MB", kb / 1024);
+            ImGui::ProgressBar(pct >= 0 ? pct / 100.0f : 0.0f, ImVec2(360, 0), label);
+            break;
+        }
+        case kUpdNeedPermission:
+            ImGui::TextWrapped("%s", message.c_str());
+            if (ImGui::Button("Install", ImVec2(260, 0))) UpdaterCall("install");
+            break;
+        case kUpdInstalling:
+            ImGui::TextWrapped("%s", message.c_str());
+            if (ImGui::Button("Open the installer again", ImVec2(260, 0))) UpdaterCall("install");
+            break;
+    }
+    ImGui::Spacing();
+}
+#else
+void DrawUpdater() {}
+#endif
+
 void DrawDebug(UiState& ui) {
     if (!ImGui::CollapsingHeader("Developer tools")) return;
     ImGui::Checkbox("Show Link position (for measuring the map)", &ui.showPosition);
@@ -11365,6 +11789,7 @@ void DrawRoyaleUi() {
         }
     }
     ImGui::Spacing();
+    DrawUpdater();
     DrawDebug(ui);
 }
 

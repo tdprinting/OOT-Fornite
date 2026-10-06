@@ -18,6 +18,9 @@ on:
       - ".gitmodules"
   workflow_dispatch:
 
+permissions:
+  contents: write   # to publish the release the in-game updater downloads
+
 jobs:
   android:
     runs-on: ubuntu-latest
@@ -42,6 +45,13 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.0.10792818" "cmake;3.31.5" "platforms;android-33" "platforms;android-31"
+      - name: Sign with our fixed key (so each build can install over the last one)
+        run: |
+          # Android only installs an update over an app signed with the same key. The runner would otherwise invent a fresh
+          # debug key every run, so every build would be a "different app". This is a throwaway key, not a secret: it only
+          # makes our builds line up with each other.
+          mkdir -p ~/.android
+          cp scripts/royale-debug.keystore ~/.android/debug.keystore
       - name: Build the release APK (arm64-v8a)
         working-directory: third_party/Shipwright-Android/Android
         run: ./gradlew assembleRelease --no-daemon
@@ -57,3 +67,14 @@ jobs:
             third_party/Shipwright-Android/Android/app/build/intermediates/cxx/**/obj/arm64-v8a/*.so
             third_party/Shipwright-Android/Android/app/build/intermediates/merged_native_libs/**/*.so
           if-no-files-found: warn
+      - name: Publish as the newest release (what the in-game updater downloads)
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp third_party/Shipwright-Android/Android/app/build/outputs/apk/release/*.apk TDawgsBattleRoyale.apk
+          gh release create "build-${{ github.run_number }}" TDawgsBattleRoyale.apk --latest \
+            --title "Build 0.${{ github.run_number }}" \
+            --notes "Automatic build of ${{ github.sha }}. Install it from the game's Battle Royale menu > Game updates."
+          # keep only the 10 newest builds
+          gh release list --limit 100 --json tagName --jq '.[10:][].tagName' | xargs -r -n1 gh release delete --cleanup-tag --yes
