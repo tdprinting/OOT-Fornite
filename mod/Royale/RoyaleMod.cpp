@@ -5507,21 +5507,74 @@ void OnEmoteWheelInput() {
     in.cur.stick_x = in.cur.stick_y = in.rel.stick_x = in.rel.stick_y = in.press.stick_x = in.press.stick_y = 0;
 }
 
+// ---- the mod's own sounds, mixed into the game's audio ------------------------------------------------------------------------------
+// Everything the mod plays (the music folder's songs, the chicken dance tune, the storm and Lilo sounds) is mixed into each buffer the game's own
+// audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
+// silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
+// there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCount };
+struct MixVoiceState {
+    std::shared_ptr<const std::vector<int16_t>> pcm;
+    bool stereo = false, loop = false;
+    int rate = 44100;
+    double pos = 0;     // in frames of the voice's own rate
+    float volume = 0.0f;
+};
+std::mutex gMixMutex;
+MixVoiceState gVoices[kVoiceCount];
+}   // namespace
+extern "C" void (*gRoyaleAudioMix)(int16_t* buf, uint32_t frames);
+namespace {
+void MixVoices(int16_t* buf, uint32_t frames) {
+    std::lock_guard<std::mutex> lock(gMixMutex);
+    for (MixVoiceState& v : gVoices) {
+        if (!v.pcm || v.volume <= 0.0f) continue;
+        const std::vector<int16_t>& p = *v.pcm;
+        const size_t ch = v.stereo ? 2 : 1, total = p.size() / ch;
+        if (total == 0) continue;
+        const double step = static_cast<double>(v.rate) / 44100.0;
+        for (uint32_t i = 0; i < frames; i++) {
+            size_t f = static_cast<size_t>(v.pos);
+            if (f >= total) {
+                if (!v.loop) { v.pcm.reset(); break; }
+                v.pos = std::fmod(v.pos, static_cast<double>(total));
+                f = static_cast<size_t>(v.pos);
+            }
+            const int l = static_cast<int>(p[f * ch] * v.volume), r = v.stereo ? static_cast<int>(p[f * ch + 1] * v.volume) : l;
+            buf[2 * i] = static_cast<int16_t>(std::clamp(buf[2 * i] + l, -32768, 32767));
+            buf[2 * i + 1] = static_cast<int16_t>(std::clamp(buf[2 * i + 1] + r, -32768, 32767));
+            v.pos += step;
+        }
+    }
+}
+void StartVoice(Voice id, std::shared_ptr<const std::vector<int16_t>> pcm, bool stereo, int rate, bool loop, float volume) {
+    gRoyaleAudioMix = MixVoices;
+    std::lock_guard<std::mutex> lock(gMixMutex);
+    MixVoiceState& v = gVoices[id];
+    v.pcm = std::move(pcm); v.stereo = stereo; v.rate = rate; v.loop = loop; v.volume = volume; v.pos = 0;
+}
+void StopVoice(Voice id) {
+    std::lock_guard<std::mutex> lock(gMixMutex);
+    gVoices[id].pcm.reset();
+}
+void SetVoiceVolume(Voice id, float volume) {
+    std::lock_guard<std::mutex> lock(gMixMutex);
+    gVoices[id].volume = volume;
+}
+bool VoiceDone(Voice id) {
+    std::lock_guard<std::mutex> lock(gMixMutex);
+    return !gVoices[id].pcm;
+}
+// The game's own master volume (its default is 40) times the music volume.
+float GameVolume(bool music) {
+    const float master = static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 40)) / 100.0f;
+    const float sub = music ? static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f : 1.0f;
+    return std::clamp(master * sub, 0.0f, 1.0f);
+}
+
 // The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
 // when somebody doing it is near: louder the closer they are.
-struct ChickenMusic {
-    SDL_AudioDeviceID device = 0;
-    std::vector<int16_t> cycle;
-    size_t pos = 0;
-    bool playing = false;
-    bool failed = false;
-};
-ChickenMusic gMusic;
-
-void StopChickenMusic() {
-    if (gMusic.device != 0 && gMusic.playing) SDL_ClearQueuedAudio(gMusic.device);
-    gMusic.playing = false;
-}
+void StopChickenMusic() { StopVoice(kVoiceChicken); }
 
 void UpdateChickenMusic() {
     float volume = 0.0f;
@@ -5535,27 +5588,12 @@ void UpdateChickenMusic() {
             volume = std::max(volume, v * v * 0.8f);
         }
     }
-    volume *= std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.7f;
-    if (volume < 0.01f || gMusic.failed) { StopChickenMusic(); return; }
-    if (gMusic.device == 0) {
-        SDL_AudioSpec want = {}, have = {};
-        want.freq = royale::kTuneRate; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 1024; want.callback = nullptr;
-        gMusic.device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-        if (gMusic.device == 0) { gMusic.failed = true; return; } // no second audio stream available: the dance just stays silent
-        SDL_PauseAudioDevice(gMusic.device, 0);
-        gMusic.cycle = royale::BuildChickenTune();
-    }
-    // Keep about a third of a second queued, in quarter-second pieces at the current volume.
-    const Uint32 bytesPerSecond = royale::kTuneRate * 2;
-    if (SDL_GetQueuedAudioSize(gMusic.device) > bytesPerSecond / 3) return;
-    const size_t chunk = royale::kTuneRate / 4;
-    std::vector<int16_t> out(chunk);
-    for (size_t i = 0; i < chunk; i++) {
-        out[i] = static_cast<int16_t>(gMusic.cycle[gMusic.pos] * volume);
-        gMusic.pos = (gMusic.pos + 1) % gMusic.cycle.size();
-    }
-    SDL_QueueAudio(gMusic.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
-    gMusic.playing = true;
+    volume *= GameVolume(false) * 0.7f;
+    if (volume < 0.01f) { StopChickenMusic(); return; }
+    if (VoiceDone(kVoiceChicken)) {
+        static const auto tune = std::make_shared<const std::vector<int16_t>>(royale::BuildChickenTune());
+        StartVoice(kVoiceChicken, tune, false, royale::kTuneRate, true, volume);
+    } else SetVoiceVolume(kVoiceChicken, volume);
 }
 
 // ---- carts: the Lon Lon Buggy -------------------------------------------------------------------------------------------------------
@@ -6366,10 +6404,8 @@ bool HeldGlowOn(bool self) {
 }
 
 struct LobbyMusic {
-    SDL_AudioDeviceID device = 0;
     std::vector<std::filesystem::path> tracks;
-    std::vector<int16_t> pcm;   // the current track, converted to the device format (stereo, 44.1 kHz)
-    size_t pos = 0;
+    std::vector<int16_t> pcm;   // a track just read, converted to the game's output format (stereo, 44.1 kHz), until it is handed to the mixer
     size_t next = 0;
     bool scanned = false;
     bool failed = false;
@@ -6378,6 +6414,7 @@ struct LobbyMusic {
     std::string status;         // shown in the menu: where the folder is, how many songs, and why one could not be read
 };
 LobbyMusic gLobbyMusic;
+
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
@@ -6445,7 +6482,6 @@ bool LoadNextTrack() {
             if (SDL_ConvertAudio(&cvt) < 0) continue;
             m.pcm.assign(reinterpret_cast<const int16_t*>(work.data()), reinterpret_cast<const int16_t*>(work.data()) + static_cast<size_t>(cvt.len_cvt) / 2);
         }
-        m.pos = 0;
         m.nowPlaying = file.stem().string();
         Trace("song load: done");
         return !m.pcm.empty();
@@ -6780,7 +6816,7 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     LobbyMusic& m = gLobbyMusic;
     const bool want = ((inLobby && MapOption("LobbyMusic", true)) || inMatchRandom) && !m.failed;
     if (!want) {
-        if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
+        if (m.playing) StopVoice(kVoiceSong);
         m.playing = false;
         StopOotSong();
         if (!inLobby && !inMatchRandom) m.scanned = false; // pick up newly added songs next time
@@ -6791,40 +6827,34 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     // A song already turned into OoT music plays on the game's own sound engine; the others play as they are until they are ready.
     if (OotSongPlaying()) { if (OotInstrumentsOn()) { KeepOotSongVolume(); return; } StopOotSong(); }
     gOot.playing = nullptr;
-    if (OotInstrumentsOn() && (m.pcm.empty() || m.pos >= m.pcm.size())) {
+    const bool done = VoiceDone(kVoiceSong);
+    if (OotInstrumentsOn() && done) {
         for (size_t i = 0; i < m.tracks.size(); i++) {
             const size_t k = (m.next + i) % m.tracks.size();
             std::shared_ptr<OotSong> song = ReadyOotSong(m.tracks[k]);
             if (!song || !StartOotSong(song)) continue;
             m.next = k + 1;
-            m.pcm.clear();
-            m.pos = 0;
+            StopVoice(kVoiceSong);
             m.nowPlaying = m.tracks[k].stem().string();
-            if (m.device != 0) SDL_ClearQueuedAudio(m.device);
             m.playing = true;
             KeepOotSongVolume();
             Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying + " (OoT instruments)");
             return;
         }
     }
-    if (m.device == 0) {
-        SDL_AudioSpec want2 = {}, have = {};
-        want2.freq = 44100; want2.format = AUDIO_S16SYS; want2.channels = 2; want2.samples = 2048; want2.callback = nullptr;
-        m.device = SDL_OpenAudioDevice(nullptr, 0, &want2, &have, 0);
-        if (m.device == 0) { m.failed = true; return; }
-        SDL_PauseAudioDevice(m.device, 0);
-    }
-    if (SDL_GetQueuedAudioSize(m.device) > 44100 * 4 / 3) return; // about a third of a second queued is enough
-    if (m.pcm.empty() || m.pos >= m.pcm.size()) {
-        if (!LoadNextTrack()) { m.failed = true; return; }
+    if (done) {
+        if (!LoadNextTrack()) {
+            m.failed = true;   // the game's own music comes back (DriveMatchMusic), and the menu says why
+            if (m.status.rfind("Could not read", 0) != 0) m.status = "None of the songs in " + MusicFolder().string() + " could be played.";
+            Say("Music folder: " + m.status);
+            return;
+        }
+        StartVoice(kVoiceSong, std::make_shared<const std::vector<int16_t>>(std::move(m.pcm)), true, 44100, false, GameVolume(true));
+        m.pcm.clear();
         Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying);
+    } else {
+        SetVoiceVolume(kVoiceSong, GameVolume(true));
     }
-    const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.8f;
-    const size_t chunk = std::min<size_t>(44100 / 2, m.pcm.size() - m.pos);
-    std::vector<int16_t> out(chunk);
-    for (size_t i = 0; i < chunk; i++) out[i] = static_cast<int16_t>(m.pcm[m.pos + i] * volume);
-    m.pos += chunk;
-    SDL_QueueAudio(m.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
     m.playing = true;
 }
 
@@ -8649,32 +8679,13 @@ void DriveMinimapSwitch(bool on) {
 // ---- storm alerts ------------------------------------------------------------------------------------------------------------
 // A jingle (with a banner) whenever the storm changes phase, a siren fifteen and five seconds before the zone starts to close, and a siren every
 // few seconds while you are standing in the storm. The sounds are synthesised in shared/tune.h and played on a small audio stream of their own.
-struct OneShotAudio {
-    SDL_AudioDeviceID device = 0;
-    bool failed = false;
-    std::vector<int16_t> jingle, warning, fart;
-};
-OneShotAudio gOneShot;
-
 void PlayOneShot(int kind) {   // 0 the storm warning, 1 the storm jingle, 2 Lilo's accident
-    if (gOneShot.failed) return;
-    if (gOneShot.device == 0) {
-        SDL_AudioSpec want = {}, have = {};
-        want.freq = royale::kTuneRate; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 1024; want.callback = nullptr;
-        gOneShot.device = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
-        if (gOneShot.device == 0) { gOneShot.failed = true; return; }
-        SDL_PauseAudioDevice(gOneShot.device, 0);
-        gOneShot.jingle = royale::BuildStormJingle();
-        gOneShot.warning = royale::BuildStormWarning();
-        gOneShot.fart = royale::BuildFart();
-    }
-    const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f);
+    static const auto jingle = std::make_shared<const std::vector<int16_t>>(royale::BuildStormJingle());
+    static const auto warning = std::make_shared<const std::vector<int16_t>>(royale::BuildStormWarning());
+    static const auto fart = std::make_shared<const std::vector<int16_t>>(royale::BuildFart());
+    const float volume = GameVolume(false);
     if (volume < 0.01f) return;
-    const std::vector<int16_t>& src = kind == 1 ? gOneShot.jingle : kind == 2 ? gOneShot.fart : gOneShot.warning;
-    std::vector<int16_t> out(src.size());
-    for (size_t i = 0; i < src.size(); i++) out[i] = static_cast<int16_t>(src[i] * volume);
-    SDL_ClearQueuedAudio(gOneShot.device);
-    SDL_QueueAudio(gOneShot.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
+    StartVoice(kVoiceOneShot, kind == 1 ? jingle : kind == 2 ? fart : warning, false, royale::kTuneRate, false, volume);
 }
 
 void DriveStormAlerts(const royale::HudState& hud) {
