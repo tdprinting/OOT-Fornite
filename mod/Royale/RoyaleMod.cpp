@@ -257,6 +257,20 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
 
+// Per-frame vertices for our own effects. The game's "Zelda 0" display-list buffer holds both the frame's commands (growing up from the start) and
+// everything Graph_Alloc hands out (growing down from the end), and nothing checks that they stay apart. When the sky, fog, storm wall, water, weather,
+// pets and 32 players all asked for memory in the same frame, the two met: vertices overwrote commands, the graphics thread then ran garbage as a
+// display list, and a stray "modify vertex" command wrote far outside its table (the match-start crash in gfx_modify_vtx_handler). So our effects take
+// memory only while a generous reserve is left for the commands the game still has to write this frame; otherwise they skip drawing for that frame.
+inline void* FrameAlloc(PlayState* play, size_t bytes) {
+    constexpr size_t kReserve = 64 * 1024;   // about a third of the buffer, kept free for the game's own commands
+    const TwoHeadGfxArena& a = play->state.gfxCtx->polyOpa;
+    if (a.d < a.p) return nullptr;
+    const size_t room = static_cast<size_t>(a.d - a.p) * sizeof(Gfx);
+    if (bytes + kReserve > room) return nullptr;
+    return Graph_Alloc(play->state.gfxCtx, bytes);
+}
+
 // ---- debug switches ----------------------------------------------------------------------------------------------------------
 // A temporary Debug section in the Battle Royale menu: each newer feature can be switched off to find out which one causes a crash or glitch.
 // They are all on by default and remembered between runs. Remove this section (and the DebugOn checks) once the features are trusted.
@@ -2431,8 +2445,8 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
     gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    if (!tris.empty()) {   // the canopy: this frame's triangles, in memory the game hands out for one frame
-        Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, tris.size() * sizeof(Vtx)));
+    Vtx* v = tris.empty() ? nullptr : static_cast<Vtx*>(FrameAlloc(play, tris.size() * sizeof(Vtx)));
+    if (v != nullptr) {   // the canopy: this frame's triangles, in memory the game hands out for one frame
         for (size_t i = 0; i < tris.size(); i++) {
             v[i].v.ob[0] = static_cast<s16>(std::lround(tris[i].x));
             v[i].v.ob[1] = static_cast<s16>(std::lround(tris[i].y));
@@ -3066,7 +3080,7 @@ void DrawStormWall(PlayState* play) {
     constexpr int kRows = 4;
     const float heights[kRows] = { gWallBase - 3000.0f, gWallBase + 250.0f, gWallBase + 2600.0f, gWallBase + 7500.0f };
     const float alphas[kRows] = { 175.0f, 160.0f, 110.0f, 0.0f };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
     if (v == nullptr) return;
     auto put = [&](Vtx& o, float ang, int row) {
         const float c = std::cos(ang), s = std::sin(ang);
@@ -3121,7 +3135,7 @@ void DrawWeatherParticles(PlayState* play) {
     const float speed = ash ? 60.0f + 0.25f * wl : 380.0f + 0.9f * wl;
     constexpr float kBox = 1400.0f, kHalf = kBox * 0.5f, kTall = 900.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 8 * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(n) * 8 * sizeof(Vtx)));
     if (v == nullptr) return;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
@@ -3245,7 +3259,7 @@ struct DiscSet {
     int n = 0, cap = 0;
     bool Init(PlayState* play, int count) {
         cap = count; n = 0;
-        v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
+        v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
         return v != nullptr;
     }
     // A lumpy, slightly stretched disc at (x,y,z), centre colour/alpha `c`, rim colour with alpha `ra`.
@@ -3315,7 +3329,7 @@ void DrawSky(PlayState* play) {
     // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
     constexpr int kSegs = 14, kRings = 8;
     static const float kElev[kRings] = { -0.12f, 0.0f, 0.07f, 0.16f, 0.30f, 0.52f, 0.78f, 1.0f };   // the sine of each ring's height
-    Vtx* dv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
+    Vtx* dv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
     if (dv == nullptr) return;
     const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * 6.2831853f;
     for (int r = 0; r < kRings; r++) {
@@ -3342,7 +3356,7 @@ void DrawSky(PlayState* play) {
     const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
     if (starA > 0.03f && gSkyStars) {
         constexpr int kStars = 220;
-        Vtx* sv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
+        Vtx* sv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
         if (sv != nullptr) {
             for (int i = 0; i < kStars; i++) {
                 const float a = Flora01(i, 5, 711) * 6.2831853f + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
@@ -3368,7 +3382,7 @@ void DrawSky(PlayState* play) {
     {
         const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
         const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
-        Vtx* qv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, 8 * sizeof(Vtx)));
+        Vtx* qv = static_cast<Vtx*>(FrameAlloc(play, 8 * sizeof(Vtx)));
         if (gSkyBodies && qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
             const float warm = L.twilight;
             SkyQuad(&qv[0], std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c, kR * 0.96f, 330.0f, 255, mix(244, 160, warm), mix(205, 90, warm), 255.0f * sunA);
@@ -3504,7 +3518,7 @@ void DrawWindParticles(PlayState* play) {
     const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
     constexpr float kBox = 1500.0f, kHalf = kBox * 0.5f, kTall = 650.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int i = 0; i < n; i++) {
         const float h1 = Flora01(i, 31, 301), h2 = Flora01(i, 37, 302), h3 = Flora01(i, 41, 303), depth = 0.6f + 0.8f * Flora01(i, 43, 304);
@@ -3611,7 +3625,7 @@ void DrawTornado(PlayState* play) {
     const Vec3f eye = play->view.eye;
     if (std::hypot(gTornado.x - eye.x, gTornado.z - eye.z) > 5500.0f) return;
     constexpr int kRings = 10, kSegs = 14;
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kSegs + 1) * kRings * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kSegs + 1) * kRings * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int i = 0; i < kRings; i++) {
         const float h01 = static_cast<float>(i) / (kRings - 1), h = h01 * kTornadoHeight;
@@ -3651,7 +3665,7 @@ void DrawTornado(PlayState* play) {
     Matrix_Translate(gTornado.x, gTornado.ground, gTornado.z, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     for (int j = 0; j < kSegs; j++) {   // one strip of the funnel at a time: two columns of rings
-        Vtx* strip = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(2 * kRings) * sizeof(Vtx)));
+        Vtx* strip = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(2 * kRings) * sizeof(Vtx)));
         if (strip == nullptr) break;
         for (int i = 0; i < kRings; i++) { strip[i] = v[i * (kSegs + 1) + j]; strip[kRings + i] = v[i * (kSegs + 1) + j + 1]; }
         gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(strip), 2 * kRings, 0);
@@ -8487,7 +8501,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const float cell = OnIsland() ? 340.0f : 210.0f, half = N * 0.5f * cell;
     const float cx = std::round(eye.x / cell) * cell, cz = std::round(eye.z / cell) * cell, amp = WaveAmp();
     float anySurface = 0; bool any = false;
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(V) * V * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(V) * V * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int j = 0; j < V; j++) {
         for (int i = 0; i < V; i++) {
@@ -8556,7 +8570,7 @@ void DrawWaterFx(PlayState* play, float dt, float t, float light) {
         i++;
     }
     if (gWaterFx.empty()) return;
-    Vtx* base = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, verts * sizeof(Vtx)));
+    Vtx* base = static_cast<Vtx*>(FrameAlloc(play, verts * sizeof(Vtx)));
     if (base == nullptr) return;
     SetupWaterXlu(play);
     OPEN_DISPS(play->state.gfxCtx);
@@ -10313,7 +10327,7 @@ constexpr float kLiloMapScale = 0.5f;
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
     namespace L = royale::lilo;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * L::kVertCount));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * L::kVertCount));
     if (vtx == nullptr) return;
     // The sun: high, a little in front and to one side, turned into the model's own axes (the inverse of Matrix_RotateY(yaw)).
     const float wx = 0.35f, wy = 0.82f, wz = 0.45f;
@@ -10812,7 +10826,7 @@ constexpr float kBabyScale = 0.62f;   // the model stands about 64 units tall at
 void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::avriella::Pose& pose, int face) {
     namespace A = royale::avriella;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * A::kVertCount));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
     if (vtx == nullptr) return;
     const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for Lilo
     const float cy = std::cos(yaw), sy = std::sin(yaw);
@@ -11227,7 +11241,7 @@ void DrawBabyCap(PlayState* play, const royale::avriella::Pose& pose) {
     constexpr int kRings = 4, kSides = 5;
     const float radius[kRings] = { 5.0f, 4.2f, 2.8f, 1.4f };
     float cx = 0.0f, cyy = 0.0f, cz = 0.0f;   // ring centres, in her own space
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * (kRings * kSides + 1)));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * (kRings * kSides + 1)));
     if (vtx == nullptr) return;
     constexpr float kSub = 8.0f;
     const float fore = std::clamp(c.capSpring.fore, -1.1f, 1.1f), side = std::clamp(c.capSpring.side, -1.0f, 1.0f);
