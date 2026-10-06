@@ -1571,7 +1571,7 @@ void ApplyLocalTunic(bool on) {
     }
 }
 
-void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme); // with the other custom models, below
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain = false); // with the other custom models, below
 
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
@@ -1585,7 +1585,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
     if (st && HangingFromGlider(st, actor, play)) {
-        DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id);
+        DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id, st->isBot);   // a bot's glider is the plain model: no cloth to simulate
     }
 }
 
@@ -2312,8 +2312,8 @@ struct GliderClothState {
 };
 std::unordered_map<uint32_t, GliderClothState> gGliderCloth;
 
-void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme) {
-    const bool cloth = gClothScale > 0.01f;
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain) {
+    const bool cloth = gClothScale > 0.01f && !plain;
     if (cloth) gGliderClothFrames++;
     const GpuMesh* mesh = GpuMeshFor(cloth ? royale::MeshKind::GliderFrame : royale::MeshKind::Glider, cloth ? 0u : scheme);
     if (mesh == nullptr || mesh->dl.empty()) return;
