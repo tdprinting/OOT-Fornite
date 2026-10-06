@@ -4338,8 +4338,7 @@ size_t NearestLootIndex() {
     Player* pl = GET_PLAYER(gPlayState);
     size_t best = kNoLoot;
     float bestD = 1e18f;
-    for (const auto& entry : gLoot) {
-        const LootActor& la = entry.second;
+    for (const auto& [idx, la] : gLoot) {
         if (idx >= loot.size() || loot[idx].taken || la.opened) continue;
         const float reach = la.chest ? kChestOpenRange : kLootPickupRange;
         const float dx = la.actor->world.pos.x - pl->actor.world.pos.x, dz = la.actor->world.pos.z - pl->actor.world.pos.z;
