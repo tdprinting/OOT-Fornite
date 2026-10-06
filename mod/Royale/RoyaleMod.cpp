@@ -6538,6 +6538,29 @@ void InstallCrashReporter() {}
 #endif
 
 // A crash report from the last run, shown at the top of the Battle Royale menu until dismissed.
+// Android's own record of why the last run ended (written by ExitReport.java at start), shown until dismissed.
+void DrawExitReason() {
+    static int state = 0;   // 0: not looked yet, 1: showing, 2: none or dismissed
+    static std::string text;
+    const std::filesystem::path file(Ship::Context::GetPathRelativeToAppDirectory("royale-exit-reason.txt"));
+    if (state == 0) {
+        std::ifstream in(file);
+        std::stringstream ss;
+        if (in) ss << in.rdbuf();
+        text = ss.str();
+        state = text.empty() ? 2 : 1;
+    }
+    if (state != 1) return;
+    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Android's note on why the game ended last time. Please send a photo of this to Claude:");
+    ImGui::TextWrapped("%s", text.c_str());
+    if (ImGui::Button("Dismiss Android note")) {
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        state = 2;
+    }
+    ImGui::Separator();
+}
+
 void DrawCrashReport() {
     static int state = 0;   // 0: not looked yet, 1: showing a crash, 2: none or dismissed, 3: showing a silent stop
     static std::string text;
@@ -11062,6 +11085,7 @@ void DrawRoyaleUi() {
         ImGui::TextColored(kGrey, "Version %s", ROYALE_BUILD_VERSION);
     }
     DrawCrashReport();
+    DrawExitReason();
 
     if (h.mode == royale::HudState::Mode::Idle) {
         DrawMainMenu(ui, h);

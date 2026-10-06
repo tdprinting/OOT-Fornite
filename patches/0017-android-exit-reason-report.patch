@@ -1,0 +1,101 @@
+diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+--- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
++++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+@@ -734,5 +734,10 @@ public class MainActivity extends SDLActivity{
+ 
+     }
+ 
+-
++    @Override
++    protected void onStart() {
++        super.onStart();
++        // Record why the previous run ended; the Battle Royale menu shows it
++        if (hasStoragePermission()) ExitReport.write(this);
++    }
+ }
+diff --git a/Android/app/src/main/java/com/dishii/soh/ExitReport.java b/Android/app/src/main/java/com/dishii/soh/ExitReport.java
+new file mode 100644
+--- /dev/null
++++ b/Android/app/src/main/java/com/dishii/soh/ExitReport.java
+@@ -0,0 +1,81 @@
++package com.dishii.soh;
++
++import android.app.ActivityManager;
++import android.app.ApplicationExitInfo;
++import android.content.Context;
++import android.os.Build;
++import android.os.Environment;
++import android.util.Log;
++
++import java.io.File;
++import java.io.FileWriter;
++import java.util.List;
++
++// Android keeps a record of why each earlier run of the app ended (killed for memory, native crash, ...), with how much memory
++// it was using. On start, write the newest abnormal one to TDawgsBattleRoyale/royale-exit-reason.txt so the Battle Royale menu can
++// show it; a normal exit removes the file again.
++public final class ExitReport {
++    private static final String TAG = "RoyaleExit";
++
++    private ExitReport() {}
++
++    public static void write(Context context) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
++        try {
++            File dir = new File(Environment.getExternalStorageDirectory(), "TDawgsBattleRoyale");
++            File out = new File(dir, "royale-exit-reason.txt");
++            ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
++            List<ApplicationExitInfo> exits = am.getHistoricalProcessExitReasons(context.getPackageName(), 0, 1);
++            if (exits == null || exits.isEmpty()) return;
++            ApplicationExitInfo info = exits.get(0);
++            if (!isAbnormal(info.getReason())) {
++                //noinspection ResultOfMethodCallIgnored
++                out.delete();
++                return;
++            }
++            ActivityManager.MemoryInfo mem = new ActivityManager.MemoryInfo();
++            am.getMemoryInfo(mem);
++            String text = "Android says the game ended because: " + reasonName(info.getReason()) + "\n"
++                    + "Details: " + (info.getDescription() == null ? "none" : info.getDescription()) + "\n"
++                    + "Game memory when it ended: " + (info.getRss() / 1024) + " MB (peak share " + (info.getPss() / 1024) + " MB)\n"
++                    + "Phone memory free now: " + (mem.availMem / (1024 * 1024)) + " of " + (mem.totalMem / (1024 * 1024)) + " MB\n"
++                    + "Signal/status: " + info.getStatus() + "\n"
++                    + "When: " + new java.util.Date(info.getTimestamp()) + "\n";
++            if (dir.isDirectory() || dir.mkdirs()) {
++                try (FileWriter w = new FileWriter(out, false)) {
++                    w.write(text);
++                }
++            }
++            Log.w(TAG, text);
++        } catch (Throwable t) {
++            Log.w(TAG, "Could not read the last exit reason", t);
++        }
++    }
++
++    private static boolean isAbnormal(int reason) {
++        switch (reason) {
++            case ApplicationExitInfo.REASON_EXIT_SELF:
++            case ApplicationExitInfo.REASON_USER_REQUESTED:
++            case ApplicationExitInfo.REASON_USER_STOPPED:
++            case ApplicationExitInfo.REASON_UNKNOWN:
++                return false;
++            default:
++                return true;
++        }
++    }
++
++    private static String reasonName(int reason) {
++        switch (reason) {
++            case ApplicationExitInfo.REASON_LOW_MEMORY: return "the phone ran low on memory and closed it (LOW_MEMORY)";
++            case ApplicationExitInfo.REASON_CRASH: return "a Java crash (CRASH)";
++            case ApplicationExitInfo.REASON_CRASH_NATIVE: return "a native crash (CRASH_NATIVE)";
++            case ApplicationExitInfo.REASON_ANR: return "the app stopped responding (ANR)";
++            case ApplicationExitInfo.REASON_SIGNALED: return "it was ended by a signal (SIGNALED)";
++            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "it used too many resources (EXCESSIVE_RESOURCE_USAGE)";
++            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "it failed to start (INITIALIZATION_FAILURE)";
++            case ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "a permission changed (PERMISSION_CHANGE)";
++            case ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "something it depends on died (DEPENDENCY_DIED)";
++            default: return "reason code " + reason;
++        }
++    }
++}
