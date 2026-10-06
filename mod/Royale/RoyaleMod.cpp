@@ -5574,6 +5574,9 @@ void Trace(const char* step) {
 }
 
 void QueueOotSongs();
+// The menu is drawn on the render thread, but a scan also copies the game's soundfonts out of its audio data (CaptureOotFonts), which only the
+// game thread may touch. So the menu asks for a scan with this flag and the game thread's frame update does it.
+bool gScanRequested = false;
 void ScanMusicFolder() {
     Trace("music scan: start");
     gLobbyMusic.tracks.clear();
@@ -9139,6 +9142,7 @@ void OnGameFrameUpdate() {
     NoticeRoyaleFile();
     SyncPauseInventory(hud);
     UpdateChickenMusic();
+    if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)
     UpdateLobbyMusic(joined && hud.state == royale::MatchState::Lobby, DriveMatchMusic(hud, joined));
     DriveLobbyTimer(hud);
     DriveTimeOfDay(hud);
@@ -9446,7 +9450,7 @@ void DrawMinimapOptions() {
     if (gLobbyMusic.status.empty()) ImGui::TextColored(kGrey, "Press Rescan to look for songs.");   // not scanned for you: opening this section stays light
     else ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
     if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
-    if (ImGui::Button("Rescan music folder")) ScanMusicFolder();
+    if (ImGui::Button("Rescan music folder")) gScanRequested = true;
     ImGui::Spacing();
     ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
