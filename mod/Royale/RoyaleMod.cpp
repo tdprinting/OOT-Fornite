@@ -108,6 +108,7 @@ void Player_UseItem(PlayState* play, Player* player, s32 item);
 s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
+extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 }
@@ -265,6 +266,20 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 // dies the report names the last feature that started (a string literal, so the crash handler can read it safely).
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
+
+// Per-frame vertices for our own effects. The game's "Zelda 0" display-list buffer holds both the frame's commands (growing up from the start) and
+// everything Graph_Alloc hands out (growing down from the end), and nothing checks that they stay apart. When the sky, fog, storm wall, water, weather,
+// pets and 32 players all asked for memory in the same frame, the two met: vertices overwrote commands, the graphics thread then ran garbage as a
+// display list, and a stray "modify vertex" command wrote far outside its table (the match-start crash in gfx_modify_vtx_handler). So our effects take
+// memory only while a generous reserve is left for the commands the game still has to write this frame; otherwise they skip drawing for that frame.
+inline void* FrameAlloc(PlayState* play, size_t bytes) {
+    constexpr size_t kReserve = 64 * 1024;   // about a third of the buffer, kept free for the game's own commands
+    const TwoHeadGfxArena& a = play->state.gfxCtx->polyOpa;
+    if (a.d < a.p) return nullptr;
+    const size_t room = static_cast<size_t>(a.d - a.p) * sizeof(Gfx);
+    if (bytes + kReserve > room) return nullptr;
+    return Graph_Alloc(play->state.gfxCtx, bytes);
+}
 
 // ---- debug switches ----------------------------------------------------------------------------------------------------------
 // A temporary Debug section in the Battle Royale menu: each newer feature can be switched off to find out which one causes a crash or glitch.
@@ -459,6 +474,7 @@ std::vector<size_t> gPlatformIdx;
 const royale::Prop* gPlatformSrc = nullptr;
 size_t gPlatformSrcCount = 0;
 std::unordered_map<size_t, float> gPlatformBase;   // floor height under each block's middle
+std::unordered_map<size_t, float> gPlatformFoot;   // the lowest ground under each block's footprint (PlatformFoot)
 
 void RefreshPlatforms() {
     if (!gSession.Client()) { gPlatformIdx.clear(); gPlatformSrc = nullptr; gPlatformSrcCount = 0; return; }
@@ -468,6 +484,7 @@ void RefreshPlatforms() {
     gPlatformSrcCount = props.size();
     gPlatformIdx.clear();
     gPlatformBase.clear();
+    gPlatformFoot.clear();
     for (size_t i = 0; i < props.size(); i++) if (royale::IsPlatform(props[i].kind)) gPlatformIdx.push_back(i);
 }
 
@@ -2440,8 +2457,8 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
     gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
-    if (!tris.empty()) {   // the canopy: this frame's triangles, in memory the game hands out for one frame
-        Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, tris.size() * sizeof(Vtx)));
+    Vtx* v = tris.empty() ? nullptr : static_cast<Vtx*>(FrameAlloc(play, tris.size() * sizeof(Vtx)));
+    if (v != nullptr) {   // the canopy: this frame's triangles, in memory the game hands out for one frame
         for (size_t i = 0; i < tris.size(); i++) {
             v[i].v.ob[0] = static_cast<s16>(std::lround(tris[i].x));
             v[i].v.ob[1] = static_cast<s16>(std::lround(tris[i].y));
@@ -3020,8 +3037,9 @@ void ApplyTrees(Player* player) {
 }
 
 // The island's oaks and boulders are solid too (shared/fortnite_scenery.h, SceneryRadius).
+bool SolidActive();
 void ApplyScenery(Player* player) {
-    if (!OnIsland() || gFoliage <= 0.01f) return;
+    if (!OnIsland() || gFoliage <= 0.01f || SolidActive()) return;   // with the game's own collision in place (see "solid scenery") the oaks and boulders are real
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z, cell = royale::fortnite::kSceneryCell;
     gFloraBudget = 6;
     for (int cz = static_cast<int>(std::floor((pz - 140.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 140.0f) / cell)); cz++)
@@ -3075,7 +3093,7 @@ void DrawStormWall(PlayState* play) {
     constexpr int kRows = 4;
     const float heights[kRows] = { gWallBase - 3000.0f, gWallBase + 250.0f, gWallBase + 2600.0f, gWallBase + 7500.0f };
     const float alphas[kRows] = { 175.0f, 160.0f, 110.0f, 0.0f };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
     if (v == nullptr) return;
     auto put = [&](Vtx& o, float ang, int row) {
         const float c = std::cos(ang), s = std::sin(ang);
@@ -3130,7 +3148,7 @@ void DrawWeatherParticles(PlayState* play) {
     const float speed = ash ? 60.0f + 0.25f * wl : 380.0f + 0.9f * wl;
     constexpr float kBox = 1400.0f, kHalf = kBox * 0.5f, kTall = 900.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 8 * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(n) * 8 * sizeof(Vtx)));
     if (v == nullptr) return;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
@@ -3144,9 +3162,9 @@ void DrawWeatherParticles(PlayState* play) {
         // Each speck drifts along the wind (and up or down) through a box that moves with the camera, wrapping round its sides.
         const float drift = t * speed * depth;
         const float rise = ash ? t * (i % 3 == 0 ? 45.0f : -25.0f) * depth : std::sin(t * 2.0f + i) * 20.0f;
-        float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
-        float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
-        float y = wrap(h3 * kTall + eye.y + rise, kTall) - kTall * 0.5f;
+        float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf;
+        float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
+        float y = wrap(h3 * kTall - eye.y + rise, kTall) - kTall * 0.5f;
         if (ash) { x += std::sin(t * 0.8f + i) * 25.0f; z += std::cos(t * 0.7f + i * 1.7f) * 25.0f; }
         // Two crossed quads, so the speck looks the same from any side: a small square for ash, a thin streak along the wind for sand.
         float ax, ay, az, bx, by, bz, cx, cy, cz;
@@ -3254,7 +3272,7 @@ struct DiscSet {
     int n = 0, cap = 0;
     bool Init(PlayState* play, int count) {
         cap = count; n = 0;
-        v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
+        v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
         return v != nullptr;
     }
     // A lumpy, slightly stretched disc at (x,y,z), centre colour/alpha `c`, rim colour with alpha `ra`.
@@ -3324,7 +3342,7 @@ void DrawSky(PlayState* play) {
     // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
     constexpr int kSegs = 14, kRings = 8;
     static const float kElev[kRings] = { -0.12f, 0.0f, 0.07f, 0.16f, 0.30f, 0.52f, 0.78f, 1.0f };   // the sine of each ring's height
-    Vtx* dv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
+    Vtx* dv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
     if (dv == nullptr) return;
     const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * 6.2831853f;
     for (int r = 0; r < kRings; r++) {
@@ -3351,7 +3369,7 @@ void DrawSky(PlayState* play) {
     const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
     if (starA > 0.03f && gSkyStars) {
         constexpr int kStars = 220;
-        Vtx* sv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
+        Vtx* sv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
         if (sv != nullptr) {
             for (int i = 0; i < kStars; i++) {
                 const float a = Flora01(i, 5, 711) * 6.2831853f + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
@@ -3377,7 +3395,7 @@ void DrawSky(PlayState* play) {
     {
         const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
         const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
-        Vtx* qv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, 8 * sizeof(Vtx)));
+        Vtx* qv = static_cast<Vtx*>(FrameAlloc(play, 8 * sizeof(Vtx)));
         if (gSkyBodies && qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
             const float warm = L.twilight;
             SkyQuad(&qv[0], std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c, kR * 0.96f, 330.0f, 255, mix(244, 160, warm), mix(205, 90, warm), 255.0f * sunA);
@@ -3408,7 +3426,7 @@ void DrawSky(PlayState* play) {
     for (int i = 0; i < puffs; i++) {
         const float h1 = Flora01(i, 7, 721), h2 = Flora01(i, 11, 722), h3 = Flora01(i, 13, 723), h4 = Flora01(i, 17, 724);
         const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
-        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
         const float d = std::hypot(x, z);
         const float edge = std::clamp((5000.0f - d) / 1800.0f, 0.0f, 1.0f) * std::clamp((d - 900.0f) / 900.0f, 0.0f, 1.0f);
         if (edge <= 0.01f) continue;
@@ -3473,7 +3491,7 @@ void DrawFogBanks(PlayState* play) {
     for (int i = 0; i < banks; i++) {
         const float h1 = Flora01(i, 7, 731), h2 = Flora01(i, 11, 732), h3 = Flora01(i, 13, 733);
         const float drift = t * (8.0f + 0.12f * wl) * (0.6f + 0.8f * h3);
-        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
         const float d = std::hypot(x, z);
         const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 150.0f) / 450.0f, 0.0f, 1.0f);
         if (edge <= 0.01f) continue;
@@ -3513,13 +3531,13 @@ void DrawWindParticles(PlayState* play) {
     const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
     constexpr float kBox = 1500.0f, kHalf = kBox * 0.5f, kTall = 650.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int i = 0; i < n; i++) {
         const float h1 = Flora01(i, 31, 301), h2 = Flora01(i, 37, 302), h3 = Flora01(i, 41, 303), depth = 0.6f + 0.8f * Flora01(i, 43, 304);
         const float drift = t * wl * 1.5f * depth;   // streaks outrun the wind a little so the direction reads at a glance
-        const float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
-        const float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
+        const float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf;
+        const float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
         const float y = wrap(h3 * kTall + eye.y * 0.0f, kTall) - kTall * 0.35f + std::sin(t * 1.7f + i) * 14.0f;
         const float len = (30.0f + 120.0f * wind) * depth, th = 1.8f * depth;
         const float fade = std::clamp(std::min(wrap(drift * 0.001f + h1, 1.0f), 1.0f - wrap(drift * 0.001f + h1, 1.0f)) * 5.0f, 0.0f, 1.0f);
@@ -3620,7 +3638,7 @@ void DrawTornado(PlayState* play) {
     const Vec3f eye = play->view.eye;
     if (std::hypot(gTornado.x - eye.x, gTornado.z - eye.z) > 5500.0f) return;
     constexpr int kRings = 10, kSegs = 14;
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kSegs + 1) * kRings * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(kSegs + 1) * kRings * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int i = 0; i < kRings; i++) {
         const float h01 = static_cast<float>(i) / (kRings - 1), h = h01 * kTornadoHeight;
@@ -3660,7 +3678,7 @@ void DrawTornado(PlayState* play) {
     Matrix_Translate(gTornado.x, gTornado.ground, gTornado.z, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     for (int j = 0; j < kSegs; j++) {   // one strip of the funnel at a time: two columns of rings
-        Vtx* strip = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(2 * kRings) * sizeof(Vtx)));
+        Vtx* strip = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(2 * kRings) * sizeof(Vtx)));
         if (strip == nullptr) break;
         for (int i = 0; i < kRings; i++) { strip[i] = v[i * (kSegs + 1) + j]; strip[kRings + i] = v[i * (kSegs + 1) + j + 1]; }
         gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(strip), 2 * kRings, 0);
@@ -6888,6 +6906,19 @@ void LeaveSeatPose(Player* player) {
     if (player->actor.draw == LocalRide_Draw) player->actor.draw = Player_Draw;
 }
 
+// The camera follows Link's feet on the ground under the saddle, so in the saddle it sits as low as a walking Link's and the front of the cart
+// blocks the road. While seated, the view is lifted by how high he is drawn above his feet, plus a little more to see over the nose.
+constexpr float kRideCamExtra = 30.0f;
+float gCamLiftNow = 0.0f;
+void UpdateRideCamera(Player* player) {
+    const float scale = std::max(0.001f, player->actor.scale.y);
+    const bool seated = gRide.seated && player->actor.draw == LocalRide_Draw;
+    const float target = seated ? std::max(0.0f, player->actor.shape.yOffset * scale) + kRideCamExtra : 0.0f;
+    gCamLiftNow += (target - gCamLiftNow) * 0.12f;   // eased, so getting on and off glides the view up and down
+    if (std::fabs(gCamLiftNow) < 0.05f && target == 0.0f) gCamLiftNow = 0.0f;
+    gRoyaleCamLift = gCamLiftNow;
+}
+
 // On foot, a cart is solid: you are pushed out of it to its nearest side (as the rocks push you, ApplyRocks).
 void PushOutOfCarts(Player* player) {
     Vec3f& p = player->actor.world.pos;
@@ -8155,7 +8186,7 @@ SurfaceType gSolidSurfaces[2] = {
 CollisionHeader gSolidHeader;
 Actor* gSolidActor = nullptr;
 bool gSolidFailed = false;            // the game had no free collision slot: fall back to ApplyPlatforms / ApplyRocks
-std::vector<size_t> gSolidSet;         // the props in the mesh now
+std::vector<uint64_t> gSolidSet;       // the props (their index) and the island's scenery (SceneryKey) in the mesh now, sorted
 royale::Vec2 gSolidCentre = { 1e9f, 1e9f };
 int gSolidAge = 0;
 
@@ -8185,11 +8216,18 @@ struct SolidBuilder {
         p.normal = { 0, 0x7FFF, 0 };   // filled in properly by the game when it takes the mesh
     }
     // A stone: a ring of `sides` points round the foot, a smaller ring at the top, and a flat top to stand on. A box is the same with four sides.
-    void Prism(float x, float z, float baseY, float topY, float footR, float topR, int sides, float turn, u16 type, u16 xp) {
-        const int foot = nv;
-        for (int i = 0; i < sides; i++) { const float a = turn + 6.2831853f * i / sides; V(x + std::sin(a) * footR, baseY, z + std::cos(a) * footR); }
-        const int top = nv;
-        for (int i = 0; i < sides; i++) { const float a = turn + 6.2831853f * i / sides; V(x + std::sin(a) * topR, topY, z + std::cos(a) * topR); }
+    // The rings can be ellipses (half-widths along x and z before `yaw` turns the whole stone, the game's own Y turn), for the island's cliff slabs.
+    void Stone(float x, float z, float baseY, float topY, float footX, float footZ, float topX, float topZ, int sides, float turn, float yaw, u16 type, u16 xp) {
+        const float cy = std::cos(yaw), sy = std::sin(yaw);
+        auto ring = [&](float rx, float rz, float y) {
+            const int first = nv;
+            for (int i = 0; i < sides; i++) {
+                const float a = turn + 6.2831853f * i / sides, lx = std::sin(a) * rx, lz = std::cos(a) * rz;
+                V(x + lx * cy + lz * sy, y, z - lx * sy + lz * cy);
+            }
+            return first;
+        };
+        const int foot = ring(footX, footZ, baseY), top = ring(topX, topZ, topY);
         const Vec3f inside = { x, (baseY + topY) * 0.5f, z };
         for (int i = 0; i < sides; i++) {
             const int j = (i + 1) % sides;
@@ -8198,6 +8236,9 @@ struct SolidBuilder {
         }
         const Vec3f below = { x, topY - 50.0f, z };
         for (int i = 1; i + 1 < sides; i++) T(top, top + i, top + i + 1, below, type, xp);
+    }
+    void Prism(float x, float z, float baseY, float topY, float footR, float topR, int sides, float turn, u16 type, u16 xp) {
+        Stone(x, z, baseY, topY, footR, footR, topR, topR, sides, turn, 0.0f, type, xp);
     }
 };
 constexpr int PrismVtx(int sides) { return sides * 2; }
@@ -8219,10 +8260,61 @@ int SolidPolyBudget() {
     return std::clamp(room, 0, kSolidMaxPoly);
 }
 
+// The island's own scenery that has a solid body (shared/fortnite_scenery.h): the cliff slabs and crags are walls and ledges, the boulders and
+// oaks are stones and trunks. Each piece is cheap to rebuild from its cell, so the mesh only remembers which cells are in it.
+struct SolidScenery { int cx, cz; royale::fortnite::SceneryPiece pc; float base; };
+constexpr float kSolidSceneryRadius = 900.0f;
+bool SceneryIsSolid(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Cliff || k == SceneryKind::Crag || k == SceneryKind::Boulder || k == SceneryKind::Oak;
+}
+int SceneryPolys(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Crag ? 3 * PrismPoly(6) : k == SceneryKind::Cliff ? PrismPoly(10) : PrismPoly(6);
+}
+int SceneryVtx(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Crag ? 3 * PrismVtx(6) : k == SceneryKind::Cliff ? PrismVtx(10) : PrismVtx(6);
+}
+// The scenery within kSolidSceneryRadius of (x, z) that is standing (the same pieces DrawIslandScenery draws), nearest first.
+void NearbySolidScenery(float x, float z, std::vector<std::pair<float, SolidScenery>>* out) {
+    if (!OnIsland() || !DebugOn(kDbgScenery) || gFoliage <= 0.01f) return;
+    const float cell = royale::fortnite::kSceneryCell, dens = std::min(1.3f, gFoliage);
+    gFloraBudget = 60;   // measuring each piece's ground is cached, so this only spreads the first look over a few frames
+    for (int cz = static_cast<int>(std::floor((z - kSolidSceneryRadius) / cell)); cz <= static_cast<int>(std::floor((z + kSolidSceneryRadius) / cell)); cz++)
+        for (int cx = static_cast<int>(std::floor((x - kSolidSceneryRadius) / cell)); cx <= static_cast<int>(std::floor((x + kSolidSceneryRadius) / cell)); cx++) {
+            royale::fortnite::SceneryPiece pc;
+            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc) || !SceneryIsSolid(pc.kind)) continue;
+            const float d = std::hypot(pc.x - x, pc.z - z);
+            if (d > kSolidSceneryRadius) continue;
+            const FloraSpot* spot = FloraSpotAt(7, cx, cz, pc.x, pc.z);
+            if (spot == nullptr || !spot->ok) continue;
+            out->push_back({ d, { cx, cz, pc, spot->y } });
+        }
+}
+uint64_t SceneryKey(const SolidScenery& s) { return (1ull << 62) | (static_cast<uint64_t>(s.cx + 65536) << 24) | static_cast<uint64_t>(s.cz + 65536); }
+
+// The lowest ground under a block's footprint (its middle and corners), so a block on a slope reaches down to the low side instead of floating over it.
+float PlatformFoot(size_t i) {
+    auto it = gPlatformFoot.find(i);
+    if (it != gPlatformFoot.end()) return it->second;
+    const float mid = PlatformBase(i);
+    if (mid < -1.0e8f) return mid;
+    const royale::Prop& p = gSession.Client()->Props()[i];
+    float low = mid;
+    for (int k = 0; k < 4; k++) {
+        float y = 0;
+        if (RawFloorAt(p.pos.x + (k & 1 ? 1 : -1) * royale::kPlatformHalf, p.pos.z + (k & 2 ? 1 : -1) * royale::kPlatformHalf, &y)) low = std::min(low, y);
+    }
+    gPlatformFoot[i] = low;
+    return low;
+}
+
 // Fill the mesh with the scenery nearest (x, z). Returns false if the same pieces are already in it.
 bool BuildSolidMesh(float x, float z, bool force) {
     const auto& props = gSession.Client()->Props();
-    std::vector<std::pair<float, size_t>> near;
+    struct Cand { float d; bool scenery; size_t i; };
+    std::vector<Cand> near;
     for (size_t i = 0; i < props.size(); i++) {
         const royale::Prop& p = props[i];
         if (!IsSolidKind(p.kind) || gBrokenProps.count(i)) continue;
@@ -8230,36 +8322,72 @@ bool BuildSolidMesh(float x, float z, bool force) {
         if (d > kSolidRadius) continue;
         auto pa = gProps.find(i);   // a rock someone has picked up and carried off is not where its footprint is any more
         if (pa != gProps.end() && pa->second.actor != nullptr && std::hypot(pa->second.actor->world.pos.x - p.pos.x, pa->second.actor->world.pos.z - p.pos.z) > 30.0f) continue;
-        near.push_back({ d, i });
+        near.push_back({ d, false, i });
     }
-    std::sort(near.begin(), near.end());
+    std::vector<std::pair<float, SolidScenery>> scenery;
+    NearbySolidScenery(x, z, &scenery);
+    for (size_t k = 0; k < scenery.size(); k++) near.push_back({ scenery[k].first, true, k });
+    std::sort(near.begin(), near.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
     const int budget = SolidPolyBudget();
-    std::vector<size_t> chosen;
+    std::vector<Cand> chosen;
+    std::vector<uint64_t> keys;
     int polys = 1, vtx = 3;   // the placeholder below
-    for (const auto& [d, i] : near) {
-        const int sides = SolidSides(props[i].kind);
-        if (polys + PrismPoly(sides) > budget || vtx + PrismVtx(sides) > kSolidMaxVtx) break;
-        if (PlatformBase(i) < -1.0e8f) continue;   // its ground isn't loaded yet
-        polys += PrismPoly(sides);
-        vtx += PrismVtx(sides);
-        chosen.push_back(i);
+    for (const Cand& c : near) {
+        const int addPoly = c.scenery ? SceneryPolys(scenery[c.i].second.pc.kind) : PrismPoly(SolidSides(props[c.i].kind));
+        const int addVtx = c.scenery ? SceneryVtx(scenery[c.i].second.pc.kind) : PrismVtx(SolidSides(props[c.i].kind));
+        if (polys + addPoly > budget || vtx + addVtx > kSolidMaxVtx) break;
+        if (!c.scenery && PlatformFoot(c.i) < -1.0e8f) continue;   // its ground isn't loaded yet
+        polys += addPoly;
+        vtx += addVtx;
+        chosen.push_back(c);
+        keys.push_back(c.scenery ? SceneryKey(scenery[c.i].second) : static_cast<uint64_t>(c.i));
     }
-    std::sort(chosen.begin(), chosen.end());
-    if (!force && chosen == gSolidSet) return false;
-    gSolidSet = chosen;
+    std::sort(keys.begin(), keys.end());
+    if (!force && keys == gSolidSet) return false;
+    gSolidSet = keys;
 
     SolidBuilder b;
     // Always one triangle, so the mesh is never empty (the game divides by its vertex count): a sliver of wall far below the map, out of everyone's way.
     const float lowY = -31000.0f;
     const int a = b.V(x, lowY, z), c = b.V(x + 1.0f, lowY, z), e = b.V(x, lowY + 1.0f, z);
     b.T(a, c, e, { x, lowY, z + 1.0f }, 0, 1);
-    for (size_t i : chosen) {
+    for (const Cand& cand : chosen) {
+        if (cand.scenery) {
+            using royale::fortnite::SceneryKind;
+            const SolidScenery& sc = scenery[cand.i].second;
+            const float sk = sc.pc.scale, base = sc.base, yaw = sc.pc.yaw;
+            auto local = [&](float lx, float lz, float* wx, float* wz) { *wx = sc.pc.x + (lx * std::cos(yaw) + lz * std::sin(yaw)) * sk; *wz = sc.pc.z + (-lx * std::sin(yaw) + lz * std::cos(yaw)) * sk; };
+            switch (sc.pc.kind) {
+                case SceneryKind::Cliff:   // a slab 300 wide and 112 deep, 166 tall, a little narrower at the top (tools/scenery/build_scenery.py, build_cliff); you stand on its top from the high side
+                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 1);
+                    break;
+                case SceneryKind::Crag: {   // three spires: the snowy tips are too narrow to stand on, so each is a wall
+                    static const float spire[3][4] = { { 0.0f, 0.0f, 58.0f, 250.0f }, { 64.0f, 26.0f, 42.0f, 180.0f }, { -52.0f, -30.0f, 38.0f, 150.0f } };
+                    for (const auto& sp : spire) {
+                        float wx, wz;
+                        local(sp[0], sp[1], &wx, &wz);
+                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 1);
+                    }
+                    break;
+                }
+                case SceneryKind::Oak:   // the trunk only: the leaves are above your head
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 1);
+                    break;
+                default: {   // a boulder: wide at the foot, a flat crown you can climb onto
+                    const float r = royale::fortnite::SceneryRadius(sc.pc.kind, sk);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + royale::fortnite::SceneryTop(sc.pc.kind, sk) * 0.8f, r, r, r * 0.65f, r * 0.65f, 6, sc.pc.yaw, 0.0f, 0, 1);
+                    break;
+                }
+            }
+            continue;
+        }
+        const size_t i = cand.i;
         const royale::Prop& p = props[i];
         const float base = PlatformBase(i);
         const int sides = SolidSides(p.kind);
-        if (royale::IsPlatform(p.kind)) {   // a box, square to the map, sunk a little into the ground so a slope never leaves a gap under it
+        if (royale::IsPlatform(p.kind)) {   // a box, square to the map, reaching down to the low side of its footprint so a slope never leaves a gap under it
             const float h = royale::kPlatformHalf * 1.41421356f;
-            b.Prism(p.pos.x, p.pos.z, base - 40.0f, base + royale::PlatformHeight(p.kind), h, h, 4, 0.78539816f, 1, 0);
+            b.Prism(p.pos.x, p.pos.z, PlatformFoot(i) - 20.0f, base + royale::PlatformHeight(p.kind), h, h, 4, 0.78539816f, 1, 0);
         } else if (p.kind == royale::PropKind::Pillar) {
             b.Prism(p.pos.x, p.pos.z, base - 30.0f, base + 200.0f, royale::PropRadius(p.kind), royale::PropRadius(p.kind) * 0.85f, sides, 0.0f, 0, 1);
         } else {   // rocks and boulders: wide at the foot, a flat crown at the height you stand on (BoulderTop)
@@ -8644,7 +8772,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
 
     // 2. the surface's look at each point
     const WaterSky sky = WaterSkyNow();
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(V) * V * sizeof(Vtx)));
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(V) * V * sizeof(Vtx)));
     if (v == nullptr) return;
     static std::vector<uint8_t> clear;   // a point where there is nothing to show
     clear.assign(static_cast<size_t>(V) * V, 1);
@@ -8731,7 +8859,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     // the reflections of whoever stands or swims here: a strip from the feet toward the camera, in their colours, wobbling with the swell
     if (!gWaterRefl.empty() && gWaterSkyOn && gWaterBodiesRefl) {
         constexpr int S = 4;   // slices
-        Vtx* rv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, gWaterRefl.size() * 2 * S * sizeof(Vtx)));
+        Vtx* rv = static_cast<Vtx*>(FrameAlloc(play, gWaterRefl.size() * 2 * S * sizeof(Vtx)));
         if (rv != nullptr) {
             Vtx* o = rv;
             for (const WaterRefl& w : gWaterRefl) {
@@ -9633,7 +9761,7 @@ void CancelGameDeath(Player* player) {
 void OnPlayerUpdate() {
     Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
-    if (!gSession.Joined() || !InGame()) return;
+    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
@@ -9694,6 +9822,7 @@ void OnPlayerUpdate() {
     UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
     UpdateLocalRide(player, hud);
+    UpdateRideCamera(player);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
@@ -10469,7 +10598,7 @@ constexpr float kLiloMapScale = 0.5f;
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
     namespace L = royale::lilo;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * L::kVertCount));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * L::kVertCount));
     if (vtx == nullptr) return;
     // The sun: high, a little in front and to one side, turned into the model's own axes (the inverse of Matrix_RotateY(yaw)).
     const float wx = 0.35f, wy = 0.82f, wz = 0.45f;
@@ -10968,7 +11097,7 @@ constexpr float kBabyScale = 0.62f;   // the model stands about 64 units tall at
 void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::avriella::Pose& pose, int face) {
     namespace A = royale::avriella;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * A::kVertCount));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
     if (vtx == nullptr) return;
     const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for Lilo
     const float cy = std::cos(yaw), sy = std::sin(yaw);
@@ -11383,7 +11512,7 @@ void DrawBabyCap(PlayState* play, const royale::avriella::Pose& pose) {
     constexpr int kRings = 4, kSides = 5;
     const float radius[kRings] = { 5.0f, 4.2f, 2.8f, 1.4f };
     float cx = 0.0f, cyy = 0.0f, cz = 0.0f;   // ring centres, in her own space
-    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * (kRings * kSides + 1)));
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * (kRings * kSides + 1)));
     if (vtx == nullptr) return;
     constexpr float kSub = 8.0f;
     const float fore = std::clamp(c.capSpring.fore, -1.1f, 1.1f), side = std::clamp(c.capSpring.side, -1.0f, 1.0f);
