@@ -13816,7 +13816,6 @@ struct UiState {
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
-    bool showCustomize = false;
     bool loaded = false;
     bool showPosition = false;
     std::string error;
@@ -14287,6 +14286,18 @@ void DrawLocalEffects() {
     if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
 }
 
+void DrawRagdollTools(const royale::HudState& h) {
+    if (!ImGui::CollapsingHeader("Ragdoll test")) return;
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!InGame() || !DebugOn(kDbgRagdoll));
+    if (ImGui::Button("Spawn a test ragdoll", ImVec2(220, 0))) SpawnTestRagdoll(h);
+    if (ImGui::Button("Fling the test ragdolls", ImVec2(220, 0))) FlingTestRagdolls();
+    if (ImGui::Button("Remove the test ragdolls", ImVec2(220, 0))) RemoveTestRagdolls();
+    ImGui::EndDisabled();
+    ImGui::TextColored(kGrey, "Walk into it to shove it, hit it with your sword, or hold L next to it to carry it around. (Needs the Ragdoll switch in Debug.)");
+
+}
+
 void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("LOBBY");
     ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
@@ -14342,59 +14353,61 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (h.isHost) {
         if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
         else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
-        {
-            UiState& ui = Ui();
-            int limit = h.playerLimit;
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
-                ui.playerLimit = limit;
-                gSession.SetPlayerLimit(limit);
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
-            if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
-                gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
-                SaveUi(ui);
-            }
-        }
-        {
-            UiState& ui = Ui();
-            static const char* kLevels[] = { "Easy", "Normal", "Hard" };
-            ImGui::SetNextItemWidth(160);
-            if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
-                gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
-        }
-        {
-            UiState& ui = Ui();
-            bool changed = false;
-            static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
-            ImGui::SetNextItemWidth(160);
-            changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
-            if (changed) {
-                gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
-        }
         ImGui::BeginDisabled(!InGame() || gPendingStart);
-        if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
+        if (PrimaryMenuButton(gPendingStart ? "Preparing..." : "Start match", true)) gPendingStart = true;
         ImGui::EndDisabled();
         if (gPendingStart) ImGui::TextColored(kGrey, "Heading to %s and measuring the map before the countdown...", CurrentMap().name);
         else ImGui::TextColored(kGrey, "Starting takes you to %s first, so the real map can be measured.", CurrentMap().name);
         if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
+        if (ImGui::CollapsingHeader("Match settings")) {
+            {
+                UiState& ui = Ui();
+                int limit = h.playerLimit;
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
+                    ui.playerLimit = limit;
+                    gSession.SetPlayerLimit(limit);
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
+                if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
+                    gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
+                    SaveUi(ui);
+                }
+            }
+            {
+                UiState& ui = Ui();
+                static const char* kLevels[] = { "Easy", "Normal", "Hard" };
+                ImGui::SetNextItemWidth(160);
+                if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
+                    gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
+            }
+            {
+                UiState& ui = Ui();
+                bool changed = false;
+                static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
+                ImGui::SetNextItemWidth(160);
+                changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
+                ImGui::SetNextItemWidth(280);
+                changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
+                ImGui::SetNextItemWidth(280);
+                changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
+                if (changed) {
+                    gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
+            }
+        }
     } else {
         if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
-    DrawLocalEffects();
+    if (ImGui::CollapsingHeader("Local graphics and music")) DrawLocalEffects();
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");
@@ -14405,15 +14418,6 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
     if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
     ImGui::EndDisabled();
-
-    ImGui::Spacing();
-    Heading("Ragdoll test");
-    ImGui::BeginDisabled(!InGame() || !DebugOn(kDbgRagdoll));
-    if (ImGui::Button("Spawn a test ragdoll", ImVec2(220, 0))) SpawnTestRagdoll(h);
-    if (ImGui::Button("Fling the test ragdolls", ImVec2(220, 0))) FlingTestRagdolls();
-    if (ImGui::Button("Remove the test ragdolls", ImVec2(220, 0))) RemoveTestRagdolls();
-    ImGui::EndDisabled();
-    ImGui::TextColored(kGrey, "Walk into it to shove it, hit it with your sword, or hold L next to it to carry it around. (Needs the Ragdoll switch in Debug.)");
 
     ImGui::Spacing();
     if (ImGui::Button("Leave lobby", ImVec2(220, 0))) gSession.Leave();
@@ -15099,6 +15103,7 @@ void RegisterRoyaleMenu() {
             }
         }
         DrawDebug(Ui());
+        if (gSession.Joined()) DrawRagdollTools(gSession.Hud());
     });
     WidgetPath gfx = { "Battle Royale", "Graphics", SECTION_COLUMN_1 };
     mSohMenu->AddSidebarEntry("Battle Royale", gfx.sidebarName, 1);
