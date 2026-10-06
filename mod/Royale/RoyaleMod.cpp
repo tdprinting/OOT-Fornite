@@ -10800,7 +10800,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
 // She crawls after you, sits when you stop, and then does baby things: waves, claps, babbles, giggles, stacks three tiny rocks, rolls over, stands up
 // and wobbles, reaches for loot nearby, and falls asleep when you stand still for long. Stand still facing her and press A to talk: she sits and
 // babbles a line in the game's own text box. Her voice is Link's own child voice sounds played much higher (no recordings of a real baby).
-constexpr float kBabyScale = 0.62f;   // the model stands about 62 units tall at 1.0 (sitting about 40, crawling about 30 high); Link is about 60
+constexpr float kBabyScale = 0.62f;   // the model stands about 64 units tall at 1.0 (sitting about 54 with her tuft, crawling about 50); Link is about 60, so she is half his size
 
 void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::avriella::Pose& pose, int face) {
     namespace A = royale::avriella;
