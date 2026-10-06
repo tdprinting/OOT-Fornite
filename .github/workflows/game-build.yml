@@ -4,7 +4,7 @@ name: Game build
 # runs when game-facing files change, or on demand. Every successful run publishes a release (see the last step). It compiles and links but does not run the game: that needs your ROM.
 on:
   push:
-    branches: ["claude/**", "main"]
+    branches: ["claude/**", "codex/**", "main"]
     paths:
       - "mod/**"
       - "patches/**"
