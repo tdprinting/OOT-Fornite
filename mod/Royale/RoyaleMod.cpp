@@ -645,6 +645,11 @@ Look LookFor(royale::ItemId weapon) {
             return { PLAYER_MODELGROUP_DEFAULT, PLAYER_IA_NONE, ITEM_NONE };
     }
 }
+// The Deku Stick is drawn scaled by Player::unk_85C (its length), which the game sets to 1 only when it takes the stick out
+// (Player_InitDekuStickIA). Anywhere the stick is put in the hand by setting the item action directly, that length is still 0 and the stick is invisible.
+void ShowStickLength(Player* player) {
+    if (player->heldItemAction == PLAYER_IA_DEKU_STICK && player->unk_85C == 0.0f) player->unk_85C = 1.0f;
+}
 // A bottle in the hand, coloured by what is in it, as Link holds one to drink.
 Look BottleLook(royale::ItemId contents) {
     using royale::ItemId;
@@ -1444,6 +1449,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         Player_SetModelGroup(player, look.modelGroup);
         gSaveContext.equips.buttonItems[0] = original;
     }
+    ShowStickLength(player);   // puppets never go through the game's take-out, so the stick has no length until it is given one
 
     if (s.alive) HeldGlow(play, player, s.weaponRarity, false);
 
@@ -9397,6 +9403,7 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
             gSaveContext.equips.buttonItems[0] = look.buttonItem;
             player->itemAction = player->heldItemAction = look.itemAction;
             Player_SetModelGroup(player, look.modelGroup);
+            ShowStickLength(player);
             swapped = true;
         }
         if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
@@ -9442,6 +9449,7 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
         if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
             player->itemAction = player->heldItemAction = look.itemAction;
             Player_SetModelGroup(player, look.modelGroup);
+            ShowStickLength(player);
         }
     }
 }
