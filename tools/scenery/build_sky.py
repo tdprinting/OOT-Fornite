@@ -117,6 +117,84 @@ def build_glow():
     ring = [g.add(p, (1.0, 1.0, 1.0, 0.0)) for p in ring_pts(8, 1.0)]
     g.fan(c, ring)
 
+MW_PIECES, MW_COLS, MW_ROWS, MW_HALF = 48, 2, 9, 0.44   # the band: 96 columns round the circle, 9 rows across it (+-0.44 rad)
+DUST_PIECES = 24
+
+def _mw_noise():
+    """A smooth tiling value-noise field over (column, row), 0..1: the cloudy structure of the band."""
+    import numpy as np
+    rng = np.random.RandomState(7)
+    cols, rows = MW_PIECES * MW_COLS, MW_ROWS * 6
+    out = np.zeros((rows, cols)); amp = 1.0; tot = 0.0
+    for o, (gc, gr) in enumerate(((12, 3), (24, 5), (48, 9), (96, 17))):
+        g = rng.rand(gr, gc)
+        # bilinear upsample with wraparound in the column direction
+        yy = np.linspace(0, gr - 1, rows)[:, None]; xx = np.linspace(0, gc, cols, endpoint=False)[None, :]
+        y0 = np.floor(yy).astype(int); y1 = np.minimum(y0 + 1, gr - 1); fy = yy - y0
+        x0 = np.floor(xx).astype(int) % gc; x1 = (x0 + 1) % gc; fx = xx - np.floor(xx)
+        fx = fx * fx * (3 - 2 * fx)
+        v = (g[y0, x0] * (1 - fx) + g[y0, x1] * fx) * (1 - fy) + (g[y1, x0] * (1 - fx) + g[y1, x1] * fx) * fy
+        out += amp * v; tot += amp; amp *= 0.55
+    return out / tot
+
+def mw_intensity(col_f, off):
+    """How bright the band is at a column (0..1 round the circle) and offset across it (radians): a bright core, a wide halo, a dark dust lane splitting
+    the core, a bright bulge on one side and cloudy structure from the noise."""
+    import numpy as np
+    n = MW_N
+    ci = (col_f * MW_PIECES * MW_COLS) % (MW_PIECES * MW_COLS)
+    ri = (off + MW_HALF) / (2 * MW_HALF) * (n.shape[0] - 1)
+    c0 = int(ci) % n.shape[1]; c1 = (c0 + 1) % n.shape[1]; r0 = int(min(max(ri, 0), n.shape[0] - 2)); fx = ci - int(ci); fy = ri - r0
+    nv = (n[r0, c0] * (1 - fx) + n[r0, c1] * fx) * (1 - fy) + (n[r0 + 1, c0] * (1 - fx) + n[r0 + 1, c1] * fx) * fy
+    bulge = 0.55 + 0.45 * math.cos((col_f - 0.15) * 2 * math.pi)            # the band is thick and bright on one side of the sky
+    width = 0.08 + 0.05 * bulge
+    core = math.exp(-(off / width) ** 2) * (0.6 + 0.8 * nv)
+    halo = 0.35 * math.exp(-(off / (width * 2.6)) ** 2) * (0.5 + nv)
+    lane_c = 0.05 * math.sin(col_f * 2 * math.pi * 3 + 1.0)
+    lane = math.exp(-((off - lane_c) / 0.028) ** 2) * (0.85 if 0.2 < (col_f * 3) % 1 < 0.9 else 0.35) * (0.5 + 0.5 * nv)
+    return max(0.0, min(1.0, (core + halo) * bulge * 1.0 - lane * core * 0.9))
+
+def build_milky_way():
+    global MW_N
+    MW_N = _mw_noise()
+    deep = (0.20, 0.34, 0.72); mid = (0.52, 0.72, 1.0); hot = (0.96, 0.95, 0.88)
+    for i in range(MW_PIECES):
+        m = piece("mw_%d" % i, False, 1000)
+        rows = []
+        for r in range(MW_ROWS):
+            off = -MW_HALF + 2 * MW_HALF * r / (MW_ROWS - 1)
+            ring = []
+            for c in range(MW_COLS + 1):
+                col_f = (i * MW_COLS + c) / float(MW_PIECES * MW_COLS)
+                ph = 2 * math.pi * col_f
+                inten = mw_intensity(col_f, off)
+                # lerp deep -> mid -> warm hot core
+                t1 = min(1.0, inten * 1.6); t2 = max(0.0, inten * 1.4 - 0.7)
+                colr = lerp(lerp(deep, mid, t1), hot, min(1.0, t2))
+                edge = max(0.0, 1.0 - (abs(off) / MW_HALF) ** 2)
+                v = (math.cos(ph), math.sin(ph), off)
+                l = math.sqrt(sum(x * x for x in v))
+                ring.append(m.add((v[0] / l, v[1] / l, v[2] / l), (*colr, min(1.0, inten * 0.6) * edge)))
+            rows.append(ring)
+        for r in range(MW_ROWS - 1):
+            m.strip(rows[r], rows[r + 1], close=False)
+    # star dust: tiny diamonds (4 corners) clustered where the band is bright
+    rng = random.Random(11)
+    for i in range(DUST_PIECES):
+        m = piece("dust_%d" % i, False, 1000)
+        for k in range(8):
+            for _ in range(40):
+                col_f = (i + rng.random()) / DUST_PIECES; off = rng.uniform(-MW_HALF, MW_HALF)
+                if rng.random() < mw_intensity(col_f, off) * 1.3: break
+            ph = 2 * math.pi * col_f
+            cen = [math.cos(ph), math.sin(ph), off]; l = math.sqrt(sum(x * x for x in cen)); cen = [x / l for x in cen]
+            sz = rng.uniform(0.0011, 0.0028) * (1.8 if rng.random() < 0.12 else 1.0)
+            a = rng.uniform(0.5, 1.0); warm = rng.random()
+            colr = (0.85 + 0.15 * warm, 0.92, 1.0 - 0.25 * warm)
+            tang = (-math.sin(ph), math.cos(ph), 0.0)
+            pts = [m.add((cen[0] + tang[0] * dx * sz, cen[1] + tang[1] * dx * sz, cen[2] + dz * sz), (*colr, a if (dx, dz) == (0, 0) else a)) for dx, dz in ((-1, 0), (0, -1), (1, 0), (0, 1))]
+            m.tri(pts[0], pts[1], pts[2]); m.tri(pts[0], pts[2], pts[3])
+
 def build_stars():
     # A four-point sparkle: a long cross with a small waist, like the twinkles on the OoT title screens.
     s = piece("star_sparkle", False, 1000)
@@ -289,6 +367,10 @@ def export_header():
     L.append("inline constexpr int kDomeSegs = %d, kDomeRings = %d;" % (DOME_SEGS, len(DOME_RINGS)))
     L.append("inline constexpr Mesh kClouds[4] = {cloud_0, cloud_1, cloud_2, cloud_3};")
     L.append("inline constexpr Mesh kHills[3] = {hill_0, hill_1, hill_2};")
+    L.append("// The Milky Way band, in its own frame (x along the circle, y round it, z across it) in %d pieces, and star dust along it in %d." % (MW_PIECES, DUST_PIECES))
+    L.append("inline constexpr int kMwPieces = %d, kDustPieces = %d;" % (MW_PIECES, DUST_PIECES))
+    L.append("inline constexpr Mesh kMilkyWay[%d] = {%s};" % (MW_PIECES, ",".join("mw_%d" % i for i in range(MW_PIECES))))
+    L.append("inline constexpr Mesh kMwDust[%d] = {%s};" % (DUST_PIECES, ",".join("dust_%d" % i for i in range(DUST_PIECES))))
     L.append("// The animation loops authored in the Blender file, in seconds.")
     for k, v in ANIM.items():
         L.append("inline constexpr float k%s = %.1ff;" % ("".join(w.capitalize() for w in k.split("_")), v))
@@ -426,7 +508,7 @@ def render_preview(objs):
     sheet.save(PREVIEW)
 
 def main():
-    build_dome(); build_hills(); build_clouds(); build_sun(); build_moon(); build_glow(); build_stars()
+    build_dome(); build_hills(); build_clouds(); build_sun(); build_moon(); build_glow(); build_milky_way(); build_stars()
     objs = make_objects()
     animate(objs)
     os.makedirs(ASSETS, exist_ok=True)
