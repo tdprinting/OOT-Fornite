@@ -3135,9 +3135,9 @@ void DrawWeatherParticles(PlayState* play) {
         // Each speck drifts along the wind (and up or down) through a box that moves with the camera, wrapping round its sides.
         const float drift = t * speed * depth;
         const float rise = ash ? t * (i % 3 == 0 ? 45.0f : -25.0f) * depth : std::sin(t * 2.0f + i) * 20.0f;
-        float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
-        float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
-        float y = wrap(h3 * kTall + eye.y + rise, kTall) - kTall * 0.5f;
+        float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf;
+        float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
+        float y = wrap(h3 * kTall - eye.y + rise, kTall) - kTall * 0.5f;
         if (ash) { x += std::sin(t * 0.8f + i) * 25.0f; z += std::cos(t * 0.7f + i * 1.7f) * 25.0f; }
         // Two crossed quads, so the speck looks the same from any side: a small square for ash, a thin streak along the wind for sand.
         float ax, ay, az, bx, by, bz, cx, cy, cz;
@@ -3399,7 +3399,7 @@ void DrawSky(PlayState* play) {
     for (int i = 0; i < puffs; i++) {
         const float h1 = Flora01(i, 7, 721), h2 = Flora01(i, 11, 722), h3 = Flora01(i, 13, 723), h4 = Flora01(i, 17, 724);
         const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
-        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
         const float d = std::hypot(x, z);
         const float edge = std::clamp((5000.0f - d) / 1800.0f, 0.0f, 1.0f) * std::clamp((d - 900.0f) / 900.0f, 0.0f, 1.0f);
         if (edge <= 0.01f) continue;
@@ -3464,7 +3464,7 @@ void DrawFogBanks(PlayState* play) {
     for (int i = 0; i < banks; i++) {
         const float h1 = Flora01(i, 7, 731), h2 = Flora01(i, 11, 732), h3 = Flora01(i, 13, 733);
         const float drift = t * (8.0f + 0.12f * wl) * (0.6f + 0.8f * h3);
-        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
         const float d = std::hypot(x, z);
         const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 150.0f) / 450.0f, 0.0f, 1.0f);
         if (edge <= 0.01f) continue;
@@ -3509,8 +3509,8 @@ void DrawWindParticles(PlayState* play) {
     for (int i = 0; i < n; i++) {
         const float h1 = Flora01(i, 31, 301), h2 = Flora01(i, 37, 302), h3 = Flora01(i, 41, 303), depth = 0.6f + 0.8f * Flora01(i, 43, 304);
         const float drift = t * wl * 1.5f * depth;   // streaks outrun the wind a little so the direction reads at a glance
-        const float x = wrap(h1 * kBox + eye.x + dx * drift, kBox) - kHalf;
-        const float z = wrap(h2 * kBox + eye.z + dz * drift, kBox) - kHalf;
+        const float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf;
+        const float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
         const float y = wrap(h3 * kTall + eye.y * 0.0f, kTall) - kTall * 0.35f + std::sin(t * 1.7f + i) * 14.0f;
         const float len = (30.0f + 120.0f * wind) * depth, th = 1.8f * depth;
         const float fade = std::clamp(std::min(wrap(drift * 0.001f + h1, 1.0f), 1.0f - wrap(drift * 0.001f + h1, 1.0f)) * 5.0f, 0.0f, 1.0f);
