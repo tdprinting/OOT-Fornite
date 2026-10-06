@@ -108,6 +108,25 @@ inline constexpr const char* kLiloPetLines[kLiloPetLineCount] = {
     "*sniff sniff* meoooww I smell a fart nearby",
 };
 
+// Avriella, a baby who can follow you around as a pet instead of Lilo (an option, looks only). She says one of these, in turn, when you stand still facing
+// her and press A: baby babble, giggles and the things babies do. They are said through the game's own text box too.
+inline constexpr const char* kAvriellaName = "Avriella";
+inline constexpr int kAvriellaPetLineCount = 12;
+inline constexpr const char* kAvriellaPetLines[kAvriellaPetLineCount] = {
+    "Da da da da! (Avriella waves both chubby arms at you.)",
+    "Ba ba ba! Ba!",
+    "Dada! Dada! Dada! (She is very sure about this.)",
+    "Ooooh! (She points at something shiny and wiggles.)",
+    "*giggle giggle giggle* (Something is extremely funny. She cannot say what.)",
+    "Ah goo! (She hands you a tiny rock. It is a very important rock.)",
+    "Boo! (She hides behind her hands, then peeks out.) Peekaboo!",
+    "Baaaa... (She yawns a giant yawn and rubs one eye.)",
+    "Yaaay! (She claps for you.)",
+    "Pbbbbbt! (She blows a bubble and is proud of it.)",
+    "Hi! Hi! (She waves with her whole arm.)",
+    "Mamamama! Dadadada! Gaaah! (She has so much to tell you.)",
+};
+
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
 static_assert(kFortniteMapIndex < kMapCount, "the Fortnite Map is the sixth place");

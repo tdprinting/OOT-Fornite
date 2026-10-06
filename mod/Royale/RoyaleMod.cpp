@@ -11,6 +11,7 @@
 #include "build_version.h"
 #include "lilo_anim.h"
 #include "lilo_sounds.h"
+#include "avriella_anim.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -276,11 +277,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Fog", "Fog banks (low volumetric-style fog)" },
     { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
     { "IslandPuddles", "Fortnite Map standing puddles" },
+    { "Avriella", "Avriella the baby pet (the pet picker)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles };
-static_assert(kDbgIslandPuddles + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgAvriella };
+static_assert(kDbgAvriella + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -4319,7 +4321,8 @@ size_t NearestLootIndex() {
     Player* pl = GET_PLAYER(gPlayState);
     size_t best = kNoLoot;
     float bestD = 1e18f;
-    for (const auto& [idx, la] : gLoot) {
+    for (const auto& entry : gLoot) {
+        const LootActor& la = entry.second;
         if (idx >= loot.size() || loot[idx].taken || la.opened) continue;
         const float reach = la.chest ? kChestOpenRange : kLootPickupRange;
         const float dx = la.actor->world.pos.x - pl->actor.world.pos.x, dz = la.actor->world.pos.z - pl->actor.world.pos.z;
@@ -9699,6 +9702,8 @@ constexpr u16 kTextLilo = 0x7F00;       // Lilo sitting on the map
 constexpr u16 kTextLiloPet = 0x7F01;    // Lilo the pet: 0x7F01 onwards, one per line in royale::kLiloPetLines
 constexpr u16 kTextMaya = 0x7F10;
 constexpr u16 kTextSign = 0x7F20;
+constexpr u16 kTextAvriellaPet = 0x7F30;   // Avriella the baby pet: 0x7F30 onwards, one per line in royale::kAvriellaPetLines
+static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= 0x7FFF, "Avriella's lines run past the Royale text ids");
 static_assert(kTextLiloPet + royale::kLiloPetLineCount <= kTextMaya, "Lilo's pet lines run into Maya's text id");
 bool gRoyaleMessagesMade = false;
 
@@ -9709,6 +9714,8 @@ void RegisterRoyaleMessages() {
     cm->CreateMessage("RoyaleMod", kTextLilo, CustomMessage(royale::kLiloLine));
     for (int i = 0; i < royale::kLiloPetLineCount; i++)
         cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextLiloPet + i), CustomMessage(royale::kLiloPetLines[i]));
+    for (int i = 0; i < royale::kAvriellaPetLineCount; i++)
+        cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextAvriellaPet + i), CustomMessage(royale::kAvriellaPetLines[i]));
     cm->CreateMessage("RoyaleMod", kTextMaya, CustomMessage(royale::kMayaGreeting));
     cm->CreateMessage("RoyaleMod", kTextSign, CustomMessage(royale::kMapSignText, TEXTBOX_TYPE_WOODEN));
     gRoyaleMessagesMade = true;
@@ -10222,9 +10229,12 @@ void Cat_Draw(Actor* actor, PlayState* play) {
 }
 void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
 
+// Which pet follows you when the pet option is on: 0 Lilo the cat, 1 Avriella the baby (picked in the "Your pet" section of the menu).
+int PetKind() { return CVarGetInteger(CVAR_SETTING("Royale.PetKind"), 0) == 1 ? 1 : 0; }
+
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = MapOption("LiloPet", false) && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+    const bool want = MapOption("LiloPet", false) && PetKind() == 0 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
                       !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }
@@ -10245,6 +10255,395 @@ void ReconcileCatPet(const royale::HudState& hud) {
     gCat.pickups = gPickupLog.size();
     gCat.mood = CatMood::Follow;
     gCat.anim = royale::lilo::Animator{};
+}
+
+// ---- Avriella, the baby pet ----------------------------------------------------------------------------------------------------------
+// A second pet to pick instead of Lilo (the "Your pet" section of the Battle Royale menu): a baby girl in the N64 style, made in Blender
+// (tools/avriella/, assets/avriella/avriella.blend, about 1050 triangles, a 64x32 cloth and a 64x32 skin texture and five 32x32 face pictures, 23 bones,
+// twelve clips: idle, sit, crawl, wave, giggle, clap, roll, nap, stand, reach, babble and stack; shared/avriella_model.h). She is skinned on the CPU every
+// frame exactly like Lilo (DrawLiloModel) and, like Lilo, is only for looks: no collision, no targeting, nothing the server knows about, nobody else sees her.
+// She crawls after you, sits when you stop, and then does baby things: waves, claps, babbles, giggles, stacks three tiny rocks, rolls over, stands up
+// and wobbles, reaches for loot nearby, and falls asleep when you stand still for long. Stand still facing her and press A to talk: she sits and
+// babbles a line in the game's own text box. Her voice is Link's own child voice sounds played much higher (no recordings of a real baby).
+constexpr float kBabyScale = 0.62f;   // the model stands about 62 units tall at 1.0 (sitting about 40, crawling about 30 high); Link is about 60
+
+void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::avriella::Pose& pose, int face) {
+    namespace A = royale::avriella;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * A::kVertCount));
+    if (vtx == nullptr) return;
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for Lilo
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < A::kVertCount; i++) {
+        const A::Vert& v = A::kVerts[i];
+        float p[3], n[3];
+        A::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.55f + 0.55f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(245.0f * lit);
+        o.v.cn[3] = 255;
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours; she is seen from all sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // her texture times the vertex colour
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const int pic = std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1);
+    int loaded = -1;
+    for (int b = 0; b < A::kBatchCount; b++) {
+        const A::Batch& bt = A::kBatches[b];
+        const int tex = bt.texture == A::kFace ? 2 + pic : static_cast<int>(bt.texture);   // 0 cloth, 1 skin, 2 and up the faces
+        if (tex != loaded) {
+            const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : A::kFaceTex[tex - 2];
+            const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : A::kFaceH;
+            gDPLoadTextureBlock(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0, A::kTris[t + 1][0], A::kTris[t + 1][1], A::kTris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Her voice: Link's child voice sounds, pitched way up and strung together into babble. Each coo is a few sounds a moment apart.
+enum BabyCoo { kCooBaba, kCooDada, kCooGiggle, kCooOoh, kCooYawn, kCooHi, kCooBoth, kCooCount };
+struct PendingCoo { float at; u16 sfx; float pitch, volume; };
+std::vector<PendingCoo> gBabyCoos;
+
+void BabyCooNow(Actor* a, u16 sfx, float pitch, float volume) {
+    if (a == nullptr || volume < 0.01f) return;
+    f32 freq = pitch, vol = volume;
+    Audio_PlaySoundGeneral(sfx, &a->projectedPos, 4, &freq, &vol, &gSfxDefaultReverb);
+}
+
+void BabyCoo(int kind) {
+    auto add = [](float at, u16 sfx, float pitch, float volume = 0.8f) { if (gBabyCoos.size() < 24) gBabyCoos.push_back({ at, sfx, pitch, volume }); };
+    switch (kind) {
+        case kCooBaba: add(0.0f, NA_SE_VO_LI_SWORD_N, 2.0f); add(0.24f, NA_SE_VO_LI_SWORD_N, 2.2f); add(0.5f, NA_SE_VO_LI_SWORD_N, 1.9f); break;
+        case kCooDada: add(0.0f, NA_SE_VO_LI_AUTO_JUMP, 2.3f); add(0.26f, NA_SE_VO_LI_AUTO_JUMP, 2.1f); break;
+        case kCooGiggle:
+            for (int i = 0; i < 5; i++) add(0.14f * static_cast<float>(i), NA_SE_VO_LI_SWORD_N, 2.3f + 0.15f * static_cast<float>(i % 3), 0.6f);
+            break;
+        case kCooOoh: add(0.0f, NA_SE_VO_LI_SURPRISE, 1.8f); break;
+        case kCooYawn: add(0.0f, NA_SE_VO_LI_SWORD_L, 1.2f, 0.6f); break;
+        case kCooHi: add(0.0f, NA_SE_VO_LI_SURPRISE, 2.1f); add(0.22f, NA_SE_VO_LI_SWORD_N, 2.3f); break;
+        default: add(0.0f, NA_SE_VO_LI_SWORD_N, 2.0f); add(0.22f, NA_SE_VO_LI_AUTO_JUMP, 2.3f); add(0.46f, NA_SE_VO_LI_SWORD_N, 2.1f); add(0.7f, NA_SE_VO_LI_AUTO_JUMP, 2.2f); break;
+    }
+}
+
+enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Talk };
+struct BabyBrain {
+    Actor* actor = nullptr;
+    BabyMood mood = BabyMood::Sit;
+    float moodT = 0, idle = 0, sitT = 0, nextAt = 5.0f;
+    float x = 0, z = 0, y = 0, yaw = 0, speed = 0;
+    float reachX = 0, reachZ = 0, reachCool = 6.0f;   // where the thing she is reaching for is, and a pause before she reaches again
+    float cooIn = 20.0f, sparkleIn = 0.0f;
+    size_t pickups = 0;
+    bool placed = false;
+    bool sleepy = false;      // just woke: heavy eyes for a moment
+    int line = 0;             // what she says next (royale::kAvriellaPetLines)
+    int face = 0;
+    royale::avriella::Animator anim;
+};
+BabyBrain gBaby;
+
+void SetBabyMood(BabyBrain& c, BabyMood m) { c.mood = m; c.moodT = 0; }
+
+void BabySparkle(PlayState* play, float x, float y, float z) {
+    Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 26.0f, y + 8.0f + Rand_ZeroOne() * 14.0f, z + (Rand_ZeroOne() - 0.5f) * 26.0f };
+    Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 1.0f, 0.5f + Rand_ZeroOne() * 0.6f, (Rand_ZeroOne() - 0.5f) * 1.0f }, accel = { 0, 0, 0 };
+    Color_RGBA8 prim = { 255, 225, 235, 255 }, env = { 255, 150, 190, 255 };
+    EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 100, 24);
+}
+
+// The nearest loot (an item on the ground or a closed chest) within `range` of a spot, or nullptr.
+const Actor* NearestLootTo(float x, float z, float range) {
+    const Actor* best = nullptr;
+    float bestD = range;
+    for (const auto& entry : gLoot) {
+        const LootActor& la = entry.second;
+        if (la.actor == nullptr || la.killing || la.opened) continue;
+        const float d = std::hypot(la.actor->world.pos.x - x, la.actor->world.pos.z - z);
+        if (d < bestD) { bestD = d; best = la.actor; }
+    }
+    return best;
+}
+
+void Baby_Update(Actor* actor, PlayState* play) {
+    namespace A = royale::avriella;
+    BabyBrain& c = gBaby;
+    const float dt = 1.0f / royale::kTickHz;
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z, py = pl->actor.world.pos.y;
+    const float pyaw = pl->actor.shape.rot.y * (3.14159265f / 32768.0f);
+    const float pspeed = std::fabs(pl->linearVelocity);
+    const bool playerStill = pspeed < 0.6f;
+    // Her place beside you: behind and to the right (Lilo takes the left).
+    const float wantX = px + std::sin(pyaw + 3.14159265f - 0.7f) * 80.0f, wantZ = pz + std::cos(pyaw + 3.14159265f - 0.7f) * 80.0f;
+    float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
+    if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
+        if (c.placed) CatPoof(play, c.x, c.y, c.z);
+        c.x = wantX; c.z = wantZ; c.y = py; c.placed = true;
+        CatPoof(play, c.x, c.y, c.z);
+        dx = dz = 0; d = 0;
+        SetBabyMood(c, BabyMood::Sit);
+        c.sitT = 0;
+        c.nextAt = 3.0f;
+    }
+    c.moodT += dt;
+    if (playerStill) c.idle += dt; else c.idle = 0;
+    c.reachCool -= dt;
+
+    // The coos that are waiting their turn.
+    for (size_t i = 0; i < gBabyCoos.size();) {
+        gBabyCoos[i].at -= dt;
+        if (gBabyCoos[i].at <= 0.0f) {
+            BabyCooNow(actor, gBabyCoos[i].sfx, gBabyCoos[i].pitch, gBabyCoos[i].volume);
+            gBabyCoos.erase(gBabyCoos.begin() + static_cast<long>(i));
+        } else {
+            i++;
+        }
+    }
+
+    const bool talking = TalkingTo(actor);
+    if (talking && c.mood != BabyMood::Talk) {
+        SetBabyMood(c, BabyMood::Talk);
+        static const int kLineCoo[royale::kAvriellaPetLineCount] = { kCooBaba, kCooBaba, kCooDada, kCooOoh, kCooGiggle, kCooBoth,
+                                                                      kCooOoh, kCooYawn, kCooGiggle, kCooBaba, kCooHi, kCooBoth };
+        BabyCoo(kLineCoo[c.line % royale::kAvriellaPetLineCount]);
+    }
+    if (!talking && c.mood == BabyMood::Talk) {   // done talking: she sits a while and has something new to say next time
+        SetBabyMood(c, BabyMood::Sit);
+        c.sitT = 0; c.nextAt = 4.0f;
+        c.line = (c.line + 1) % royale::kAvriellaPetLineCount;
+    }
+    if (c.mood != BabyMood::Talk) {
+        const bool busy = c.mood == BabyMood::Roll || c.mood == BabyMood::Clap || c.mood == BabyMood::Giggle;
+        // You pick something up: she claps for you. You use an emote: she waves. You jump: she giggles.
+        if (gPickupLog.size() != c.pickups) {
+            if (gPickupLog.size() > c.pickups && !busy) { SetBabyMood(c, BabyMood::Clap); BabyCoo(kCooHi); }
+            c.pickups = gPickupLog.size();
+        }
+        if (gEmote.id >= 0 && c.mood != BabyMood::Wave && !busy) { SetBabyMood(c, BabyMood::Wave); BabyCoo(kCooHi); }
+        if ((c.mood == BabyMood::Crawl || c.mood == BabyMood::Sit) && !(pl->actor.bgCheckFlags & 1) && pl->actor.velocity.y > 4.0f && d < 400.0f) {
+            SetBabyMood(c, BabyMood::Giggle);
+            BabyCoo(kCooGiggle);
+        }
+        // A coo of her own now and then.
+        c.cooIn -= dt;
+        if (c.cooIn <= 0.0f) {
+            if (c.mood == BabyMood::Crawl || c.mood == BabyMood::Sit) BabyCoo(Rand_ZeroOne() < 0.5f ? kCooBaba : kCooDada);
+            c.cooIn = 22.0f + Rand_ZeroOne() * 28.0f;
+        }
+    }
+
+    const float tm = static_cast<float>(play->gameplayFrames) * dt;
+    bool moving = false;
+    float heading = c.yaw;
+    int clip = A::kSit, face = A::kFaceSmile;
+    float rate = 1.0f;
+    auto follow = [&](float minSpeed) {   // crawl to her place: slowly when it is near, quickly when you have gone on ahead
+        c.speed += (std::clamp((d - 45.0f) * 2.4f, minSpeed, 240.0f) - c.speed) * 0.2f;
+        heading = std::atan2(dx, dz);
+        c.x += std::sin(heading) * c.speed * dt;
+        c.z += std::cos(heading) * c.speed * dt;
+        moving = true;
+    };
+    auto faceYou = [&]() { heading = std::atan2(px - c.x, pz - c.z); };
+
+    switch (c.mood) {
+        case BabyMood::Crawl: {
+            if (d > 70.0f) {
+                follow(40.0f);
+                clip = A::kCrawl;
+                rate = std::clamp(c.speed / 85.0f, 0.5f, 2.4f);
+            } else {
+                c.speed *= 0.6f;
+                SetBabyMood(c, BabyMood::Sit);
+                c.sitT = 0; c.nextAt = 3.0f + Rand_ZeroOne() * 3.0f;
+            }
+            break;
+        }
+        case BabyMood::Sit: {
+            c.sitT += dt;
+            clip = std::fmod(c.sitT, 10.0f) < 5.0f ? A::kIdle : A::kSit;
+            if (c.sleepy && c.moodT < 1.6f) face = A::kFaceHalf; else c.sleepy = false;
+            if (!playerStill || d > 150.0f) { SetBabyMood(c, BabyMood::Crawl); break; }
+            if (c.sitT > 24.0f) {   // you have stood still a long time: she nods off
+                SetBabyMood(c, BabyMood::Nap);
+                break;
+            }
+            if (c.sitT > 17.0f) face = A::kFaceHalf;   // heavy eyes first
+            if (c.moodT > c.nextAt) {
+                c.nextAt = 4.5f + Rand_ZeroOne() * 4.0f;
+                const Actor* loot = c.reachCool <= 0.0f ? NearestLootTo(c.x, c.z, 320.0f) : nullptr;
+                if (loot != nullptr) {
+                    c.reachX = loot->world.pos.x; c.reachZ = loot->world.pos.z; c.reachCool = 14.0f;
+                    SetBabyMood(c, BabyMood::Reach);
+                    BabyCoo(kCooOoh);
+                } else {
+                    const float r = Rand_ZeroOne();
+                    if (r < 0.17f) { SetBabyMood(c, BabyMood::Wave); BabyCoo(kCooHi); }
+                    else if (r < 0.32f) { SetBabyMood(c, BabyMood::Clap); BabyCoo(kCooBaba); }
+                    else if (r < 0.47f) { SetBabyMood(c, BabyMood::Babble); BabyCoo(kCooBoth); }
+                    else if (r < 0.59f) { SetBabyMood(c, BabyMood::Giggle); BabyCoo(kCooGiggle); }
+                    else if (r < 0.77f) { SetBabyMood(c, BabyMood::Stack); }
+                    else if (r < 0.90f) { SetBabyMood(c, BabyMood::Stand); BabyCoo(kCooOoh); }
+                    else { SetBabyMood(c, BabyMood::Roll); BabyCoo(kCooGiggle); }
+                }
+            }
+            break;
+        }
+        case BabyMood::Wave: {
+            clip = A::kWave;
+            face = std::fmod(c.moodT, 0.8f) < 0.4f ? A::kFaceSmile : A::kFaceGiggle;
+            if (c.moodT > 3.2f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Giggle: {
+            clip = A::kGiggle;
+            face = A::kFaceGiggle;
+            if (c.moodT > 2.4f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Clap: {
+            clip = A::kClap;
+            face = A::kFaceGiggle;
+            if (c.moodT > 3.0f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Babble: {
+            clip = A::kBabble;
+            face = std::fmod(c.moodT, 0.4f) < 0.2f ? A::kFaceOh : A::kFaceSmile;   // her mouth goes with the babble
+            if (c.moodT > 2.4f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Roll: {   // tips over, rolls right round and sits up again
+            clip = A::kRoll;
+            face = A::kFaceGiggle;
+            if (c.moodT > A::ClipSeconds(A::kRoll) + 0.2f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Nap: {   // asleep on her back with little 'z's
+            clip = A::kNap;
+            face = A::kFaceShut;
+            if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
+                Vec3f pos = { c.x, c.y + 38.0f, c.z }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
+                Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
+                EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
+            }
+            if (!playerStill || d > 150.0f) {   // you move: she wakes with a yawn and crawls after you
+                SetBabyMood(c, BabyMood::Crawl);
+                c.sleepy = true;
+                BabyCoo(kCooYawn);
+            }
+            break;
+        }
+        case BabyMood::Stand: {   // pulls herself up and wobbles on her two feet, then plops down
+            clip = A::kStand;
+            face = A::kFaceOh;
+            if (static_cast<int>(c.moodT * 10.0f) % 12 == 0 && play->gameplayFrames % 3 == 0) BabySparkle(play, c.x, c.y + 20.0f, c.z);
+            if (c.moodT > 4.8f) { SetBabyMood(c, BabyMood::Sit); BabyCoo(kCooGiggle); }
+            break;
+        }
+        case BabyMood::Reach: {   // reaches both ways for loot she can see
+            clip = A::kReach;
+            face = A::kFaceOh;
+            heading = std::atan2(c.reachX - c.x, c.reachZ - c.z);
+            if (c.moodT > 2.4f) SetBabyMood(c, BabyMood::Sit);
+            break;
+        }
+        case BabyMood::Stack: {   // three tiny rocks, one on top of the other, and then they fall over
+            clip = A::kRocks;
+            face = c.moodT < 0.8f ? A::kFaceHalf : A::kFaceSmile;
+            if (c.moodT > 6.8f) { SetBabyMood(c, BabyMood::Sit); BabyCoo(kCooGiggle); }
+            if (std::fmod(c.moodT, 3.4f) > 2.7f && std::fmod(c.moodT, 3.4f) < 2.75f) BabyCoo(kCooOoh);   // the tower falls
+            if (!playerStill || d > 150.0f) SetBabyMood(c, BabyMood::Crawl);
+            break;
+        }
+        case BabyMood::Talk: {   // sitting, facing you, babbling
+            clip = A::kBabble;
+            face = std::fmod(c.moodT, 0.5f) < 0.25f ? A::kFaceOh : A::kFaceSmile;
+            c.speed = 0;
+            break;
+        }
+    }
+    // Sparkles while she is delighted.
+    if (c.mood == BabyMood::Giggle || c.mood == BabyMood::Clap) {
+        c.sparkleIn -= dt;
+        if (c.sparkleIn <= 0.0f) { BabySparkle(play, c.x, c.y + 24.0f, c.z); c.sparkleIn = 0.3f; }
+    }
+    // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
+    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && pspeed < 3.0f &&
+        OfferTalk(actor, play, static_cast<u16>(kTextAvriellaPet + c.line), 110.0f))
+        SetBabyMood(c, BabyMood::Talk);
+    // turn to face the way she goes (or, when still, towards you if you are close)
+    if (!moving && c.mood != BabyMood::Reach && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && d < 400.0f) faceYou();
+    {
+        float diff = heading - c.yaw;
+        while (diff > 3.14159265f) diff -= 6.2831853f;
+        while (diff < -3.14159265f) diff += 6.2831853f;
+        c.yaw += diff * (moving ? 0.25f : 0.1f);
+    }
+    c.anim.Play(clip, 0.25f);
+    c.anim.Update(dt, rate);
+    // eyes: a quick blink every few seconds while they are open
+    c.face = (face == A::kFaceSmile && std::fmod(tm, 3.9f) < 0.13f) ? static_cast<int>(A::kFaceShut) : face;
+
+    c.y = GroundY(play, c.x, c.z, c.y);   // her clips carry their own bounce
+    actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y;
+    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
+    actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 24.0f;
+}
+
+void Baby_Draw(Actor* actor, PlayState* play) {
+    royale::avriella::Pose pose;
+    gBaby.anim.Evaluate(pose);
+    DrawAvriellaModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gBaby.yaw, kBabyScale, pose, gBaby.face);
+}
+void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.actor = nullptr; gBaby.placed = false; } }
+
+void ReconcileBabyPet(const royale::HudState& hud) {
+    const bool inMatch = IsLive(hud);
+    const bool want = MapOption("LiloPet", false) && PetKind() == 1 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr &&
+                      !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
+    if (!want) {
+        if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); }
+        return;
+    }
+    if (gBaby.actor != nullptr) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
+    if (a == nullptr) return;
+    a->update = Baby_Update;
+    a->draw = Baby_Draw;
+    a->destroy = Baby_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
+    a->shape.shadowScale = 20.0f;
+    gBaby.actor = a;
+    gBaby.placed = false;
+    gBaby.pickups = gPickupLog.size();
+    gBaby.mood = BabyMood::Sit;
+    gBaby.anim = royale::avriella::Animator{};
+    gBaby.anim.Play(royale::avriella::kSit, 0.0f);
 }
 
 // ---- Lilo ---------------------------------------------------------------------------------------------------------------------------
@@ -11192,6 +11591,7 @@ void OnGameFrameUpdate() {
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
     Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) UpdateLiloFx();
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
     Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
@@ -11479,6 +11879,30 @@ const char* CleanName(const char* name) {
 
 // What the minimap shows. Players and bots are only the ones near you (the server sends the closest dozen), plus everyone while a Lens of
 // Truth or Saria's Song is active.
+// The pet: Lilo the cat or Avriella the baby follows you around. Only for looks: it changes nothing in the match, and only you see it.
+void DrawPetOptions() {
+    if (!ImGui::CollapsingHeader("Your pet: Lilo or Avriella")) return;
+    bool on = MapOption("LiloPet", false);
+    if (ImGui::Checkbox("A pet follows me around (only for looks: it changes nothing in the match, and only you see it)", &on)) {
+        CVarSetInteger(CVAR_SETTING("Royale.LiloPet"), on ? 1 : 0);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    int kind = PetKind();
+    bool changed = ImGui::RadioButton("Lilo the cat", &kind, 0);
+    ImGui::SameLine();
+    changed |= ImGui::RadioButton("Avriella the baby", &kind, 1);
+    if (changed) {
+        CVarSetInteger(CVAR_SETTING("Royale.PetKind"), kind);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    if (kind == 1)
+        ImGui::TextWrapped("Avriella crawls after you, sits when you stop, and waves, claps, babbles, giggles, stacks tiny rocks, rolls over, stands up and wobbles, "
+                           "reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
+    else
+        ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
+    if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");
+}
+
 void DrawMinimapOptions() {
     struct Opt { const char* key; const char* label; bool fallback; };
     static const Opt opts[] = {
@@ -11490,7 +11914,6 @@ void DrawMinimapOptions() {
         { "LobbyMusic", "Play songs from the music folder in the lobby", true },
         { "OotConvert", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
         { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
-        { "LiloPet", "Lilo follows me around as a pet (only for looks: she changes nothing in the match, and only you see her)", false },
     };
     if (!ImGui::CollapsingHeader("Minimap and game options")) return;
     for (const Opt& o : opts) {
@@ -11627,6 +12050,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
 
     if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
     if (ui.showCustomize) DrawCustomize(ui);
+    DrawPetOptions();
     DrawMinimapOptions();
     DrawItemGuide();
     ImGui::Spacing();

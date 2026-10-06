@@ -15,9 +15,11 @@
 #include <string>
 #include "../../shared/anim.h"
 #include "../../shared/lilo_anim.h"
+#include "../../shared/avriella_anim.h"
 #include "../../shared/lilo_sounds.h"
 #include "../../shared/loot.h"
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 
 using namespace royale;
@@ -3431,6 +3433,134 @@ static void LiloTheCatModel() {
     CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
 }
 
+// Avriella's Blender model (shared/avriella_model.h): a low poly budget, batches the graphics chip can load, textures that fit its memory, and clips that
+// pose her as a baby: sitting, crawling low, lying down to nap, standing up to wobble, and three rocks that only show while she stacks them.
+static void AvriellaTheBabyModel() {
+    using namespace royale::avriella;
+    CHECK(kTriCount >= 600 && kTriCount <= 1300 && kVertCount >= 300);
+    int tris = 0, verts = 0;
+    int batchesWithTexture[3] = { 0, 0, 0 };
+    for (int b = 0; b < kBatchCount; b++) {
+        const Batch& bt = kBatches[b];
+        CHECK(bt.vertCount > 0 && bt.vertCount <= 32 && bt.firstVert == verts && bt.firstTri == tris);
+        for (int t = bt.firstTri; t < bt.firstTri + bt.triCount; t++)
+            for (int k = 0; k < 3; k++) CHECK(kTris[t][k] < bt.vertCount);
+        tris += bt.triCount;
+        verts += bt.vertCount;
+        CHECK(bt.texture <= kFace);
+        batchesWithTexture[bt.texture]++;
+    }
+    CHECK(tris == kTriCount && verts == kVertCount);
+    CHECK(batchesWithTexture[kCloth] > 0 && batchesWithTexture[kSkin] > 0 && batchesWithTexture[kFace] > 0);
+    for (int i = 0; i < kVertCount; i++) {
+        const Vert& v = kVerts[i];
+        CHECK(v.b0 < kBoneCount && v.b1 < kBoneCount && v.s / 32 >= -1 && v.t / 32 >= -1 && v.s / 32 <= 65 && v.t / 32 <= 33);
+        CHECK(std::abs(std::sqrt(static_cast<float>(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz)) - 127.0f) < 4.0f);
+    }
+    // each texture fits the N64's 4 KB of texture memory, and is opaque
+    CHECK(sizeof(kClothTex) == kClothW * kClothH * 2 && kClothW * kClothH * 2 <= 4096 && sizeof(kSkinTex) == kSkinW * kSkinH * 2 && kSkinW * kSkinH * 2 <= 4096);
+    CHECK(sizeof(kFaceTex[0]) == kFaceW * kFaceH * 2 && kFaceCount == 5);
+    for (int i = 0; i < kClothW * kClothH; i++) CHECK(kClothTex[i * 2 + 1] & 1);
+    for (int i = 0; i < kSkinW * kSkinH; i++) CHECK(kSkinTex[i * 2 + 1] & 1);
+    CHECK(std::string(kClips[kIdle].name) == "idle" && std::string(kClips[kCrawl].name) == "crawl" && std::string(kClips[kNap].name) == "nap" &&
+          std::string(kClips[kRocks].name) == "rocks" && kClipCount == 12);
+    for (int f = 0; f < kFrameCount * kBoneCount; f++) {
+        const int16_t* q = &kPoses[f * 7];
+        const float len = std::sqrt(static_cast<float>(q[0]) * q[0] + static_cast<float>(q[1]) * q[1] + static_cast<float>(q[2]) * q[2] + static_cast<float>(q[3]) * q[3]) / 32767.0f;
+        CHECK(std::fabs(len - 1.0f) < 0.002f);
+    }
+    // Which vertices are the rocks: those on the last three bones (rock.1 to rock.3). They sit under the ground (the terrain hides them) except while she stacks.
+    Pose p;
+    float mn[3], mx[3];
+    auto bodyBounds = [&](const Pose& pose, float lo[3], float hi[3]) {   // her without the rocks
+        for (int k = 0; k < 3; k++) { lo[k] = 1e30f; hi[k] = -1e30f; }
+        for (int i = 0; i < kVertCount; i++) {
+            if (kVerts[i].b0 >= kBoneCount - 3 || kVerts[i].b1 >= kBoneCount - 3) continue;
+            float pos[3], nrm[3];
+            SkinVertex(pose, kVerts[i], pos, nrm);
+            for (int k = 0; k < 3; k++) { lo[k] = std::min(lo[k], pos[k]); hi[k] = std::max(hi[k], pos[k]); }
+        }
+    };
+    float lowestRock = 1e30f;
+    auto rockLow = [&](const Pose& pose) {
+        float low = 1e30f;
+        for (int i = 0; i < kVertCount; i++) {
+            if (kVerts[i].b0 < kBoneCount - 3) continue;
+            float pos[3], nrm[3];
+            SkinVertex(pose, kVerts[i], pos, nrm);
+            low = std::min(low, pos[1]);
+            lowestRock = std::min(lowestRock, pos[1]);
+        }
+        return low;
+    };
+    CHECK(kVertCount > 0 && std::string(kBoneNames[kBoneCount - 3]) == "rock.1");
+    SampleClip(kStand, 0.0f, p);
+    bodyBounds(p, mn, mx);
+    CHECK(std::fabs(mn[1]) < 2.0f && mx[1] > 55.0f && mx[1] < 70.0f && mx[0] - mn[0] < 60.0f);   // standing: about 62 units tall, feet on the ground, arms out
+    SampleClip(kSit, 0.0f, p);
+    bodyBounds(p, mn, mx);
+    CHECK(mn[1] > -2.0f && mx[1] > 45.0f && mx[1] < 60.0f);                                       // sitting: about 52 tall with her tuft, not sunk into the ground
+    SampleClip(kCrawl, 0.2f, p);
+    bodyBounds(p, mn, mx);
+    CHECK(mn[1] > -2.5f && mx[1] < 55.0f && mx[2] - mn[2] > 35.0f);                               // crawling: low and long, nose towards +z
+    SampleClip(kNap, 0.0f, p);
+    bodyBounds(p, mn, mx);
+    CHECK(mn[1] > -6.0f && mx[1] < 26.0f && mx[2] - mn[2] > 45.0f);                               // asleep on her back: flat
+    for (int c = 0; c < kClipCount; c++) {
+        for (float t = 0.0f; t <= ClipSeconds(c); t += 0.05f) {
+            SampleClip(c, t, p);
+            bodyBounds(p, mn, mx);
+            CHECK(mn[1] > -8.0f && mx[1] < 80.0f && std::isfinite(mn[0]) && std::isfinite(mx[2]));   // nothing sinks far into the ground or flies off in any clip
+            if (c != kRocks) CHECK(rockLow(p) < -50.0f);                                          // the rocks stay hidden under the ground
+        }
+    }
+    // while she stacks, the rocks come up out of hiding and the tower grows: the top rock ends up higher than the bottom one
+    int shown = 0;
+    float topSeen = -1e30f;
+    for (float t = 0.0f; t <= ClipSeconds(kRocks); t += 0.05f) {
+        SampleClip(kRocks, t, p);
+        if (rockLow(p) > -2.0f) shown++;
+        for (int i = 0; i < kVertCount; i++) {
+            if (kVerts[i].b0 < kBoneCount - 3) continue;
+            float pos[3], nrm[3];
+            SkinVertex(p, kVerts[i], pos, nrm);
+            topSeen = std::max(topSeen, pos[1]);
+        }
+    }
+    CHECK(shown > 20 && topSeen > 9.0f && topSeen < 25.0f && lowestRock < -50.0f);
+    // she waves with a hand above her head, and the clap brings the hands together
+    SampleClip(kWave, 0.5f, p);
+    float handY = -1e30f, headY = 0;
+    for (int i = 0; i < kVertCount; i++) {
+        float pos[3], nrm[3];
+        SkinVertex(p, kVerts[i], pos, nrm);
+        if (kVerts[i].b0 == 12 || kVerts[i].b0 == 13) handY = std::max(handY, pos[1]);   // the right forearm and hand
+        headY = std::max(headY, pos[1]);
+    }
+    CHECK(handY > 24.0f && headY > handY - 40.0f);
+    SampleClip(kRoll, 1.0f, p);
+    bodyBounds(p, mn, mx);
+    CHECK(mx[1] < 30.0f);   // rolling on the floor
+    // loops wrap round, the animator cross-fades, and her one-shot (the roll) ends
+    Pose a, b;
+    SampleClip(kCrawl, ClipSeconds(kCrawl) + 0.1f, a);
+    SampleClip(kCrawl, 0.1f, b);
+    CHECK(std::fabs(a.bone[8].q[0] - b.bone[8].q[0]) < 1e-4f);
+    Animator an;
+    an.Play(kRoll);
+    CHECK(an.clip == kRoll && an.from == kIdle && !an.Done());
+    for (int i = 0; i < 60; i++) an.Update(0.05f);
+    CHECK(an.Done() && an.from < 0);
+    an.Play(kCrawl, 0.0f);
+    an.Update(1e9f, 1.0f);
+    an.Update(-1.0f, std::nanf(""));
+    an.Evaluate(p);
+    CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
+    // her lines: a dozen, each fits a text box, and none is empty
+    CHECK(kAvriellaPetLineCount == 12 && std::string(kAvriellaName) == "Avriella");
+    for (int i = 0; i < kAvriellaPetLineCount; i++) CHECK(std::strlen(kAvriellaPetLines[i]) > 3 && std::strlen(kAvriellaPetLines[i]) < 120);
+}
+
 // ---- Bots get about like players: the skydive, sprinting, ledges, cliffs, cover and high ground --------------------------------
 
 // A cliff: x < 0 is low ground, x >= 0 is 300 higher, except a gentle ramp across z > 900 that climbs from one to the other.
@@ -3905,7 +4035,7 @@ static void BotsUseCoverAndHighGround() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
