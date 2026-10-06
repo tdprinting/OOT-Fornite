@@ -3,6 +3,7 @@
 #include "../shared/protocol.h"
 #include "../shared/transport.h"
 #include "sim.h"
+#include "../shared/sandbox_layout.h"
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -50,6 +51,9 @@ class GameServer {
     int PlayerLimit() const { return playerLimit; }
     // Test mode (see Match::SetSoloTest): no bots, and the match goes on with one player. Survives Reconfigure.
     void SetSoloTest(bool on) { soloTest = on; sim.match.SetSoloTest(on); }
+    // The Sandbox test map (shared/sandbox_layout.h): used when the map chosen is the Sandbox. Survives Reconfigure.
+    void SetSandbox(bool on) { sandbox = on; sim.match.SetSandbox(on && ClampMap(mapId) == kSandboxMapIndex); }
+    bool Sandbox() const { return sandbox && ClampMap(mapId) == kSandboxMapIndex; }
     bool SoloTest() const { return soloTest; }
     // The lobby starts the match by itself after this many seconds (0 turns it off). The clock starts when the first player is here.
     void SetAutoStart(float seconds) { autoStartSec = seconds; if (seconds <= 0) lobbyElapsed = 0; }
@@ -88,8 +92,10 @@ class GameServer {
         sim.match.SetPlacementValidator(valid);
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
         sim.match.SetMapId(mapId);
-        PoiLayout layout = GeneratePois(seed, map, poiCount, valid, mapId);
+        const bool sandboxMap = ClampMap(mapId) == kSandboxMapIndex;   // the test map is laid out by hand (shared/sandbox_layout.h)
+        PoiLayout layout = sandboxMap ? GenerateSandboxLayout(seed) : GeneratePois(seed, map, poiCount, valid, mapId);
         pois = layout.pois;
+        if (!sandboxMap) {
         const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
         const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
         // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
@@ -101,6 +107,9 @@ class GameServer {
                       2 + static_cast<int>(map.radius / 650.0f), 2 + static_cast<int>(map.radius / 1100.0f));
         props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
         if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
+        } else {
+            props = layout.props;
+        }
         broken.assign(props.size(), false);
         sim.bots.SetProps(props);
         sim.match.SetLootSpots(layout.lootSpots);
@@ -109,12 +118,14 @@ class GameServer {
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
         // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
-        const int bosses = bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        const int bosses = sandboxMap ? 0 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
-        sim.match.SetMajorBoss(majorBoss);
+        sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
         sim.match.SetSoloTest(soloTest);
+        sim.match.SetSandbox(sandboxMap && sandbox);
+        if (sandboxMap) { sim.match.SetSandboxSpawn(SandboxSpawn()); sim.match.SetSandboxLootRoom(SandboxLootRoom()); }
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid, height);
             AddSceneryToNav(*grid, props);
@@ -131,9 +142,16 @@ class GameServer {
             world.solid = [map](float x, float z) { return Distance({x, z}, map.center) > map.radius - 40.0f; };
             sim.match.SetVehicleWorld(world);
         }
-        sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
-        sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
-        sim.match.RegenerateLoot(lootCount);
+        if (sandboxMap) {   // four carts to start with (the host's panel adds more), and the loot plaza instead of scattered chests
+            sim.match.SetVehicleCount(vehicleCount < 0 ? 4 : vehicleCount);
+            sim.match.SetVehicleSpots(SandboxCartSpots());
+            sim.match.SetSupplyDrops(true);
+            sim.match.SandboxStockLoot();
+        } else {
+            sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
+            sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
+            sim.match.RegenerateLoot(lootCount);
+        }
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
 
@@ -198,6 +216,7 @@ class GameServer {
     // measures the real scene when the match starts and rebuilds it once more.
     bool SelectMap(int id) {
         if (sim.match.State() != MatchState::Lobby || id < 0 || id >= kMapCount) return false;
+        if (id == kSandboxMapIndex && !sandbox) return false;   // the test map is only for a sandbox game (its own menu button)
         mapId = id;
         mapCircle = MapOf(id).fallback;
         return Reconfigure(mapCircle, nullptr, lastLootCount, FreshSeedOffset());
@@ -888,6 +907,7 @@ class GameServer {
     std::vector<std::pair<float, const VehicleState*>> vehicleNear;
     int playerLimit = kMaxPlayers;
     bool soloTest = false;
+    bool sandbox = false;
     float autoStartSec = 0;
     float lobbyElapsed = 0;
     PlacementFn lastValid;

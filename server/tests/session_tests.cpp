@@ -204,9 +204,30 @@ static void LocalAddressesLookSane() {
     std::printf("  local addresses found: %zu\n", addrs.size());
 }
 
+static void SandboxSessionGivesTheHostItsPanel() {
+    RoyaleSession host;
+    std::string err;
+    CHECK(!host.Sandbox() && host.SandboxMatch() == nullptr && host.SandboxBots() == nullptr);   // nothing before hosting
+    CHECK(host.Host(0, "Link", &err, true, true));
+    CHECK(host.Sandbox() && host.SoloTest() && host.SandboxMatch() != nullptr && host.SandboxBots() != nullptr);
+    CHECK(PumpUntil({&host}, [&] { return host.Joined() && host.Hud().mapId == kSandboxMapIndex; }));
+    CHECK(host.StartMatch());
+    CHECK(PumpUntil({&host}, [&] { return host.Hud().state == MatchState::InMatch; }, 5));   // no countdown, no drop
+    Match* m = host.SandboxMatch();
+    CHECK(m->SandboxBot({0, 0}) && m->SandboxBoss(BossKind::Stone, {300, 0}));
+    CHECK(PumpUntil({&host}, [&] { return !host.Puppets().empty(); }, 5));
+    host.Leave();
+    CHECK(!host.Sandbox() && host.SandboxMatch() == nullptr);
+    // An ordinary solo test is not a sandbox, and the Sandbox map can't be picked for a lobby.
+    RoyaleSession plain;
+    CHECK(plain.Host(0, "Link", &err, true) && !plain.Sandbox() && plain.SandboxMatch() == nullptr);
+    plain.SelectMap(kSandboxMapIndex);
+    CHECK(plain.Hud().mapId != kSandboxMapIndex);
+}
+
 int main() {
     IdleSessionIsHarmless(); HostCanStartAndBotsAppear(); BadAddressesAndPorts(); LateJoinerSeesWhy();
-    HostLeavingEndsGuestSession(); CanHostAgainAfterLeaving(); LobbyRosterHostAndReady(); CountdownAndWinnerReachTheHud(); LocalAddressesLookSane();
+    HostLeavingEndsGuestSession(); CanHostAgainAfterLeaving(); LobbyRosterHostAndReady(); CountdownAndWinnerReachTheHud(); LocalAddressesLookSane(); SandboxSessionGivesTheHostItsPanel();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all session tests passed\n");
     return 0;

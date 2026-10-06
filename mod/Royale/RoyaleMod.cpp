@@ -144,6 +144,7 @@ bool InGame() {
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
+bool gFortniteSandbox = false;   // ...and its ground is the Sandbox test map's (shared/sandbox_terrain.h) rather than the island's
 bool gFortniteScene = false;   // the scene now loaded is Hyrule Field with the Fortnite map's collision (see "the Fortnite map" below)
 // State the cloth and weather code shares (the weather is drawn much further down; the glider and the cap need the wind early).
 royale::MatchState gStateNow = royale::MatchState::Lobby;   // the match state as of this frame (the glider only shows during the skydive)
@@ -227,7 +228,7 @@ const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 // (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
 bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
-           (!gSession.Joined() || (gMapId == royale::fortnite::kMapId) == gFortniteScene);
+           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || (gMapId == royale::kSandboxMapIndex) == gFortniteSandbox)));
 }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
@@ -520,6 +521,13 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
+    if (gMapId == royale::kSandboxMapIndex) {   // the test map is a fixed arena: no measuring
+        *out = royale::MapOf(gMapId).fallback;
+        gMedianFloorY = 0.0f;
+        gMapMeasured = true;
+        gMeasuredRadius = out->radius;
+        return true;
+    }
     std::vector<royale::Vec2> points;
     std::vector<float> heights;
     // The window is the scene's own collision bounds (the old fixed +-9000 box cut Hyrule Field, which runs from x -11000 to 6700 and z -1800 to 16500,
@@ -3915,6 +3923,7 @@ std::string ClockText(float seconds) {
 
 // Drawn straight onto the screen every frame, whether or not the menu is open: alive count, storm timer, a pointer to the
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
+bool gSandboxGlide = false;   // the Sandbox's "glide from here" button: the skydive behaves as in the drop (glide, hold Z to dive) outside the drop
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
 bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see OnEmoteWheelInput), so it can't lock on and flatten the camera
 
@@ -4129,15 +4138,15 @@ ImTextureID UploadRgba(const uint8_t* rgba, int w, int h, int* idInOut) {
 ImTextureID FortniteMinimapTexture() {
     static int texId = -1;
     static ImTextureID tex = nullptr;
-    static bool tried = false;
-    if (!tried) {
-        tried = true;
+    static int triedFor = -1;   // which ground the picture was made from (the island's or the Sandbox's)
+    if (triedFor != (royale::fortnite::gSandboxTerrain ? 1 : 0)) {
+        triedFor = royale::fortnite::gSandboxTerrain ? 1 : 0;
         constexpr int n = royale::fortnite::kFine + 1;
         std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; i++) {
-            rgba[i * 4 + 0] = royale::fortnite::kColours[i * 3 + 0];
-            rgba[i * 4 + 1] = royale::fortnite::kColours[i * 3 + 1];
-            rgba[i * 4 + 2] = royale::fortnite::kColours[i * 3 + 2];
+            rgba[i * 4 + 0] = royale::fortnite::gColourData[i * 3 + 0];
+            rgba[i * 4 + 1] = royale::fortnite::gColourData[i * 3 + 1];
+            rgba[i * 4 + 2] = royale::fortnite::gColourData[i * 3 + 2];
             rgba[i * 4 + 3] = 255;
         }
         tex = UploadRgba(rgba.data(), n, n, &texId);
@@ -5463,7 +5472,7 @@ void DrawOverlay() {
             if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
         }
     }
-    if (live && h.state == royale::MatchState::Drop && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
+    if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
     if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
 
     if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
@@ -8018,7 +8027,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         gFortniteActor = nullptr;
     }
     if (!gSession.Joined()) return;
-    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && gFortniteScene != (gMapId == royale::fortnite::kMapId)) {
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && gFortniteSandbox != (gMapId == royale::kSandboxMapIndex)))) {
         GoToField();   // the host changed the map: load the scene again with the right ground
         return;
     }
@@ -8029,7 +8038,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
     if (hud.state != royale::MatchState::Lobby || gSkydiving) return;
     namespace fn = royale::fortnite;
     const float a = static_cast<float>(std::rand() % 628) / 100.0f, r = static_cast<float>(std::rand() % 220);
-    const float x = fn::kSpawnX + std::sin(a) * r, z = fn::kSpawnZ + std::cos(a) * r;
+    const float x = fn::gSpawnX + std::sin(a) * r, z = fn::gSpawnZ + std::cos(a) * r;
     float y = 0;
     if (!fn::GroundHeight(x, z, &y)) return;
     player->actor.world.pos = { x, y + 12.0f, z };
@@ -8352,7 +8361,8 @@ void SteerToSafeLanding(Player* player, const royale::HudState& hud, float dt) {
 void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
-    if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; return; }
+    if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
     const Input& in = gPlayState->state.input[0];
 
@@ -8369,10 +8379,10 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     }
 
     gGliderRoll += ((mag > 0.1f ? -sx / 80.0f * 0.5f : 0.0f) - gGliderRoll) * 0.12f;                  // bank into the turn
-    gGliderDiving = hud.state == royale::MatchState::Drop && gDiveHeld;
+    gGliderDiving = dropLike && gDiveHeld;
 
     float fall = 0.0f;                                                          // hold in the sky during the countdown
-    if (hud.state == royale::MatchState::Drop) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
+    if (dropLike) fall = gDiveHeld ? kDiveSpeed : kGlideSpeed;
     else if (hud.state == royale::MatchState::InMatch) fall = royale::kLateFallSpeed;           // the drop is over: land now
     SteerToSafeLanding(player, hud, dt);
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
@@ -8380,6 +8390,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (ground > -1.0e5f && y <= ground + 8.0f) {
         y = ground + 8.0f;
         gSkydiving = false;                                                       // touched down; normal gravity takes over
+        gSandboxGlide = false;
     }
     player->actor.world.pos.y = y;
     player->actor.prevPos = player->actor.world.pos;
@@ -9133,13 +9144,26 @@ void DriveLobbyTimer(const royale::HudState& hud) {
 // has got, so the last circles are fought at dusk and in the dark. The player's own time of day is put back afterwards.
 bool gTimeTaken = false;
 u16 gSavedDayTime = 0;
+// What the Sandbox panel shows (the panel's own switches; the server's copies are set by the commands below). Reset whenever there is no sandbox.
+struct SandboxUi {
+    bool god = true, stormRuns = false, weatherFree = false, botsStill = false;
+    int season = 1, sky = 0, intensity = 60;   // the weather to set
+    int item = 0, rarity = 4;                  // the item to give
+    float day = 0.3f;                          // the time of day, 0 (morning) to 1 (night)
+    bool dayRuns = false;
+};
+SandboxUi gSbx;
 void DriveTimeOfDay(const royale::HudState& hud) {
     const bool on = gSession.Joined() && InField() && (hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch) && gSession.Client();
     if (on) {
         if (!gTimeTaken) { gSavedDayTime = gSaveContext.dayTime; gTimeTaken = true; }
         float total = 0;
         for (const auto& ph : royale::kStormPhases) total += ph.waitSec + ph.closeSec;
-        const float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
+        float p = std::clamp(gSession.Client()->StormTime() / std::max(1.0f, total), 0.0f, 1.0f);
+        if (gSession.Sandbox()) {   // the test map: the slider decides the hour (and it can run by itself)
+            if (gSbx.dayRuns) gSbx.day = std::fmod(gSbx.day + 1.0f / (60.0f * 150.0f), 1.0f);
+            p = gSbx.day;
+        }
         int t = 0x5000 + static_cast<int>(p * 0x9000); // about 7:30 in the morning to about 9 at night
         const float dark = std::max(gStormWeather * 0.85f, royale::SkyDarkness(gWeatherShown) * gWeatherBlend);   // the storm zone and heavy weather both darken the sky
         if (t < 0xD400) t += static_cast<int>((0xD400 - t) * dark);
@@ -9149,6 +9173,69 @@ void DriveTimeOfDay(const royale::HudState& hud) {
         gSaveContext.dayTime = gSavedDayTime;
         gSaveContext.skyboxTime = gSavedDayTime;
         gTimeTaken = false;
+    }
+}
+
+
+// ---- the Sandbox test map ---------------------------------------------------------------------------------------------------------------
+// "Sandbox test map" in the Battle Royale menu: a flat test arena (shared/sandbox_terrain.h) with a match that has no countdown, no end and a frozen
+// storm. The host's panel (DrawSandboxPanel, under "MATCH IN PROGRESS") has a button for every feature: teleports to the places, carts, bots, bosses,
+// any item, the storm, the weather, the time of day and the glider. The server's side is in Match (SandboxBot, SandboxBoss, ...), and everything
+// the panel does goes through one queue, run on the game's thread (the menu draws on another).
+struct SandboxCmd {
+    enum Kind { Go, Cart, ClearCarts, Bot, ClearBots, FreezeBots, Boss, ClearBosses, Give, Heal, Revive, God, StormRuns, StormPhase, Supply, Weather, WeatherFree, Restock, Glide } kind = Go;
+    int a = 0, b = 0, c = 0;
+};
+std::mutex gSandboxLock;
+std::vector<SandboxCmd> gSandboxCmds;
+void SandboxDo(SandboxCmd::Kind kind, int a = 0, int b = 0, int c = 0) {
+    std::lock_guard<std::mutex> lock(gSandboxLock);
+    gSandboxCmds.push_back({kind, a, b, c});
+}
+
+void RunSandboxCommands(const royale::HudState& hud) {
+    Feat("sandbox commands");
+    royale::Match* m = gSession.SandboxMatch();
+    std::vector<SandboxCmd> cmds;
+    { std::lock_guard<std::mutex> lock(gSandboxLock); cmds.swap(gSandboxCmds); }
+    if (m == nullptr) { gSbx = SandboxUi(); gSandboxGlide = false; return; }
+    if (!hud.haveSelf || !InGame()) return;
+    Player* player = GET_PLAYER(gPlayState);
+    const uint32_t self = hud.selfId;
+    const royale::Vec2 at = { player->actor.world.pos.x, player->actor.world.pos.z };
+    const float facing = static_cast<float>(player->actor.shape.rot.y) * (3.14159265f / 32768.0f);
+    auto ahead = [&](float d) { return royale::Vec2{ at.x + std::sin(facing) * d, at.z + std::cos(facing) * d }; };
+    for (const SandboxCmd& c : cmds) {
+        switch (c.kind) {
+            case SandboxCmd::Go: m->SandboxTeleport(self, royale::SandboxZoneAt(c.a)); break;
+            case SandboxCmd::Cart: if (!m->SandboxCart(ahead(360.0f), facing)) Say("No room for another cart: take one away first"); break;
+            case SandboxCmd::ClearCarts: m->SandboxClearCarts(); break;
+            case SandboxCmd::Bot:
+                for (int i = 0; i < c.a; i++) m->SandboxBot(ahead(300.0f + 90.0f * static_cast<float>(i % 5) + 60.0f * static_cast<float>(i / 5)));
+                break;
+            case SandboxCmd::ClearBots: m->SandboxClearBots(); break;
+            case SandboxCmd::FreezeBots: if (royale::BotController* bots = gSession.SandboxBots()) bots->SetFrozen(c.a != 0); break;
+            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(c.a >= static_cast<int>(royale::BossKind::DragonFire) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
+            case SandboxCmd::ClearBosses: m->SandboxClearBosses(); break;
+            case SandboxCmd::Give: m->SandboxGive(self, static_cast<royale::ItemId>(c.a), static_cast<royale::Rarity>(c.b)); break;
+            case SandboxCmd::Heal: m->SandboxHeal(self); break;
+            case SandboxCmd::Revive: m->SandboxRevive(self); break;
+            case SandboxCmd::God: m->SandboxGod(c.a != 0); break;
+            case SandboxCmd::StormRuns: m->SandboxStormRuns(c.a != 0); break;
+            case SandboxCmd::StormPhase: m->SandboxStormPhase(c.a); break;
+            case SandboxCmd::Supply: m->SandboxSupplyDrop(ahead(500.0f)); break;
+            case SandboxCmd::Weather: m->SandboxWeather(static_cast<royale::Season>(c.a), static_cast<royale::Sky>(c.b), c.c); break;
+            case SandboxCmd::WeatherFree: m->SandboxWeatherFree(c.a != 0); break;
+            case SandboxCmd::Restock: Say("Put back " + std::to_string(m->SandboxRestock()) + " things on the plaza"); break;
+            case SandboxCmd::Glide:
+                if (InField() && !gSkydiving) {   // 1500 up (the safe-landing pull starts below that), then the skydive's own glider takes over
+                    gSkydiving = true;
+                    gSandboxGlide = true;
+                    player->actor.world.pos.y += 2200.0f;
+                    player->actor.prevPos = player->actor.world.pos;
+                }
+                break;
+        }
     }
 }
 
@@ -9408,8 +9495,8 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // 32x32 face in three versions (eyes open, half shut, shut), a skeleton of 25 bones and eleven animation clips: idle, walk, run, jump, sit, talk,
 // groom, sleep, stretch, pounce and happy (shared/lilo_model.h). She is skinned on the CPU every frame (the way the game itself skins Epona), lit by
 // a fixed sun baked into the vertex colours, and drawn with her own two textures.
-constexpr float kLiloPetScale = 0.8f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52); Link is about 60
-constexpr float kLiloMapScale = 1.0f;
+constexpr float kLiloPetScale = 0.3f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52), and Link is about 60: at 0.8 and 1.0 she was
+constexpr float kLiloMapScale = 0.38f;  // as big as a child. A real cat is about a third of a child's height, so about 18 units here
 
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
     namespace L = royale::lilo;
@@ -9793,7 +9880,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
     a->destroy = Cat_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 18.0f;
+    a->shape.shadowScale = 8.0f;
     gCat.actor = a;
     gCat.placed = false;
     gCat.pickups = gPickupLog.size();
@@ -9868,7 +9955,11 @@ void ReconcileLilo(const royale::HudState& hud) {
         return;
     }
     if (gLiloActor != nullptr) return;
-    if (!gLiloKnown) { if (!FindLiloSpot(hud.map, &gLiloPos)) return; gLiloKnown = true; }
+    if (!gLiloKnown) {
+        if (gMapId == royale::kSandboxMapIndex) gLiloPos = { royale::sandbox::kSpawnX + 260.0f, royale::sandbox::kSpawnZ + 120.0f };   // the test map: beside the spawn pad
+        else if (!FindLiloSpot(hud.map, &gLiloPos)) return;
+        gLiloKnown = true;
+    }
     float y = 0;
     if (!FloorAt(gLiloPos.x, gLiloPos.z, &y)) return;
     Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, gLiloPos.x, y, gLiloPos.z, 0, 0x6000, 0, 0, false);
@@ -9878,7 +9969,7 @@ void ReconcileLilo(const royale::HudState& hud) {
     a->destroy = Lilo_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 22.0f;
+    a->shape.shadowScale = 9.0f;   // a small cat: a small shadow
     gLiloActor = a;
     gLiloAnim = royale::lilo::Animator{};
     gLiloAnim.Play(royale::lilo::kSit, 0.0f);
@@ -10748,6 +10839,7 @@ void OnGameFrameUpdate() {
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) UpdateLiloFx();
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
     Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
+    RunSandboxCommands(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     Feat("projectiles"); ReconcileProjectileActor();
     Feat("storm alerts"); DriveStormAlerts(hud);
@@ -10950,7 +11042,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0));
+        ui.mapId = std::min(royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0)), royale::kPlayableMapCount - 1);   // the Sandbox is never a lobby map
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
         ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
@@ -11223,7 +11315,7 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         const char* current = royale::MapOf(ui.mapId).name;
         ImGui::SetNextItemWidth(300);
         if (ImGui::BeginCombo("Map##solo_map", current)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
+            for (int i = 0; i < royale::kPlayableMapCount; i++) {
                 if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -11247,6 +11339,20 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         }
     }
     ImGui::TextColored(kGrey, "Just you on the map chosen above, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
+    ImGui::Spacing();
+    if (ImGui::Button("Sandbox test map", ImVec2(300, 0))) {
+        ui.port = std::clamp(ui.port, 1024, 65535);
+        ui.error.clear();
+        SaveUi(ui);
+        gSession.ClearLastEnded();
+        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true, true)) {
+            ui.error = "Could not host: " + ui.error;
+        } else {
+            gSoloStartWanted = true;
+            RefreshLocalAddresses(ui, true);
+        }
+    }
+    ImGui::TextColored(kGrey, "A flat test arena with ramps, a cliff, a pond, a loot plaza with every item, a cart lot and a boss pad. No countdown, nothing hurts you, the storm waits, and a panel in this menu has a button for every feature: carts, bots, bosses, items, storm, weather, time of day, wind and the glider.");
     ImGui::Spacing();
 
     Heading("Join a lobby");
@@ -11291,6 +11397,38 @@ void DrawRoster(const royale::HudState& h) {
     }
 }
 
+// The options that only change what your own screen shows: weather density, grass and trees, cloth, wind, the tornado and the match music. Shared by
+// the lobby page and the Sandbox panel.
+void DrawLocalEffects() {
+    UiState& ui = Ui();
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+    ImGui::SetNextItemWidth(280);
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::Checkbox("Cloth physics (caps, tunics and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+    if (ui.clothOn) {
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+        ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
+                           gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
+    }
+    if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
+    if (ui.windOn) {
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
+        if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
+        float wnx, wnz, wns;
+        WindNow(&wnx, &wnz, &wns);
+        ImGui::TextColored(kGrey, "Wind right now: %d%% (it gusts, and rain and thunder bring squalls)", static_cast<int>(wns * 100.0f));
+    }
+    { static bool tornado = false; if (ImGui::Checkbox("Tornado (easter egg, only you can see it)", &tornado)) gTornadoOn = tornado; }
+    static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
+    ImGui::SetNextItemWidth(280);
+    if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
+}
+
 void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("LOBBY");
     ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
@@ -11317,10 +11455,10 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
     if (h.isHost) {
         UiState& ui = Ui();
-        ui.mapId = h.mapId;
+        if (h.mapId < royale::kPlayableMapCount) ui.mapId = h.mapId;
         ImGui::SetNextItemWidth(260);
         if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kMapCount; i++) {
+            for (int i = 0; i < royale::kPlayableMapCount; i++) {
                 if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -11398,35 +11536,7 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
-    {
-        UiState& ui = Ui();
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Checkbox("Cloth physics (caps, tunics and gliders)", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
-        if (ui.clothOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
-            ImGui::TextColored(kGrey, "Check: cap asked for %d times, last swing %.1f degrees; tunic asked for %d times, last swing %.1f degrees; cloth glider drawn %d frames",
-                               gHatHookCalls, gHatLastSwing, gClothLimbCalls, gSkirtLastSwing, gGliderClothFrames);
-        }
-        if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
-        if (ui.windOn) {
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
-            if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
-            float wnx, wnz, wns;
-            WindNow(&wnx, &wnz, &wns);
-            ImGui::TextColored(kGrey, "Wind right now: %d%% (it gusts, and rain and thunder bring squalls)", static_cast<int>(wns * 100.0f));
-        }
-        { static bool tornado = false; if (ImGui::Checkbox("Tornado (easter egg, only you can see it)", &tornado)) gTornadoOn = tornado; }
-        static const char* kMusic[] = { "The game's own music", "Random songs from the music folder", "No music" };
-        ImGui::SetNextItemWidth(280);
-        if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
-    }
+    DrawLocalEffects();
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");
@@ -11450,8 +11560,115 @@ void DrawCountdown(const royale::HudState& h) {
     if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
 }
 
+// Buttons that fill a line and wrap to the next one.
+struct ButtonFlow {
+    bool first = true;
+    bool Button(const char* label) {
+        const float w = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        if (!first) { ImGui::SameLine(); if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine(); }
+        first = false;
+        return ImGui::Button(label);
+    }
+};
+
+// The Sandbox panel: a button or switch for each feature, grouped. Only for the host's own sandbox game, shown in the Battle Royale menu while it is on.
+// (The newer features, water, fog, sky and the rest, get their own switches in the Debug section below it as they are added.)
+void DrawSandboxPanel(const royale::HudState& h) {
+    if (!gSession.Sandbox()) return;
+    Heading("SANDBOX: try every feature alone");
+    ImGui::TextColored(kGrey, "No countdown, no end, and the storm waits. Close this menu to play; open it again for more buttons.");
+    SandboxUi& sb = gSbx;
+    if (ImGui::CollapsingHeader("Go to a place", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ButtonFlow flow;
+        for (int i = 0; i < royale::sandbox::kZoneCount; i++) {
+            if (flow.Button(royale::sandbox::kZones[i].name)) SandboxDo(SandboxCmd::Go, i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", royale::sandbox::kZones[i].blurb);
+        }
+        ImGui::TextColored(kGrey, "Each place has what it is named for: ramps, a cliff, a pond, a loot plaza, a cart lot, a boss pad, stone steps, cover.");
+        if (ImGui::Button("Glide from here (3000 up, then hold Z to dive)")) SandboxDo(SandboxCmd::Glide);
+    }
+    if (ImGui::CollapsingHeader("Carts, bots and bosses")) {
+        ImGui::TextColored(kGold, "Carts (get in with A next to one; A go, B brake, R get out)");
+        if (ImGui::Button("Put a cart in front of me")) SandboxDo(SandboxCmd::Cart);
+        ImGui::SameLine();
+        if (ImGui::Button("Remove all carts")) SandboxDo(SandboxCmd::ClearCarts);
+        ImGui::TextColored(kGold, "Bots (they sprint, climb, take cover and use the ground, as in a match)");
+        { ButtonFlow flow;
+          if (flow.Button("1 bot")) SandboxDo(SandboxCmd::Bot, 1);
+          if (flow.Button("5 bots")) SandboxDo(SandboxCmd::Bot, 5);
+          if (flow.Button("Remove bots")) SandboxDo(SandboxCmd::ClearBots); }
+        if (ImGui::Checkbox("Bots stand still (a target dummy)", &sb.botsStill)) SandboxDo(SandboxCmd::FreezeBots, sb.botsStill ? 1 : 0);
+        ImGui::TextColored(kGold, "Bosses (they appear in front of you)");
+        ButtonFlow flow;
+        for (int i = 0; i < royale::kBossKindCount; i++) {
+            const std::string label = std::string(royale::BossOf(static_cast<royale::BossKind>(i)).name) + (i >= static_cast<int>(royale::BossKind::DragonFire) ? " (major)" : "");
+            if (flow.Button(label.c_str())) SandboxDo(SandboxCmd::Boss, i);
+        }
+        if (flow.Button("Remove bosses")) SandboxDo(SandboxCmd::ClearBosses);
+    }
+    if (ImGui::CollapsingHeader("Items and health")) {
+        if (ImGui::Checkbox("Nothing can hurt me", &sb.god)) SandboxDo(SandboxCmd::God, sb.god ? 1 : 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Heal and refill")) SandboxDo(SandboxCmd::Heal);
+        if (!h.selfAlive) { ImGui::SameLine(); if (ImGui::Button("Get back up")) SandboxDo(SandboxCmd::Revive); }
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::BeginCombo("Item##sbx_item", royale::kItems[std::clamp(sb.item, 0, royale::kItemCount - 1)].name)) {
+            for (int i = 0; i < royale::kItemCount; i++) {
+                if (static_cast<royale::ItemId>(i) == royale::ItemId::BasicSword) continue;
+                if (ImGui::Selectable(royale::kItems[i].name, sb.item == i)) sb.item = i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Rarity##sbx_rarity", RarityName(static_cast<royale::Rarity>(sb.rarity)))) {
+            for (int i = 0; i < royale::kRarityCount; i++) if (ImGui::Selectable(RarityName(static_cast<royale::Rarity>(i)), sb.rarity == i)) sb.rarity = i;
+            ImGui::EndCombo();
+        }
+        if (ImGui::Button("Give me this item")) SandboxDo(SandboxCmd::Give, sb.item, sb.rarity);
+        ImGui::SameLine();
+        if (ImGui::Button("Put the loot plaza back")) SandboxDo(SandboxCmd::Restock);
+        ImGui::TextColored(kGrey, "The loot plaza has every item in the game, in rows, and a chest of each rarity.");
+    }
+    if (ImGui::CollapsingHeader("Storm, supply drops and weather")) {
+        if (ImGui::Checkbox("The storm runs (it waits while this is off)", &sb.stormRuns)) SandboxDo(SandboxCmd::StormRuns, sb.stormRuns ? 1 : 0);
+        { ButtonFlow flow;
+          for (int i = 0; i < royale::kStormPhaseCount; i++) {
+              char label[40];
+              std::snprintf(label, sizeof(label), "Start of circle %d", i + 1);
+              if (flow.Button(label)) SandboxDo(SandboxCmd::StormPhase, i);
+          }
+          if (flow.Button("Storm all closed in")) SandboxDo(SandboxCmd::StormPhase, royale::kStormPhaseCount);
+          if (flow.Button("Back to the start")) SandboxDo(SandboxCmd::StormPhase, 0); }
+        if (ImGui::Button("Call a supply drop in front of me")) SandboxDo(SandboxCmd::Supply);
+        ImGui::Spacing();
+        ImGui::TextColored(kGold, "Weather");
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Season##sbx_season", royale::SeasonName(static_cast<royale::Season>(sb.season)))) {
+            for (int i = 0; i < royale::kSeasonCount; i++) if (ImGui::Selectable(royale::SeasonName(static_cast<royale::Season>(i)), sb.season == i)) sb.season = i;
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Sky##sbx_sky", royale::SkyName(static_cast<royale::Sky>(sb.sky)))) {
+            for (int i = 0; i < royale::kSkyCount; i++) if (ImGui::Selectable(royale::SkyName(static_cast<royale::Sky>(i)), sb.sky == i)) sb.sky = i;
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(260);
+        ImGui::SliderInt("How strong (%)##sbx_strength", &sb.intensity, 0, 100);
+        if (ImGui::Button("Set this weather")) { SandboxDo(SandboxCmd::Weather, sb.season, sb.sky, sb.intensity); if (sb.weatherFree) { sb.weatherFree = false; SandboxDo(SandboxCmd::WeatherFree, 0); } }
+        if (ImGui::Checkbox("Let the weather change by itself (it follows the storm's clock)", &sb.weatherFree)) SandboxDo(SandboxCmd::WeatherFree, sb.weatherFree ? 1 : 0);
+        ImGui::SetNextItemWidth(260);
+        ImGui::SliderFloat("Time of day (0 morning, 1 night)##sbx_day", &sb.day, 0.0f, 1.0f);
+        ImGui::Checkbox("Let the day pass (about 2 minutes to night)", &sb.dayRuns);
+        ImGui::TextColored(kGrey, "Wind, the tornado, cloth, grass and trees are just below, under \"What your screen shows\".");
+    }
+    if (ImGui::CollapsingHeader("What your screen shows (wind, tornado, cloth, grass)")) DrawLocalEffects();
+    DrawDebugSwitches();   // one switch per newer feature (water, fog, sky, scenery...): turn each on or off to try it alone
+    ImGui::Spacing();
+}
+
 void DrawInMatch(const royale::HudState& h) {
     Heading(h.state == royale::MatchState::Drop ? "DROP: you are protected for a moment" : "MATCH IN PROGRESS");
+    DrawSandboxPanel(h);
     DrawItemGuide();
     ImGui::Text("Players alive: %d / %d", h.alive, h.playerLimit);
     if (h.haveSelf) {
@@ -11869,8 +12086,15 @@ CollisionHeader* FortniteHeader() {
 // Called as every scene loads its collision: the island's, if this is Hyrule Field and the lobby's map is the Fortnite map; otherwise null (the scene's own).
 extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     gFortniteScene = false;
-    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || gMapId != royale::fortnite::kMapId) return nullptr;
+    if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
+    const bool sandbox = gMapId == royale::kSandboxMapIndex;
+    if (sandbox != gFortniteSandbox || sandbox != royale::fortnite::gSandboxTerrain) {   // the other ground: the collision and the drawn mesh are made again from it
+        royale::fortnite::UseTerrain(sandbox);
+        gFortniteSandbox = sandbox;
+        gFortniteBuilt = false;
+        gFortniteGpu.built = false;
+    }
     return FortniteHeader();
 }
 extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }
