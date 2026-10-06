@@ -3,6 +3,7 @@
 #include "game_client.h"
 #include "game_server.h"
 #include "loopback.h"
+#include "../../shared/fortnite_map.h"
 #include <cstdio>
 #include <memory>
 
@@ -1463,6 +1464,90 @@ static void ShieldAndWeaponReachTheSnapshot() {
     CHECK(self && self->boots == static_cast<uint8_t>(ItemId::HoverBoots) && self->mask == static_cast<uint8_t>(ItemId::BunnyHood));
 }
 
+static void SandboxServerBuildsTheTestMap() {
+    // The server lays the Sandbox out by hand: its places and props, no mini bosses, no dragon, carts in the lot and the plaza stocked.
+    LoopbackNetwork network(7);
+    GameServer server(network.Server(), 7, kHyruleFieldMap);
+    server.SetBossCount(5);
+    server.SetMajorBoss(true);
+    CHECK(!server.SelectMap(kSandboxMapIndex));          // not offered as a lobby map
+    server.SetSandbox(true);
+    CHECK(server.SelectMap(kSandboxMapIndex) && server.Sandbox() && server.MapId() == kSandboxMapIndex);
+    Match& m = server.Sim().match;
+    CHECK(m.Sandbox() && !m.MajorBossEnabled());
+    CHECK(server.Pois().size() == static_cast<size_t>(sandbox::kZoneCount));
+    CHECK(!m.Loot().empty() && m.VehicleCount() == 4);
+    CHECK(server.SelectMap(0) && !server.Sandbox() && !server.Sim().match.Sandbox());   // another map, an ordinary lobby again
+}
+
+// The host's commands reach a player over the wire: a bot, a cart and a boss put where they are wanted show up in the player's snapshots, the
+// weather the host sets is announced, and a teleport moves the player (the client is told through the epoch).
+static void SandboxOverTheWire() {
+    Rig rig(11, 0);
+    rig.server.SetSandbox(true);
+    rig.server.SetSoloTest(true);
+    CHECK(rig.server.SelectMap(kSandboxMapIndex));
+    GameClient& a = rig.Add("Hero");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    CHECK(a.MapId() == kSandboxMapIndex);
+    CHECK(rig.server.StartMatch());
+    rig.Run(1.0f);
+    CHECK(rig.M().State() == MatchState::InMatch && a.State() == MatchState::InMatch && rig.M().Players().size() == 1);
+    CHECK(Distance(rig.M().Find(1)->pos, SandboxSpawn()) < 1.0f);
+    Match& m = rig.M();
+    CHECK(m.SandboxBot({sandbox::kSpawnX + 200, sandbox::kSpawnZ}));
+    CHECK(m.SandboxBoss(BossKind::Moss, {sandbox::kSpawnX - 400, sandbox::kSpawnZ}));
+    CHECK(m.SandboxCart({sandbox::kSpawnX, sandbox::kSpawnZ + 300}, 0.0f));
+    m.SandboxWeather(Season::Autumn, Sky::Rain, 70);
+    rig.Run(1.0f);
+    bool bot = false, boss = false, cart = false;
+    for (uint16_t id : a.VisiblePlayers()) { net::PlayerNet p; bot |= id >= 1000 && a.Sample(id, p); }
+    for (const auto& n : a.Bosses()) boss |= n.kind == static_cast<uint8_t>(BossKind::Moss);
+    for (const auto& n : a.Vehicles()) cart |= std::fabs(n.z - (sandbox::kSpawnZ + 300)) < 60.0f;
+    CHECK(bot && boss && cart);
+    CHECK(a.CurrentWeather().sky == Sky::Rain && a.CurrentWeather().season == Season::Autumn);
+    const uint8_t epoch = a.Epoch();
+    CHECK(m.SandboxTeleport(1, {1000, 1000}));
+    rig.Run(0.5f);
+    CHECK(a.Epoch() != epoch && a.Self() && Distance({a.Self()->x, a.Self()->z}, {1000, 1000}) < 5.0f);
+}
+
+// Bots on the test map's own ground: with its heights and its dry, walkable ground as the host's game measures them, bots dropped on the course
+// move about, climb the stone steps' blocks and never end up in the pond.
+static void SandboxBotsWalkTheTestMap() {
+    namespace fn = royale::fortnite;
+    fn::UseTerrain(true);
+    Rig rig(21, 0);
+    rig.server.SetSandbox(true);
+    rig.server.SetSoloTest(true);
+    CHECK(rig.server.SelectMap(kSandboxMapIndex));
+    const PlacementFn dry = [](Vec2 p) { float y; return fn::GroundHeight(p.x, p.z, &y) && y > fn::kWaterY + 10.0f && fn::GroundUp(p.x, p.z) >= 0.8f; };
+    const HeightFn height = [](Vec2 p, float* y) { return fn::GroundHeight(p.x, p.z, y); };
+    CHECK(rig.server.Reconfigure(MapOf(kSandboxMapIndex).fallback, dry, 0, GameServer::FreshSeedOffset(), height));
+    GameClient& a = rig.Add("Hero");
+    CHECK(rig.RunUntil([&] { return rig.AllJoined(); }));
+    CHECK(rig.server.StartMatch());
+    rig.Run(0.5f);
+    Match& m = rig.M();
+    CHECK(m.Sandbox() && m.State() == MatchState::InMatch && !m.Vehicles().empty());
+    for (int i = 0; i < 6; i++) CHECK(m.SandboxBot({-200.0f + 80.0f * i, -1000.0f}));
+    std::vector<Vec2> start;
+    for (const auto& p : m.Players()) start.push_back(p.pos);
+    rig.Run(40.0f);
+    float moved = 0;
+    bool dryAll = true;
+    for (size_t i = 0; i < m.Players().size(); i++) {
+        const auto& p = m.Players()[i];
+        if (!p.isBot || !p.alive) continue;
+        moved = (std::max)(moved, Distance(p.pos, start[i]));
+        float y;
+        dryAll &= fn::GroundHeight(p.pos.x, p.pos.z, &y) && y > fn::kWaterY - 5.0f;
+    }
+    CHECK(moved > 200.0f && dryAll);
+    CHECK(a.State() == MatchState::InMatch);
+    fn::UseTerrain(false);
+}
+
 int main() {
     ByteReaderBounds(); MessagesRoundTrip(); DecodeRejectsMangled(); DecodeRejectsBadValues(); FuzzNeverCrashes();
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
@@ -1471,7 +1556,7 @@ int main() {
     ShieldOverTheWire(); SmashingPropsOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
-    ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
+    SandboxServerBuildsTheTestMap(); SandboxOverTheWire(); SandboxBotsWalkTheTestMap(); ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
     WeatherOverTheWire(); AlliesOverTheWire(); VehiclesOverTheWire(); ReplayOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }

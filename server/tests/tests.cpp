@@ -7,6 +7,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
 #include "../../shared/fortnite_puddles.h"
 #include <set>
@@ -2467,6 +2468,163 @@ static void SoloTestHasNoBotsAndKeepsGoing() {
     CHECK(kFortniteMapIndex == royale::fortnite::kMapId);
 }
 
+
+static void SandboxTerrainAndLayout() {
+    namespace fn = royale::fortnite;
+    CHECK(kSandboxMapIndex == kPlayableMapCount && kSandboxMapIndex < kMapCount && IsIslandMap(kSandboxMapIndex) && IsIslandMap(kFortniteMapIndex) && !IsIslandMap(0));
+    CHECK(std::string(MapOf(kSandboxMapIndex).name) == "Sandbox" && MapOf(kSandboxMapIndex).scene == kHyruleFieldScene);
+    fn::UseTerrain(true);
+    float y = 0;
+    // Spawn: flat, dry, walkable. Pond: under the water. Plateau, plaza and cliff top at their heights. The sea outside is deep.
+    CHECK(fn::GroundHeight(sandbox::kSpawnX, sandbox::kSpawnZ, &y) && std::fabs(y) < 5.0f && fn::GroundUp(sandbox::kSpawnX, sandbox::kSpawnZ) > 0.95f);
+    CHECK(fn::IsWaterAt(sandbox::kPondX, sandbox::kPondZ) && !fn::IsWaterAt(sandbox::kPondX + 1100.0f, sandbox::kPondZ));
+    CHECK(fn::GroundHeight(0, 2650, &y) && std::fabs(y - sandbox::kPlateauHeight) < 6.0f);
+    CHECK(fn::GroundHeight(-2300, 300, &y) && std::fabs(y - sandbox::kPlazaHeight) < 6.0f);
+    CHECK(fn::GroundHeight(2900, 100, &y) && std::fabs(y - sandbox::kCliffHeight) < 6.0f);
+    CHECK(fn::GroundHeight(sandbox::kHillX, sandbox::kHillZ, &y) && y > sandbox::kHillTop - 20.0f);
+    CHECK(fn::IsWaterAt(5000, 0) && fn::IsWaterAt(0, -5000));
+    // The ramps: two you can walk up (17 and 27 degrees) and one too steep to stand on; the cliff wall is steep; the ramp up the cliff is walkable.
+    CHECK(fn::GroundUp(-1100, 1800) > 0.9f && fn::GroundUp(-150, 2000) > 0.85f && fn::GroundUp(800, 2200) < 0.8f);
+    CHECK(fn::GroundUp(2450, 100) < 0.7f && fn::GroundUp(2800, -1100) > 0.85f);
+    // Every zone is on dry land and on ground you can stand on, and inside the map circle.
+    for (int i = 0; i < sandbox::kZoneCount; i++) {
+        const sandbox::Zone& z = sandbox::kZones[i];
+        CHECK(fn::GroundHeight(z.x, z.z, &y) && (i == 5 ? y < fn::kWaterY : y > fn::kWaterY + 20.0f) && fn::GroundUp(z.x, z.z) > 0.8f);
+        CHECK(Distance({z.x, z.z}, MapOf(kSandboxMapIndex).fallback.center) + z.radius * 0.0f < MapOf(kSandboxMapIndex).fallback.radius);
+    }
+    // The cover: grass on the hill, trees in the grove, paving on the plaza, water in the pond.
+    CHECK(fn::CoverAt(-2300, 300) == fn::Cover::Paving && fn::CoverAt(900, 900) == fn::Cover::Woods && fn::CoverAt(sandbox::kHillX, sandbox::kHillZ) == fn::Cover::Meadow && fn::CoverAt(sandbox::kPondX, sandbox::kPondZ) == fn::Cover::Water);
+    // Collision built from it is sound (every triangle up, on its plane) and the colours are not the island's.
+    const fn::Mesh m = fn::BuildCollision();
+    bool sound = m.verts.size() == static_cast<size_t>(fn::kVerts * fn::kVerts);
+    for (const fn::Poly& p : m.polys) sound &= p.ny > 0;
+    CHECK(sound);
+    const fn::DrawVert dv = fn::FineVertex(fn::kFine / 2, fn::kFine / 2);
+    fn::UseTerrain(false);
+    const fn::DrawVert iv = fn::FineVertex(fn::kFine / 2, fn::kFine / 2);
+    CHECK(dv.y != iv.y || dv.r != iv.r || dv.g != iv.g);
+    CHECK(!fn::gSandboxTerrain && fn::gSpawnX == fn::kSpawnX);   // back to the island: the other tests use it
+    // The layout: a place for every zone, props of every kind the test course needs, and nothing outside the map.
+    const PoiLayout layout = GenerateSandboxLayout(5);
+    CHECK(layout.pois.size() == static_cast<size_t>(sandbox::kZoneCount) && layout.pois[0].name == kSandboxMapIndex * kNamesPerMap);
+    std::set<int> kinds;
+    bool inside = true;
+    for (const Prop& p : layout.props) { kinds.insert(static_cast<int>(p.kind)); inside &= Distance(p.pos, MapOf(kSandboxMapIndex).fallback.center) < MapOf(kSandboxMapIndex).fallback.radius; }
+    CHECK(inside && kinds.count(static_cast<int>(PropKind::PlatformLow)) && kinds.count(static_cast<int>(PropKind::PlatformMid)) && kinds.count(static_cast<int>(PropKind::PlatformHigh)));
+    CHECK(kinds.count(static_cast<int>(PropKind::Boulder)) && kinds.count(static_cast<int>(PropKind::Rock)) && kinds.count(static_cast<int>(PropKind::Bush)) && kinds.count(static_cast<int>(PropKind::Pillar)));
+    CHECK(Distance(SandboxLootRoom().center, {sandbox::kZones[1].x, sandbox::kZones[1].z}) < 1.0f);
+}
+
+static Match MakeSandbox(uint64_t seed = 9) {
+    Match m(seed, MapOf(kSandboxMapIndex).fallback, 0);
+    m.SetMapId(kSandboxMapIndex);
+    m.SetSandboxSpawn(SandboxSpawn());
+    m.SetSandboxLootRoom(SandboxLootRoom());
+    m.SetVehicleCount(2);
+    m.SetBossCount(0);
+    CHECK(m.SetSandbox(true));
+    m.AddHuman(1);
+    return m;
+}
+
+static void SandboxMatchHasNoCountdownOrEnd() {
+    Match m = MakeSandbox();
+    m.SandboxStockLoot();
+    // Every item in the game is lying on the plaza, plus chests; nothing is outside it.
+    int items = 0, chests = 0;
+    for (const LootEntry& l : m.Loot()) { (l.spawn.container ? chests : items)++; CHECK(Distance(l.spawn.pos, SandboxLootRoom().center) <= SandboxLootRoom().radius); }
+    CHECK(items == kItemCount - 1 && chests == 6);   // everything but the starting sword
+    std::set<int> seen;
+    for (const LootEntry& l : m.Loot()) if (!l.spawn.container) seen.insert(static_cast<int>(l.spawn.item));
+    CHECK(static_cast<int>(seen.size()) == kItemCount - 1 && seen.count(static_cast<int>(ItemId::ShockwaveGrenade)) && seen.count(static_cast<int>(ItemId::HoverBoots)));
+    CHECK(!m.SandboxBot({0, 0}) && !m.SandboxGive(1, ItemId::MasterSword, Rarity::Rare));   // not before the match
+    CHECK(m.Start());
+    CHECK(m.State() == MatchState::InMatch && m.Players().size() == 1);               // no countdown, no drop, no bots
+    CHECK(Distance(m.Players()[0].pos, SandboxSpawn()) < 1.0f);
+    // The storm waits, nothing hurts, nothing ends the match.
+    for (int i = 0; i < 20 * 30; i++) m.Tick(0.05f);
+    CHECK(m.StormTime() == 0.0f && m.Players()[0].health == m.Players()[0].maxHealth);
+    CHECK(m.Damage(1, 5.0f, kNoPlayer, DamageKind::Normal) == false && m.Players()[0].health == m.Players()[0].maxHealth);   // god mode
+    m.SandboxGod(false);
+    m.Damage(1, 1.0f, kNoPlayer, DamageKind::Normal);
+    CHECK(m.Players()[0].health < m.Players()[0].maxHealth);
+    m.SandboxHeal(1);
+    CHECK(m.Players()[0].health == m.Players()[0].maxHealth);
+    m.Damage(1, 500.0f, kNoPlayer, DamageKind::Normal);                                // dead: the match still goes on
+    CHECK(!m.Players()[0].alive);
+    for (int i = 0; i < 20; i++) m.Tick(0.05f);
+    CHECK(m.State() == MatchState::InMatch);
+    CHECK(m.SandboxRevive(1) && m.Players()[0].alive && m.Players()[0].health == m.Players()[0].maxHealth);
+    // The storm runs only when asked, from the phase asked for.
+    m.SandboxStormRuns(true);
+    CHECK(m.SandboxStormPhase(2) && std::fabs(m.StormTime() - Match::StormPhaseStart(2)) < 0.01f);
+    m.Tick(0.05f);
+    CHECK(m.StormTime() > Match::StormPhaseStart(2));
+    CHECK(!m.SandboxStormPhase(kStormPhaseCount + 1) && m.SandboxStormPhase(kStormPhaseCount));
+}
+
+static void SandboxCommands() {
+    Match m = MakeSandbox(4);
+    m.SandboxStockLoot();
+    m.Start();
+    // Bots appear where they are put, one after the other, and go away quietly.
+    CHECK(m.SandboxBot({300, 0}) && m.SandboxBot({400, 0}) && m.Players().size() == 3 && m.Players()[1].id != m.Players()[2].id && m.Players()[1].isBot);
+    CHECK(Distance(m.Players()[2].pos, {400, 0}) < 1.0f);
+    // The bots obey the freeze switch: a frozen bot does not move however long the match runs.
+    BotController bots(4);
+    bots.SetFrozen(true);
+    const Vec2 before = m.Players()[1].pos;
+    for (int i = 0; i < 20 * 10; i++) { bots.Step(m, 0.05f); m.Tick(0.05f); }
+    CHECK(bots.Frozen() && Distance(m.Players()[1].pos, before) < 0.01f);
+    m.SandboxClearBots();
+    CHECK(!m.Players()[1].alive && !m.Players()[2].alive && m.Players()[0].alive && m.Alive() == 1);
+    // Bosses: seven mini bosses can stand at once and an eighth is refused; a major boss takes the dragon's place; clearing removes them.
+    for (int i = 0; i < kMaxBosses - 1; i++) CHECK(m.SandboxBoss(static_cast<BossKind>(i % kMiniBossKindCount), {500.0f + 100.0f * i, 900}));
+    CHECK(!m.SandboxBoss(BossKind::Stone, {0, 900}));
+    CHECK(m.SandboxBoss(BossKind::DragonFire, {0, 900}) && m.SandboxBoss(BossKind::DragonWater, {100, 900}));
+    int dragons = 0, minis = 0;
+    for (const MiniBoss& b : m.Bosses()) { if (!b.alive) continue; (IsDragonKind(b.kind) ? dragons : minis)++; }
+    CHECK(dragons == 1 && minis == kMaxBosses - 1);
+    for (int i = 0; i < 20 * 5; i++) m.Tick(0.05f);   // they run without trouble
+    m.SandboxClearBosses();
+    for (const MiniBoss& b : m.Bosses()) CHECK(!b.alive);
+    CHECK(m.SandboxBoss(BossKind::Frost, {500, 900}));   // the places are free again
+    // Carts: the two from the start plus more, up to the limit; a cleared cart's place is used again.
+    CHECK(m.Vehicles().size() == 2);
+    while (m.SandboxCart({1700, -1900}, 0.5f)) {}
+    CHECK(static_cast<int>(m.Vehicles().size()) == kMaxVehicles);
+    m.SandboxClearCarts();
+    CHECK(m.SandboxCart({1700, -1900}, 0.5f) && m.Vehicles()[0].index == 0 && !m.Vehicles()[0].gone);
+    // Giving: an item goes straight into the bag or hands at the rarity asked for (within what the item allows).
+    CHECK(m.SandboxGive(1, ItemId::MasterSword, Rarity::Epic) && m.Players()[0].weapon.item == ItemId::MasterSword && m.Players()[0].weapon.rarity == Rarity::Epic);
+    CHECK(m.SandboxGive(1, ItemId::ShockwaveGrenade, Rarity::Legendary) && m.Players()[0].hasAbility && m.Players()[0].ability.item == ItemId::ShockwaveGrenade);
+    CHECK(m.SandboxGive(1, ItemId::HoverBoots, Rarity::Rare) && (m.Players()[0].gearMask & (1 << static_cast<int>(GearSlot::Boots))));
+    // Weather stays where it is put; it only follows the schedule when set free. Teleports and supply drops work.
+    m.SandboxWeather(Season::Winter, Sky::Snow, 80);
+    for (int i = 0; i < 20 * 30; i++) m.Tick(0.05f);
+    CHECK(m.CurrentWeather().sky == Sky::Snow && m.CurrentWeather().season == Season::Winter && m.CurrentWeather().intensity == 80);
+    CHECK(m.SandboxTeleport(1, {1000, 1000}) && Distance(m.Players()[0].pos, {1000, 1000}) < 1.0f);
+    const size_t lootBefore = m.Loot().size();
+    CHECK(m.SandboxSupplyDrop({200, 200}));
+    for (int i = 0; i < 20 * 9; i++) m.Tick(0.05f);
+    CHECK(m.Loot().size() > lootBefore);
+    // Restocking the plaza puts back what was taken, once.
+    size_t taken = 0;
+    for (size_t i = 0; i < m.Loot().size() && taken < 3; i++) {
+        if (m.Loot()[i].taken || m.Loot()[i].spawn.container || Distance(m.Loot()[i].spawn.pos, SandboxLootRoom().center) > SandboxLootRoom().radius) continue;
+        m.SandboxTeleport(1, m.Loot()[i].spawn.pos);
+        if (m.PickUp(1, i, true)) taken++;
+    }
+    CHECK(taken == 3);
+    CHECK(m.SandboxRestock() == static_cast<int>(taken) && m.SandboxRestock() == 0);
+    // None of it works in an ordinary match.
+    Match plain(3, {{0, 0}, 3000.0f}, 10);
+    plain.AddHuman(1);
+    plain.Start();
+    for (int i = 0; i < 20 * 40; i++) plain.Tick(0.05f);
+    CHECK(!plain.SandboxBot({0, 0}) && !plain.SandboxBoss(BossKind::Stone, {0, 0}) && !plain.SandboxCart({0, 0}, 0) && !plain.SandboxGive(1, ItemId::MasterSword, Rarity::Rare) && !plain.SandboxTeleport(1, {5, 5}));
+}
+
 static void CustomObjModels() {
     // A little winged thing: a body box, two wings and a tail, with a material colour and a quad that must be cut into two triangles.
     const std::string obj =
@@ -3941,7 +4099,7 @@ static void BotsUseCoverAndHighGround() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();

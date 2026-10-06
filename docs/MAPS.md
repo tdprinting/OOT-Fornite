@@ -89,3 +89,7 @@ the rest of the mod, none of it has been run in the game yet.
 **Solo test button:** the Battle Royale menu has "Fortnite Map: solo test" under "Host a lobby". It hosts a lobby on the Fortnite Map with no bots and no lobby timer,
 and starts the match by itself as soon as you are in it (`Match::SetSoloTest`). Everything else runs as in a real match, and the match goes on until you are out
 instead of ending when one player is left.
+
+## The Sandbox (test map)
+
+A seventh entry in `kMaps` that is never a lobby map: it is only started by the **Sandbox test map** menu button. See [SANDBOX.md](SANDBOX.md).
