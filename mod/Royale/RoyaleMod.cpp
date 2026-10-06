@@ -6366,10 +6366,8 @@ bool HeldGlowOn(bool self) {
 }
 
 struct LobbyMusic {
-    SDL_AudioDeviceID device = 0;
     std::vector<std::filesystem::path> tracks;
-    std::vector<int16_t> pcm;   // the current track, converted to the device format (stereo, 44.1 kHz)
-    size_t pos = 0;
+    std::vector<int16_t> pcm;   // a track just read, converted to the game's output format (stereo, 44.1 kHz), until it is handed to the mixer
     size_t next = 0;
     bool scanned = false;
     bool failed = false;
@@ -6378,6 +6376,54 @@ struct LobbyMusic {
     std::string status;         // shown in the menu: where the folder is, how many songs, and why one could not be read
 };
 LobbyMusic gLobbyMusic;
+
+// The song being played is mixed straight into the game's own sound, on the game's audio thread (patch 0016 calls this for every buffer the
+// game makes, 44.1 kHz stereo). It used to go to a second SDL audio stream, which never opened on Windows (the game talks to WASAPI there and
+// never starts SDL's audio) and may not on a phone: the songs stayed silent and the game's music was left on.
+struct FolderMix {
+    std::mutex mutex;
+    std::shared_ptr<const std::vector<int16_t>> pcm;
+    size_t pos = 0;
+    float volume = 0.0f;
+};
+FolderMix gMix;
+}   // namespace
+extern "C" void (*gRoyaleAudioMix)(int16_t* buf, uint32_t frames);
+namespace {
+void MixFolderSong(int16_t* buf, uint32_t frames) {
+    std::lock_guard<std::mutex> lock(gMix.mutex);
+    if (!gMix.pcm || gMix.pos >= gMix.pcm->size()) return;
+    const std::vector<int16_t>& p = *gMix.pcm;
+    const size_t n = std::min<size_t>(static_cast<size_t>(frames) * 2, p.size() - gMix.pos);
+    for (size_t i = 0; i < n; i++) {
+        const int v = buf[i] + static_cast<int>(p[gMix.pos + i] * gMix.volume);
+        buf[i] = static_cast<int16_t>(std::clamp(v, -32768, 32767));
+    }
+    gMix.pos += n;
+}
+void StopFolderSong() {
+    std::lock_guard<std::mutex> lock(gMix.mutex);
+    gMix.pcm.reset();
+    gMix.pos = 0;
+}
+bool FolderSongDone() {
+    std::lock_guard<std::mutex> lock(gMix.mutex);
+    return !gMix.pcm || gMix.pos >= gMix.pcm->size();
+}
+// The song follows the game's own master and music volume (the game's default master volume is 40).
+float FolderSongVolume() {
+    const float master = static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 40)) / 100.0f;
+    const float music = static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.MainMusic"), 100)) / 100.0f;
+    return std::clamp(master * music, 0.0f, 1.0f);
+}
+void PlayFolderSong(std::vector<int16_t>&& pcm) {
+    auto song = std::make_shared<const std::vector<int16_t>>(std::move(pcm));
+    gRoyaleAudioMix = MixFolderSong;
+    std::lock_guard<std::mutex> lock(gMix.mutex);
+    gMix.pcm = std::move(song);
+    gMix.pos = 0;
+    gMix.volume = FolderSongVolume();
+}
 
 std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("music")); }
 
@@ -6445,7 +6491,6 @@ bool LoadNextTrack() {
             if (SDL_ConvertAudio(&cvt) < 0) continue;
             m.pcm.assign(reinterpret_cast<const int16_t*>(work.data()), reinterpret_cast<const int16_t*>(work.data()) + static_cast<size_t>(cvt.len_cvt) / 2);
         }
-        m.pos = 0;
         m.nowPlaying = file.stem().string();
         Trace("song load: done");
         return !m.pcm.empty();
@@ -6780,7 +6825,7 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     LobbyMusic& m = gLobbyMusic;
     const bool want = ((inLobby && MapOption("LobbyMusic", true)) || inMatchRandom) && !m.failed;
     if (!want) {
-        if (m.device != 0 && m.playing) SDL_ClearQueuedAudio(m.device);
+        if (m.playing) StopFolderSong();
         m.playing = false;
         StopOotSong();
         if (!inLobby && !inMatchRandom) m.scanned = false; // pick up newly added songs next time
@@ -6791,40 +6836,35 @@ void UpdateLobbyMusic(bool inLobby, bool inMatchRandom = false) {
     // A song already turned into OoT music plays on the game's own sound engine; the others play as they are until they are ready.
     if (OotSongPlaying()) { if (OotInstrumentsOn()) { KeepOotSongVolume(); return; } StopOotSong(); }
     gOot.playing = nullptr;
-    if (OotInstrumentsOn() && (m.pcm.empty() || m.pos >= m.pcm.size())) {
+    const bool done = FolderSongDone();
+    if (OotInstrumentsOn() && done) {
         for (size_t i = 0; i < m.tracks.size(); i++) {
             const size_t k = (m.next + i) % m.tracks.size();
             std::shared_ptr<OotSong> song = ReadyOotSong(m.tracks[k]);
             if (!song || !StartOotSong(song)) continue;
             m.next = k + 1;
-            m.pcm.clear();
-            m.pos = 0;
+            StopFolderSong();
             m.nowPlaying = m.tracks[k].stem().string();
-            if (m.device != 0) SDL_ClearQueuedAudio(m.device);
             m.playing = true;
             KeepOotSongVolume();
             Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying + " (OoT instruments)");
             return;
         }
     }
-    if (m.device == 0) {
-        SDL_AudioSpec want2 = {}, have = {};
-        want2.freq = 44100; want2.format = AUDIO_S16SYS; want2.channels = 2; want2.samples = 2048; want2.callback = nullptr;
-        m.device = SDL_OpenAudioDevice(nullptr, 0, &want2, &have, 0);
-        if (m.device == 0) { m.failed = true; return; }
-        SDL_PauseAudioDevice(m.device, 0);
-    }
-    if (SDL_GetQueuedAudioSize(m.device) > 44100 * 4 / 3) return; // about a third of a second queued is enough
-    if (m.pcm.empty() || m.pos >= m.pcm.size()) {
-        if (!LoadNextTrack()) { m.failed = true; return; }
+    if (done) {
+        if (!LoadNextTrack()) {
+            m.failed = true;   // the game's own music comes back (DriveMatchMusic), and the menu says why
+            if (m.status.rfind("Could not read", 0) != 0) m.status = "None of the songs in " + MusicFolder().string() + " could be played.";
+            Say("Music folder: " + m.status);
+            return;
+        }
+        PlayFolderSong(std::move(m.pcm));
+        m.pcm.clear();
         Say((inLobby ? "Lobby music: " : "Now playing: ") + m.nowPlaying);
+    } else {
+        std::lock_guard<std::mutex> lock(gMix.mutex);
+        gMix.volume = FolderSongVolume();
     }
-    const float volume = std::clamp(static_cast<float>(CVarGetInteger(CVAR_SETTING("Volume.Master"), 100)) / 100.0f, 0.0f, 1.0f) * 0.8f;
-    const size_t chunk = std::min<size_t>(44100 / 2, m.pcm.size() - m.pos);
-    std::vector<int16_t> out(chunk);
-    for (size_t i = 0; i < chunk; i++) out[i] = static_cast<int16_t>(m.pcm[m.pos + i] * volume);
-    m.pos += chunk;
-    SDL_QueueAudio(m.device, out.data(), static_cast<Uint32>(out.size() * sizeof(int16_t)));
     m.playing = true;
 }
 

@@ -1,0 +1,26 @@
+diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
+index 7203065..88ccd61 100644
+--- a/soh/soh/OTRGlobals.cpp
++++ b/soh/soh/OTRGlobals.cpp
+@@ -539,6 +539,10 @@ uint32_t OTRGlobals::GetInterpolationFPS() {
+ extern "C" void OTRMessage_Init();
+ extern "C" void AudioMgr_CreateNextAudioBuffer(s16* samples, u32 num_samples);
+ extern "C" void AudioPlayer_Play(const uint8_t* buf, uint32_t len);
++// OOT Royale: the mod mixes the music folder's songs into the game's own sound here (44.1 kHz stereo), so they play on whatever audio
++// output the game uses (WASAPI on Windows never starts SDL's audio, and a phone may give no second stream). Set by the mod; called on this thread.
++extern "C" void (*gRoyaleAudioMix)(int16_t* buf, uint32_t frames);
++void (*gRoyaleAudioMix)(int16_t* buf, uint32_t frames) = nullptr;
+ extern "C" int AudioPlayer_Buffered(void);
+ extern "C" int AudioPlayer_GetDesiredBuffered(void);
+ std::unordered_map<std::string, ExtensionEntry> ExtensionCache;
+@@ -582,6 +586,10 @@ void OTRAudio_Thread() {
+                                            num_audio_samples);
+         }
+ 
++        if (gRoyaleAudioMix != nullptr) {
++            gRoyaleAudioMix(audio_buffer, num_audio_samples * AUDIO_FRAMES_PER_UPDATE);
++        }
++
+         AudioPlayer_Play((u8*)audio_buffer,
+                          num_audio_samples * (sizeof(int16_t) * NUM_AUDIO_CHANNELS * AUDIO_FRAMES_PER_UPDATE));
+ 
