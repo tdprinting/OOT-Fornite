@@ -110,6 +110,13 @@ def build_moon():
     r2 = [h.add(p, (0.78, 0.86, 1.0, 0.0)) for p in ring_pts(12, 2.4)]
     h.fan(c, r1); h.strip(r1, r2)
 
+def build_glow():
+    # A soft round glow (opaque middle fading to clear), used in numbers for the Milky Way band and the nebula patches of the night sky.
+    g = piece("sky_glow", False, 1000)
+    c = g.add((0, 0, 0), (1.0, 1.0, 1.0, 1.0))
+    ring = [g.add(p, (1.0, 1.0, 1.0, 0.0)) for p in ring_pts(8, 1.0)]
+    g.fan(c, ring)
+
 def build_stars():
     # A four-point sparkle: a long cross with a small waist, like the twinkles on the OoT title screens.
     s = piece("star_sparkle", False, 1000)
@@ -419,7 +426,7 @@ def render_preview(objs):
     sheet.save(PREVIEW)
 
 def main():
-    build_dome(); build_hills(); build_clouds(); build_sun(); build_moon(); build_stars()
+    build_dome(); build_hills(); build_clouds(); build_sun(); build_moon(); build_glow(); build_stars()
     objs = make_objects()
     animate(objs)
     os.makedirs(ASSETS, exist_ok=True)

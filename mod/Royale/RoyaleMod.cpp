@@ -3547,9 +3547,53 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
     }
 
     SkyBatch sky;
-    if (!sky.Init(play, 1700)) return;
+    if (!sky.Init(play, 2200)) return;
     const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * kTau;
     const float white[3] = { 1, 1, 1 };
+
+    // The Milky Way: a slanted band of soft pale-blue glow with a brighter core, a scatter of deep teal nebula patches beside it and a dense dust of tiny stars
+    // along it, all turning slowly with the night, as in the painted night skies of Ocarina of Time.
+    {
+        const float mwA = L.night * (1.0f - ov) * (1.0f - 0.9f * std::min(1.0f, gStormWeather * 1.4f));
+        SkyBatch mw;
+        if (mwA > 0.03f && gSkyStars && mw.Init(play, 1100)) {
+            const float yaw = spin * 0.5f + 0.8f, cy = std::cos(yaw), sy = std::sin(yaw), tc = std::cos(1.0f), ts = std::sin(1.0f);
+            auto along = [&](float ph, float off, float out[3]) {   // a point on the band, `off` radians across it
+                const float x = std::cos(ph), y0 = std::sin(ph);
+                float px = x + 0.0f, py = y0 * tc + off * 0.9f, pz = y0 * ts + off * 0.3f;   // `off` moves the point across the band
+                const float l = std::sqrt(px * px + py * py + pz * pz);
+                out[0] = (px * cy - pz * sy) / l; out[1] = py / l; out[2] = (px * sy + pz * cy) / l;
+            };
+            const float blueHalo[3] = { 0.50f, 0.68f, 1.0f }, core[3] = { 0.80f, 0.90f, 1.0f }, teal[3] = { 0.25f, 0.55f, 0.85f };
+            for (int i = 0; i < 52; i++) {
+                float d[3];
+                along(kTau * (i + 0.4f * Flora01(i, 3, 781)) / 52.0f, (Flora01(i, 5, 782) - 0.5f) * 0.12f, d);
+                if (d[1] < -0.02f) continue;
+                const float hz = std::min(1.0f, d[1] * 5.0f + 0.2f);
+                mw.AddBillboard(sky_glow, d, kR * 0.975f, 800.0f + 500.0f * Flora01(i, 7, 783), blueHalo, mwA * hz * 0.30f);
+                mw.AddBillboard(sky_glow, d, kR * 0.976f, 380.0f + 260.0f * Flora01(i, 9, 784), core, mwA * hz * 0.34f * (0.5f + Flora01(i, 11, 785)));
+            }
+            for (int i = 0; i < 10; i++) {
+                const float a = Flora01(i, 3, 791) * kTau + spin * 0.5f, s = 0.12f + 0.8f * Flora01(i, 5, 792), cc = std::sqrt(1.0f - s * s);
+                const float d[3] = { std::cos(a) * cc, s, std::sin(a) * cc };
+                mw.AddBillboard(sky_glow, d, kR * 0.974f, 1300.0f + 900.0f * Flora01(i, 7, 793), teal, mwA * 0.22f);
+            }
+            mw.Draw(play);
+        }
+        if (mwA > 0.03f && gSkyStars) {   // the fine star dust along the band goes in the main batch
+            const float yaw = spin * 0.5f + 0.8f, cy = std::cos(yaw), sy = std::sin(yaw), tc = std::cos(1.0f), ts = std::sin(1.0f);
+            for (int i = 0; i < 90; i++) {
+                const float ph = Flora01(i, 3, 801) * kTau, off = (Flora01(i, 5, 802) + Flora01(i, 6, 803) - 1.0f) * 0.28f;
+                float px = std::cos(ph), py = std::sin(ph) * tc + off * 0.9f, pz = std::sin(ph) * ts + off * 0.3f;
+                const float l = std::sqrt(px * px + py * py + pz * pz);
+                const float d[3] = { (px * cy - pz * sy) / l, py / l, (px * sy + pz * cy) / l };
+                if (d[1] < 0.03f) continue;
+                const float tw = 0.7f + 0.3f * std::sin(t * kTau / kStarTwinkle + i * 1.7f);
+                const float tintS[3] = { 0.85f, 0.93f, 1.0f };
+                sky.AddBillboard(star_dot, d, kR * 0.97f, 9.0f + 9.0f * Flora01(i, 7, 804), tintS, mwA * tw * 0.8f, 0.785f);
+            }
+        }
+    }
 
     // Stars: the two modelled kinds, turning slowly through the night and twinkling on the loop built in Blender; they come in as the sun sets, go out as it
     // rises, and hide behind cloud and the storm.

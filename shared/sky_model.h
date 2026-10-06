@@ -83,6 +83,11 @@ inline constexpr int16_t kmoon_halo_Pos[] = {0,0,-10,1400,0,0,1212,700,0,700,121
 inline constexpr uint8_t kmoon_halo_Col[] = {199,219,255,102,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,46,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0,199,219,255,0};
 inline constexpr uint16_t kmoon_halo_Idx[] = {0,1,2,0,2,3,0,3,4,0,4,5,0,5,6,0,6,7,0,7,8,0,8,9,0,9,10,0,10,11,0,11,12,0,12,1,1,2,14,1,14,13,2,3,15,2,15,14,3,4,16,3,16,15,4,5,17,4,17,16,5,6,18,5,18,17,6,7,19,6,19,18,7,8,20,7,20,19,8,9,21,8,21,20,9,10,22,9,22,21,10,11,23,10,23,22,11,12,24,11,24,23,12,1,13,12,13,24};
 
+inline constexpr int ksky_glow_Verts = 9, ksky_glow_Tris = 8;
+inline constexpr int16_t ksky_glow_Pos[] = {0,0,0,1000,0,0,707,707,0,0,1000,0,-707,707,0,-1000,0,0,-707,-707,0,0,-1000,0,707,-707,0};
+inline constexpr uint8_t ksky_glow_Col[] = {255,255,255,255,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0};
+inline constexpr uint16_t ksky_glow_Idx[] = {0,1,2,0,2,3,0,3,4,0,4,5,0,5,6,0,6,7,0,7,8,0,8,1};
+
 inline constexpr int kstar_sparkle_Verts = 9, kstar_sparkle_Tris = 8;
 inline constexpr int16_t kstar_sparkle_Pos[] = {0,0,0,1000,0,0,156,156,0,0,1000,0,-156,156,0,-1000,0,0,-156,-156,0,0,-1000,0,156,-156,0};
 inline constexpr uint8_t kstar_sparkle_Col[] = {255,255,235,255,230,242,255,0,255,250,219,230,230,242,255,0,255,250,219,230,230,242,255,0,255,250,219,230,230,242,255,0,255,250,219,230};
@@ -109,6 +114,7 @@ inline constexpr Mesh sun_rays_short = {ksun_rays_short_Verts, ksun_rays_short_T
 inline constexpr Mesh moon_disc = {kmoon_disc_Verts, kmoon_disc_Tris, kmoon_disc_Pos, kmoon_disc_Col, kmoon_disc_Idx, 0.001f};
 inline constexpr Mesh moon_craters = {kmoon_craters_Verts, kmoon_craters_Tris, kmoon_craters_Pos, kmoon_craters_Col, kmoon_craters_Idx, 0.001f};
 inline constexpr Mesh moon_halo = {kmoon_halo_Verts, kmoon_halo_Tris, kmoon_halo_Pos, kmoon_halo_Col, kmoon_halo_Idx, 0.001f};
+inline constexpr Mesh sky_glow = {ksky_glow_Verts, ksky_glow_Tris, ksky_glow_Pos, ksky_glow_Col, ksky_glow_Idx, 0.001f};
 inline constexpr Mesh star_sparkle = {kstar_sparkle_Verts, kstar_sparkle_Tris, kstar_sparkle_Pos, kstar_sparkle_Col, kstar_sparkle_Idx, 0.001f};
 inline constexpr Mesh star_dot = {kstar_dot_Verts, kstar_dot_Tris, kstar_dot_Pos, kstar_dot_Col, kstar_dot_Idx, 0.001f};
 
