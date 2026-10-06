@@ -1,5 +1,5 @@
 diff --git a/ZAPD/Main.cpp b/ZAPD/Main.cpp
-index 4e28315..247db3b 100644
+index 4e28315..054cbab 100644
 --- a/ZAPD/Main.cpp
 +++ b/ZAPD/Main.cpp
 @@ -73,6 +73,11 @@ ZRoom room(nullptr);
@@ -14,7 +14,7 @@ index 4e28315..247db3b 100644
  #include <string>
  #include <string_view>
  #include "tinyxml2.h"
-@@ -89,7 +94,51 @@ void BuildAssetBackground(const fs::path& imageFilePath, const fs::path& outPath
+@@ -89,7 +94,59 @@ void BuildAssetBackground(const fs::path& imageFilePath, const fs::path& outPath
  void BuildAssetBlob(const fs::path& blobFilePath, const fs::path& outPath);
  int ExtractFunc(int workerID, int fileListSize, std::string fileListItem, ZFileMode fileMode);
  
@@ -28,6 +28,14 @@ index 4e28315..247db3b 100644
 +
 +// Optional: called from the thread that runs zapd_main while files are extracted (done == total once they all are).
 +extern "C" void (*gZapdProgressCallback)(int done, int total) = nullptr;
++
++// How many files are extracted at once. 0 means the default (half the hardware threads). Set before zapd_main; the extractor
++// lowers it on a retry after a failed run.
++static std::atomic<int> sWorkerLimit = 0;
++extern "C" void zapd_set_worker_limit(int workers)
++{
++	sWorkerLimit = workers;
++}
 +
 +// The first error a worker hit during the last zapd_main run, or "" if none.
 +extern "C" const char* zapd_last_error()
@@ -67,7 +75,7 @@ index 4e28315..247db3b 100644
  
  extern void ImportExporters();
  
-@@ -106,6 +155,12 @@ extern "C" int zapd_main(int argc, char* argv[])
+@@ -106,6 +163,12 @@ extern "C" int zapd_main(int argc, char* argv[])
  	Globals* g = new Globals();
  	WarningHandler::Init(argc, argv);
  
@@ -80,7 +88,19 @@ index 4e28315..247db3b 100644
  	for (int i = 1; i < argc; i++)
  	{
  		if (!strcmp(argv[i], "--version"))
-@@ -318,13 +373,15 @@ extern "C" int zapd_main(int argc, char* argv[])
+@@ -301,7 +364,10 @@ extern "C" int zapd_main(int argc, char* argv[])
+ 					Directory::ListFiles(Globals::Instance->inputPath.string());
+ 
+ 				const int num_threads = std::thread::hardware_concurrency();
+-				ctpl::thread_pool pool(num_threads > 1 ? num_threads / 2 : 1);
++				int poolSize = num_threads > 1 ? num_threads / 2 : 1;
++				if (sWorkerLimit > 0 && sWorkerLimit < poolSize)
++					poolSize = sWorkerLimit;
++				ctpl::thread_pool pool(poolSize);
+ 
+ 				bool parseSuccessful;
+ 
+@@ -318,13 +384,15 @@ extern "C" int zapd_main(int argc, char* argv[])
  				{
  					if (Globals::Instance->singleThreaded)
  					{
@@ -98,7 +118,7 @@ index 4e28315..247db3b 100644
  						});
  					}
  				}
-@@ -333,13 +390,27 @@ extern "C" int zapd_main(int argc, char* argv[])
+@@ -333,13 +401,30 @@ extern "C" int zapd_main(int argc, char* argv[])
  				{
  					while (true)
  					{
@@ -121,13 +141,16 @@ index 4e28315..247db3b 100644
 +						sZapdFirstError += StringHelper::Sprintf("\n\n%i of %i files failed to extract.",
 +						                                         (int)numWorkersFailed, fileListSize);
 +					}
++					// Clean up so another zapd_main run (the extractor retries) starts from a fresh state
++					delete exporterSet;
++					delete g;
 +					return 1;
 +				}
 +
  				auto end = std::chrono::steady_clock::now();
  				auto diff =
  					std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
-@@ -457,8 +528,6 @@ int ExtractFunc(int workerID, int fileListSize, std::string fileListItem, ZFileM
+@@ -457,8 +542,6 @@ int ExtractFunc(int workerID, int fileListSize, std::string fileListItem, ZFileM
  		Globals::Instance->workerData[workerID]->externalFiles.clear();
  		Globals::Instance->workerData[workerID]->segments.clear();
  		Globals::Instance->workerData[workerID]->segmentRefFiles.clear();
@@ -136,7 +159,7 @@ index 4e28315..247db3b 100644
  	}
  	return 0;
  }
-@@ -467,13 +536,32 @@ bool Parse(const fs::path& xmlFilePath, const fs::path& basePath, const fs::path
+@@ -467,13 +550,32 @@ bool Parse(const fs::path& xmlFilePath, const fs::path& basePath, const fs::path
             ZFileMode fileMode, int workerID)
  {
  	tinyxml2::XMLDocument doc;

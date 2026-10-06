@@ -736,10 +736,19 @@ index 2b045bc..160b2f4 100644
  
      public void openFilePicker() {
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index 1277ce4..99ff1fa 100644
+index 1277ce4..410e277 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
-@@ -47,8 +47,12 @@
+@@ -5,6 +5,8 @@
+ #pragma comment(lib, "Shlwapi.lib")
+ #endif
+ #include "Extract.h"
++#include <thread>
++#include <chrono>
+ #include "portable-file-dialogs.h"
+ #include <utils/binarytools/BitConverter.h>
+ #include "variables.h"
+@@ -47,8 +49,12 @@
  
  #include <SDL2/SDL_messagebox.h>
  
@@ -752,7 +761,7 @@ index 1277ce4..99ff1fa 100644
  #include <filesystem>
  #include <unordered_map>
  #include <random>
-@@ -78,7 +82,7 @@ static const std::unordered_map<uint32_t, const char*> verMap = {
+@@ -78,7 +84,7 @@ static const std::unordered_map<uint32_t, const char*> verMap = {
      { OOT_PAL_GC_MQ_DBG, "PAL MQ Debug" },  { OOT_PAL_10, "PAL N64 1.0" },
      { OOT_PAL_11, "PAL N64 1.1" },          { OOT_NTSC_US_GC, "NTSC Gamecube US" },
      { OOT_NTSC_JP_GC, "NTSC Gamecube JP" }, { OOT_NTSC_JP_GC_CE, "NTSC Gamecube JP (Collector's Edition)" },
@@ -761,7 +770,7 @@ index 1277ce4..99ff1fa 100644
      { OOT_NTSC_10, "NTSC N64 1.0" },        { OOT_NTSC_11, "NTSC N64 1.1" },
      { OOT_NTSC_12, "NTSC N64 1.2" },
  };
-@@ -115,27 +119,136 @@ enum class ButtonId : int {
+@@ -115,27 +121,136 @@ enum class ButtonId : int {
  };
  
  #ifdef __ANDROID__
@@ -908,7 +917,7 @@ index 1277ce4..99ff1fa 100644
  #ifdef _WIN32
      MessageBoxA(nullptr, text, title, MB_OK | MB_ICONERROR);
  #else
-@@ -162,6 +275,7 @@ void Extractor::ShowCompressedErrorBox() const {
+@@ -162,6 +277,7 @@ void Extractor::ShowCompressedErrorBox() const {
  }
  
  int Extractor::ShowRomPickBox(uint32_t verCrc) const {
@@ -916,7 +925,7 @@ index 1277ce4..99ff1fa 100644
      std::unique_ptr<char[]> boxBuffer = std::make_unique<char[]>(mCurrentRomPath.size() + 100);
      SDL_MessageBoxData boxData = { 0 };
      SDL_MessageBoxButtonData buttons[3] = { { 0 } };
-@@ -184,14 +298,15 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
+@@ -184,14 +300,15 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
      boxData.buttons = buttons;
      snprintf(boxBuffer.get(), mCurrentRomPath.size() + 100,
               "Rom detected: %s, Header CRC32: %8X. It appears to be: %s. Use this rom?", mCurrentRomPath.c_str(),
@@ -934,7 +943,7 @@ index 1277ce4..99ff1fa 100644
  #ifdef _WIN32
      ret = MessageBoxA(nullptr, box, title, MB_YESNO | MB_ICONQUESTION);
  #else
-@@ -209,7 +324,9 @@ int Extractor::ShowYesNoBox(const char* title, const char* box) {
+@@ -209,7 +326,9 @@ int Extractor::ShowYesNoBox(const char* title, const char* box) {
      boxData.message = box;
      boxData.title = title;
      boxData.buttons = buttons;
@@ -945,7 +954,7 @@ index 1277ce4..99ff1fa 100644
  #endif
      return ret;
  }
-@@ -223,9 +340,14 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+@@ -223,9 +342,14 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
      std::ifstream inFile;
      std::vector<std::string>::iterator it = roms.begin();
  
@@ -960,7 +969,7 @@ index 1277ce4..99ff1fa 100644
  
          // Skip. We will handle rom size errors later on after filtering
          if (!ValidateRomSize()) {
-@@ -234,6 +356,10 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+@@ -234,6 +358,10 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
          }
  
          inFile.open(rom, std::ios::in | std::ios::binary);
@@ -971,7 +980,7 @@ index 1277ce4..99ff1fa 100644
          inFile.read((char*)mRomData.get(), mCurRomSize);
          inFile.clear();
          inFile.close();
-@@ -293,31 +419,39 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
+@@ -293,31 +421,39 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
      }
      closedir(d);
  #elif defined(__ANDROID__)
@@ -1029,7 +1038,7 @@ index 1277ce4..99ff1fa 100644
      }
  #else
      for (const auto& file : std::filesystem::directory_iterator(mSearchPath)) {
-@@ -371,27 +505,30 @@ bool Extractor::GetRomPathFromBox() {
+@@ -371,27 +507,30 @@ bool Extractor::GetRomPathFromBox() {
      mCurrentRomPath = nameBuffer;
  
  #elif defined(__ANDROID__)
@@ -1051,14 +1060,14 @@ index 1277ce4..99ff1fa 100644
 +    // copy failed. The copy itself reports its own progress.
 +    while (fileDialogOpen) {
 +        SDL_Delay(100);
-+    }
+     }
+-    SDL_Log("%s",javaRomPath);
+-    selection.push_back(javaRomPath);
 +    std::string picked;
 +    {
 +        std::lock_guard<std::mutex> lock(javaRomPathMutex);
 +        picked = javaRomPath;
-     }
--    SDL_Log("%s",javaRomPath);
--    selection.push_back(javaRomPath);
++    }
 +    SDL_Log("Picked rom: %s", picked.c_str());
  
 -    if (selection.empty()) {
@@ -1076,7 +1085,7 @@ index 1277ce4..99ff1fa 100644
  
  #else
      auto selection = pfd::open_file("Select a file", mSearchPath, { "N64 Roms", "*.z64 *.n64 *.v64" }).result();
-@@ -411,7 +548,10 @@ uint32_t Extractor::GetRomVerCrc() const {
+@@ -411,7 +550,10 @@ uint32_t Extractor::GetRomVerCrc() const {
  }
  
  size_t Extractor::GetCurRomSize() const {
@@ -1088,7 +1097,7 @@ index 1277ce4..99ff1fa 100644
  }
  
  bool Extractor::ValidateAndFixRom() {
-@@ -482,16 +622,25 @@ bool Extractor::ManuallySearchForRom() {
+@@ -482,16 +624,25 @@ bool Extractor::ManuallySearchForRom() {
          return false;
      }
  
@@ -1115,7 +1124,7 @@ index 1277ce4..99ff1fa 100644
      if (!ValidateRom()) {
          return false;
      }
-@@ -536,6 +685,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -536,6 +687,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
  
      mSearchPath = searchPath;
  
@@ -1123,7 +1132,7 @@ index 1277ce4..99ff1fa 100644
      GetRoms(roms);
      FilterRoms(roms, searchMode);
  
-@@ -565,6 +715,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -565,6 +717,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
              continue;
          }
  
@@ -1131,7 +1140,7 @@ index 1277ce4..99ff1fa 100644
          inFile.open(rom, std::ios::in | std::ios::binary);
          inFile.read((char*)mRomData.get(), mCurRomSize);
          inFile.clear();
-@@ -574,6 +725,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -574,6 +727,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
          int option = ShowRomPickBox(GetRomVerCrc());
  
          if (option == (int)ButtonId::YES) {
@@ -1139,7 +1148,7 @@ index 1277ce4..99ff1fa 100644
              if (!ValidateRom(true)) {
                  if (rom == roms.back()) {
                      ShowCrcErrorBox();
-@@ -620,9 +772,10 @@ bool Extractor::IsMasterQuest() const {
+@@ -620,9 +774,10 @@ bool Extractor::IsMasterQuest() const {
          case OOT_PAL_11:
          case OOT_PAL_GC:
          case OOT_PAL_GC_DBG1:
@@ -1151,7 +1160,7 @@ index 1277ce4..99ff1fa 100644
      }
  }
  
-@@ -657,9 +810,8 @@ const char* Extractor::GetZapdVerStr() const {
+@@ -657,9 +812,8 @@ const char* Extractor::GetZapdVerStr() const {
          case OOT_NTSC_12:
              return "N64_NTSC_12";
          default:
@@ -1163,7 +1172,7 @@ index 1277ce4..99ff1fa 100644
      }
  }
  
-@@ -667,7 +819,17 @@ std::string Extractor::Mkdtemp() {
+@@ -667,7 +821,17 @@ std::string Extractor::Mkdtemp() {
  #ifndef __ANDROID__
      std::string temp_dir = std::filesystem::temp_directory_path().string();
  #else
@@ -1182,13 +1191,14 @@ index 1277ce4..99ff1fa 100644
  #endif
      // create 6 random alphanumeric characters
      static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-@@ -687,7 +849,60 @@ std::string Extractor::Mkdtemp() {
+@@ -687,7 +851,61 @@ std::string Extractor::Mkdtemp() {
  }
  
  extern "C" int zapd_main(int argc, char** argv);
 +extern "C" void (*gZapdProgressCallback)(int done, int total);
 +extern "C" const char* zapd_last_error();
- 
++extern "C" void zapd_set_worker_limit(int workers);
++
 +// Extraction gets 5-90% of the bar, packing the archive the rest.
 +static void ReportZapdProgress(int done, int total) {
 +    static int sLastDone = -1;
@@ -1204,7 +1214,7 @@ index 1277ce4..99ff1fa 100644
 +        SohLoading_SetStatus("Packing the game archive", "Writing all assets into one file", 90, 240);
 +    }
 +}
-+
+ 
 +#ifdef __ANDROID__
 +// std::filesystem::copy can leave a file short or missing on Android's external storage. Compare every copied file
 +// with its source and redo the ones that differ with a plain read/write copy, so ZAPD never starts on a bad file.
@@ -1243,7 +1253,7 @@ index 1277ce4..99ff1fa 100644
  bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      constexpr int argc = 18;
      char xmlPath[1024];
-@@ -697,72 +912,113 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
+@@ -697,72 +915,134 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      const char* version = GetZapdVerStr();
      const char* otrFile = IsMasterQuest() ? "oot-mq.otr" : "oot.otr";
  
@@ -1258,30 +1268,45 @@ index 1277ce4..99ff1fa 100644
 +        return false;
 +    }
 +
++    // The failure is random (it differs run to run and passes on a later try), so one bad run must not end the extraction.
++    // Each retry starts clean, in a new work folder, and uses fewer helper threads, which takes any thread race and the memory
++    // use of many files at once out of the picture.
++    constexpr int kAttempts = 4;
++    std::error_code ec;
++    std::string failure;
 +    std::string tempdir;
 +    std::string curdir;
-+    std::string failure;
-+    int zapdResult = 1;
-+
-+    SohLoading_SetStatus("Preparing to extract", "Copying the extractor files", -1, 120);
-+    try {
-+        std::string romPath = std::filesystem::absolute(mCurrentRomPath).string();
-+        installPath = std::filesystem::absolute(installPath).string();
-+        exportdir = std::filesystem::absolute(exportdir).string();
-+        // Work this out in the temporary folder
-+        tempdir = Mkdtemp();
-+        curdir = std::filesystem::current_path().string();
++    for (int attempt = 1; attempt <= kAttempts; attempt++) {
++        tempdir.clear();
++        curdir.clear();
++        failure.clear();
++        int zapdResult = 1;
++        if (attempt > 1) {
++            char detail[96];
++            snprintf(detail, sizeof(detail), "Try %d of %d, with fewer helpers", attempt, kAttempts);
++            SohLoading_SetStatus("That did not work, trying again", detail, -1, 120);
++            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
++        }
++        zapd_set_worker_limit(attempt == 1 ? 0 : (attempt == 2 ? 2 : 1));
++        SohLoading_SetStatus("Preparing to extract", "Copying the extractor files", -1, 120);
++        try {
++            std::string romPath = std::filesystem::absolute(mCurrentRomPath).string();
++            installPath = std::filesystem::absolute(installPath).string();
++            exportdir = std::filesystem::absolute(exportdir).string();
++            // Work this out in the temporary folder
++            tempdir = Mkdtemp();
++            curdir = std::filesystem::current_path().string();
  #if defined(_WIN32) || defined(__ANDROID__)
 -    std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
 -                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
-+        std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
-+                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
++            std::filesystem::copy(installPath + "/assets", tempdir + "/assets",
++                                  std::filesystem::copy_options::recursive | std::filesystem::copy_options::update_existing);
 +#ifdef __ANDROID__
-+        VerifyCopiedAssets(installPath + "/assets", tempdir + "/assets");
++            VerifyCopiedAssets(installPath + "/assets", tempdir + "/assets");
 +#endif
  #else
 -    std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
-+        std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
++            std::filesystem::create_symlink(installPath + "/assets", tempdir + "/assets");
  #endif
  
 -    std::filesystem::current_path(tempdir);
@@ -1308,30 +1333,30 @@ index 1277ce4..99ff1fa 100644
 -    argv[15] = otrFile;
 -    argv[16] = "--portVer";
 -    argv[17] = portVersion;
-+        std::filesystem::current_path(tempdir);
++            std::filesystem::current_path(tempdir);
 +
-+        snprintf(xmlPath, 1024, "assets/extractor/xmls/%s", version);
-+        snprintf(confPath, 1024, "assets/extractor/Config_%s.xml", version);
-+        snprintf(portVersion, 18, "%d.%d.%d", gBuildVersionMajor, gBuildVersionMinor, gBuildVersionPatch);
++            snprintf(xmlPath, 1024, "assets/extractor/xmls/%s", version);
++            snprintf(confPath, 1024, "assets/extractor/Config_%s.xml", version);
++            snprintf(portVersion, 18, "%d.%d.%d", gBuildVersionMajor, gBuildVersionMinor, gBuildVersionPatch);
 +
-+        argv[0] = "ZAPD";
-+        argv[1] = "ed";
-+        argv[2] = "-i";
-+        argv[3] = xmlPath;
-+        argv[4] = "-b";
-+        argv[5] = romPath.c_str();
-+        argv[6] = "-fl";
-+        argv[7] = "assets/extractor/filelists";
-+        argv[8] = "-gsf";
-+        argv[9] = "1";
-+        argv[10] = "-rconf";
-+        argv[11] = confPath;
-+        argv[12] = "-se";
-+        argv[13] = "OTR";
-+        argv[14] = "--otrfile";
-+        argv[15] = otrFile;
-+        argv[16] = "--portVer";
-+        argv[17] = portVersion;
++            argv[0] = "ZAPD";
++            argv[1] = "ed";
++            argv[2] = "-i";
++            argv[3] = xmlPath;
++            argv[4] = "-b";
++            argv[5] = romPath.c_str();
++            argv[6] = "-fl";
++            argv[7] = "assets/extractor/filelists";
++            argv[8] = "-gsf";
++            argv[9] = "1";
++            argv[10] = "-rconf";
++            argv[11] = confPath;
++            argv[12] = "-se";
++            argv[13] = "OTR";
++            argv[14] = "--otrfile";
++            argv[15] = otrFile;
++            argv[16] = "--portVer";
++            argv[17] = portVersion;
  
  #ifdef _WIN32
 -    // Grab a handle to the command window.
@@ -1347,62 +1372,69 @@ index 1277ce4..99ff1fa 100644
 -                             "Extraction will now begin in the background.\n\nPlease be patient for the process to "
 -                             "finish. Do not close the main program.",
 -                             nullptr);
-+        // Grab a handle to the command window.
-+        HWND cmdWindow = GetConsoleWindow();
++            // Grab a handle to the command window.
++            HWND cmdWindow = GetConsoleWindow();
 +
-+        // Normally the command window is hidden. We want the window to be shown here so the user can see the progess of the
-+        // extraction.
-+        ShowWindow(cmdWindow, SW_SHOW);
-+        SetWindowPos(cmdWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
++            // Normally the command window is hidden. We want the window to be shown here so the user can see the progess of the
++            // extraction.
++            ShowWindow(cmdWindow, SW_SHOW);
++            SetWindowPos(cmdWindow, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
 +#elif !defined(__ANDROID__)
-+        // Show extraction in background message until linux/mac can have visual progress
-+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Extracting",
-+                                 "Extraction will now begin in the background.\n\nPlease be patient for the process to "
-+                                 "finish. Do not close the main program.",
-+                                 nullptr);
++            // Show extraction in background message until linux/mac can have visual progress
++            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Extracting",
++                                     "Extraction will now begin in the background.\n\nPlease be patient for the process to "
++                                     "finish. Do not close the main program.",
++                                     nullptr);
  #endif
  
 -    zapd_main(argc, (char**)argv.data());
-+        SohLoading_SetStatus("Extracting game assets from your ROM", "Starting", 5, 120);
-+        gZapdProgressCallback = ReportZapdProgress;
-+        zapdResult = zapd_main(argc, (char**)argv.data());
-+        gZapdProgressCallback = nullptr;
++            SohLoading_SetStatus("Extracting game assets from your ROM", "Starting", 5, 120);
++            gZapdProgressCallback = ReportZapdProgress;
++            zapdResult = zapd_main(argc, (char**)argv.data());
++            gZapdProgressCallback = nullptr;
  
  #ifdef _WIN32
 -    // Hide the command window again.
 -    ShowWindow(cmdWindow, SW_HIDE);
-+        // Hide the command window again.
-+        ShowWindow(cmdWindow, SW_HIDE);
++            // Hide the command window again.
++            ShowWindow(cmdWindow, SW_HIDE);
  #endif
  
 -    std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
-+        if (zapdResult != 0) {
-+            failure = std::string("The extractor stopped with an error.\n\n") + zapd_last_error();
-+        } else if (!std::filesystem::exists(otrFile) || std::filesystem::file_size(otrFile) == 0) {
-+            failure = std::string("The extractor finished but did not create ") + otrFile + ".";
-+        } else {
-+            SohLoading_SetStatus("Saving the game archive", otrFile, 98, 120);
-+            std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
-+        }
-+    } catch (const std::exception& e) {
-+        gZapdProgressCallback = nullptr;
-+        failure = std::string("The extraction failed: ") + e.what();
-+    }
- 
+-
 -    // Go back to where this game was executed from
 -    std::filesystem::current_path(curdir);
 -    std::filesystem::remove_all(tempdir);
-+    // Go back to where this game was executed from, and clean up
-+    std::error_code ec;
-+    if (!curdir.empty()) {
-+        std::filesystem::current_path(curdir, ec);
-+    }
-+    if (!tempdir.empty()) {
-+        std::filesystem::remove_all(tempdir, ec);
-+    }
++            if (zapdResult != 0) {
++                failure = std::string("The extractor stopped with an error.\n\n") + zapd_last_error();
++            } else if (!std::filesystem::exists(otrFile) || std::filesystem::file_size(otrFile) == 0) {
++                failure = std::string("The extractor finished but did not create ") + otrFile + ".";
++            } else {
++                SohLoading_SetStatus("Saving the game archive", otrFile, 98, 120);
++                std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
++            }
++        } catch (const std::exception& e) {
++            gZapdProgressCallback = nullptr;
++            failure = std::string("The extraction failed: ") + e.what();
++        }
  
 -    return 0;
++        // Go back to where this game was executed from, and clean up
++        if (!curdir.empty()) {
++            std::filesystem::current_path(curdir, ec);
++        }
++        if (!tempdir.empty()) {
++            std::filesystem::remove_all(tempdir, ec);
++        }
++        if (failure.empty()) {
++            break;
++        }
++        printf("Extraction attempt %d of %d failed: %s\n", attempt, kAttempts, failure.c_str());
++    }
++    zapd_set_worker_limit(0);
++
 +    if (!failure.empty()) {
++        failure += "\n\nThe extraction was tried " + std::to_string(kAttempts) + " times.";
 +        printf("Extraction failed: %s\n", failure.c_str());
 +        // A half-written archive would make the next launch skip extraction and fail later
 +        std::filesystem::remove(exportdir + "/" + otrFile, ec);
