@@ -24,6 +24,7 @@
 #include "ground_patches.h"
 #include "lobby_fish.h"
 #include "lobby_fish_model.h"
+#include "lobby_reef_geometry.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -15099,7 +15100,7 @@ void DrawGraphicsUi() {
     }
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
         GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
-        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, and busy cleaner wrasse. Only for looks.");
+        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, busy cleaner wrasse and hermit crabs sifting the sand.");
     }
     ImGui::Spacing();
 }

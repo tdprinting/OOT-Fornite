@@ -34,6 +34,11 @@ def xyz(v):return (v[0]/100,-v[2]/100,v[1]/100)
 
 def pose(v,part,phase):
     x,y,z=v
+    if part>=5:
+        side=1 if part==5 else -1
+        if part in (5,6):y+=max(0,math.sin(phase+side*1.1+z*0.18))*2.5;z+=math.sin(phase+side*1.1)*2
+        elif part==7:y+=math.sin(phase)*2;z-=2+math.sin(phase)*1.2
+        return xyz((x,y,z))
     bend=max(0,min(1,(-z+8)/44))
     x+=math.sin(phase+z*0.045)*bend*bend*5
     if part==1:
@@ -79,9 +84,16 @@ for i in range(6):
     ob=obj(('Clownfish' if species==0 else 'CleanerWrasse')+'_%02d'%i,make_fish.mesh(species),True)
     ob.location=xyz(locations[i])
     ob.rotation_euler[2]=[-0.9,0.8,-1.4,1.1,-0.8,2.4][i]
-    scale=0.72 if i==1 else 0.88 if i==2 else 0.8 if i==5 else 1
+    scale=0.55*(0.72 if i==1 else 0.88 if i==2 else 0.8 if i==5 else 1)
     ob.scale=(scale,scale,scale)
     ob['personality']=['curious visitor watcher','shy anemone youngster','playful weaver','busy cleaner','patient cleaner','quick scout'][i]
+    fish.append(ob)
+for i in range(3):
+    ob=obj('HermitCrab_%02d'%i,make_fish.crab(),True)
+    ob.location=xyz((i*85-85,32,32 if i%2 else -35))
+    ob.rotation_euler[2]=i*1.8
+    ob.scale=(0.75,)*3 if i==1 else (0.9,)*3
+    ob['personality']=['sand sifter','shy shell dweller','busy beachcomber'][i]
     fish.append(ob)
 
 # The game makes its translucent panes procedurally; these are the editable preview equivalent.
@@ -89,7 +101,7 @@ glass=bpy.data.materials.new('Water_Glass')
 glass.use_nodes=True
 shader=glass.node_tree.nodes.get('Principled BSDF')
 shader.inputs['Base Color'].default_value=(0.18,0.64,0.72,1)
-shader.inputs['Alpha'].default_value=0.10
+shader.inputs['Alpha'].default_value=0.035
 shader.inputs['Roughness'].default_value=0.24
 if hasattr(glass,'surface_render_method'):glass.surface_render_method='BLENDED'
 panes=[((-160,34,-86),(160,34,-86),(160,183,-86),(-160,183,-86)),
@@ -100,6 +112,10 @@ panes=[((-160,34,-86),(160,34,-86),(160,183,-86),(-160,183,-86)),
 me=bpy.data.meshes.new('Water panes')
 me.from_pydata([xyz(p) for q in panes for p in q],[],[tuple(range(i,i+4)) for i in range(0,20,4)])
 water=bpy.data.objects.new('Water panes',me);bpy.context.collection.objects.link(water);me.materials.append(glass)
+root_ob=bpy.data.objects.new('LobbyReefScale_50percent',None)
+bpy.context.collection.objects.link(root_ob)
+for ob in [tank,water]+fish:ob.parent=root_ob
+root_ob.scale=(0.5,0.5,0.5)
 
 scene=bpy.context.scene
 scene.frame_start=1;scene.frame_end=24;scene.render.fps=24
@@ -108,19 +124,19 @@ scene.render.engine='CYCLES'
 scene.cycles.samples=24
 scene.render.resolution_x=1024;scene.render.resolution_y=768;scene.render.resolution_percentage=100
 scene.world.color=(0.13,0.13,0.13)
-bpy.ops.object.camera_add(location=(5.1,7.6,4.6))
+bpy.ops.object.camera_add(location=(2.55,3.8,1.9))
 camera=bpy.context.object;camera.name='Preview Camera'
-camera.rotation_euler=(Vector((0,0,1.05))-camera.location).to_track_quat('-Z','Y').to_euler()
-camera.data.type='ORTHO';camera.data.ortho_scale=5.6;scene.camera=camera
-for name,loc,energy,size in [('Warm key',(1,4,6),750,5),('Blue rim',(-4,-2,4),600,4)]:
+camera.rotation_euler=(Vector((0,0,0.51))-camera.location).to_track_quat('-Z','Y').to_euler()
+camera.data.type='ORTHO';camera.data.ortho_scale=2.55;scene.camera=camera
+for name,loc,energy,size in [('Warm key',(1,3,4),180,4),('Blue rim',(-3,-2,3),140,3)]:
     bpy.ops.object.light_add(type='AREA',location=loc)
     light=bpy.context.object;light.name=name;light.data.energy=energy;light.data.shape='DISK';light.data.size=size
-    light.rotation_euler=(Vector((0,0,1))-light.location).to_track_quat('-Z','Y').to_euler()
+    light.rotation_euler=(Vector((0,0,0.5))-light.location).to_track_quat('-Z','Y').to_euler()
 scene.view_settings.view_transform='Standard'
 scene.render.image_settings.file_format='PNG'
 bpy.ops.wm.save_as_mainfile(filepath=str(OUT/'lobby_reef.blend'))
 bpy.ops.object.select_all(action='DESELECT')
-for ob in [tank,water]+fish:ob.select_set(True)
+for ob in [root_ob,tank,water]+fish:ob.select_set(True)
 bpy.ops.export_scene.gltf(filepath=str(OUT/'lobby_reef.glb'),use_selection=True,export_format='GLB',export_animations=True,export_morph=True)
 if '--render' in sys.argv:
     (OUT/'previews').mkdir(exist_ok=True)
