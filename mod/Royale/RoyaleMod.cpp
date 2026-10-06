@@ -9408,8 +9408,8 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // 32x32 face in three versions (eyes open, half shut, shut), a skeleton of 25 bones and eleven animation clips: idle, walk, run, jump, sit, talk,
 // groom, sleep, stretch, pounce and happy (shared/lilo_model.h). She is skinned on the CPU every frame (the way the game itself skins Epona), lit by
 // a fixed sun baked into the vertex colours, and drawn with her own two textures.
-constexpr float kLiloPetScale = 0.8f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52); Link is about 60
-constexpr float kLiloMapScale = 1.0f;
+constexpr float kLiloPetScale = 0.4f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52) and Link about 60: at 0.4 she is cat sized, about 20 units
+constexpr float kLiloMapScale = 0.5f;
 
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
     namespace L = royale::lilo;
@@ -9488,10 +9488,10 @@ void PlayMeow(int clip, float gain = 0.7f) {
 }
 
 // A little greenish cloud (a few brown puffs among it) that drifts up and thins out; called every tick while the cloud lasts.
-void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs) {
+void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs, float size = 1.0f) {
     for (int i = 0; i < puffs; i++) {
-        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, by + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
-        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
+        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f * size, by + (22.0f + Rand_ZeroOne() * 22.0f) * size, bz + (Rand_ZeroOne() - 0.5f) * 34.0f * size };
+        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f * size, (0.5f + Rand_ZeroOne() * 0.7f) * size, (Rand_ZeroOne() - 0.5f) * 0.9f * size }, accel = { 0.0f, 0.02f * size, 0.0f };
         const bool brown = Rand_ZeroOne() < 0.35f;
         Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
         Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
@@ -9574,7 +9574,7 @@ void SetMood(CatBrain& c, CatMood m) { c.mood = m; c.moodT = 0; }
 
 void CatPoof(PlayState* play, float x, float y, float z) {
     for (int i = 0; i < 7; i++) {
-        Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 30.0f, y + 10.0f + Rand_ZeroOne() * 22.0f, z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+        Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 18.0f, y + 5.0f + Rand_ZeroOne() * 12.0f, z + (Rand_ZeroOne() - 0.5f) * 18.0f };
         Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 1.6f, 0.6f + Rand_ZeroOne(), (Rand_ZeroOne() - 0.5f) * 1.6f }, accel = { 0, 0, 0 };
         Color_RGBA8 prim = { 255, 245, 210, 255 }, env = { 200, 190, 255, 255 };
         EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 120, 26);
@@ -9591,7 +9591,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     const float pspeed = std::fabs(pl->linearVelocity);
     const bool playerStill = pspeed < 0.6f;
     // Her place beside you: behind and to the left.
-    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 95.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 95.0f;
+    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 75.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 75.0f;
     float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
     if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
         if (c.placed) CatPoof(play, c.x, c.y, c.z);
@@ -9654,7 +9654,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     }
     if (c.cloudT > 0.0f) {   // the cloud, behind her
         c.cloudT -= dt;
-        FartCloudStep(play, c.x - std::sin(c.yaw) * 48.0f, c.y, c.z - std::cos(c.yaw) * 48.0f, 2);
+        FartCloudStep(play, c.x - std::sin(c.yaw) * 26.0f, c.y, c.z - std::cos(c.yaw) * 26.0f, 2, 0.55f);
     }
 
     const float tm = static_cast<float>(play->gameplayFrames) * dt;
@@ -9663,7 +9663,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     int clip = L::kIdle, eyes = L::kEyesOpen;
     float rate = 1.0f;
     auto follow = [&](float minSpeed) {   // go to her place: a walk when it is near, a run when you have gone on ahead
-        c.speed += (std::clamp((d - 40.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
+        c.speed += (std::clamp((d - 30.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
         heading = std::atan2(dx, dz);
         c.x += std::sin(heading) * c.speed * dt;
         c.z += std::cos(heading) * c.speed * dt;
@@ -9672,7 +9672,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
 
     switch (c.mood) {
         case CatMood::Follow: case CatMood::Stand: {
-            if (d > 58.0f) {
+            if (d > 46.0f) {
                 follow(45.0f);
                 c.mood = CatMood::Follow;
             } else {
@@ -9703,7 +9703,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
             clip = L::kSleep;
             eyes = L::kEyesShut;
             if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
-                Vec3f pos = { c.x + std::sin(c.yaw) * 20.0f, c.y + 40.0f, c.z + std::cos(c.yaw) * 20.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
+                Vec3f pos = { c.x + std::sin(c.yaw) * 10.0f, c.y + 20.0f, c.z + std::cos(c.yaw) * 10.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
                 Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
                 EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
             }
@@ -9719,7 +9719,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
         case CatMood::Pounce: {   // crouch and wiggle, then a leap at nothing
             clip = L::kPounce;
             if (c.moodT < 0.9f) {
-                c.leapX = std::sin(c.yaw) * 75.0f; c.leapZ = std::cos(c.yaw) * 75.0f;
+                c.leapX = std::sin(c.yaw) * 45.0f; c.leapZ = std::cos(c.yaw) * 45.0f;
             } else if (c.moodT < 1.35f) {
                 c.x += c.leapX * dt / 0.45f; c.z += c.leapZ * dt / 0.45f;
             } else if (c.moodT > 1.5f) {
@@ -9766,7 +9766,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y;
     actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
     actor->focus.pos = actor->world.pos;
-    actor->focus.pos.y += 30.0f;
+    actor->focus.pos.y += 16.0f;
 }
 
 void Cat_Draw(Actor* actor, PlayState* play) {
@@ -9793,7 +9793,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
     a->destroy = Cat_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 18.0f;
+    a->shape.shadowScale = 9.0f;
     gCat.actor = a;
     gCat.placed = false;
     gCat.pickups = gPickupLog.size();
@@ -9824,7 +9824,7 @@ void Lilo_Update(Actor* actor, PlayState* play) {
         actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * (talking ? 0.25f : 0.1f));
     }
     actor->focus.pos = actor->world.pos;
-    actor->focus.pos.y += 40.0f;
+    actor->focus.pos.y += 20.0f;
     if (OfferTalk(actor, play, kTextLilo, royale::kHireRange)) TalkToLilo();
     gLiloAnim.Play(talking ? L::kTalk : L::kSit, 0.3f);
     gLiloAnim.Update(1.0f / royale::kTickHz);
@@ -9878,7 +9878,7 @@ void ReconcileLilo(const royale::HudState& hud) {
     a->destroy = Lilo_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 22.0f;
+    a->shape.shadowScale = 11.0f;
     gLiloActor = a;
     gLiloAnim = royale::lilo::Animator{};
     gLiloAnim.Play(royale::lilo::kSit, 0.0f);
@@ -9915,7 +9915,7 @@ void UpdateLiloFx() {
     if (gLiloMewAt > 0.0 && now >= gLiloMewAt) { gLiloMewAt = -1.0; PlayMeow(kMewFall, 0.6f); }   // a satisfied mew once the air has cleared a little
     if (now < gFartCloudUntil) {
         const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
-        FartCloudStep(gPlayState, gLiloPos.x - std::sin(yaw) * 48.0f, gLiloActor->world.pos.y, gLiloPos.z - std::cos(yaw) * 48.0f, 3);   // behind her
+        FartCloudStep(gPlayState, gLiloPos.x - std::sin(yaw) * 30.0f, gLiloActor->world.pos.y, gLiloPos.z - std::cos(yaw) * 30.0f, 3, 0.65f);   // behind her
     }
 }
 
@@ -9926,7 +9926,7 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z);
     ImVec2 at;
-    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 78.0f, gLiloPos.z, &at)) {
+    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 42.0f, gLiloPos.z, &at)) {
         const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
         const char* label = royale::kLiloName;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
