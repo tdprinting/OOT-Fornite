@@ -158,11 +158,30 @@ inline constexpr int kLods = 3;
 inline constexpr int LodSquares(int lod) { return lod <= 0 ? kSub : lod == 1 ? kSub / 2 : 1; }
 inline constexpr int LodVerts(int lod) { return (LodSquares(lod) + 1) * (LodSquares(lod) + 1); }
 
-// Block (bi, bj) at level `lod` as a list of vertices, row by row: (LodSquares + 1)^2 of them, every one a fine vertex.
+// A coarser vertex takes the average colour of the fine ones around it (within `radius` fine squares) instead of the one colour it happens to sit
+// on. The texture is busy (streams, paths, single trees), so a lone sample made far ground speckle with blue, orange and dark blotches that
+// shimmered while the camera moved and jumped whenever a chunk changed level of detail. Averaged, the far ground fades to its plain colour. The
+// result depends only on the fine position, so neighbouring blocks agree along their shared edge.
+inline DrawVert FilteredVertex(int fi, int fj, int radius) {
+    DrawVert v = FineVertex(fi, fj);
+    if (radius <= 0) return v;
+    int r = 0, g = 0, b = 0, n = 0;
+    for (int j = std::max(0, fj - radius); j <= std::min(kFine, fj + radius); j++)
+        for (int i = std::max(0, fi - radius); i <= std::min(kFine, fi + radius); i++) {
+            const uint8_t* c = &gColourData[(static_cast<size_t>(j) * (kFine + 1) + i) * 3];
+            r += c[0]; g += c[1]; b += c[2]; n++;
+        }
+    v.r = static_cast<uint8_t>(r / n); v.g = static_cast<uint8_t>(g / n); v.b = static_cast<uint8_t>(b / n);
+    return v;
+}
+
+// Block (bi, bj) at level `lod` as a list of vertices, row by row: (LodSquares + 1)^2 of them, every one a fine vertex (its colour averaged over
+// the squares it stands for, at the coarser levels).
 inline void BlockVertices(int bi, int bj, int lod, std::vector<DrawVert>& out) {
     const int n = LodSquares(lod), step = kSub / n;
+    const int radius = lod <= 0 ? 0 : step;
     for (int b = 0; b <= n; b++)
-        for (int a = 0; a <= n; a++) out.push_back(FineVertex(bi * kSub + a * step, bj * kSub + b * step));
+        for (int a = 0; a <= n; a++) out.push_back(FilteredVertex(bi * kSub + a * step, bj * kSub + b * step, radius));
 }
 inline void BlockVertices(int bi, int bj, bool fine, std::vector<DrawVert>& out) { BlockVertices(bi, bj, fine ? 0 : kLods - 1, out); }
 
