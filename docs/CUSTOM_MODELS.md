@@ -30,7 +30,7 @@ idle, walk, run, jump, sit, talk, groom, sleep, stretch, pounce, happy. The game
 Avriella is a low poly baby in the Ocarina of Time style: `assets/avriella/avriella.blend` (also `avriella.glb`; the big `.fbx` is not committed) has the mesh
 (about 1050 triangles: a big round head with a face picture, a curly hair tuft, a pumpkin-print ruffle-shoulder romper, chubby arms and legs, and three
 tiny rocks), the skeleton (23 bones: a spine, neck, head, tuft, shoulder frills, arms with hands, legs with feet, and the three rocks) and fifteen clips: idle, sit,
-crawl (unused: she cannot crawl yet), wave, giggle, clap, roll, nap, stand, reach, babble, rocks (stacking the rocks), tumble (rolling about), kick and chew. The textures are painted per pixel in code, 5 bits a channel, at most 64x32 so
+crawl (unused: she cannot crawl yet), wave, giggle, clap, roll, nap, stand, reach, babble, rocks (stacking the rocks), tumble (rolling about), kick, chew and cap (swirling a cap overhead). The textures are painted per pixel in code, 5 bits a channel, at most 64x32 so
 each one fits the N64's texture memory: `avriella_cloth` (romper and sleeves), `avriella_skin` (legs, hair, frills, stone, plain skin) and five faces (smile, sleepy, asleep,
 giggle, "oh"). The game reads it from `shared/avriella_model.h`, which is generated.
 

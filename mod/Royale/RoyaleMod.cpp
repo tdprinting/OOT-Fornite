@@ -10884,7 +10884,7 @@ void BabyCoo(int kind) {
     }
 }
 
-enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Kick, Chew, Talk };   // Crawl is how she gets about: she cannot crawl yet, so she rolls
+enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Kick, Chew, Cap, Talk };   // Crawl is how she gets about: she cannot crawl yet, so she rolls
 struct BabyBrain {
     Actor* actor = nullptr;
     BabyMood mood = BabyMood::Sit;
@@ -10897,6 +10897,10 @@ struct BabyBrain {
     bool sleepy = false;      // just woke: heavy eyes for a moment
     int line = 0;             // what she says next (royale::kAvriellaPetLines)
     int face = 0;
+    royale::HatSpring capSpring;                       // the green cap she waves about: its tail swings with her hand
+    float hx = 0, hy = 0, hz = 0, hvx = 0, hvy = 0, hvz = 0;   // where her hand was and how fast it was going last frame
+    double capSeen = 0, tugAt = 0;
+    bool haveHand = false;
     royale::avriella::Animator anim;
 };
 BabyBrain gBaby;
@@ -10964,7 +10968,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
         SetBabyMood(c, BabyMood::Talk);
         static const int kLineCoo[royale::kAvriellaPetLineCount] = { kCooBaba, kCooBaba, kCooDada, kCooOoh, kCooGiggle, kCooBoth,
                                                                       kCooOoh, kCooYawn, kCooGiggle, kCooBaba, kCooHi, kCooBoth,
-                                                                      kCooChew, kCooChew, kCooGiggle, kCooGiggle };
+                                                                      kCooChew, kCooChew, kCooGiggle, kCooGiggle, kCooGiggle };
         BabyCoo(kLineCoo[c.line % royale::kAvriellaPetLineCount]);
     }
     if (!talking && c.mood == BabyMood::Talk) {   // done talking: she sits a while and has something new to say next time
@@ -11047,8 +11051,9 @@ void Baby_Update(Actor* actor, PlayState* play) {
                     else if (r < 0.55f) { SetBabyMood(c, BabyMood::Stack); }
                     else if (r < 0.61f) { SetBabyMood(c, BabyMood::Stand); BabyCoo(kCooOoh); }
                     else if (r < 0.69f) { SetBabyMood(c, BabyMood::Roll); BabyCoo(kCooGiggle); }
-                    else if (r < 0.85f) { SetBabyMood(c, BabyMood::Kick); BabyCoo(kCooGiggle); }
-                    else { SetBabyMood(c, BabyMood::Chew); BabyCoo(kCooChew); }
+                    else if (r < 0.78f) { SetBabyMood(c, BabyMood::Kick); BabyCoo(kCooGiggle); }
+                    else if (r < 0.88f) { SetBabyMood(c, BabyMood::Chew); BabyCoo(kCooChew); }
+                    else { SetBabyMood(c, BabyMood::Cap); c.haveHand = false; c.capSpring = royale::HatSpring{}; c.tugAt = 0.0; BabyCoo(kCooHi); }
                 }
             }
             break;
@@ -11119,6 +11124,14 @@ void Baby_Update(Actor* actor, PlayState* play) {
             if (c.moodT > 4.8f) SetBabyMood(c, BabyMood::Sit);
             break;
         }
+        case BabyMood::Cap: {   // snatches a green cap (a copy of yours) and swirls it round by its tail
+            clip = A::kCap;
+            face = A::kFaceGiggle;
+            if (std::fmod(c.moodT, 1.3f) < dt) BabyCoo(kCooGiggle);
+            if (c.moodT > 5.4f) SetBabyMood(c, BabyMood::Sit);
+            if (!playerStill || d > 150.0f) SetBabyMood(c, BabyMood::Crawl);
+            break;
+        }
         case BabyMood::Chew: {   // gnawing on a tiny rock
             clip = A::kChew;
             face = A::kFaceSmile;
@@ -11170,10 +11183,105 @@ void Baby_Update(Actor* actor, PlayState* play) {
     actor->focus.pos.y += 24.0f;
 }
 
+// The cap she waves: a little green cone in four rings, hung from her hand. Link's own cap is part of the game's model and cannot be taken off,
+// so this is a copy; his real cap gets a tug each time she grabs it. The tail swings on the same springs as his own (royale::HatSpring), fed by
+// how her hand moves.
+void TugLinkCap(const Player* pl, float side);   // (defined with the cap's springs, further down)
+void DrawBabyCap(PlayState* play, const royale::avriella::Pose& pose) {
+    namespace A = royale::avriella;
+    BabyBrain& c = gBaby;
+    Actor* a = c.actor;
+    if (a == nullptr) return;
+    // her hand: the middle of the mitt's vertices (the ones that follow only the right hand bone)
+    float sx = 0, sy = 0, sz = 0;
+    int n = 0;
+    for (int i = 0; i < A::kVertCount; i++) {
+        const A::Vert& v = A::kVerts[i];
+        if (v.b0 != 13 || v.w0 != 255) continue;
+        float p[3], nr[3];
+        A::SkinVertex(pose, v, p, nr);
+        sx += p[0]; sy += p[1]; sz += p[2]; n++;
+    }
+    if (n == 0) return;
+    sx /= static_cast<float>(n); sy /= static_cast<float>(n); sz /= static_cast<float>(n);
+    const float cy = std::cos(c.yaw), sn = std::sin(c.yaw);
+    const double now = ImGui::GetTime();
+    const float dt = static_cast<float>(now - c.capSeen);
+    if (!c.haveHand || dt > 0.25f) { c.hx = sx; c.hy = sy; c.hz = sz; c.hvx = c.hvy = c.hvz = 0; c.haveHand = true; c.capSeen = now; }
+    else if (dt > 0.004f) {   // (drawn more than once a frame sometimes: only step when time has passed)
+        const float vx = std::clamp((sx - c.hx) * kBabyScale / dt, -600.0f, 600.0f), vy = std::clamp((sy - c.hy) * kBabyScale / dt, -600.0f, 600.0f),
+                    vz = std::clamp((sz - c.hz) * kBabyScale / dt, -600.0f, 600.0f);
+        const float ax = (vx - c.hvx) / dt, ay = (vy - c.hvy) / dt, az = (vz - c.hvz) / dt;   // her hand speeding up: the tail is flung the other way
+        c.capSpring.Step((std::min)(dt, 0.05f), -vx, -vz, -vy, 0.0f, static_cast<float>(now), 0.7f, std::clamp(az * 0.0012f, -2.5f, 2.5f), std::clamp(-ax * 0.0012f, -2.5f, 2.5f), 0.0f);
+        (void)ay;
+        c.hx = sx; c.hy = sy; c.hz = sz; c.hvx = vx; c.hvy = vy; c.hvz = vz; c.capSeen = now;
+    }
+    // the tail's four rings: each bends a little further than the one before, drooping with its own weight
+    constexpr int kRings = 4, kSides = 5;
+    const float radius[kRings] = { 5.0f, 4.2f, 2.8f, 1.4f };
+    float cx = 0.0f, cyy = 0.0f, cz = 0.0f;   // ring centres, in her own space
+    Vtx* vtx = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Vtx) * (kRings * kSides + 1)));
+    if (vtx == nullptr) return;
+    constexpr float kSub = 8.0f;
+    const float fore = std::clamp(c.capSpring.fore, -1.1f, 1.1f), side = std::clamp(c.capSpring.side, -1.0f, 1.0f);
+    float tipX = 0, tipY = 0, tipZ = 0;
+    for (int r = 0; r < kRings; r++) {
+        const float k = static_cast<float>(r) / 3.0f;
+        const float pitch = 0.35f + 1.5f * fore * k + 0.5f * k, roll = 1.5f * side * k;   // how far this ring has bent from straight up
+        const float dx = std::sin(roll), dy = std::cos(pitch) * std::cos(roll), dz = -std::sin(pitch);
+        if (r > 0) { cx += dx * 9.0f; cyy += dy * 9.0f; cz += dz * 9.0f; }
+        // two axes at right angles to the tail's direction
+        float ux = dy, uy = -dx, uz = 0.0f;
+        const float ul = std::sqrt(ux * ux + uy * uy) + 1e-5f;
+        ux /= ul; uy /= ul;
+        const float wx = uy * dz - uz * dy, wy = uz * dx - ux * dz, wz = ux * dy - uy * dx;
+        for (int j = 0; j < kSides; j++) {
+            const float ang = 6.2831853f * static_cast<float>(j) / kSides;
+            const float ca = std::cos(ang) * radius[r], sa = std::sin(ang) * radius[r];
+            Vtx& o = vtx[r * kSides + j];
+            const float px = cx + ux * ca + wx * sa, py = cyy + uy * ca + wy * sa, pz = cz + uz * ca + wz * sa;
+            o.v.ob[0] = static_cast<s16>(std::lround(px * kSub)); o.v.ob[1] = static_cast<s16>(std::lround(py * kSub)); o.v.ob[2] = static_cast<s16>(std::lround(pz * kSub));
+            o.v.flag = 0; o.v.tc[0] = 0; o.v.tc[1] = 0;
+            const float lit = 0.62f + 0.38f * std::cos(ang + 0.7f);
+            o.v.cn[0] = static_cast<u8>(70.0f * lit); o.v.cn[1] = static_cast<u8>(170.0f * lit); o.v.cn[2] = static_cast<u8>(60.0f * lit); o.v.cn[3] = 255;
+        }
+        tipX = cx + dx * 6.0f; tipY = cyy + dy * 6.0f; tipZ = cz + dz * 6.0f;
+    }
+    Vtx& tip = vtx[kRings * kSides];
+    tip.v.ob[0] = static_cast<s16>(std::lround(tipX * kSub)); tip.v.ob[1] = static_cast<s16>(std::lround(tipY * kSub)); tip.v.ob[2] = static_cast<s16>(std::lround(tipZ * kSub));
+    tip.v.flag = 0; tip.v.tc[0] = 0; tip.v.tc[1] = 0;
+    tip.v.cn[0] = 230; tip.v.cn[1] = 225; tip.v.cn[2] = 150; tip.v.cn[3] = 255;   // a pale tip
+    // her hand's place in the world (the model turns about her feet by yaw, scaled)
+    const float hwx = a->world.pos.x + (sx * cy + sz * sn) * kBabyScale, hwy = a->world.pos.y + sy * kBabyScale, hwz = a->world.pos.z + (-sx * sn + sz * cy) * kBabyScale;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    Matrix_Translate(hwx, hwy, hwz, MTXMODE_NEW);
+    Matrix_RotateY(c.yaw, MTXMODE_APPLY);
+    Matrix_Scale(1.0f / kSub * 1.0f, 1.0f / kSub, 1.0f / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(vtx), kRings * kSides + 1, 0);
+    for (int r = 0; r + 1 < kRings; r++)
+        for (int j = 0; j < kSides; j++) {
+            const int j2 = (j + 1) % kSides;
+            const int a0 = r * kSides + j, a1 = r * kSides + j2, b0 = (r + 1) * kSides + j, b1 = (r + 1) * kSides + j2;
+            gSP2Triangles(POLY_OPA_DISP++, a0, a1, b1, 0, a0, b1, b0, 0);
+        }
+    for (int j = 0; j < kSides; j++) gSP1Triangle(POLY_OPA_DISP++, (kRings - 1) * kSides + j, (kRings - 1) * kSides + (j + 1) % kSides, kRings * kSides, 0);
+    CLOSE_DISPS(play->state.gfxCtx);
+    // and Link's own cap gets a tug each time she pulls it
+    if (now - c.tugAt > 0.9) {
+        c.tugAt = now;
+        TugLinkCap(GET_PLAYER(play), std::fmod(now, 2.0) < 1.0 ? 2.0f : -2.0f);
+    }
+}
+
 void Baby_Draw(Actor* actor, PlayState* play) {
     royale::avriella::Pose pose;
     gBaby.anim.Evaluate(pose);
     DrawAvriellaModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gBaby.yaw, kBabyScale, pose, gBaby.face);
+    if (gBaby.mood == BabyMood::Cap) DrawBabyCap(play, pose);
 }
 void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.actor = nullptr; gBaby.placed = false; } }
 
@@ -11675,6 +11783,12 @@ struct HatState {
     bool have = false;
 };
 std::unordered_map<const void*, HatState> gHats;
+void TugLinkCap(const Player* pl, float side) {
+    auto it = gHats.find(pl);
+    if (it == gHats.end()) return;
+    it->second.spring.vFore += 3.0f;
+    it->second.spring.vSide += side;
+}
 int gClothLimbCalls = 0;       // how many times the game has asked about the tunic (shown in the menu, to prove the hook is wired)
 float gSkirtLastSwing = 0.0f;  // the last skirt swing applied, in degrees
 

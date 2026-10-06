@@ -122,7 +122,7 @@ inline constexpr const char* kLiloPetLines[kLiloPetLineCount] = {
 // Avriella, a baby who can follow you around as a pet instead of Lilo (an option, looks only). She says one of these, in turn, when you stand still facing
 // her and press A: baby babble, giggles and the things babies do. They are said through the game's own text box too.
 inline constexpr const char* kAvriellaName = "Avriella";
-inline constexpr int kAvriellaPetLineCount = 16;
+inline constexpr int kAvriellaPetLineCount = 17;
 inline constexpr const char* kAvriellaPetLines[kAvriellaPetLineCount] = {
     "Da da da da! (Avriella waves both chubby arms at you.)",
     "Ba ba ba! Ba!",
@@ -140,6 +140,7 @@ inline constexpr const char* kAvriellaPetLines[kAvriellaPetLineCount] = {
     "Gnarf! (She tries to chew your boot. It tastes like adventure.)",
     "Kick kick kick kick kick! (Her legs go like a windmill and she cannot stop laughing.)",
     "*gummy grin* (She has been smiling at you this whole time.)",
+    "Ba ba BAAA! (She swirls a little green cap round and round. It looks a lot like yours.)",
 };
 
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);

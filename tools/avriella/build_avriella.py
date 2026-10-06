@@ -1025,6 +1025,22 @@ def clip_stack(t, T):
 
 
 # name, seconds, loops, function. The game refers to clips by position in this list (see shared/avriella_model.h).
+def clip_cap(t, T):
+    """Sitting with her right arm held high, swirling a cap she has snatched round and round, laughing."""
+    p = Pose()
+    ph = t / T * TAU
+    sit_base(p, lean=-0.05)
+    hide_rocks(p)
+    p.add("upper_arm.R", x=0.30, y=2.25)
+    p.add("forearm.R", x=0.45, y=0.1 + 0.35 * math.sin(ph))
+    p.add("hand.R", y=0.5 * math.sin(ph + 0.8), x=0.3 * math.cos(ph))
+    p.add("upper_arm.L", x=-0.5, y=-0.3)
+    p.add("head", x=-0.1, y=-0.18 + 0.05 * math.sin(ph))
+    p.add("chest", x=0.03 * math.sin(ph * 2), y=-0.06 * math.sin(ph))
+    jiggle(p, ph, 1.0)
+    return p
+
+
 CLIPS = [
     ("idle", 5.0, True, clip_idle),
     ("sit", 3.0, True, clip_sit),
@@ -1041,6 +1057,7 @@ CLIPS = [
     ("tumble", 1.4, True, clip_tumble),
     ("kick", 1.2, True, clip_kick),
     ("chew", 2.4, True, clip_chew),
+    ("cap", 1.0, True, clip_cap),
 ]
 
 

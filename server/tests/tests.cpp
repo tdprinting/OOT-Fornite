@@ -3657,7 +3657,7 @@ static void AvriellaTheBabyModel() {
     for (int i = 0; i < kClothW * kClothH; i++) CHECK(kClothTex[i * 2 + 1] & 1);
     for (int i = 0; i < kSkinW * kSkinH; i++) CHECK(kSkinTex[i * 2 + 1] & 1);
     CHECK(std::string(kClips[kIdle].name) == "idle" && std::string(kClips[kCrawl].name) == "crawl" && std::string(kClips[kNap].name) == "nap" &&
-          std::string(kClips[kRocks].name) == "rocks" && kClipCount == 15);
+          std::string(kClips[kRocks].name) == "rocks" && kClipCount == 16);
     for (int f = 0; f < kFrameCount * kBoneCount; f++) {
         const int16_t* q = &kPoses[f * 7];
         const float len = std::sqrt(static_cast<float>(q[0]) * q[0] + static_cast<float>(q[1]) * q[1] + static_cast<float>(q[2]) * q[2] + static_cast<float>(q[3]) * q[3]) / 32767.0f;
@@ -3766,7 +3766,7 @@ static void AvriellaTheBabyModel() {
     an.Evaluate(p);
     CHECK(std::isfinite(p.bone[0].q[3]) && !an.Done());
     // her lines: sixteen, each fits a text box, and none is empty
-    CHECK(kAvriellaPetLineCount == 16 && std::string(kAvriellaName) == "Avriella");
+    CHECK(kAvriellaPetLineCount == 17 && std::string(kAvriellaName) == "Avriella");
     for (int i = 0; i < kAvriellaPetLineCount; i++) CHECK(std::strlen(kAvriellaPetLines[i]) > 3 && std::strlen(kAvriellaPetLines[i]) < 120);
 }
 
