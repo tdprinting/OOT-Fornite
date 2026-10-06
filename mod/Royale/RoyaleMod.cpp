@@ -10,6 +10,7 @@
 #include "cloth.h"
 #include "build_version.h"
 #include "lilo_anim.h"
+#include "lilo_sounds.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -1966,6 +1967,7 @@ void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below,
 void PlayOneShot(int kind);
 void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale); // below, with the skydive
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale);   // below, with Lilo
 bool LiloNear();
 void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
@@ -5280,6 +5282,7 @@ void DrawOverlay() {
     DrawSign(dl, font, ds, scale);
     DrawMaya(dl, font, ds, scale);
     DrawLilo(dl, font, ds, scale);
+    DrawFartReactions(dl, font, scale);
     DrawAllyLabels(dl, font, ds, scale, h);
     DrawCartHud(dl, font, ds, scale);
     DrawMinimap(dl, ds, scale, h);
@@ -5536,11 +5539,11 @@ void OnEmoteWheelInput() {
 }
 
 // ---- the mod's own sounds, mixed into the game's audio ------------------------------------------------------------------------------
-// Everything the mod plays (the music folder's songs, the chicken dance tune, the storm and Lilo sounds) is mixed into each buffer the game's own
+// Everything the mod plays (the music folder's songs, the chicken dance tune, the storm sounds, Lilo's mews and her accident) is mixed into each buffer the game's own
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -9151,6 +9154,81 @@ int LiloEyes(float seconds, int wanted) {
     return std::fmod(seconds, 3.7f) < 0.13f ? royale::lilo::kEyesShut : royale::lilo::kEyesOpen;
 }
 
+// -- Lilo's voice and her accidents (shared by the pet and the Lilo on the map) --
+// Her mews are seven short recordings of the real Lilo (assets/lilo/sounds, shared/lilo_sounds.h), on a mixer voice of their own so a mew never
+// cuts off a storm siren. Which one plays depends on what she is doing:
+enum LiloMew { kMewChirp, kMewLong, kMewTrail, kMewShort, kMewAsk, kMewFall, kMewLoud };   // the clips in order (cat_01, 03, 04, 05, 06, 07, 10)
+void PlayMeow(int clip, float gain = 0.7f) {
+    namespace S = royale::lilo_snd;
+    constexpr int kClipCount = sizeof(S::kClips) / sizeof(S::kClips[0]);
+    static std::shared_ptr<const std::vector<int16_t>> cache[kClipCount];
+    const float volume = GameVolume(false) * gain;
+    if (clip < 0 || clip >= kClipCount || volume < 0.01f) return;
+    if (!cache[clip]) cache[clip] = std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data, S::kClips[clip].data + S::kClips[clip].count);
+    StartVoice(kVoiceCat, cache[clip], false, S::kRate, false, volume);
+}
+
+// A little greenish cloud (a few brown puffs among it) that drifts up and thins out; called every tick while the cloud lasts.
+void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs) {
+    for (int i = 0; i < puffs; i++) {
+        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, by + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
+        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
+        const bool brown = Rand_ZeroOne() < 0.35f;
+        Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
+        Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
+        EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 260 + static_cast<int>(Rand_ZeroOne() * 160.0f), 40);
+    }
+}
+
+// Everybody close enough to smell it (bots and other players you can see, and you) gags for a moment: a little word floats up from their head and
+// a puff of green hangs there. Purely a joke on your screen: nothing the server knows about.
+struct FartReaction { uint16_t id; double start; float x, y, z; };
+std::vector<FartReaction> gFartReactions;
+constexpr uint16_t kFartSelf = 0xFFFF;
+constexpr float kFartSmellRange = 420.0f;
+void FartReact(float x, float z) {
+    if (gPlayState == nullptr) return;
+    const double now = ImGui::GetTime();
+    auto add = [&](uint16_t id, float px, float py, float pz) {
+        gFartReactions.push_back({ id, now, px, py, pz });
+        FartCloudStep(gPlayState, px, py - 12.0f, pz, 1);
+    };
+    Player* me = GET_PLAYER(gPlayState);
+    if (me != nullptr && std::hypot(me->actor.world.pos.x - x, me->actor.world.pos.z - z) < kFartSmellRange)
+        add(kFartSelf, me->actor.world.pos.x, me->actor.world.pos.y, me->actor.world.pos.z);
+    for (const auto& [id, st] : gState) {
+        if (!st.alive || st.scene != gPlayState->sceneNum || royale::IsBossId(id)) continue;
+        if (me != nullptr && std::hypot(st.x - me->actor.world.pos.x, st.z - me->actor.world.pos.z) < 4.0f) continue;   // that is you
+        if (std::hypot(st.x - x, st.z - z) < kFartSmellRange) add(id, st.x, st.y, st.z);
+    }
+}
+
+void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale) {
+    static const char* const words[] = { "*cough*", "Ew!", "*gag*", "LILO!", "*sniff* ...ugh", "Who did that?!" };
+    const double now = ImGui::GetTime();
+    for (size_t i = 0; i < gFartReactions.size();) {
+        const FartReaction& r = gFartReactions[i];
+        const float age = static_cast<float>(now - r.start);
+        if (age > 2.4f || gPlayState == nullptr) { gFartReactions.erase(gFartReactions.begin() + static_cast<long>(i)); continue; }
+        float x = r.x, y = r.y, z = r.z;
+        if (r.id != kFartSelf) {   // follow the puppet while it moves
+            auto it = gState.find(r.id);
+            if (it == gState.end() || !it->second.alive) { gFartReactions.erase(gFartReactions.begin() + static_cast<long>(i)); continue; }
+            x = it->second.x; y = it->second.y; z = it->second.z;
+        } else if (Player* me = GET_PLAYER(gPlayState)) { x = me->actor.world.pos.x; y = me->actor.world.pos.y; z = me->actor.world.pos.z; }
+        ImVec2 at;
+        if (WorldToScreen(x, y + 85.0f + age * 14.0f, z, &at)) {
+            const float fade = std::clamp((2.4f - age) / 0.6f, 0.0f, 1.0f);
+            const char* label = words[(r.id == kFartSelf ? 3u : r.id) % (sizeof(words) / sizeof(words[0]))];
+            const float size = 21.0f * scale;
+            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+            dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f + 2, at.y + 2), IM_COL32(20, 40, 10, static_cast<int>(220 * fade)), label);
+            dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y), IM_COL32(190, 235, 110, static_cast<int>(255 * fade)), label);
+        }
+        i++;
+    }
+}
+
 // -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
 // Her moods pick her animation clip; the clips cross-fade, so walking, sitting, grooming and curling up to sleep blend instead of snapping. Stand
 // still facing her and press A to talk: she sits and mews her line in the game's own text box.
@@ -9165,6 +9243,9 @@ struct CatBrain {
     size_t pickups = 0;
     bool placed = false;
     int line = 0;    // what she says next (royale::kLiloPetLines)
+    CatMood seen = CatMood::Follow;            // the mood last tick, to mew when it changes
+    float meowIn = 25.0f, fartIn = 70.0f;      // seconds until a mew of her own, and until her next accident
+    float afterFartMew = -1.0f, cloudT = 0.0f; // the mew that follows an accident, and how long her cloud keeps drifting
     int eyes = 0;
     royale::lilo::Animator anim;
 };
@@ -9207,6 +9288,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     if (!talking && c.mood == CatMood::Talk) {   // done talking: she stays sitting a while, and has something new to say next time
         SetMood(c, CatMood::Sit);
         c.sitT = 0; c.nextAt = 4.0f;
+        if (c.line == royale::kLiloPetLineCount - 1) c.fartIn = 0.9f;   // she said she smelled one, and now she has made one
         c.line = (c.line + 1) % royale::kLiloPetLineCount;
     }
     if (c.mood != CatMood::Talk) {
@@ -9215,6 +9297,45 @@ void Cat_Update(Actor* actor, PlayState* play) {
         // you jump, she jumps
         if ((c.mood == CatMood::Follow || c.mood == CatMood::Stand) && !(pl->actor.bgCheckFlags & 1) && pl->actor.velocity.y > 4.0f && d < 400.0f)
             SetMood(c, CatMood::Jump);
+    }
+
+    // Her voice: a mew for what she has just started doing, one now and then of her own, and her accidents.
+    if (c.mood != c.seen) {
+        static const int kLineMew[royale::kLiloPetLineCount] = { kMewShort, kMewAsk, kMewLong, kMewLoud, kMewTrail, kMewFall };
+        switch (c.mood) {
+            case CatMood::Talk: PlayMeow(kLineMew[c.line % royale::kLiloPetLineCount]); break;
+            case CatMood::Happy: PlayMeow(kMewChirp); break;
+            case CatMood::Jump: PlayMeow(kMewChirp, 0.45f); break;
+            case CatMood::Pounce: PlayMeow(kMewLoud, 0.5f); break;
+            case CatMood::Stretch: PlayMeow(kMewFall, 0.5f); break;
+            default: break;
+        }
+        c.seen = c.mood;
+    }
+    if (c.mood != CatMood::Talk) {
+        c.meowIn -= dt;
+        if (c.meowIn <= 0.0f) {
+            static const int kIdleMew[3] = { kMewChirp, kMewShort, kMewAsk };
+            if (c.mood == CatMood::Follow || c.mood == CatMood::Stand || c.mood == CatMood::Sit) PlayMeow(kIdleMew[static_cast<int>(Rand_ZeroOne() * 2.99f)], 0.45f);
+            c.meowIn = 25.0f + Rand_ZeroOne() * 30.0f;
+        }
+        c.fartIn -= dt;
+        if (c.fartIn <= 0.0f && c.mood != CatMood::Pounce) {   // she farts a lot: now and then, wherever she is
+            PlayOneShot(2);
+            c.cloudT = 2.0f;
+            FartReact(c.x, c.z);
+            c.afterFartMew = 1.0f;
+            c.fartIn = 55.0f + Rand_ZeroOne() * 75.0f;
+            if (c.mood == CatMood::Sit || c.mood == CatMood::Stand || c.mood == CatMood::Loaf) SetMood(c, CatMood::Happy);   // so pleased with herself
+        }
+    }
+    if (c.afterFartMew >= 0.0f) {
+        c.afterFartMew -= dt;
+        if (c.afterFartMew < 0.0f) PlayMeow(kMewFall, 0.5f);
+    }
+    if (c.cloudT > 0.0f) {   // the cloud, behind her
+        c.cloudT -= dt;
+        FartCloudStep(play, c.x - std::sin(c.yaw) * 48.0f, c.y, c.z - std::cos(c.yaw) * 48.0f, 2);
     }
 
     const float tm = static_cast<float>(play->gameplayFrames) * dt;
@@ -9369,7 +9490,7 @@ royale::Vec2 gLiloPos = {};
 bool gLiloKnown = false;
 double gLiloTalkStart = -100.0;
 bool gLiloFarted = true, gLiloHeard = false;
-double gFartCloudUntil = 0;
+double gFartCloudUntil = 0, gLiloMewAt = -1.0;
 royale::lilo::Animator gLiloAnim;
 int gLiloEyes = 0;
 
@@ -9452,6 +9573,7 @@ bool LiloNear() {
 
 // The talk itself is the game's text box (Lilo_Update); this arms the accident for when it closes.
 void TalkToLilo() {
+    PlayMeow(kMewLong);
     gLiloTalkStart = ImGui::GetTime();
     gLiloFarted = false;
     gLiloHeard = false;
@@ -9467,19 +9589,14 @@ void UpdateLiloFx() {
             gLiloFarted = true;
             gFartCloudUntil = now + 2.6;
             PlayOneShot(2);
+            FartReact(gLiloPos.x, gLiloPos.z);
+            gLiloMewAt = now + 1.0;
         }
     }
+    if (gLiloMewAt > 0.0 && now >= gLiloMewAt) { gLiloMewAt = -1.0; PlayMeow(kMewFall, 0.6f); }   // a satisfied mew once the air has cleared a little
     if (now < gFartCloudUntil) {
         const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
-        const float bx = gLiloPos.x - std::sin(yaw) * 48.0f, bz = gLiloPos.z - std::cos(yaw) * 48.0f;   // behind her
-        for (int i = 0; i < 3; i++) {
-            Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, gLiloActor->world.pos.y + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
-            Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
-            const bool brown = Rand_ZeroOne() < 0.35f;
-            Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
-            Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
-            EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 260 + static_cast<int>(Rand_ZeroOne() * 160.0f), 40);
-        }
+        FartCloudStep(gPlayState, gLiloPos.x - std::sin(yaw) * 48.0f, gLiloActor->world.pos.y, gLiloPos.z - std::cos(yaw) * 48.0f, 3);   // behind her
     }
 }
 

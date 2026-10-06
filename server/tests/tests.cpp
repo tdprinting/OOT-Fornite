@@ -13,6 +13,7 @@
 #include <string>
 #include "../../shared/anim.h"
 #include "../../shared/lilo_anim.h"
+#include "../../shared/lilo_sounds.h"
 #include "../../shared/loot.h"
 #include <cstdio>
 #include <cstdlib>
@@ -1285,6 +1286,13 @@ static void TheSignInTheMiddle() {
     int peak = 0; double energy = 0;
     for (int16_t v : fart) { peak = std::max(peak, std::abs(static_cast<int>(v))); energy += static_cast<double>(v) * v; }
     CHECK(peak > 6000 && peak < 32000 && energy / fart.size() > 1.0e6 && std::abs(static_cast<int>(fart.back())) < 300);   // audible, never clipping, ends quietly
+    // Lilo's seven recorded mews: short, audible, never clipping, and fading out to nothing at the end.
+    CHECK(sizeof(lilo_snd::kClips) / sizeof(lilo_snd::kClips[0]) == 7);
+    for (const lilo_snd::Clip& clip : lilo_snd::kClips) {
+        int clipPeak = 0;
+        for (int i = 0; i < clip.count; i++) clipPeak = std::max(clipPeak, std::abs(static_cast<int>(clip.data[i])));
+        CHECK(clip.count > lilo_snd::kRate / 5 && clip.count < lilo_snd::kRate * 2 && clipPeak > 8000 && clipPeak < 32000 && std::abs(static_cast<int>(clip.data[clip.count - 1])) < 300);
+    }
     CHECK(std::string(kMayaName) == "Maya" && std::string(kMayaGreeting) == "Hi Daddy I'm a Goo goo!");
     const MeshData sign = BuildMesh(MeshKind::Sign, 0);
     float mn[3], mx[3];
