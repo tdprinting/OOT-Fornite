@@ -12,6 +12,8 @@
 #include "lilo_anim.h"
 #include "lilo_sounds.h"
 #include "avriella_sounds.h"
+#include "avriella_toys.h"
+#include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
 #include "cart_model.h"
 #include "logo_data.h"
@@ -6577,7 +6579,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -11485,6 +11487,169 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+// ---- Avriella's toys: a stuffed Bluey, a little television and a laptop ----------------------------------------------------------------
+// Made in Blender (tools/avriella/build_toys.py, assets/avriella/toys.blend; the plush is about 1300 triangles, the TV about 600, the laptop about 400, all with tiny
+// textures) and drawn from shared/avriella_toys.h. Each is a few stiff parts joined at pivots, posed by angles every frame, so the plush's arms, legs, ears and
+// head move however the game wants. The TV and the laptop show a little picture of the pup (two cheering frames, two of static); the sounds are original
+// (shared/avriella_toy_sounds.h: a xylophone tune, slide whistle, boing, bonk, ta-da).
+struct ToyModel {
+    const royale::avriella_toys::Part* parts; int partCount;
+    const royale::avriella_toys::Vert* verts; int vertCount;
+    const royale::avriella_toys::Batch* batches; int batchCount;
+    const uint8_t (*tris)[3];
+};
+constexpr int kToyMaxParts = 10;
+struct ToyPose {
+    float r[kToyMaxParts][3] = {};          // each part's turn about its pivot (x, then y, then z), radians
+    float off[3] = {};                      // the whole toy shifted (model units)
+    float sx = 1, sy = 1, sz = 1;           // squash and stretch of the whole toy
+    int screen = royale::avriella_toys::kTexBlueyA;   // which picture is on the glass
+    float glow = 1.0f;                      // how bright the glass is
+};
+const ToyModel& PlushModel() {
+    namespace T = royale::avriella_toys;
+    static const ToyModel m = { T::kPlushParts, T::kPlushPartCount, T::kPlushVerts, T::kPlushVertCount, T::kPlushBatches, T::kPlushBatchCount, T::kPlushTris };
+    return m;
+}
+const ToyModel& TvModel() {
+    namespace T = royale::avriella_toys;
+    static const ToyModel m = { T::kTvParts, T::kTvPartCount, T::kTvVerts, T::kTvVertCount, T::kTvBatches, T::kTvBatchCount, T::kTvTris };
+    return m;
+}
+const ToyModel& LaptopModel() {
+    namespace T = royale::avriella_toys;
+    static const ToyModel m = { T::kLaptopParts, T::kLaptopPartCount, T::kLaptopVerts, T::kLaptopVertCount, T::kLaptopBatches, T::kLaptopBatchCount, T::kLaptopTris };
+    return m;
+}
+// the order of the plush's parts (kPlushPartNames)
+enum PlushPart { kPlBody, kPlHead, kPlEarL, kPlEarR, kPlArmL, kPlArmR, kPlLegL, kPlLegR, kPlTail };
+
+struct ToyXf { float m[9]; float t[3]; };   // a turn (row-major) and a shift
+ToyXf ToyMul(const ToyXf& a, const ToyXf& b) {   // a after b: apply b, then a
+    ToyXf o;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) o.m[i * 3 + j] = a.m[i * 3] * b.m[j] + a.m[i * 3 + 1] * b.m[3 + j] + a.m[i * 3 + 2] * b.m[6 + j];
+        o.t[i] = a.m[i * 3] * b.t[0] + a.m[i * 3 + 1] * b.t[1] + a.m[i * 3 + 2] * b.t[2] + a.t[i];
+    }
+    return o;
+}
+ToyXf ToyTurn(float rx, float ry, float rz, float tx, float ty, float tz) {   // Rz * Ry * Rx, then the shift
+    const float cx = std::cos(rx), sx = std::sin(rx), cy = std::cos(ry), sy = std::sin(ry), cz = std::cos(rz), sz = std::sin(rz);
+    ToyXf o = { { cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+                  sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+                  -sy, cy * sx, cy * cx }, { tx, ty, tz } };
+    return o;
+}
+
+// Draws a toy standing at (x, y, z) turned `yaw`, at `scale` (the same scale as Avriella herself).
+void DrawToy(PlayState* play, const ToyModel& model, float x, float y, float z, float yaw, float scale, const ToyPose& pose) {
+    namespace T = royale::avriella_toys;
+    if (model.partCount > kToyMaxParts || scale < 0.01f) return;
+    constexpr float kSub = 8.0f;
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * model.vertCount));
+    if (vtx == nullptr) return;
+    ToyXf world[kToyMaxParts];
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    for (int i = 0; i < model.partCount; i++) {
+        const T::Part& pt = model.parts[i];
+        const ToyXf local = ToyTurn(pose.r[i][0], pose.r[i][1], pose.r[i][2], pt.ox, pt.oy, pt.oz);
+        if (pt.parent < 0) {
+            const ToyXf root = { { cy * pose.sx, 0, sy * pose.sz, 0, pose.sy, 0, -sy * pose.sx, 0, cy * pose.sz }, { 0, 0, 0 } };   // turn about Y after the squash
+            ToyXf withOff = local;
+            withOff.t[0] += pose.off[0]; withOff.t[1] += pose.off[1]; withOff.t[2] += pose.off[2];
+            world[i] = ToyMul(root, withOff);
+        } else {
+            world[i] = ToyMul(world[pt.parent], local);
+        }
+    }
+    const float lx = 0.35f, ly = 0.82f, lz = 0.45f;
+    for (int i = 0; i < model.partCount; i++) {
+        const T::Part& pt = model.parts[i];
+        const ToyXf& w = world[i];
+        for (int k = 0; k < pt.vertCount; k++) {
+            const T::Vert& v = model.verts[pt.firstVert + k];
+            float p[3], n[3];
+            for (int a = 0; a < 3; a++) {
+                p[a] = w.m[a * 3] * v.x + w.m[a * 3 + 1] * v.y + w.m[a * 3 + 2] * v.z + w.t[a];
+                n[a] = w.m[a * 3] * v.nx + w.m[a * 3 + 1] * v.ny + w.m[a * 3 + 2] * v.nz;
+            }
+            const float nl = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            const float lit = nl > 1e-4f ? std::clamp(0.55f + 0.55f * std::max(0.0f, (n[0] * lx + n[1] * ly + n[2] * lz) / nl), 0.0f, 1.0f) : 0.8f;
+            Vtx& o = vtx[pt.firstVert + k];
+            for (int a = 0; a < 3; a++) o.v.ob[a] = static_cast<s16>(std::lround(std::clamp(p[a] * kSub, -32000.0f, 32000.0f)));
+            o.v.flag = 0;
+            o.v.tc[0] = v.s;
+            o.v.tc[1] = v.t;
+            o.v.cn[0] = static_cast<u8>(255.0f * lit);
+            o.v.cn[1] = static_cast<u8>(250.0f * lit);
+            o.v.cn[2] = static_cast<u8>(245.0f * lit);
+            o.v.cn[3] = 255;
+        }
+    }
+    for (int b = 0; b < model.batchCount; b++) {   // the glass glows: lit the same all over, brighter or dimmer with `glow`
+        const T::Batch& bt = model.batches[b];
+        if (bt.texture != T::kTexScreen) continue;
+        const u8 g = static_cast<u8>(255.0f * std::clamp(pose.glow, 0.0f, 1.0f));
+        for (int k = 0; k < bt.vertCount; k++) vtx[bt.firstVert + k].v.cn[0] = vtx[bt.firstVert + k].v.cn[1] = vtx[bt.firstVert + k].v.cn[2] = g;
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    int loaded = -1;
+    for (int b = 0; b < model.batchCount; b++) {
+        const T::Batch& bt = model.batches[b];
+        const int tex = bt.texture == T::kTexScreen ? std::clamp(pose.screen, static_cast<int>(T::kTexBlueyA), static_cast<int>(T::kTexOff)) : bt.texture;
+        if (tex != loaded) {
+            gDPLoadTextureBlock(POLY_OPA_DISP++, T::kTextures[tex].data, G_IM_FMT_RGBA, G_IM_SIZ_16b, T::kTextures[tex].w, T::kTextures[tex].h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, model.tris[t][0], model.tris[t][1], model.tris[t][2], 0, model.tris[t + 1][0], model.tris[t + 1][1], model.tris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, model.tris[t][0], model.tris[t][1], model.tris[t][2], 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// The toys' sounds, on two voices of their own (the tune, and the effects over it).
+void ToySfx(int clip, float gain = 0.8f) {
+    namespace S = royale::avriella_toy_snd;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kSfxCount];
+    const float volume = GameVolume(false) * gain;
+    if (clip < 0 || clip >= S::kSfxCount || volume < 0.01f) return;
+    if (!cache[clip]) cache[clip] = std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data, S::kClips[clip].data + S::kClips[clip].count);
+    StartVoice(clip == S::kTune ? kVoiceToy : kVoiceToySfx, cache[clip], false, S::kRate, false, volume);
+}
+void ToyStopTune() { StopVoice(kVoiceToy); }
+
+float ToyEaseBack(float k) {   // 0..1 with a little overshoot: the pop out of the ground
+    k = std::clamp(k, 0.0f, 1.0f);
+    const float c1 = 2.2f, c3 = c1 + 1.0f, u = k - 1.0f;
+    return 1.0f + c3 * u * u * u + c1 * u * u;
+}
+
+enum class ToyKind { None, Plush, Tv, Laptop };
+struct BabyToy {
+    ToyKind kind = ToyKind::None;
+    int variant = 0;          // which way she plays with the plush: 0 hug, 1 swing it, 2 chew it, 3 make it dance, 4 wave it about
+    float len = 10.0f;        // how long the game lasts
+    float nextSfx = 3.0f;
+    float x = 0, z = 0, y = 0;   // where a TV or laptop stands
+    bool tuneOn = false;
+};
+BabyToy gToy;
+constexpr float kToyAppearSeconds = 0.7f, kToyLeaveSeconds = 0.5f;
+// 0 to about 1.1 as a toy pops out (a little overshoot), 1 while it plays, down to 0 as it goes away
+float ToyScale(float t, float len) { return ToyEaseBack(t / kToyAppearSeconds) * std::clamp((len - t) / kToyLeaveSeconds, 0.0f, 1.0f); }
+
 // Her voice: Link's child voice sounds, pitched way up and strung together into babble. Each coo is a few sounds a moment apart.
 enum BabyCoo { kCooBaba, kCooDada, kCooGiggle, kCooOoh, kCooYawn, kCooHi, kCooBoth, kCooChew, kCooCount };
 struct PendingCoo { float at; u16 sfx; float pitch, volume; };
@@ -11557,7 +11722,7 @@ void BabyCoo(int kind, bool force = false) {
     }
 }
 
-enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Kick, Chew, Cap, Talk };   // Crawl is how she gets about: she cannot crawl yet, so she rolls
+enum class BabyMood { Crawl, Sit, Wave, Giggle, Clap, Babble, Roll, Nap, Stand, Reach, Stack, Kick, Chew, Cap, Talk, Plush, Tv, Laptop };   // Crawl is how she gets about: she cannot crawl yet, so she rolls
 struct BabyBrain {
     Actor* actor = nullptr;
     BabyMood mood = BabyMood::Sit;
@@ -11565,6 +11730,7 @@ struct BabyBrain {
     float x = 0, z = 0, y = 0, yaw = 0, speed = 0;
     float reachX = 0, reachZ = 0, reachCool = 6.0f;   // where the thing she is reaching for is, and a pause before she reaches again
     float cooIn = 20.0f, sparkleIn = 0.0f;
+    float toyCool = 25.0f, laptopCool = 0.0f;   // seconds before she may pull out a toy (the plush or TV) again, and the laptop
     size_t pickups = 0;
     bool placed = false;
     bool sleepy = false;      // just woke: heavy eyes for a moment
@@ -11580,6 +11746,51 @@ struct BabyBrain {
 BabyBrain gBaby;
 
 void SetBabyMood(BabyBrain& c, BabyMood m) { c.mood = m; c.moodT = 0; }
+
+// Where she puts a TV or laptop: a little way off to one side, so you see the screen from the front-ish and she turns to look at it.
+void BabyToySpot(PlayState* play, BabyBrain& c, float dist) {
+    const float a = c.yaw + 0.9f;
+    gToy.x = c.x + std::sin(a) * dist;
+    gToy.z = c.z + std::cos(a) * dist;
+    gToy.y = GroundY(play, gToy.x, gToy.z, c.y);
+}
+
+void StartBabyToy(PlayState* play, BabyBrain& c, ToyKind kind) {
+    gToy = BabyToy{};
+    gToy.kind = kind;
+    gToy.nextSfx = 3.5f;
+    c.haveHand = false;
+    if (kind == ToyKind::Plush) {
+        gToy.variant = std::min(4, static_cast<int>(Rand_ZeroOne() * 5.0f));
+        gToy.len = 9.0f;
+        SetBabyMood(c, BabyMood::Plush);
+        c.toyCool = 40.0f;
+        BabyToySpot(play, c, 42.0f);   // (only the dance uses it)
+        CatPoof(play, c.x - std::sin(c.yaw) * 10.0f, c.y + 6.0f, c.z - std::cos(c.yaw) * 10.0f);
+        ToySfx(royale::avriella_toy_snd::kPop, 0.8f);
+    } else if (kind == ToyKind::Tv) {
+        gToy.len = 16.0f;
+        SetBabyMood(c, BabyMood::Tv);
+        c.toyCool = 50.0f;
+        BabyToySpot(play, c, 64.0f);
+        CatPoof(play, gToy.x, gToy.y + 4.0f, gToy.z);
+        ToySfx(royale::avriella_toy_snd::kBoing, 0.8f);
+    } else {
+        gToy.len = 22.0f;
+        SetBabyMood(c, BabyMood::Laptop);
+        c.laptopCool = 120.0f;
+        BabyToySpot(play, c, 38.0f);
+        CatPoof(play, gToy.x, gToy.y + 4.0f, gToy.z);
+        ToySfx(royale::avriella_toy_snd::kPop, 0.8f);
+    }
+    BabyCoo(kCooOoh);
+}
+
+void EndBabyToy(BabyBrain& c, bool quietly) {
+    if (gToy.kind != ToyKind::None && !quietly) ToySfx(royale::avriella_toy_snd::kOff, 0.7f);
+    ToyStopTune();
+    gToy = BabyToy{};
+}
 
 void BabySparkle(PlayState* play, float x, float y, float z) {
     Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 26.0f, y + 8.0f + Rand_ZeroOne() * 14.0f, z + (Rand_ZeroOne() - 0.5f) * 26.0f };
@@ -11626,6 +11837,9 @@ void Baby_Update(Actor* actor, PlayState* play) {
     c.moodT += dt;
     if (playerStill) c.idle += dt; else c.idle = 0;
     c.reachCool -= dt;
+    c.toyCool -= dt;
+    if (gToy.kind != ToyKind::None && c.mood != BabyMood::Plush && c.mood != BabyMood::Tv && c.mood != BabyMood::Laptop) EndBabyToy(c, true);   // something else took over (she was spoken to)
+    c.laptopCool -= dt;
 
     // The coos that are waiting their turn.
     for (size_t i = 0; i < gBabyCoos.size();) {
@@ -11652,7 +11866,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
         c.line = (c.line + 1) % royale::kAvriellaPetLineCount;
     }
     if (c.mood != BabyMood::Talk) {
-        const bool busy = c.mood == BabyMood::Roll || c.mood == BabyMood::Clap || c.mood == BabyMood::Giggle;
+        const bool busy = c.mood == BabyMood::Roll || c.mood == BabyMood::Clap || c.mood == BabyMood::Giggle || c.mood == BabyMood::Plush || c.mood == BabyMood::Tv || c.mood == BabyMood::Laptop;
         // You pick something up: she claps for you. You use an emote: she waves. You jump: she giggles.
         if (gPickupLog.size() != c.pickups) {
             if (gPickupLog.size() > c.pickups && !busy) { SetBabyMood(c, BabyMood::Clap); BabyCoo(kCooHi); }
@@ -11704,6 +11918,10 @@ void Baby_Update(Actor* actor, PlayState* play) {
             clip = std::fmod(c.sitT, 10.0f) < 5.0f ? A::kIdle : A::kSit;
             if (c.sleepy && c.moodT < 1.6f) face = A::kFaceHalf; else c.sleepy = false;
             if (!playerStill || d > 150.0f) { SetBabyMood(c, BabyMood::Crawl); break; }
+            if (c.sitT > 15.0f && c.laptopCool <= 0.0f) {   // bored from sitting still so long: she pops out a laptop and watches her favourite show
+                StartBabyToy(play, c, ToyKind::Laptop);
+                break;
+            }
             if (c.sitT > 24.0f) {   // you have stood still a long time: she nods off
                 SetBabyMood(c, BabyMood::Nap);
                 break;
@@ -11717,6 +11935,8 @@ void Baby_Update(Actor* actor, PlayState* play) {
                     c.reachX = loot->world.pos.x; c.reachZ = loot->world.pos.z; c.reachCool = 14.0f;
                     SetBabyMood(c, BabyMood::Reach);
                     BabyCoo(kCooOoh);
+                } else if (c.toyCool <= 0.0f && Rand_ZeroOne() < 0.22f) {   // she gets a toy out (the plush, or a TV for the show)
+                    StartBabyToy(play, c, Rand_ZeroOne() < 0.6f ? ToyKind::Plush : ToyKind::Tv);
                 } else {
                     const float r = Rand_ZeroOne();
                     if (r < 0.12f) { SetBabyMood(c, BabyMood::Wave); BabyCoo(kCooHi); }
@@ -11731,6 +11951,38 @@ void Baby_Update(Actor* actor, PlayState* play) {
                     else { SetBabyMood(c, BabyMood::Cap); c.haveHand = false; c.capSpring = royale::HatSpring{}; c.tugAt = 0.0; BabyCoo(kCooHi); }
                 }
             }
+            break;
+        }
+        case BabyMood::Plush: {   // pulls her stuffed Bluey out from behind her and plays with it
+            const int v = gToy.variant;
+            static const int kClipFor[5] = { A::kBabble, A::kCap, A::kChew, A::kClap, A::kWave };
+            clip = kClipFor[v];
+            face = v == 2 ? A::kFaceSmile : A::kFaceGiggle;
+            if (c.moodT < 0.8f) face = A::kFaceOh;
+            if (v == 3) { BabyToySpot(play, c, 42.0f); }
+            if (c.moodT > 1.0f && std::fmod(c.moodT, 2.2f) < dt) BabyCoo(v == 2 ? kCooChew : (Rand_ZeroOne() < 0.5f ? kCooGiggle : kCooBaba));
+            if (!playerStill || d > 150.0f) { EndBabyToy(c, false); SetBabyMood(c, BabyMood::Crawl); break; }
+            if (c.moodT > gToy.len) { EndBabyToy(c, true); SetBabyMood(c, BabyMood::Sit); c.sitT = 0; BabyCoo(kCooHi); }
+            break;
+        }
+        case BabyMood::Tv:
+        case BabyMood::Laptop: {   // watches her favourite show: a TV pops out of the ground (or a laptop opens) and the show is on
+            const bool tv = c.mood == BabyMood::Tv;
+            namespace S = royale::avriella_toy_snd;
+            heading = std::atan2(gToy.x - c.x, gToy.z - c.z);
+            const int phase = static_cast<int>(c.moodT / 3.0f) % 3;
+            clip = c.moodT < 1.2f ? A::kSit : (phase == 1 ? A::kClap : (phase == 2 ? A::kGiggle : A::kSit));
+            face = c.moodT < 1.2f ? A::kFaceOh : A::kFaceGiggle;
+            if (!gToy.tuneOn && c.moodT > (tv ? 1.0f : 1.6f)) { gToy.tuneOn = true; ToySfx(S::kChime, 0.6f); ToySfx(S::kTune, 0.5f); }
+            if (c.moodT > gToy.nextSfx && c.moodT < gToy.len - 2.0f) {   // something funny happens in the show
+                const int pick = static_cast<int>(Rand_ZeroOne() * 5.0f) % 5;
+                static const int kShow[5] = { S::kSlide, S::kBonk, S::kXyloRun, S::kTada, S::kBoing };
+                ToySfx(kShow[pick], 0.7f);
+                BabyCoo(pick == 3 ? kCooHi : kCooGiggle);
+                gToy.nextSfx = c.moodT + 3.0f + Rand_ZeroOne() * 2.5f;
+            }
+            if (!playerStill || d > 150.0f) { EndBabyToy(c, false); SetBabyMood(c, BabyMood::Crawl); break; }
+            if (c.moodT > gToy.len) { EndBabyToy(c, false); SetBabyMood(c, BabyMood::Sit); c.sitT = 0; BabyCoo(kCooHi); }
             break;
         }
         case BabyMood::Wave: {
@@ -11835,11 +12087,11 @@ void Baby_Update(Actor* actor, PlayState* play) {
         if (c.sparkleIn <= 0.0f) { BabySparkle(play, c.x, c.y + 24.0f, c.z); c.sparkleIn = 0.3f; }
     }
     // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
-    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && c.mood != BabyMood::Kick && pspeed < 3.0f &&
+    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && c.mood != BabyMood::Kick && c.mood != BabyMood::Plush && c.mood != BabyMood::Tv && c.mood != BabyMood::Laptop && pspeed < 3.0f &&
         OfferTalk(actor, play, static_cast<u16>(kTextAvriellaPet + c.line), 110.0f))
         SetBabyMood(c, BabyMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)
-    if (!moving && c.mood != BabyMood::Reach && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && d < 400.0f && c.mood != BabyMood::Kick) faceYou();
+    if (!moving && c.mood != BabyMood::Reach && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && d < 400.0f && c.mood != BabyMood::Kick && c.mood != BabyMood::Tv && c.mood != BabyMood::Laptop) faceYou();
     {
         float diff = heading - c.yaw;
         while (diff > 3.14159265f) diff -= 6.2831853f;
@@ -11954,20 +12206,144 @@ void DrawBabyCap(PlayState* play, const royale::avriella::Pose& pose) {
     }
 }
 
+// Her hand (the middle of the mitt's vertices) in the world.
+bool BabyHandWorld(const royale::avriella::Pose& pose, float out[3]) {
+    namespace A = royale::avriella;
+    const BabyBrain& c = gBaby;
+    float sx = 0, sy = 0, sz = 0;
+    int n = 0;
+    for (int i = 0; i < A::kVertCount; i++) {
+        const A::Vert& v = A::kVerts[i];
+        if (v.b0 != 13 || v.w0 != 255) continue;
+        float p[3], nr[3];
+        A::SkinVertex(pose, v, p, nr);
+        sx += p[0]; sy += p[1]; sz += p[2]; n++;
+    }
+    if (n == 0) return false;
+    sx /= static_cast<float>(n); sy /= static_cast<float>(n); sz /= static_cast<float>(n);
+    const float cy = std::cos(c.yaw), sn = std::sin(c.yaw);
+    out[0] = c.x + (sx * cy + sz * sn) * kBabyScale;
+    out[1] = c.y + sy * kBabyScale;
+    out[2] = c.z + (-sx * sn + sz * cy) * kBabyScale;
+    return true;
+}
+
+// The plush's limbs for a way of playing (v: 0 hug, 1 swing, 2 chew, 3 dance, 4 wave) or, with `seated`, sitting with its legs out in front watching TV.
+void PlushPose(ToyPose& tp, int v, float t, bool seated) {
+    namespace T = royale::avriella_toys;
+    auto L = [&](int part, int axis) -> float& { return tp.r[part][axis]; };
+    if (seated) {
+        L(kPlLegL, 0) = L(kPlLegR, 0) = -1.45f;
+        L(kPlArmL, 0) = L(kPlArmR, 0) = -0.9f;
+        L(kPlArmL, 2) = 0.3f + 0.5f * std::max(0.0f, std::sin(t * 3.0f)); L(kPlArmR, 2) = -0.3f - 0.5f * std::max(0.0f, std::sin(t * 3.0f + 1.0f));
+        L(kPlHead, 0) = 0.08f;
+        L(kPlEarL, 2) = 0.1f * std::sin(t * 4.0f); L(kPlEarR, 2) = -0.1f * std::sin(t * 4.0f + 1.0f);
+        tp.sy = 1.0f - 0.03f * std::sin(t * 5.0f);
+        return;
+    }
+    switch (v) {
+        case 0:   // hugged: it squishes a little with each squeeze and wobbles
+            tp.sy = 1.0f - 0.08f * (0.5f + 0.5f * std::sin(t * 4.0f)); tp.sx = tp.sz = 1.0f + 0.05f * (0.5f + 0.5f * std::sin(t * 4.0f));
+            L(kPlArmL, 2) = 0.5f; L(kPlArmR, 2) = -0.5f; L(kPlHead, 2) = 0.12f * std::sin(t * 2.0f);
+            L(kPlEarL, 2) = 0.2f * std::sin(t * 4.0f); L(kPlEarR, 2) = -0.2f * std::sin(t * 4.0f);
+            break;
+        case 3:   // dances: hops, sways, waves its arms and kicks
+            tp.off[1] = std::fabs(std::sin(t * 5.0f)) * 5.0f;
+            L(kPlBody, 2) = 0.14f * std::sin(t * 5.0f);
+            L(kPlArmL, 2) = 1.1f + 0.6f * std::sin(t * 10.0f); L(kPlArmR, 2) = -1.1f - 0.6f * std::sin(t * 10.0f + 1.5f);
+            L(kPlLegL, 0) = 0.6f * std::sin(t * 5.0f); L(kPlLegR, 0) = -0.6f * std::sin(t * 5.0f);
+            L(kPlHead, 2) = 0.2f * std::sin(t * 5.0f + 1.0f);
+            L(kPlEarL, 2) = 0.3f * std::sin(t * 10.0f); L(kPlEarR, 2) = -0.3f * std::sin(t * 10.0f + 1.0f);
+            L(kPlTail, 2) = 0.4f * std::sin(t * 10.0f);
+            break;
+        default:   // held by a hand: it flops about
+            L(kPlArmL, 2) = 0.7f + 0.5f * std::sin(t * 9.0f); L(kPlArmR, 2) = -0.7f - 0.5f * std::sin(t * 9.0f + 1.0f);
+            L(kPlLegL, 0) = 0.5f * std::sin(t * 7.0f); L(kPlLegR, 0) = -0.5f * std::sin(t * 7.0f + 1.0f);
+            L(kPlHead, 2) = 0.25f * std::sin(t * 5.0f);
+            L(kPlEarL, 2) = 0.3f * std::sin(t * 8.0f); L(kPlEarR, 2) = -0.3f * std::sin(t * 8.0f + 1.0f);
+            L(kPlTail, 2) = 0.4f * std::sin(t * 9.0f);
+            break;
+    }
+    (void)T::kTexCount;
+}
+
+void DrawBabyToys(PlayState* play, const royale::avriella::Pose& pose) {
+    namespace T = royale::avriella_toys;
+    const BabyBrain& c = gBaby;
+    if (gToy.kind == ToyKind::None) return;
+    const float t = c.moodT;
+    const float sc = kBabyScale * ToyScale(t, gToy.len);
+    if (sc < 0.02f) return;
+    const float fx = std::sin(c.yaw), fz = std::cos(c.yaw);          // her way
+    const float face = c.yaw + 3.14159265f;                            // a toy turned to look at her
+    const float tm = static_cast<float>(play->gameplayFrames) / royale::kTickHz;
+    if (gToy.kind == ToyKind::Plush) {
+        ToyPose tp;
+        const int v = gToy.variant;
+        PlushPose(tp, v, t, false);
+        float x, y, z, yaw = face;
+        if (v == 0) { x = c.x + fx * 14.0f; z = c.z + fz * 14.0f; y = c.y + 8.0f; tp.r[kPlBody][0] = -0.25f; }
+        else if (v == 3) { x = gToy.x; z = gToy.z; y = gToy.y; yaw = std::atan2(c.x - gToy.x, c.z - gToy.z); }
+        else {
+            float h[3];
+            if (!BabyHandWorld(pose, h)) { h[0] = c.x + fx * 14.0f; h[1] = c.y + 20.0f; h[2] = c.z + fz * 14.0f; }
+            x = h[0]; y = h[1] - (v == 2 ? 2.0f : 7.0f); z = h[2];
+            if (v == 2) yaw = face + 0.6f;
+            else if (v == 1) yaw = face + 0.8f * std::sin(t * 5.0f);
+        }
+        const float k = std::clamp(t / kToyAppearSeconds, 0.0f, 1.0f);   // it arcs in from behind her
+        if (k < 1.0f) {
+            const float bx = c.x - fx * 10.0f, bz = c.z - fz * 10.0f, by = c.y + 8.0f;
+            x = bx + (x - bx) * k; z = bz + (z - bz) * k; y = by + (y - by) * k + std::sin(3.14159265f * k) * 16.0f;
+            tp.r[kPlBody][0] += (1.0f - k) * 1.2f * std::sin(k * 9.0f);   // tumbling through the air
+        }
+        DrawToy(play, PlushModel(), x, y, z, yaw, sc, tp);
+        return;
+    }
+    // The TV or the laptop, standing beside her and turned to face her.
+    const float toX = c.x - gToy.x, toZ = c.z - gToy.z;
+    const float yaw = std::atan2(toX, toZ);
+    ToyPose tp;
+    const bool showOn = gToy.tuneOn;
+    const float since = t - (gToy.kind == ToyKind::Tv ? 1.0f : 1.6f);
+    if (!showOn) tp.screen = T::kTexOff;
+    else if (since < 0.7f) tp.screen = std::fmod(since, 0.12f) < 0.06f ? T::kTexStaticA : T::kTexStaticB;   // it tunes in
+    else tp.screen = std::fmod(since, 1.0f) < 0.5f ? T::kTexBlueyA : T::kTexBlueyB;
+    tp.glow = showOn ? 0.92f + 0.08f * std::sin(tm * 40.0f) : 0.5f;
+    if (gToy.kind == ToyKind::Tv) {
+        tp.r[1][2] = 0.12f * std::sin(tm * 3.0f) + 0.1f; tp.r[2][2] = -0.12f * std::sin(tm * 3.0f + 1.0f) - 0.1f;   // the aerials sway
+        tp.sx = 1.0f + 0.04f * std::sin(tm * 14.0f) * (showOn ? 1.0f : 0.0f);
+        tp.sy = 1.0f - 0.04f * std::sin(tm * 14.0f) * (showOn ? 1.0f : 0.0f);
+        DrawToy(play, TvModel(), gToy.x, gToy.y, gToy.z, yaw, sc, tp);
+        // and the plush sits beside her, watching too
+        ToyPose pp;
+        PlushPose(pp, 0, t, true);
+        const float rx = c.x + std::cos(c.yaw) * 26.0f, rz = c.z - std::sin(c.yaw) * 26.0f;
+        const float ps = kBabyScale * ToyEaseBack((t - 0.4f) / kToyAppearSeconds) * std::clamp((gToy.len - t) / kToyLeaveSeconds, 0.0f, 1.0f);
+        DrawToy(play, PlushModel(), rx, GroundY(play, rx, rz, c.y), rz, std::atan2(gToy.x - rx, gToy.z - rz), ps, pp);
+    } else {
+        const float open = std::clamp((t - 0.5f) / 0.9f, 0.0f, 1.0f), close = std::clamp((gToy.len - t - 0.2f) / 0.6f, 0.0f, 1.0f);
+        tp.r[1][0] = 1.83f * (1.0f - ToyEaseBack(std::min(open, close)));   // the lid swings up (and shut again at the end)
+        if (tp.r[1][0] > 0.2f) tp.screen = T::kTexOff;
+        DrawToy(play, LaptopModel(), gToy.x, gToy.y, gToy.z, yaw, sc * 1.0f, tp);
+    }
+}
+
 void Baby_Draw(Actor* actor, PlayState* play) {
     royale::avriella::Pose pose;
     gBaby.anim.Evaluate(pose);
     DrawAvriellaModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gBaby.yaw, kBabyScale, pose, gBaby.face);
     if (gBaby.mood == BabyMood::Cap) DrawBabyCap(play, pose);
+    if (gBaby.mood == BabyMood::Plush || gBaby.mood == BabyMood::Tv || gBaby.mood == BabyMood::Laptop) DrawBabyToys(play, pose);
 }
-void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.actor = nullptr; gBaby.placed = false; } }
+void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.actor = nullptr; gBaby.placed = false; EndBabyToy(gBaby, true); } }
 
 void ReconcileBabyPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
     const bool want = MapOption("LiloPet", false) && PetKind() == 1 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr &&
                       !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
-        if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); }
+        if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); EndBabyToy(gBaby, true); }
         return;
     }
     if (gBaby.actor != nullptr) return;
