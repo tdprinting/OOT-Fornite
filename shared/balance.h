@@ -13,6 +13,16 @@ constexpr float kCountdownSec = 10.0f; // from Start to the drop
 constexpr float kDropSec = 18.0f;      // the skydive: spawn protection while everyone falls from the sky
 constexpr float kEndingSec = 10.0f;
 
+// Lilo's accidents: a toxic green cloud that lingers where she made it. Stand in it for kFartGraceSeconds without leaving and it starts to hurt
+// (kFartDps hearts a second); step out and the count drains away twice as fast as it built up. The server runs it (and tells everybody where the
+// cloud is); every client draws it and warns the player standing in it with the same numbers.
+constexpr float kFartCloudRadius = 260.0f;
+constexpr float kFartCloudSeconds = 10.0f;
+constexpr float kFartGraceSeconds = 3.0f;
+constexpr float kFartDps = 0.3f;
+constexpr float kFartCloudCooldown = 8.0f;   // one player can start a cloud this often
+constexpr float kFartCloudReach = 450.0f;    // and only within this far of where they are (Lilo is right beside them)
+
 // World units are OoT units. Link runs about 100 units/s.
 constexpr float kRunSpeed = 100.0f;
 constexpr float kPickupRange = 50.0f;
