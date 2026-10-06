@@ -577,13 +577,15 @@ class GameClient {
 
         bosses = s.bosses;
         allies = s.allies;
-        vehicles = s.vehicles;
+        // Carts: the ones in this snapshot, and parked ones from the last few (they are only sent now and then; see kParkedVehicleEvery).
         for (const auto& v : s.vehicles) {
             auto& h = vehicleHistory[v.index];
             if (!h.empty() && serverTime - h.back().t > 1.0f) h.clear();   // back in view after a while: don't slide in from where it was
             h.push_back({serverTime, v});
             while (h.size() > kHistoryMax) h.pop_front();
         }
+        vehicles.clear();
+        for (const auto& [index, h] : vehicleHistory) if (!h.empty() && serverTime - h.back().t <= net::kVehicleKeepSeconds) vehicles.push_back(h.back().s);
         bossesAt = localClock;
         for (auto& [id, p] : players) p.visible = false;
         for (const auto& pn : s.players) {

@@ -23,8 +23,10 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 23; // 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); // 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
+constexpr uint16_t kProtocolVersion = 23; // 23: the carts (VehicleNet in Snapshot, VehicleRequest, VehicleDrive); 22: original items on everyone; 2: lobby (ready flags, host marker), scene in Input/PlayerNet, winner in MatchStateMsg
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
+constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
+constexpr float kVehicleKeepSeconds = 0.6f;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
 constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N others, plus self (everybody while revealing)
@@ -323,7 +325,7 @@ struct MatchStateMsg {
     bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); limit = r.U8(); return r.ok && state <= 4 && limit >= kMinPlayers && limit <= kMaxPlayers; }
 };
 
-// One player as seen in a snapshot. 25 bytes.
+// One player as seen in a snapshot. 27 bytes.
 struct PlayerNet {
     static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8;   // kAdult: under the Adult Power
     uint16_t id = 0;
@@ -336,6 +338,10 @@ struct PlayerNet {
     uint8_t anim = 0;
     uint8_t scene = 0;
     uint8_t shield = 0, shieldRarity = 0; // valid when kShield is set
+    // What others can see this player wear, so it is drawn on them the way the game draws it: the boots on their feet and the mask on their
+    // face (an ItemId, or kNoGear when that gear slot is empty).
+    static constexpr uint8_t kNoGear = 0xFF;
+    uint8_t boots = kNoGear, mask = kNoGear;
     static uint8_t QuantizeHealth(float h) {
         float v = h / kMaxHealthCap * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -343,14 +349,15 @@ struct PlayerNet {
     float Health() const { return health / 255.0f * kMaxHealthCap; }
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
-        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity);
+        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity); w.U8(boots); w.U8(mask);
     }
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
-        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8();
+        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8(); boots = r.U8(); mask = r.U8();
         return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 15 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount &&
-               shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount;
+               shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount &&
+               (boots == kNoGear || boots < static_cast<uint8_t>(ItemId::Count)) && (mask == kNoGear || mask < static_cast<uint8_t>(ItemId::Count));
     }
 };
 
@@ -407,10 +414,12 @@ struct VehicleNet {
     uint8_t flags = kGrounded;
     uint32_t Id() const { return kVehicleIdBase + index; }
     void Write(ByteWriter& w) const {
-        w.U8(index); w.F32(x); w.F32(y); w.F32(z); w.I16(yaw); w.I16(speed); w.U8(static_cast<uint8_t>(steer)); w.I16(air); w.U8(hp); w.U16(driver); w.U16(passenger); w.U8(flags);
+        // the position to the nearest unit as 16 bits (every map fits in +-32000): 20 bytes a cart, 20 times a second
+        auto unit = [](float f) { return static_cast<int16_t>(std::lround(std::clamp(f, -32000.0f, 32000.0f))); };
+        w.U8(index); w.I16(unit(x)); w.I16(unit(y)); w.I16(unit(z)); w.I16(yaw); w.I16(speed); w.U8(static_cast<uint8_t>(steer)); w.I16(air); w.U8(hp); w.U16(driver); w.U16(passenger); w.U8(flags);
     }
     bool Read(ByteReader& r) {
-        index = r.U8(); x = r.F32(); y = r.F32(); z = r.F32(); yaw = r.I16(); speed = r.I16(); steer = static_cast<int8_t>(r.U8()); air = r.I16(); hp = r.U8();
+        index = r.U8(); x = r.I16(); y = r.I16(); z = r.I16(); yaw = r.I16(); speed = r.I16(); steer = static_cast<int8_t>(r.U8()); air = r.I16(); hp = r.U8();
         driver = r.U16(); passenger = r.U16(); flags = r.U8();
         return r.ok && index < kMaxVehicles && Finite(x) && Finite(y) && Finite(z) && flags <= 7;
     }

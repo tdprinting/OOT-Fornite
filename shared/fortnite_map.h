@@ -1,4 +1,5 @@
 #pragma once
+#include "fortnite_cover_data.h"
 #include "fortnite_map_data.h"
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,28 @@ inline bool GroundHeight(float x, float z, float* y) {
 inline bool IsWaterAt(float x, float z) {
     float y;
     return GroundHeight(x, z, &y) && y < static_cast<float>(kWaterY);
+}
+// How steep the ground is at (x, z): the up part of its triangle's normal (1 is flat). 0 outside the map.
+inline float GroundUp(float x, float z) {
+    if (x <= -kHalfX || x >= kHalfX || z <= -kHalfZ || z >= kHalfZ) return 0.0f;
+    const float fx = (x + kHalfX) / kCellX, fz = (z + kHalfZ) / kCellZ;
+    const int i = std::min(kCells - 1, static_cast<int>(fx)), j = std::min(kCells - 1, static_cast<int>(fz));
+    const float h00 = static_cast<float>(VertexHeight(i, j)), h10 = static_cast<float>(VertexHeight(i + 1, j));
+    const float h01 = static_cast<float>(VertexHeight(i, j + 1)), h11 = static_cast<float>(VertexHeight(i + 1, j + 1));
+    const bool lower = fx - i >= fz - j;
+    const float sx = (lower ? h10 - h00 : h11 - h01) / kCellX, sz = (lower ? h11 - h10 : h01 - h00) / kCellZ;   // the slope along x and along z
+    return 1.0f / std::sqrt(1.0f + sx * sx + sz * sz);
+}
+
+// ---- ground cover -------------------------------------------------------------------------------------------------------------------
+// What the texture shows on the ground (scripts/make_fortnite_map.py reads it from the colours): the mod grows trees in the painted woods,
+// grass on the meadows and nothing on the roads, the towns' paving or the bare rock.
+enum class Cover : uint8_t { Water, Meadow, Woods, Paving, Dirt };
+inline Cover CoverAt(float x, float z) {
+    if (x <= -kHalfX || x >= kHalfX || z <= -kHalfZ || z >= kHalfZ) return Cover::Water;
+    const int i = std::min(kCoverCells - 1, static_cast<int>((x + kHalfX) / (2.0f * kHalfX) * kCoverCells));
+    const int j = std::min(kCoverCells - 1, static_cast<int>((z + kHalfZ) / (2.0f * kHalfZ) * kCoverCells));
+    return static_cast<Cover>(kCover[j * kCoverCells + i] - '0');
 }
 
 // ---- collision ------------------------------------------------------------------------------------------------------------------------
@@ -93,8 +116,10 @@ inline Mesh BuildCollision() {
 }
 
 // ---- the drawn island -----------------------------------------------------------------------------------------------------------------
-// The island is drawn in blocks, one per collision square. Up close a block has kSub x kSub squares of vertex colour (a baked texture); far away it
-// is just its own two triangles. Water is drawn as a flat sheet at the water level, with the sea bed's colour, so swimming looks right.
+// The island is drawn in blocks, one per collision square. Up close a block has kSub x kSub squares of vertex colour (a baked texture), a little
+// further off half as many, and far away it is just its own two triangles. Water is drawn as a flat sheet at the water level, with the sea bed's
+// colour, so swimming looks right; a block that is all open water is only ever its two triangles, whatever the distance (there is nothing to
+// see in it but the sheet).
 
 struct DrawVert { int16_t x, y, z; uint8_t r, g, b; };
 
@@ -109,17 +134,23 @@ inline DrawVert FineVertex(int fi, int fj) {   // fine vertex (fi, fj), 0..kFine
     return { Round16(-kHalfX + kCellX * fi / kSub), Round16(y), Round16(-kHalfZ + kCellZ * fj / kSub), c[0], c[1], c[2] };
 }
 
-// Block (bi, bj) as a list of vertices: kBlockVerts of them (row by row, kSub+1 per row) in the fine version, or the four corners in the coarse one.
-inline void BlockVertices(int bi, int bj, bool fine, std::vector<DrawVert>& out) {
-    if (fine) {
-        for (int b = 0; b <= kSub; b++)
-            for (int a = 0; a <= kSub; a++) out.push_back(FineVertex(bi * kSub + a, bj * kSub + b));
-    } else {
-        out.push_back(FineVertex(bi * kSub, bj * kSub));
-        out.push_back(FineVertex(bi * kSub + kSub, bj * kSub));
-        out.push_back(FineVertex(bi * kSub, bj * kSub + kSub));
-        out.push_back(FineVertex(bi * kSub + kSub, bj * kSub + kSub));
-    }
+// How many squares per side a block is drawn with at each level of detail: kSub up close, half that further off, one far away.
+inline constexpr int kLods = 3;
+inline constexpr int LodSquares(int lod) { return lod <= 0 ? kSub : lod == 1 ? kSub / 2 : 1; }
+inline constexpr int LodVerts(int lod) { return (LodSquares(lod) + 1) * (LodSquares(lod) + 1); }
+
+// Block (bi, bj) at level `lod` as a list of vertices, row by row: (LodSquares + 1)^2 of them, every one a fine vertex.
+inline void BlockVertices(int bi, int bj, int lod, std::vector<DrawVert>& out) {
+    const int n = LodSquares(lod), step = kSub / n;
+    for (int b = 0; b <= n; b++)
+        for (int a = 0; a <= n; a++) out.push_back(FineVertex(bi * kSub + a * step, bj * kSub + b * step));
+}
+inline void BlockVertices(int bi, int bj, bool fine, std::vector<DrawVert>& out) { BlockVertices(bi, bj, fine ? 0 : kLods - 1, out); }
+
+// A block of open water: all four corners are under the water sheet, so every fine vertex of it is on the sheet and its finer versions would draw
+// the same flat square.
+inline bool BlockIsOpenWater(int bi, int bj) {
+    return VertexHeight(bi, bj) < kWaterY && VertexHeight(bi + 1, bj) < kWaterY && VertexHeight(bi, bj + 1) < kWaterY && VertexHeight(bi + 1, bj + 1) < kWaterY;
 }
 
 } // namespace fortnite

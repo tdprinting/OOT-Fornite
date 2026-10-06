@@ -55,8 +55,10 @@ inline void SkyWeights(int mapId, Season s, int out[kSkyCount]) {
     static const int village[4][kSkyCount] = { {4, 4, 1, 3, 0, 0, 0}, {6, 2, 2, 1, 0, 0, 0}, {3, 2, 1, 5, 0, 0, 0}, {3, 0, 0, 2, 6, 0, 0} };
     static const int crater[4][kSkyCount]  = { {3, 0, 3, 0, 0, 6, 0}, {3, 0, 3, 0, 0, 6, 0}, {3, 0, 3, 1, 0, 5, 0}, {3, 0, 2, 1, 1, 5, 0} };   // no rain in the crater: ash
     static const int desert[4][kSkyCount]  = { {5, 0, 1, 0, 0, 0, 5}, {4, 0, 1, 0, 0, 0, 7}, {5, 1, 1, 0, 0, 0, 4}, {5, 0, 0, 2, 0, 0, 3} };
+    // The Fortnite Map's island, out in the sea: its weather blows in fast, so more storms and sea fog, and real snow in winter.
+    static const int island[4][kSkyCount]  = { {3, 4, 3, 2, 0, 0, 0}, {5, 2, 3, 1, 0, 0, 0}, {2, 3, 2, 4, 0, 0, 0}, {2, 0, 1, 2, 7, 0, 0} };
     const int (*t)[kSkyCount] = field;
-    switch (ClampMap(mapId)) { case 1: t = lake; break; case 2: t = village; break; case 3: t = crater; break; case 4: t = desert; break; default: break; }
+    switch (ClampMap(mapId)) { case 1: t = lake; break; case 2: t = village; break; case 3: t = crater; break; case 4: t = desert; break; case kFortniteMapIndex: t = island; break; default: break; }
     for (int i = 0; i < kSkyCount; i++) out[i] = t[static_cast<int>(s) & 3][i];
 }
 

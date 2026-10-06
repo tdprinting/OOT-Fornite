@@ -323,6 +323,7 @@ struct VehicleState {
     uint32_t lastHitBy = 0xFFFFFFFFu;                // credited with the wreck's blast
     uint32_t lastDriver = 0xFFFFFFFFu;               // credited with what a cart that rolls on after its driver jumped out runs over
     float reportAt = -1;             // when its human driver last reported (match clock)
+    float busyAt = 0;                // when it last had anyone in it, moved or burned (a cart parked longer than a second is sent less often)
     float air = 0;                   // the human driver's report: height above the ground under it
     bool drift = false;
     struct RamCooldown { uint32_t victim; float until; };

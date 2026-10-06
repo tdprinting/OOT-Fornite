@@ -108,7 +108,9 @@ class GameServer {
         sim.match.SetBossSpots(layout.bossSpots);
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
-        sim.match.SetBossCount((std::min)(bossCount, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
+        // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
+        const int bosses = bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
@@ -775,6 +777,12 @@ class GameServer {
         n.scene = p.scene;
         n.shield = static_cast<uint8_t>(p.shield.item);
         n.shieldRarity = static_cast<uint8_t>(p.shield.rarity);
+        auto worn = [&](GearSlot slot) {
+            const int i = static_cast<int>(slot);
+            return (p.gearMask & (1 << i)) ? static_cast<uint8_t>(p.gear[i].item) : net::PlayerNet::kNoGear;
+        };
+        n.boots = worn(GearSlot::Boots);
+        n.mask = worn(GearSlot::Mask);
         return n;
     }
 
@@ -827,7 +835,7 @@ class GameServer {
                 n.flags = static_cast<uint8_t>((a.moving ? 1 : 0) | (sim.match.Clock() < a.actUntil ? 2 : 0));
                 s.allies.push_back(n);
             }
-            // The carts near enough to see: the player's own and the closest few others (each is ~27 bytes, 20 times a second).
+            // The carts near enough to see: the player's own and the closest few others (each is 20 bytes, 20 times a second).
             vehicleNear.clear();
             for (const VehicleState& v : sim.match.Vehicles()) {
                 if (v.gone) continue;
@@ -836,7 +844,13 @@ class GameServer {
                 if (mine || d <= kVehicleSendRange) vehicleNear.push_back({mine ? -1.0f : d, &v});
             }
             std::sort(vehicleNear.begin(), vehicleNear.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-            for (size_t i = 0; i < vehicleNear.size() && i < kVehicleSendMax; i++) s.vehicles.push_back(ToNet(*vehicleNear[i].second));
+            for (size_t i = 0; i < vehicleNear.size() && i < kVehicleSendMax; i++) {
+                const VehicleState& v = *vehicleNear[i].second;
+                // A cart standing parked with nobody in it doesn't change: it goes out every fifth snapshot (the client keeps it in between).
+                const bool parked = sim.match.Clock() - v.busyAt > 1.0f;
+                if (parked && (tick + v.index) % net::kParkedVehicleEvery != 0) continue;
+                s.vehicles.push_back(ToNet(v));
+            }
             SendTo(c, s, false);
         }
     }
@@ -869,8 +883,8 @@ class GameServer {
     int poiCount = 12;
     int bossCount = 0;
     int vehicleCount = -1;
-    static constexpr float kVehicleSendRange = 4500.0f;
-    static constexpr size_t kVehicleSendMax = 6;
+    static constexpr float kVehicleSendRange = 4000.0f;
+    static constexpr size_t kVehicleSendMax = 5;
     std::vector<std::pair<float, const VehicleState*>> vehicleNear;
     int playerLimit = kMaxPlayers;
     bool soloTest = false;

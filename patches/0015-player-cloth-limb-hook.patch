@@ -1,0 +1,56 @@
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+index b6e6d22..61c1f40 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+@@ -9,6 +9,7 @@ DEFINE_HOOK(OnZTitleInit, (void* gameState));
+ DEFINE_HOOK(OnZTitleUpdate, (void* gameState));
+ DEFINE_HOOK(OnLoadGame, (int32_t fileNum));
+ DEFINE_HOOK(OnExitGame, (int32_t fileNum));
++DEFINE_HOOK(OnPlayerClothLimb, (void* player, int32_t limbIndex, int16_t* rot));
+ DEFINE_HOOK(OnGameStateMainStart, ());
+ DEFINE_HOOK(OnGameFrameUpdate, ());
+ DEFINE_HOOK(OnItemReceive, (GetItemEntry itemEntry));
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+index 63f0441..5eafd79 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+@@ -18,6 +18,10 @@ void GameInteractor_ExecuteOnExitGame(int32_t fileNum) {
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnExitGame>(fileNum);
+ }
+ 
++void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot) {
++    GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerClothLimb>(player, limbIndex, rot);
++}
++
+ void GameInteractor_ExecuteOnGameStateMainStart() {
+     // Cleanup all hooks at the start of each frame
+     GameInteractor::Instance->RemoveAllQueuedHooks();
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+index bad5194..0cf43fa 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+@@ -12,6 +12,7 @@ void GameInteractor_ExecuteOnZTitleInit(void* gameState);
+ void GameInteractor_ExecuteOnZTitleUpdate(void* gameState);
+ void GameInteractor_ExecuteOnLoadGame(int32_t fileNum);
+ void GameInteractor_ExecuteOnExitGame(int32_t fileNum);
++void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot);
+ void GameInteractor_ExecuteOnGameStateMainStart();
+ void GameInteractor_ExecuteOnGameFrameUpdate();
+ void GameInteractor_ExecuteOnItemReceiveHooks(GetItemEntry itemEntry);
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+index a43adf1..3fcaa9c 100644
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -1371,6 +1371,12 @@ s32 Player_OverrideLimbDrawGameplayDefault(PlayState* play, s32 limbIndex, Gfx**
+                                            void* thisx) {
+     Player* this = (Player*)thisx;
+ 
++    // OOT Royale: lets the mod swing the tunic and sheath with Link's movement and the wind. It runs before the common overrides so a limb
++    // can undo its parent's swing (the legs and upper body stay where the animation puts them) before anything else is applied.
++    if (limbIndex != PLAYER_LIMB_ROOT) {
++        GameInteractor_ExecuteOnPlayerClothLimb(this, limbIndex, (s16*)rot);
++    }
++
+     if (!Player_OverrideLimbDrawGameplayCommon(play, limbIndex, dList, pos, rot, thisx)) {
+         if (limbIndex == PLAYER_LIMB_L_HAND) {
+             Gfx** dLists = this->leftHandDLists;

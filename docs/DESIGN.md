@@ -286,8 +286,8 @@ Zero Build replaces building with movement and cover that is already in the map.
   50 ms ticks cut into 25 ms pieces.
 - **Authority:** the server owns the seats, the cart's health and the hits. A human driver's game runs the physics against the real collision and
   reports the cart every tick (the move is clamped like a player's); the server runs it on its navigation grid's heights for bots and for carts
-  rolling with nobody at the reins, and takes over if a human driver's reports stop. Snapshots carry the player's own cart and the six nearest
-  within 4,500 units (about 27 bytes each).
+  rolling with nobody at the reins, and takes over if a human driver's reports stop. Snapshots carry the player's own cart and the five nearest
+  within 4,000 units (20 bytes each); a cart parked empty for over a second goes out in every fifth snapshot only, and clients keep it in between.
 - **Damage:** running people over (0.6 hearts at speed 120, more the faster, once a second per person), crashes and hard landings (the cart; the
   riders only for hard ones), and weapons (hammers and bombs hit harder). A cart has 14 hearts; when it is wrecked the riders are thrown off, its
   firebox blows up (1.5 hearts within 260 units, credited to whoever last hit it), and the wreck burns for nine seconds.
@@ -589,7 +589,7 @@ Everything below is implemented, covered by the server tests, and described for 
 | Hireable allies (four kinds, follow and fight, healed or freed when the owner falls) | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
 | Climbs, hideaway chests, spaced chest sites | `shared/poi.h`, `shared/loot.h` |
 | Smarter bots (rolls, lock-on footwork, hazards, calm opening, gear first, magic aware) | `server/bot.h` |
-| Cloth and wind (glider canopy, cap tail) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch` |
+| Cloth and wind (glider canopy, cap tail, tunic skirt, sheath) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch`, `patches/0015-player-cloth-limb-hook.patch` |
 | Match replay (recorded by the server, sent at the end, drawn top-down) | `shared/replay.h`, `server/match.h` (`TickReplay`) |
 | Logo everywhere (launcher icons, title screen, menus) | `assets/logo.png`, `scripts/make_logo_assets.py`, `scripts/apply_logo.sh` |
 | The sign in the middle of every map, and Maya the Kokiri | `RoyaleMod.cpp` (sign, Maya), `shared/map.h` |

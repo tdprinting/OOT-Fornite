@@ -81,9 +81,9 @@ constexpr MapDef kMaps[] = {
      {BossKind::Lava, BossKind::Stone}, BossKind::DragonFire},
     {"Desert Colossus", "Open sand dunes around a giant statue: long sight lines", 0x5C, {{2648.0f, 85.0f}, 4200.0f}, 5200.0f, Theme::Desert,
      {BossKind::Dune, BossKind::Stone}, BossKind::DragonSand},
-    // The Fortnite Map is played inside Hyrule Field's scene, with the scene's collision swapped for the island (shared/fortnite_map.h). Its circle is
-    // the island's inland (scripts/make_fortnite_map.py prints the numbers); the host's game measures the live ground when a match starts.
-    {"Fortnite Map", "A big island of hills, lakes and towns: drop in, loot up and be the last one standing", 0x51, {{89.0f, -609.0f}, 5600.0f}, 7400.0f, Theme::Meadow,
+    // The Fortnite Map is played inside Hyrule Field's scene, with the scene's collision swapped for the island (shared/fortnite_map.h). Its circle holds
+    // the whole island, coast to coast (the middle of its land and nearly all of it); the host's game measures the live ground when a match starts.
+    {"Fortnite Map", "A big island of towns, woods, lakes and hills: drop in, loot up and be the last one standing", 0x51, {{72.0f, -524.0f}, 7000.0f}, 7400.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.

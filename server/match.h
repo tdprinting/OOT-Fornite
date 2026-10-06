@@ -1011,6 +1011,7 @@ class Match {
     void TickVehicles(float dt) {
         for (auto& v : vehicles) {
             if (v.gone) continue;
+            if (v.Occupied() || v.wrecked || !v.body.grounded || std::fabs(v.body.speed) > 1.0f) v.busyAt = clock;
             if (v.wrecked) {
                 if (clock - v.wreckedAt > kCartWreckSeconds) v.gone = true;
                 else if (!v.body.grounded || std::fabs(v.body.speed) > 1.0f) StepCart(v.body, CartControls{}, vehicleWorld, dt);   // it rolls to a stop

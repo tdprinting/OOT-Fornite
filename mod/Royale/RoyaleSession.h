@@ -30,6 +30,10 @@ struct PuppetState {
     ItemId weapon = ItemId::BasicSword;
     Rarity weaponRarity = Rarity::Common;
     uint32_t tunic = SkinRgb(0); // 0xRRGGBB, the colour this player chose (bots wear a preset by id)
+    // What is drawn on them as the game draws it: the shield on their back or arm, the boots and the mask (ItemId::Count for none).
+    ItemId shield = ItemId::Count;
+    ItemId boots = ItemId::Count;
+    ItemId mask = ItemId::Count;
 };
 
 // One line of the lobby list.
@@ -236,6 +240,9 @@ class RoyaleSession {
             s.health = p.Health();
             s.weapon = static_cast<ItemId>(p.weapon);
             s.weaponRarity = static_cast<Rarity>(p.weaponRarity);
+            if (p.flags & net::PlayerNet::kShield) s.shield = static_cast<ItemId>(p.shield);
+            if (p.boots != net::PlayerNet::kNoGear) s.boots = static_cast<ItemId>(p.boots);
+            if (p.mask != net::PlayerNet::kNoGear) s.mask = static_cast<ItemId>(p.mask);
             out.push_back(std::move(s));
         }
         return out;
