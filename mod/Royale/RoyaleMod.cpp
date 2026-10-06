@@ -11,6 +11,7 @@
 #include "build_version.h"
 #include "lilo_anim.h"
 #include "lilo_sounds.h"
+#include "avriella_sounds.h"
 #include "avriella_anim.h"
 #include "cart_model.h"
 #include "logo_data.h"
@@ -6576,7 +6577,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -11480,7 +11481,50 @@ void BabyCooNow(Actor* a, u16 sfx, float pitch, float volume) {
     Audio_PlaySoundGeneral(sfx, &a->projectedPos, 4, &freq, &vol, &gSfxDefaultReverb);
 }
 
-void BabyCoo(int kind) {
+// The real Avriella. Her recordings (assets/avriella/sounds, shared/avriella_sounds.h) are sorted by how they sound: laughs, babbling, little "hi"
+// squeals, soft coos and low grunts. A coo asks for one kind; a random clip of that kind plays (never the one before) on a voice of its own, and
+// only when she is not in the middle of one and has had a few seconds' quiet, so she is not constant. Without a recording the Link-voice babble
+// below plays instead.
+enum BabyClipKind { kBabyLaugh, kBabyBabble, kBabyHi, kBabyCoo, kBabyLow, kBabyKindCount };
+constexpr int kBabyKindClips[kBabyKindCount][4] = {   // by file number (avriella_NN.wav); 0 ends a list
+    { 7, 10, 18, 0 }, { 1, 4, 17, 0 }, { 2, 11, 13, 20 }, { 8, 19, 21, 0 }, { 3, 14, 0, 0 } };
+double gBabyVoiceUntil = 0, gBabyVoiceQuietUntil = 0;
+bool gBabyVoiceLaugh = false;
+
+bool BabyVoice(int kind, bool force = false) {
+    namespace S = royale::avriella_snd;
+    constexpr int kClipCount = sizeof(S::kClips) / sizeof(S::kClips[0]);
+    static std::shared_ptr<const std::vector<int16_t>> cache[kClipCount];
+    static int last = -1;
+    const double now = ImGui::GetTime();
+    const float volume = GameVolume(false) * 0.9f;
+    if (kind < 0 || kind >= kBabyKindCount || volume < 0.01f || now < gBabyVoiceUntil || (!force && now < gBabyVoiceQuietUntil)) return false;
+    int pool[4], n = 0;
+    for (int number : kBabyKindClips[kind]) {
+        for (int i = 0; number != 0 && i < kClipCount; i++) if (S::kClips[i].number == number && i != last) pool[n++] = i;
+    }
+    if (n == 0) return false;
+    const int pick = pool[static_cast<int>(Rand_ZeroOne() * static_cast<float>(n)) % n];
+    last = pick;
+    if (!cache[pick]) cache[pick] = std::make_shared<const std::vector<int16_t>>(S::kClips[pick].data, S::kClips[pick].data + S::kClips[pick].count);
+    StartVoice(kVoiceBaby, cache[pick], false, S::kRate, false, volume);
+    const double len = static_cast<double>(S::kClips[pick].count) / S::kRate;
+    gBabyVoiceUntil = now + len;
+    gBabyVoiceQuietUntil = now + len + 2.0 + static_cast<double>(Rand_ZeroOne()) * 3.0;
+    gBabyVoiceLaugh = kind == kBabyLaugh;
+    return true;
+}
+
+void BabyCoo(int kind, bool force = false) {
+    switch (kind) {
+        case kCooBaba: case kCooDada: case kCooBoth: if (BabyVoice(kBabyBabble, force)) return; break;
+        case kCooGiggle: if (BabyVoice(kBabyLaugh, force)) return; break;
+        case kCooOoh: if (BabyVoice(kBabyCoo, force)) return; break;
+        case kCooYawn: if (BabyVoice(kBabyLow, force)) return; break;
+        case kCooHi: if (BabyVoice(kBabyHi, force)) return; break;
+        default: break;   // chewing stays a quiet gnaw
+    }
+    if (kind != kCooChew && ImGui::GetTime() < gBabyVoiceUntil) return;   // a recording is playing: no synth babble over it
     auto add = [](float at, u16 sfx, float pitch, float volume = 0.8f) { if (gBabyCoos.size() < 24) gBabyCoos.push_back({ at, sfx, pitch, volume }); };
     switch (kind) {
         case kCooBaba: add(0.0f, NA_SE_VO_LI_SWORD_N, 2.0f); add(0.24f, NA_SE_VO_LI_SWORD_N, 2.2f); add(0.5f, NA_SE_VO_LI_SWORD_N, 1.9f); break;
@@ -11583,7 +11627,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
         static const int kLineCoo[royale::kAvriellaPetLineCount] = { kCooBaba, kCooBaba, kCooDada, kCooOoh, kCooGiggle, kCooBoth,
                                                                       kCooOoh, kCooYawn, kCooGiggle, kCooBaba, kCooHi, kCooBoth,
                                                                       kCooChew, kCooChew, kCooGiggle, kCooGiggle, kCooGiggle };
-        BabyCoo(kLineCoo[c.line % royale::kAvriellaPetLineCount]);
+        BabyCoo(kLineCoo[c.line % royale::kAvriellaPetLineCount], true);
     }
     if (!talking && c.mood == BabyMood::Talk) {   // done talking: she sits a while and has something new to say next time
         SetBabyMood(c, BabyMood::Sit);
@@ -11788,6 +11832,8 @@ void Baby_Update(Actor* actor, PlayState* play) {
     c.anim.Play(clip, 0.25f);
     c.anim.Update(dt, rate);
     // eyes: a quick blink every few seconds while they are open
+    if (ImGui::GetTime() < gBabyVoiceUntil && (face == A::kFaceSmile || face == A::kFaceGiggle))   // her mouth goes with the recording
+        face = gBabyVoiceLaugh ? A::kFaceGiggle : (std::fmod(tm, 0.5f) < 0.25f ? A::kFaceOh : A::kFaceSmile);
     c.face = (face == A::kFaceSmile && std::fmod(tm, 3.9f) < 0.13f) ? static_cast<int>(A::kFaceShut) : face;
 
     c.y = GroundY(play, c.x, c.z, c.y);   // her clips carry their own bounce
