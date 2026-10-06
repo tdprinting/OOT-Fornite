@@ -222,6 +222,12 @@ class Match {
         Rng siteRng(seed ^ 0x73697465ull); // "site"
         const size_t firstSite = loot.size();
         for (const ChestSite& s : chestSites) loot.push_back({SiteChest(siteRng, s.pos, s.bonus), false});
+        // Some Rare chests hold a Piece of Heart (four make a heart), so more health in a match is within reach.
+        Rng pieceRng(seed ^ 0x7069656365ull);   // "piece"
+        for (LootEntry& e : loot) {
+            LootSpawn& l = e.spawn;
+            if (l.container && !l.special && l.rarity == Rarity::Rare && pieceRng.Unit() < kRareChestHeartPieceChance) l.item = ItemId::HeartPiece;
+        }
         // A few of the hideaways and climbs hold a Heart Container instead: pink chests, one more heart for whoever finds one.
         std::vector<size_t> good;
         for (size_t i = 0; i < chestSites.size(); i++) if (chestSites[i].bonus >= 1) good.push_back(firstSite + i);
@@ -696,12 +702,29 @@ class Match {
             if (!p->reserve.empty()) GiveStarterAmmo(*p, p->reserve.back().item);
         }
         p->dirty = true;
-        if (s.container) p->chestsOpened++;
+        if (s.container) {
+            p->chestsOpened++;
+            SpillRupees(s.pos, index);
+        }
         loot[index].taken = true;
         MatchEvent e{MatchEvent::Type::LootTaken};
         e.a = id; e.index = index;
         events.push_back(e);
         return true;
+    }
+
+    // An opened chest spills a few green and blue rupees around it, to pick up (money for hiring helpers).
+    void SpillRupees(Vec2 at, size_t index) {
+        Rng r(seed ^ 0x72757065ull ^ (static_cast<uint64_t>(index) * 0x9E3779B97F4A7C15ull));   // "rupe"
+        const int n = kChestRupeesMin + static_cast<int>(r.Below(static_cast<uint32_t>(kChestRupeesMax - kChestRupeesMin + 1)));
+        for (int i = 0; i < n; i++) {
+            const float angle = 6.2831853f * (static_cast<float>(i) + static_cast<float>(r.Unit()) * 0.6f) / static_cast<float>(n);
+            Vec2 to = {at.x + std::cos(angle) * 55.0f, at.z + std::sin(angle) * 55.0f};
+            if (Distance(to, map.center) > map.radius || (placement && !placement(to))) to = at;
+            LootSpawn money = {to, ItemId::Rupees, Rarity::Common, false, false};
+            money.amount = r.Unit() < 0.7 ? 1 : 5;
+            AddLoot(money);
+        }
     }
 
     // Use one item from the bag: the potion that restores the missing health with the least waste when hurt (or the biggest if none

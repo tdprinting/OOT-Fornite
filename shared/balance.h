@@ -41,7 +41,9 @@ constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
 constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
 constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill
 constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
-constexpr float kMaxHealth = 3.0f; // hearts
+constexpr float kMaxHealth = 7.0f; // hearts everyone starts a match with (Heart Containers and Pieces still add up to kMaxHealthCap)
+constexpr float kRareChestHeartPieceChance = 0.10f; // a Rare chest holds a Piece of Heart instead of its roll this often
+constexpr int kChestRupeesMin = 2, kChestRupeesMax = 3; // rupees (green or blue) that spill out of an opened chest
 constexpr int kMaxPotions = 3;
 constexpr float kLobbyAutoStartSec = 120.0f; // the lobby starts the match by itself after this long (the host can turn it off)
 constexpr float kLobbyStartGraceSec = 30.0f; // if the host's game hasn't started it by then, the server does

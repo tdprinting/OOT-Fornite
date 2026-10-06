@@ -1,0 +1,37 @@
+diff --git a/Android/app/build.gradle b/Android/app/build.gradle
+index eb2d4b5..4aebe90 100644
+--- a/Android/app/build.gradle
++++ b/Android/app/build.gradle
+@@ -20,9 +20,22 @@ android {
+         }
+         minSdkVersion 24
+         targetSdkVersion 33
+-        versionCode 8
++        // OOT Royale (patches/0021): every CI build gets a higher number than the last, so Android always sees an update.
++        versionCode Integer.parseInt(System.getenv("ROYALE_VERSION_CODE") ?: "8")
+         versionName "9.0.2"
+     }
++    // OOT Royale (patches/0021): one fixed signing key for every build, so each build installs over the previous one.
++    // The key is passed in by CI (ROYALE_KEYSTORE); local builds without it fall back to the usual debug key.
++    signingConfigs {
++        royale {
++            if (System.getenv("ROYALE_KEYSTORE")) {
++                storeFile file(System.getenv("ROYALE_KEYSTORE"))
++                storePassword "android"
++                keyAlias "androiddebugkey"
++                keyPassword "android"
++            }
++        }
++    }
+     buildTypes {
+         debug {
+             externalNativeBuild {
+@@ -37,7 +50,7 @@ android {
+             minifyEnabled false
+             debuggable false
+             jniDebuggable false
+-            signingConfig signingConfigs.debug
++            signingConfig (System.getenv("ROYALE_KEYSTORE") ? signingConfigs.royale : signingConfigs.debug)
+             externalNativeBuild {
+                 cmake {
+                     arguments "-DSDL_SHARED=ON", "-DANDROID_STL=c++_static", "-DHAVE_LD_VERSION_SCRIPT=OFF",'-DUSE_OPENGLES=ON'

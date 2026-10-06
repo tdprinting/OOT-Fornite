@@ -81,7 +81,7 @@ Rarity scales every number: weapon damage, healing, ability strength and duratio
 
 - PvP damage is applied through the server. The attacker's client reports a hit with the weapon, target and tick;
   the server checks range and line of sight and applies damage. Z-target dodge rolls give i-frames server-side.
-- Health: 3 hearts base, up to 10. Shield value as an overlay, as in Fortnite.
+- Health: 7 hearts base, up to 10. Opened chests spill a few rupees; some Rare chests hold a Piece of Heart. Shield value as an overlay, as in Fortnite.
 - No building. Combat is decided by aim, movement, dodge timing and positioning, as in Fortnite Zero Build.
 
 ### 4.2.1 Item catalog
