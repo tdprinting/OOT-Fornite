@@ -22,6 +22,7 @@
 #include "names.h"
 #include "objmodel.h"
 #include "skins.h"
+#include "sky_model.h"
 #include "tune.h"
 #include "basic_pitch.h"
 #include "oot_arrange.h"
@@ -170,6 +171,7 @@ float gClothScale = 1.0f;           // the local option: cloth and wind physics 
 bool gWindOn = true;                // the local option: a breeze that moves cloth, grass and trees (off: still air)
 float gWindScale = 1.0f;            // how strong the breeze is, 0 to 2 (the slider)
 bool gWindStreaks = true;           // the local option: streaks in the air that show which way the wind blows
+bool gSkyOot = true;                // the local option: the sky modelled in Blender in the Ocarina of Time style (off = the plain procedural sky)
 bool gSkyStars = true;              // the local option: stars in the night sky
 bool gSkyBodies = true;             // the local option: the sun and the moon
 float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (none) to 2
@@ -3453,6 +3455,194 @@ void SkyQuad(Vtx* q, float dx, float dy, float dz, float R, float size, float r,
     SetVtx(q[3], cx - ax + bx, cy + by, cz - az + bz, r, g, b, a);
 }
 
+
+// ---- the Ocarina of Time sky ---------------------------------------------------------------------------------------------------
+// The pieces (dome, hills, clouds, sun, moon, stars) are modelled and painted in Blender (tools/scenery/build_sky.py, shared/sky_model.h), each at most 32
+// corners. A batch puts many copies of them in one buffer, each with its own place, size, turn, colour and fade, and draws them in the order they were added.
+struct SkyBatch {
+    struct Item { const royale::sky_model::Mesh* m; int first; };
+    Vtx* v = nullptr;
+    int n = 0, cap = 0, count = 0;
+    Item items[512];
+    bool Init(PlayState* play, int maxVerts) {
+        cap = maxVerts; n = 0; count = 0;
+        v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(maxVerts) * sizeof(Vtx)));
+        return v != nullptr;
+    }
+    // `o` is where the model's origin goes; a, b, c are the unit directions of the model's x, y and z axes; `size` is the size of one model unit.
+    // tint is 0..1 per channel, fade multiplies the painted alpha, `turn` spins the model about its z axis (radians).
+    void Add(const royale::sky_model::Mesh& m, const float o[3], const float a[3], const float b[3], const float c[3], float size, const float tint[3], float fade, float turn = 0.0f) {
+        if (v == nullptr || fade <= 0.004f || n + m.verts > cap || count >= 512) return;
+        const float k = m.scale * size, cs = std::cos(turn), sn = std::sin(turn);
+        for (int i = 0; i < m.verts; i++) {
+            const float x0 = m.pos[i * 3] * k, y0 = m.pos[i * 3 + 1] * k, z0 = m.pos[i * 3 + 2] * k;
+            const float x = x0 * cs - y0 * sn, y = x0 * sn + y0 * cs;
+            SetVtx(v[n + i], o[0] + a[0] * x + b[0] * y + c[0] * z0, o[1] + a[1] * x + b[1] * y + c[1] * z0, o[2] + a[2] * x + b[2] * y + c[2] * z0,
+                   m.col[i * 4] * tint[0], m.col[i * 4 + 1] * tint[1], m.col[i * 4 + 2] * tint[2], m.col[i * 4 + 3] * fade);
+        }
+        items[count++] = { &m, n };
+        n += m.verts;
+    }
+    // A flat model that faces the camera's centre, looking out along `dir`: its x is across the sky, y up the sky, z toward the viewer.
+    void AddBillboard(const royale::sky_model::Mesh& m, const float dir[3], float R, float size, const float tint[3], float fade, float turn = 0.0f) {
+        const float len = std::max(0.001f, std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]));
+        const float dx = dir[0] / len, dy = dir[1] / len, dz = dir[2] / len;
+        const float h = std::max(0.001f, std::hypot(dx, dz));
+        const float a[3] = { -dz / h, 0.0f, dx / h }, b[3] = { -dy * dx / h, h, -dy * dz / h }, c[3] = { -dx, -dy, -dz };
+        const float o[3] = { dx * R, dy * R, dz * R };
+        Add(m, o, a, b, c, size, tint, fade, turn);
+    }
+    void Draw(PlayState* play) {
+        if (v == nullptr || count == 0) return;
+        OPEN_DISPS(play->state.gfxCtx);
+        int i = 0;
+        while (i < count) {
+            int j = i, verts = 0;
+            while (j < count && verts + items[j].m->verts <= 32) { verts += items[j].m->verts; j++; }
+            if (j == i) { i++; continue; }
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[items[i].first]), verts, 0);
+            int base = 0;
+            for (int q = i; q < j; q++) {
+                const royale::sky_model::Mesh& m = *items[q].m;
+                for (int t = 0; t < m.tris; t++) gSP1Triangle(POLY_XLU_DISP++, base + m.idx[t * 3], base + m.idx[t * 3 + 1], base + m.idx[t * 3 + 2], 0);
+                base += m.verts;
+            }
+            i = j;
+        }
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+};
+
+// The sky with the Blender models. `zen` and `hor` are the zenith and horizon colours DrawSky worked out for the time of day and weather.
+void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[3], const float zen[3], const float hor[3]) {
+    using namespace royale::sky_model;
+    constexpr float kR = 7000.0f;
+    const float t = static_cast<float>(ImGui::GetTime());
+    auto mix = [](float a, float b, float k) { return a + (b - a) * k; };
+    const float kTau = 6.2831853f;
+    const float yAxis[3] = { 0, 1, 0 };
+    SkyBegin(play);
+
+    // The dome, from the modelled rings: horizon colour up to zenith colour, with the glow of sunrise and sunset on the sun's side.
+    {
+        Vtx* dv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(sky_dome.verts) * sizeof(Vtx)));
+        if (dv == nullptr) return;
+        const float glow[3] = { 255, 128, 62 };
+        for (int i = 0; i < sky_dome.verts; i++) {
+            const float x = sky_dome.pos[i * 3] * sky_dome.scale, y = sky_dome.pos[i * 3 + 1] * sky_dome.scale, z = sky_dome.pos[i * 3 + 2] * sky_dome.scale;
+            const float k = std::pow(std::clamp(y, 0.0f, 1.0f), 0.6f);
+            const float a = std::atan2(z, x), toSun = 0.5f + 0.5f * std::cos(a - 0.6f);
+            const float g = L.twilight * (0.35f + 0.65f * toSun) * (1.0f - k) * (1.0f - ov * 0.7f);
+            float col[3];
+            for (int ch = 0; ch < 3; ch++) col[ch] = mix(mix(hor[ch], zen[ch], k), glow[ch], g * 0.35f);
+            SetVtx(dv[i], x * kR, y * kR, z * kR, col[0], col[1], col[2], y < 0.0f ? 255.0f : 232.0f);
+        }
+        OPEN_DISPS(play->state.gfxCtx);
+        const int w = kDomeSegs + 1;
+        for (int r = 0; r + 1 < kDomeRings; r++) {
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&dv[r * w]), 2 * w, 0);
+            for (int j = 0; j < kDomeSegs; j++) gSP2Triangles(POLY_XLU_DISP++, j, j + 1, w + j, 0, j + 1, w + j + 1, w + j, 0);
+        }
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+
+    SkyBatch sky;
+    if (!sky.Init(play, 1700)) return;
+    const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * kTau;
+    const float white[3] = { 1, 1, 1 };
+
+    // Stars: the two modelled kinds, turning slowly through the night and twinkling on the loop built in Blender; they come in as the sun sets, go out as it
+    // rises, and hide behind cloud and the storm.
+    const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
+    if (starA > 0.03f && gSkyStars) {
+        constexpr int kStars = 150;
+        for (int i = 0; i < kStars; i++) {
+            const float a = Flora01(i, 5, 711) * kTau + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
+            const float c = std::sqrt(1.0f - s * s), big = Flora01(i, 13, 713);
+            const float tw = 0.7f + 0.3f * std::sin(t * kTau / kStarTwinkle * (0.6f + 0.8f * Flora01(i, 17, 714)) + i * 2.3f);
+            const float fade = std::min(1.0f, s * 6.0f);
+            const float warm = Flora01(i, 21, 715);
+            const float tint[3] = { 1.0f, 1.0f - 0.08f * warm, 1.0f - 0.35f * warm };
+            const float dir[3] = { std::cos(a) * c, s, std::sin(a) * c };
+            const bool sparkle = big > 0.72f;
+            sky.AddBillboard(sparkle ? star_sparkle : star_dot, dir, kR * 0.97f, sparkle ? (44.0f + 54.0f * big) * (0.8f + 0.2f * tw) : (22.0f + 22.0f * big) * (0.85f + 0.15f * tw),
+                             tint, starA * tw * fade * (0.5f + 0.5f * big), sparkle ? 0.0f : 0.785f);
+        }
+    }
+
+    // The sun and the moon, opposite each other, behind thick cloud. The sun's rays turn and its halo breathes on the loops from the Blender file.
+    {
+        const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
+        const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
+        if (gSkyBodies) {
+            if (sunA > 0.02f) {
+                const float dir[3] = { std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c };
+                const float warm = L.twilight;
+                const float tint[3] = { 1.0f, mix(1.0f, 0.72f, warm), mix(1.0f, 0.5f, warm) };
+                const float breath = 1.0f + 0.06f * (1.0f - std::cos(t * kTau / kSunRayBreath));
+                const float turn = 0.7853982f * std::fmod(t, kSunRayTurn) / kSunRayTurn;
+                sky.AddBillboard(sun_halo, dir, kR * 0.955f, 420.0f * breath, tint, sunA * (1.0f - 0.5f * ov));
+                sky.AddBillboard(sun_rays_long, dir, kR * 0.956f, 380.0f, tint, sunA * (0.55f + 0.2f * warm), turn);
+                sky.AddBillboard(sun_rays_short, dir, kR * 0.957f, 380.0f, tint, sunA * (0.55f + 0.2f * warm), -turn);
+                sky.AddBillboard(sun_core, dir, kR * 0.958f, 400.0f, tint, sunA);
+            }
+            if (moonA > 0.02f) {
+                const float dir[3] = { -std::cos(0.6f) * c, -L.sunH, -std::sin(0.6f) * c };
+                const float pulse = 1.0f + 0.05f * (1.0f - std::cos(t * kTau / kMoonPulse));
+                sky.AddBillboard(moon_halo, dir, kR * 0.955f, 320.0f * pulse, white, moonA);
+                sky.AddBillboard(moon_disc, dir, kR * 0.958f, 320.0f, white, moonA);
+                sky.AddBillboard(moon_craters, dir, kR * 0.959f, 320.0f, white, moonA);
+            }
+        }
+    }
+
+    // Distant hills ringing the horizon, blue-green and lit by the day, so the sun and moon rise and set behind them.
+    {
+        const float lit = 0.3f + 1.0f * L.day, tw = L.twilight;
+        const float tint[3] = { lit * (1.0f - 0.5f * ov) * (1.0f + 0.35f * tw), lit * (1.0f - 0.5f * ov) * (1.0f - 0.05f * tw), lit * (1.0f - 0.3f * ov) * (1.0f - 0.2f * tw) };
+        constexpr int kHillCount = 22;
+        for (int i = 0; i < kHillCount; i++) {
+            const float a = kTau * i / kHillCount + (Flora01(i, 3, 741) - 0.5f) * 0.16f;
+            const float ca = std::cos(a), sa = std::sin(a);
+            const float size = kR * (0.085f + 0.065f * Flora01(i, 5, 742));
+            const float o[3] = { ca * kR * 0.93f, kR * 0.002f, sa * kR * 0.93f };
+            const float ax[3] = { -sa, 0.0f, ca }, cz[3] = { -ca, 0.0f, -sa };
+            sky.Add(kHills[i % 3], o, ax, yAxis, cz, size, tint, 1.0f);
+        }
+    }
+    sky.Draw(play);
+
+    // Clouds: the four modelled loaves, drifting round the sky on the Blender loop (quicker with the wind), more of them and greyer the more overcast
+    // it is; warm at sunrise and sunset, dim blue at night.
+    if (gSkyClouds <= 0.01f) return;
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz));
+    const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
+    const int puffs = std::min(30, static_cast<int>((8.0f + 22.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity)) * gSkyClouds));
+    SkyBatch cl;
+    if (!cl.Init(play, 1100)) return;
+    float lit[3];
+    for (int ch = 0; ch < 3; ch++) {
+        const float dayc = mix(250.0f, tintW[ch], ov * 0.8f);
+        float c = mix(40.0f + ch * 6.0f, dayc, L.day);
+        c = mix(c, ch == 0 ? 255.0f : (ch == 1 ? 150.0f : 120.0f), L.twilight * 0.55f * (1.0f - ov * 0.6f));
+        lit[ch] = std::clamp(c / 255.0f, 0.0f, 1.0f);
+    }
+    for (int i = 0; i < puffs; i++) {
+        const float h1 = Flora01(i, 7, 751), h2 = Flora01(i, 11, 752), h3 = Flora01(i, 13, 753), h4 = Flora01(i, 17, 754);
+        const float a = h1 * kTau + t * kTau / kCloudDrift * (0.7f + 0.6f * h4) * (1.0f + 0.01f * wl);
+        const float el = 0.12f + 0.45f * h2 * h2 + 0.12f * h2;
+        const float ce = std::cos(el), dx = std::cos(a) * ce, dy = std::sin(el), dz = std::sin(a) * ce;
+        const float R = kR * 0.9f, size = R * (0.065f + 0.06f * h3) * (1.0f + 0.5f * ov);
+        const float o[3] = { dx * R, dy * R, dz * R };
+        // the cloud's long axis lies across the sky and its flat underside stays level, whatever its height
+        const float ax[3] = { -dz / ce, 0.0f, dx / ce }, cz[3] = { -dx / ce, 0.0f, -dz / ce };
+        cl.Add(kClouds[i % 4], o, ax, yAxis, cz, size, lit, (0.55f + 0.45f * ov) * std::min(1.0f, (el - 0.04f) * 12.0f));
+    }
+    cl.Draw(play);
+}
+
 void DrawSky(PlayState* play) {
     if (!InField()) return;
     constexpr float kR = 7000.0f;
@@ -3472,6 +3662,7 @@ void DrawSky(PlayState* play) {
         const float grey = tint[i] * (0.25f + 0.75f * L.day);
         zen[i] = mix(zen[i], grey * 0.8f, ov * 0.85f) * dim; hor[i] = mix(hor[i], grey, ov * 0.85f) * dim;
     }
+    if (gSkyOot) { DrawSkyOot(play, L, ov, tint, zen, hor); return; }
     SkyBegin(play);
     // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
     constexpr int kSegs = 14, kRings = 8;
@@ -12972,6 +13163,7 @@ UiState& Ui() {
         gWindOn = ui.windOn;
         gWindScale = ui.windStrength / 100.0f;
         gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
+        gSkyOot = CVarGetInteger(ROYALE_CVAR("SkyOot"), 1) != 0;
         gSkyStars = CVarGetInteger(ROYALE_CVAR("SkyStars"), 1) != 0;
         gSkyBodies = CVarGetInteger(ROYALE_CVAR("SkyBodies"), 1) != 0;
         gSkyClouds = std::clamp(CVarGetInteger(ROYALE_CVAR("SkyClouds"), 100), 0, 200) / 100.0f;
@@ -14081,6 +14273,7 @@ void DrawGraphicsUi() {
         if (GfxSwitch("Sky", "Sky (gradient dome, stars, sun, moon, clouds)")) {
             static int clouds = -1;
             if (clouds < 0) clouds = static_cast<int>(gSkyClouds * 100.0f + 0.5f);
+            GfxCheck("Ocarina of Time sky (models and painted colours)", "SkyOot", &gSkyOot);
             GfxCheck("Stars at night", "SkyStars", &gSkyStars);
             GfxCheck("Sun and moon", "SkyBodies", &gSkyBodies);
             if (GfxPercent("Clouds (%, 0 = none)", "SkyClouds", &clouds)) gSkyClouds = clouds / 100.0f;
