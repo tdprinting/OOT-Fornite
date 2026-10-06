@@ -140,10 +140,9 @@ index ed42e52..e7b3c18 100644
                  copyDirectory(file, dest);
 diff --git a/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java b/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java
 new file mode 100644
-index 0000000..fb40008
 --- /dev/null
 +++ b/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java
-@@ -0,0 +1,260 @@
+@@ -0,0 +1,287 @@
 +package com.dishii.soh;
 +
 +import android.app.Activity;
@@ -175,7 +174,8 @@ index 0000000..fb40008
 +    private FrameLayout root;
 +    private TextView stepText, detailText, percentText, timeText, warningText, errorTitle, errorText;
 +    private ProgressBar bar;
-+    private Button closeButton;
++    private Button closeButton, retryButton;
++    private Runnable onRetry;
 +
 +    // State (only touched on the UI thread)
 +    private String step = "", detail = "";
@@ -259,6 +259,17 @@ index 0000000..fb40008
 +        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
 +                ViewGroup.LayoutParams.WRAP_CONTENT);
 +        blp.topMargin = dp(16);
++
++        retryButton = new Button(activity);
++        retryButton.setText("Try again");
++        retryButton.setVisibility(View.GONE);
++        retryButton.setOnClickListener(v -> {
++            Runnable handler = onRetry;
++            onRetry = null;
++            clearError();
++            if (handler != null) handler.run();
++        });
++        box.addView(retryButton, blp);
 +        box.addView(closeButton, blp);
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(560), ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -312,6 +323,19 @@ index 0000000..fb40008
 +        });
 +    }
 +
++    // An error the player can answer with "Try again": the handler runs once, on the UI thread, when the button is pressed.
++    public void showRetryableError(String title, String message, Runnable retryHandler) {
++        ui.post(() -> {
++            if (done) return;
++            failed = true;
++            onRetry = retryHandler;
++            Log.e(TAG, "Error (can retry): " + title + ": " + message);
++            render();
++            errorTitle.setText(title);
++            errorText.setText(message + "\n\nYour files are kept. Press Try again to start the extraction over.");
++        });
++    }
++
 +    // Back to normal after a problem the player fixed without restarting (e.g. granting file access in Settings).
 +    public void clearError() {
 +        ui.post(() -> {
@@ -319,6 +343,7 @@ index 0000000..fb40008
 +            failed = false;
 +            errorTitle.setVisibility(View.GONE);
 +            errorText.setVisibility(View.GONE);
++            retryButton.setVisibility(View.GONE);
 +            render();
 +        });
 +    }
@@ -365,6 +390,7 @@ index 0000000..fb40008
 +            errorTitle.setVisibility(View.VISIBLE);
 +            errorText.setVisibility(View.VISIBLE);
 +            closeButton.setVisibility(View.VISIBLE);
++            retryButton.setVisibility(onRetry != null ? View.VISIBLE : View.GONE);
 +            return;
 +        }
 +
@@ -405,7 +431,6 @@ index 0000000..fb40008
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
-index 2b045bc..160b2f4 100644
 --- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
 +++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
 @@ -42,9 +42,17 @@ public class MainActivity extends SDLActivity{
@@ -426,7 +451,7 @@ index 2b045bc..160b2f4 100644
  
          getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
  
-@@ -62,6 +70,55 @@ public class MainActivity extends SDLActivity{
+@@ -62,6 +70,60 @@ public class MainActivity extends SDLActivity{
  
          setupControllerOverlay();
          attachController();
@@ -445,6 +470,11 @@ index 2b045bc..160b2f4 100644
 +
 +    public void loadingError(String title, String message) {
 +        if (loading != null) loading.showError(title, message);
++    }
++
++    // An error with a "Try again" button; pressing it tells the waiting game thread to run the extraction again.
++    public void loadingRetryableError(String title, String message) {
++        if (loading != null) loading.showRetryableError(title, message, () -> nativeRetryPressed());
 +    }
 +
 +    public void loadingDone() {
@@ -482,7 +512,7 @@ index 2b045bc..160b2f4 100644
      }
  
      public static void waitForSetupFromNative() {
-@@ -149,6 +206,8 @@ public class MainActivity extends SDLActivity{
+@@ -149,6 +211,8 @@ public class MainActivity extends SDLActivity{
      private static final int FILE_PICKER_REQUEST_CODE = 0;
  
      private void requestStoragePermission() {
@@ -491,7 +521,7 @@ index 2b045bc..160b2f4 100644
          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
              // Android 11+ → MANAGE_EXTERNAL_STORAGE
              if (!Environment.isExternalStorageManager()) {
-@@ -178,36 +237,58 @@ public class MainActivity extends SDLActivity{
+@@ -178,36 +242,58 @@ public class MainActivity extends SDLActivity{
          File assetsFolder = new File(targetRootFolder, "assets");
          File sohOtrFile = new File(targetRootFolder, "soh.otr");
  
@@ -555,7 +585,7 @@ index 2b045bc..160b2f4 100644
  
              File[] sourceFiles = sourceOldRoot.listFiles();
              if (sourceFiles != null) {
-@@ -230,18 +311,12 @@ public class MainActivity extends SDLActivity{
+@@ -230,18 +316,12 @@ public class MainActivity extends SDLActivity{
                      }
                  }
              }
@@ -577,7 +607,7 @@ index 2b045bc..160b2f4 100644
          }
  
          // Always ensure mods folder exists
-@@ -250,38 +325,37 @@ public class MainActivity extends SDLActivity{
+@@ -250,49 +330,54 @@ public class MainActivity extends SDLActivity{
              targetModsDir.mkdirs();
          }
  
@@ -641,7 +671,12 @@ index 2b045bc..160b2f4 100644
      }
  
  
-@@ -293,6 +367,11 @@ public class MainActivity extends SDLActivity{
+ 
+ 
+     private native void nativeHandleSelectedFile(String filePath);
++    private native void nativeRetryPressed();
+ 
+     @Override
      protected void onActivityResult(int requestCode, int resultCode, Intent data) {
          super.onActivityResult(requestCode, resultCode, data);
  
@@ -653,7 +688,7 @@ index 2b045bc..160b2f4 100644
          if (requestCode == FILE_PICKER_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
              // Handle file selection
              Uri selectedFileUri = data.getData();
-@@ -302,36 +381,57 @@ public class MainActivity extends SDLActivity{
+@@ -302,36 +387,57 @@ public class MainActivity extends SDLActivity{
              File destinationFile = new File(destinationDirectory, fileName);
  
              if (destinationDirectory != null && selectedFileUri != null) {
@@ -736,7 +771,6 @@ index 2b045bc..160b2f4 100644
  
      public void openFilePicker() {
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index 1277ce4..410e277 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
 @@ -5,6 +5,8 @@
@@ -770,7 +804,7 @@ index 1277ce4..410e277 100644
      { OOT_NTSC_10, "NTSC N64 1.0" },        { OOT_NTSC_11, "NTSC N64 1.1" },
      { OOT_NTSC_12, "NTSC N64 1.2" },
  };
-@@ -115,27 +121,136 @@ enum class ButtonId : int {
+@@ -115,27 +121,161 @@ enum class ButtonId : int {
  };
  
  #ifdef __ANDROID__
@@ -868,6 +902,29 @@ index 1277ce4..410e277 100644
 +    env->DeleteLocalRef(jMessage);
 +}
 +
++static std::atomic<bool> sRetryPressed{ false };
++
++extern "C" void JNICALL Java_com_dishii_soh_MainActivity_nativeRetryPressed(JNIEnv*, jobject) {
++    sRetryPressed = true;
++}
++
++// Shows the error with a Try again button and waits for it. Returns when the player presses it.
++extern "C" void SohLoading_ErrorAndWaitForRetry(const char* title, const char* message) {
++    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
++    if (env == nullptr) {
++        return;
++    }
++    sRetryPressed = false;
++    jstring jTitle = NewJavaString(env, title);
++    jstring jMessage = NewJavaString(env, message);
++    CallActivityVoid("loadingRetryableError", "(Ljava/lang/String;Ljava/lang/String;)V", jTitle, jMessage);
++    env->DeleteLocalRef(jTitle);
++    env->DeleteLocalRef(jMessage);
++    while (!sRetryPressed) {
++        SDL_Delay(100);
++    }
++}
++
 +extern "C" void SohLoading_Done(void) {
 +    static bool sDone = false;
 +    if (sDone) {
@@ -883,6 +940,8 @@ index 1277ce4..410e277 100644
 +extern "C" void SohLoading_SetWaiting(bool) {
 +}
 +extern "C" void SohLoading_Error(const char*, const char*) {
++}
++extern "C" void SohLoading_ErrorAndWaitForRetry(const char*, const char*) {
 +}
 +extern "C" void SohLoading_Done(void) {
 +}
@@ -917,7 +976,7 @@ index 1277ce4..410e277 100644
  #ifdef _WIN32
      MessageBoxA(nullptr, text, title, MB_OK | MB_ICONERROR);
  #else
-@@ -162,6 +277,7 @@ void Extractor::ShowCompressedErrorBox() const {
+@@ -162,6 +302,7 @@ void Extractor::ShowCompressedErrorBox() const {
  }
  
  int Extractor::ShowRomPickBox(uint32_t verCrc) const {
@@ -925,7 +984,7 @@ index 1277ce4..410e277 100644
      std::unique_ptr<char[]> boxBuffer = std::make_unique<char[]>(mCurrentRomPath.size() + 100);
      SDL_MessageBoxData boxData = { 0 };
      SDL_MessageBoxButtonData buttons[3] = { { 0 } };
-@@ -184,14 +300,15 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
+@@ -184,14 +325,15 @@ int Extractor::ShowRomPickBox(uint32_t verCrc) const {
      boxData.buttons = buttons;
      snprintf(boxBuffer.get(), mCurrentRomPath.size() + 100,
               "Rom detected: %s, Header CRC32: %8X. It appears to be: %s. Use this rom?", mCurrentRomPath.c_str(),
@@ -943,7 +1002,7 @@ index 1277ce4..410e277 100644
  #ifdef _WIN32
      ret = MessageBoxA(nullptr, box, title, MB_YESNO | MB_ICONQUESTION);
  #else
-@@ -209,7 +326,9 @@ int Extractor::ShowYesNoBox(const char* title, const char* box) {
+@@ -209,7 +351,9 @@ int Extractor::ShowYesNoBox(const char* title, const char* box) {
      boxData.message = box;
      boxData.title = title;
      boxData.buttons = buttons;
@@ -954,7 +1013,7 @@ index 1277ce4..410e277 100644
  #endif
      return ret;
  }
-@@ -223,9 +342,14 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+@@ -223,9 +367,14 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
      std::ifstream inFile;
      std::vector<std::string>::iterator it = roms.begin();
  
@@ -969,7 +1028,7 @@ index 1277ce4..410e277 100644
  
          // Skip. We will handle rom size errors later on after filtering
          if (!ValidateRomSize()) {
-@@ -234,6 +358,10 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+@@ -234,6 +383,10 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
          }
  
          inFile.open(rom, std::ios::in | std::ios::binary);
@@ -980,7 +1039,7 @@ index 1277ce4..410e277 100644
          inFile.read((char*)mRomData.get(), mCurRomSize);
          inFile.clear();
          inFile.close();
-@@ -293,31 +421,39 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
+@@ -293,31 +446,39 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
      }
      closedir(d);
  #elif defined(__ANDROID__)
@@ -1038,7 +1097,7 @@ index 1277ce4..410e277 100644
      }
  #else
      for (const auto& file : std::filesystem::directory_iterator(mSearchPath)) {
-@@ -371,27 +507,30 @@ bool Extractor::GetRomPathFromBox() {
+@@ -371,27 +532,30 @@ bool Extractor::GetRomPathFromBox() {
      mCurrentRomPath = nameBuffer;
  
  #elif defined(__ANDROID__)
@@ -1060,14 +1119,14 @@ index 1277ce4..410e277 100644
 +    // copy failed. The copy itself reports its own progress.
 +    while (fileDialogOpen) {
 +        SDL_Delay(100);
-     }
--    SDL_Log("%s",javaRomPath);
--    selection.push_back(javaRomPath);
++    }
 +    std::string picked;
 +    {
 +        std::lock_guard<std::mutex> lock(javaRomPathMutex);
 +        picked = javaRomPath;
-+    }
+     }
+-    SDL_Log("%s",javaRomPath);
+-    selection.push_back(javaRomPath);
 +    SDL_Log("Picked rom: %s", picked.c_str());
  
 -    if (selection.empty()) {
@@ -1085,7 +1144,7 @@ index 1277ce4..410e277 100644
  
  #else
      auto selection = pfd::open_file("Select a file", mSearchPath, { "N64 Roms", "*.z64 *.n64 *.v64" }).result();
-@@ -411,7 +550,10 @@ uint32_t Extractor::GetRomVerCrc() const {
+@@ -411,7 +575,10 @@ uint32_t Extractor::GetRomVerCrc() const {
  }
  
  size_t Extractor::GetCurRomSize() const {
@@ -1097,7 +1156,7 @@ index 1277ce4..410e277 100644
  }
  
  bool Extractor::ValidateAndFixRom() {
-@@ -482,16 +624,25 @@ bool Extractor::ManuallySearchForRom() {
+@@ -482,16 +649,25 @@ bool Extractor::ManuallySearchForRom() {
          return false;
      }
  
@@ -1124,7 +1183,7 @@ index 1277ce4..410e277 100644
      if (!ValidateRom()) {
          return false;
      }
-@@ -536,6 +687,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -536,6 +712,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
  
      mSearchPath = searchPath;
  
@@ -1132,7 +1191,7 @@ index 1277ce4..410e277 100644
      GetRoms(roms);
      FilterRoms(roms, searchMode);
  
-@@ -565,6 +717,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -565,6 +742,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
              continue;
          }
  
@@ -1140,7 +1199,7 @@ index 1277ce4..410e277 100644
          inFile.open(rom, std::ios::in | std::ios::binary);
          inFile.read((char*)mRomData.get(), mCurRomSize);
          inFile.clear();
-@@ -574,6 +727,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
+@@ -574,6 +752,7 @@ bool Extractor::Run(std::string searchPath, RomSearchMode searchMode) {
          int option = ShowRomPickBox(GetRomVerCrc());
  
          if (option == (int)ButtonId::YES) {
@@ -1148,7 +1207,7 @@ index 1277ce4..410e277 100644
              if (!ValidateRom(true)) {
                  if (rom == roms.back()) {
                      ShowCrcErrorBox();
-@@ -620,9 +774,10 @@ bool Extractor::IsMasterQuest() const {
+@@ -620,9 +799,10 @@ bool Extractor::IsMasterQuest() const {
          case OOT_PAL_11:
          case OOT_PAL_GC:
          case OOT_PAL_GC_DBG1:
@@ -1160,7 +1219,7 @@ index 1277ce4..410e277 100644
      }
  }
  
-@@ -657,9 +812,8 @@ const char* Extractor::GetZapdVerStr() const {
+@@ -657,9 +837,8 @@ const char* Extractor::GetZapdVerStr() const {
          case OOT_NTSC_12:
              return "N64_NTSC_12";
          default:
@@ -1172,7 +1231,7 @@ index 1277ce4..410e277 100644
      }
  }
  
-@@ -667,7 +821,17 @@ std::string Extractor::Mkdtemp() {
+@@ -667,7 +846,17 @@ std::string Extractor::Mkdtemp() {
  #ifndef __ANDROID__
      std::string temp_dir = std::filesystem::temp_directory_path().string();
  #else
@@ -1191,7 +1250,7 @@ index 1277ce4..410e277 100644
  #endif
      // create 6 random alphanumeric characters
      static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-@@ -687,7 +851,61 @@ std::string Extractor::Mkdtemp() {
+@@ -687,7 +876,61 @@ std::string Extractor::Mkdtemp() {
  }
  
  extern "C" int zapd_main(int argc, char** argv);
@@ -1214,7 +1273,7 @@ index 1277ce4..410e277 100644
 +        SohLoading_SetStatus("Packing the game archive", "Writing all assets into one file", 90, 240);
 +    }
 +}
- 
++
 +#ifdef __ANDROID__
 +// std::filesystem::copy can leave a file short or missing on Android's external storage. Compare every copied file
 +// with its source and redo the ones that differ with a plain read/write copy, so ZAPD never starts on a bad file.
@@ -1248,12 +1307,12 @@ index 1277ce4..410e277 100644
 +    SDL_Log("Verified %zu extractor files (%zu needed a second copy)", total, fixed);
 +}
 +#endif
-+
+ 
 +// Returns true when the game archive (oot.otr or oot-mq.otr) was written to exportdir. On failure, shows why.
  bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      constexpr int argc = 18;
      char xmlPath[1024];
-@@ -697,72 +915,134 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
+@@ -697,72 +940,141 @@ bool Extractor::CallZapd(std::string installPath, std::string exportdir) {
      const char* version = GetZapdVerStr();
      const char* otrFile = IsMasterQuest() ? "oot-mq.otr" : "oot.otr";
  
@@ -1401,10 +1460,6 @@ index 1277ce4..410e277 100644
  #endif
  
 -    std::filesystem::copy(otrFile, exportdir + "/" + otrFile, std::filesystem::copy_options::overwrite_existing);
--
--    // Go back to where this game was executed from
--    std::filesystem::current_path(curdir);
--    std::filesystem::remove_all(tempdir);
 +            if (zapdResult != 0) {
 +                failure = std::string("The extractor stopped with an error.\n\n") + zapd_last_error();
 +            } else if (!std::filesystem::exists(otrFile) || std::filesystem::file_size(otrFile) == 0) {
@@ -1418,7 +1473,9 @@ index 1277ce4..410e277 100644
 +            failure = std::string("The extraction failed: ") + e.what();
 +        }
  
--    return 0;
+-    // Go back to where this game was executed from
+-    std::filesystem::current_path(curdir);
+-    std::filesystem::remove_all(tempdir);
 +        // Go back to where this game was executed from, and clean up
 +        if (!curdir.empty()) {
 +            std::filesystem::current_path(curdir, ec);
@@ -1432,14 +1489,22 @@ index 1277ce4..410e277 100644
 +        printf("Extraction attempt %d of %d failed: %s\n", attempt, kAttempts, failure.c_str());
 +    }
 +    zapd_set_worker_limit(0);
-+
+ 
+-    return 0;
 +    if (!failure.empty()) {
 +        failure += "\n\nThe extraction was tried " + std::to_string(kAttempts) + " times.";
 +        printf("Extraction failed: %s\n", failure.c_str());
 +        // A half-written archive would make the next launch skip extraction and fail later
 +        std::filesystem::remove(exportdir + "/" + otrFile, ec);
++#ifdef __ANDROID__
++        // Keep the game open: show the error with a Try again button and start the extraction over when it is pressed
++        SohLoading_ErrorAndWaitForRetry("Extraction failed", failure.c_str());
++        SohLoading_SetStatus("Starting the extraction again", "", -1, 120);
++        return CallZapd(installPath, exportdir);
++#else
 +        ShowErrorBox("Extraction failed", failure.c_str());
 +        return false;
++#endif
 +    }
 +    return true;
  }
