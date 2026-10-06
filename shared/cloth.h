@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <vector>
+#include "glider_model.h"
 
 namespace royale {
 
@@ -108,9 +109,11 @@ struct ClothVertex { float x, y, z; uint8_t r, g, b; };
 class GliderCloth {
   public:
     GliderCloth() {
-        const ClothV3 nose = {0, 156, 78}, tail = {0, 150, -64};
-        left.Init(nose, tail, {-118, 140, -58});
-        right.Init(nose, tail, {118, 140, -58});
+        // The wing's corners come from the Blender model (glider_model.h), so the live cloth fits the frame exactly.
+        using namespace glider_model;
+        const ClothV3 nose = {kNose[0], kNose[1], kNose[2]}, tail = {kTail[0], kTail[1], kTail[2]};
+        left.Init(nose, tail, {-kTip[0], kTip[1], kTip[2]});
+        right.Init(nose, tail, {kTip[0], kTip[1], kTip[2]});
     }
     void Update(float dt, ClothV3 air, float wind01, float time, uint32_t seed) {
         const float phase = static_cast<float>(seed % 97) * 0.37f;

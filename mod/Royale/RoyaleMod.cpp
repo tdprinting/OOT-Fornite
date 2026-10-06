@@ -1571,7 +1571,7 @@ void ApplyLocalTunic(bool on) {
     }
 }
 
-void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain = false); // with the other custom models, below
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain = false, const Player* hanger = nullptr); // with the other custom models, below
 
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
@@ -1585,7 +1585,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
     if (st && HangingFromGlider(st, actor, play)) {
-        DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id, st->isBot);   // a bot's glider is the plain model: no cloth to simulate
+        DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, 0.0f, false, st->id, st->isBot, (const Player*)actor);   // a bot's glider is the plain model: no cloth to simulate
     }
 }
 
@@ -2312,7 +2312,7 @@ struct GliderClothState {
 };
 std::unordered_map<uint32_t, GliderClothState> gGliderCloth;
 
-void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain) {
+void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain, const Player* hanger) {
     const bool cloth = gClothScale > 0.01f && !plain;
     if (cloth) gGliderClothFrames++;
     const GpuMesh* mesh = GpuMeshFor(cloth ? royale::MeshKind::GliderFrame : royale::MeshKind::Glider, cloth ? 0u : scheme);
@@ -2342,11 +2342,20 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     }
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    // The glider's origin is its handle bar, and the bar is put exactly where Link's two hands are (the game works out where each hand is as it
+    // draws him), so he always holds the grips, whatever his size or pose. Banking, pitching and swaying all turn about the bar, so it stays in his hands.
+    Vec3f grip = { x, y + 125.0f, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
+    if (hanger != nullptr) {
+        const Vec3f& l = hanger->bodyPartsPos[PLAYER_BODYPART_L_HAND];
+        const Vec3f& r = hanger->bodyPartsPos[PLAYER_BODYPART_R_HAND];
+        const float mx = (l.x + r.x) * 0.5f, my = (l.y + r.y) * 0.5f, mz = (l.z + r.z) * 0.5f;
+        // Trust the hands only if they are somewhere believable (near him and above his head's height): the pose may not have taken yet.
+        if (std::isfinite(mx + my + mz) && std::fabs(mx - x) < 80.0f && std::fabs(mz - z) < 80.0f && my > y + 60.0f && my < y + 220.0f) grip = { mx, my, mz };
+    }
+    Matrix_Translate(grip.x, grip.y, grip.z, MTXMODE_NEW);
     Matrix_RotateY(yaw * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_RotateZ(roll + std::sin(t * 3.1f + scheme) * 0.045f, MTXMODE_APPLY);               // gentle sway in the wind
-    Matrix_RotateX((diving ? 0.62f : 0.12f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.03f, MTXMODE_APPLY); // nose down for a dive
-    Matrix_Scale(1.0f, diving ? 0.65f : 1.0f, diving ? 0.75f : 1.0f, MTXMODE_APPLY);
+    Matrix_RotateZ(roll + std::sin(t * 3.1f + scheme) * 0.04f, MTXMODE_APPLY);               // gentle sway in the wind
+    Matrix_RotateX((diving ? 0.5f : 0.1f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.025f, MTXMODE_APPLY); // nose down for a dive
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
@@ -2376,7 +2385,7 @@ void LocalGlider_Update(Actor* actor, PlayState* play) {
     actor->focus.pos = actor->world.pos;
 }
 void LocalGlider_Draw(Actor* actor, PlayState* play) {
-    DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, gGliderRoll, gGliderDiving, 0);
+    DrawGliderAt(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y, gGliderRoll, gGliderDiving, 0, false, GET_PLAYER(play));
 }
 void LocalGlider_Destroy(Actor* actor, PlayState*) { if (gLocalGlider == actor) gLocalGlider = nullptr; }
 

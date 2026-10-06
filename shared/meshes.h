@@ -1,4 +1,5 @@
 #pragma once
+#include "glider_model.h"
 #include "boulder_texture.h"
 #include "props.h"
 #include "storm.h"
@@ -402,51 +403,25 @@ inline MeshData Golem(uint32_t kind) {
     return b.mesh;
 }
 
-// The skydiving glider: a striped delta wing 150 above a player's feet, hung from two struts. Variants are colour schemes.
+// The skydiving glider: a hang glider built in Blender (assets/glider/glider.blend, exported to glider_model.h) with its handle bar at the origin,
+// so the game can put the bar where Link's hands are. The wing's two stripes take the colours of the variant's scheme. `wings` false leaves the wing
+// out (the cloth simulation draws the live one, see cloth.h).
 inline MeshData Glider(uint32_t variant, bool wings = true) {
     static const Rgb schemes[4][2] = {
         {{230, 70, 60}, {245, 235, 220}}, {{70, 130, 235}, {245, 220, 90}}, {{70, 190, 100}, {245, 245, 235}}, {{170, 90, 230}, {250, 210, 120}}};
     const Rgb* sc = schemes[variant % 4];
-    const Rgb strut = {120, 90, 56};
+    const Rgb fixedColours[8] = {{120, 90, 56}, {103, 30, 9}, {247, 214, 34}, sc[0], sc[1],
+                                 {sc[0].r * 0.7f, sc[0].g * 0.7f, sc[0].b * 0.7f}, {sc[1].r * 0.7f, sc[1].g * 0.7f, sc[1].b * 0.7f}, {86, 60, 36}};
     Builder b;
-    const V3 nose = {0, 156, 78}, tail = {0, 150, -64};
-    const V3 tipL = {-118, 140, -58}, tipR = {118, 140, -58};
-    auto lerp = [](V3 a, V3 c, float t) { return V3{a.x + (c.x - a.x) * t, a.y + (c.y - a.y) * t, a.z + (c.z - a.z) * t}; };
-    for (int side = 0; side < (wings ? 2 : 0); side++) {   // (the cloth version of the glider draws the wings itself, see cloth.h)
-        const V3 tip = side == 0 ? tipL : tipR;
-        for (int i = 0; i < 3; i++) {
-            const float t0 = i / 3.0f, t1 = (i + 1) / 3.0f;
-            const Rgb col = sc[i % 2];
-            const V3 a = lerp(nose, tip, t0), c = lerp(nose, tip, t1), d = lerp(tail, tip, t1), e = lerp(tail, tip, t0);
-            b.inside = {0, 80, 0};
-            b.Quad(a, c, d, e, col);                                                  // top
-            b.inside = {0, 240, 0};
-            const V3 dn = {0, -7, 0};
-            b.Quad({a.x, a.y + dn.y, a.z}, {c.x, c.y + dn.y, c.z}, {d.x, d.y + dn.y, d.z}, {e.x, e.y + dn.y, e.z}, {col.r * 0.7f, col.g * 0.7f, col.b * 0.7f}); // underside
-        }
-    }
-    auto bar = [&](V3 from, V3 to, float w) {
-        b.inside = {(from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f, (from.z + to.z) * 0.5f};
-        const V3 off[4] = {{-w, 0, -w}, {w, 0, -w}, {w, 0, w}, {-w, 0, w}};
-        for (int i = 0; i < 4; i++) {
-            const int j = (i + 1) % 4;
-            b.Quad({from.x + off[i].x, from.y, from.z + off[i].z}, {from.x + off[j].x, from.y, from.z + off[j].z},
-                   {to.x + off[j].x, to.y, to.z + off[j].z}, {to.x + off[i].x, to.y, to.z + off[i].z}, strut);
-        }
+    auto add = [&](const glider_model::Tri& t) {
+        const V3 n = {t.n[0] / 127.0f, t.n[1] / 127.0f, t.n[2] / 127.0f};
+        const V3 a = {t.p[0], t.p[1], t.p[2]}, c = {t.p[3], t.p[4], t.p[5]}, d = {t.p[6], t.p[7], t.p[8]};
+        // Faces point the way Blender says they do; Builder::Tri turns a face outward from a point, so aim it along the face's own normal.
+        b.inside = {a.x - n.x, a.y - n.y, a.z - n.z};
+        b.Tri(a, c, d, fixedColours[t.colour & 7]);
     };
-    bar({-18, 80, 2}, {-46, 143, 12}, 3.5f);   // the struts down to the hand bar
-    bar({18, 80, 2}, {46, 143, 12}, 3.5f);
-    {   // the hand bar Link hangs from (he is drawn with both arms up gripping it)
-        const V3 c = {0, 80, 2};
-        const float hx = 26.0f, hy = 3.0f, hz = 3.0f;
-        b.inside = c;
-        const V3 q[8] = {{c.x - hx, c.y - hy, c.z - hz}, {c.x + hx, c.y - hy, c.z - hz}, {c.x + hx, c.y + hy, c.z - hz}, {c.x - hx, c.y + hy, c.z - hz},
-                         {c.x - hx, c.y - hy, c.z + hz}, {c.x + hx, c.y - hy, c.z + hz}, {c.x + hx, c.y + hy, c.z + hz}, {c.x - hx, c.y + hy, c.z + hz}};
-        const Rgb grip = {96, 66, 40};
-        b.Quad(q[0], q[1], q[2], q[3], grip); b.Quad(q[4], q[5], q[6], q[7], grip); b.Quad(q[0], q[1], q[5], q[4], grip);
-        b.Quad(q[3], q[2], q[6], q[7], grip); b.Quad(q[0], q[3], q[7], q[4], grip); b.Quad(q[1], q[2], q[6], q[5], grip);
-    }
-    bar({0, 138, -50}, {0, 138, 70}, 3.5f);    // the keel
+    for (int i = 0; i < glider_model::kFrameCount; i++) add(glider_model::kFrame[i]);
+    if (wings) for (int i = 0; i < glider_model::kWingCount; i++) add(glider_model::kWing[i]);
     return b.mesh;
 }
 

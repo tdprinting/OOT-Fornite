@@ -40,3 +40,18 @@ Goron brick and the glowing firebox). Empties mark the two seats, where riders s
 - In the game the vertices are built once with a fixed light baked in and drawn with one display list per part (`DrawCart` in `RoyaleMod.cpp`);
   the wheels roll and the front pair and the handlebar steer. Riders sit `kSaddleDrop` under the top of the saddle, in Link's own horse-riding poses.
 
+
+## The skydiving glider (built in, made in Blender)
+
+The glider is a hang glider in the same style: `assets/glider/glider.blend` (also `glider.glb`) has a wooden A-frame control bar with two leather grips,
+two struts up to a keel spine, leading-edge spars with gold tips, a gold nose cap, and a striped still wing (about 470 triangles in all). The game reads
+it from `shared/glider_model.h`, which is generated. **The handle bar is the origin**: the game puts it exactly where Link's two hands are (it reads
+each hand's position as it draws him), so he always holds the grips, and banking, pitching and swaying all turn about the bar.
+
+- **Rebuild everything from code:** `python3.11 tools/glider/build_glider.py` (needs `pip install bpy==4.2.0`). It writes the .blend and .glb.
+- **After changing the .blend by hand** (or the build script): `python3.11 tools/glider/export_glider.py` regenerates `shared/glider_model.h`. Keep the
+  object names `GliderFrame` and `GliderWing` and the eight materials in order (wood, grip, gold, wing A, wing B, under A, under B, dark wood): the wing's
+  stripes take the player's colour scheme.
+- **Previews:** `python3.11 tools/glider/render_previews.py [folder]` renders four views (CPU, no graphics card needed).
+- The live wing (cloth physics, human players only) is built from the same corner points, so it always fits the frame; with cloth off, and on bots, the
+  still wing from the .blend is drawn instead.
