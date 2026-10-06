@@ -11148,6 +11148,19 @@ void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale) {
 // -- Lilo as a pet: follows you (never a bot), purely for looks: no collision, no targeting, nothing the server knows about, and nobody else sees her.
 // Her moods pick her animation clip; the clips cross-fade, so walking, sitting, grooming and curling up to sleep blend instead of snapping. Stand
 // still facing her and press A to talk: she sits and mews her line in the game's own text box.
+// Bored pets (Lilo and Avriella) stroll off a little way from where you are standing: while you stand still, every 10 to 20 seconds they pick a new
+// spot 130 to 260 units from their usual place by you (or, one time in three, go back to it). The moment you move they come back to you.
+struct PetWander { float ox = 0, oz = 0, next = 12.0f; };
+void PetWanderStep(PetWander& w, float dt, bool playerStill) {
+    if (!playerStill) { w.ox = w.oz = 0; w.next = 10.0f + Rand_ZeroOne() * 8.0f; return; }
+    w.next -= dt;
+    if (w.next > 0.0f) return;
+    w.next = 10.0f + Rand_ZeroOne() * 10.0f;
+    if (Rand_ZeroOne() < 0.33f) { w.ox = w.oz = 0; return; }
+    const float a = Rand_ZeroOne() * 6.2831853f, r = 130.0f + Rand_ZeroOne() * 130.0f;
+    w.ox = std::sin(a) * r; w.oz = std::cos(a) * r;
+}
+
 enum class CatMood { Follow, Stand, Sit, Groom, Loaf, Stretch, Pounce, Happy, Jump, Talk };
 struct CatBrain {
     Actor* actor = nullptr;
@@ -11164,6 +11177,7 @@ struct CatBrain {
     float afterFartMew = -1.0f;                // the mew that follows an accident
     bool warned = false;                       // has she said she smells one, for the accident that is coming
     int eyes = 0;
+    PetWander wander;
     royale::lilo::Animator anim;
 };
 CatBrain gCat;
@@ -11189,7 +11203,8 @@ void Cat_Update(Actor* actor, PlayState* play) {
     const float pspeed = std::fabs(pl->linearVelocity);
     const bool playerStill = pspeed < 0.6f;
     // Her place beside you: behind and to the left.
-    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 75.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 75.0f;
+    PetWanderStep(c.wander, dt, playerStill);
+    const float wantX = c.wander.ox + px + std::sin(pyaw + 3.14159265f + 0.7f) * 75.0f, wantZ = c.wander.oz + pz + std::cos(pyaw + 3.14159265f + 0.7f) * 75.0f;
     float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
     if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
         if (c.placed) CatPoof(play, c.x, c.y, c.z);
@@ -11559,6 +11574,7 @@ struct BabyBrain {
     float hx = 0, hy = 0, hz = 0, hvx = 0, hvy = 0, hvz = 0;   // where her hand was and how fast it was going last frame
     double capSeen = 0, tugAt = 0;
     bool haveHand = false;
+    PetWander wander;
     royale::avriella::Animator anim;
 };
 BabyBrain gBaby;
@@ -11595,7 +11611,8 @@ void Baby_Update(Actor* actor, PlayState* play) {
     const float pspeed = std::fabs(pl->linearVelocity);
     const bool playerStill = pspeed < 0.6f;
     // Her place beside you: behind and to the right (Lilo takes the left).
-    const float wantX = px + std::sin(pyaw + 3.14159265f - 0.7f) * 80.0f, wantZ = pz + std::cos(pyaw + 3.14159265f - 0.7f) * 80.0f;
+    PetWanderStep(c.wander, dt, playerStill);
+    const float wantX = c.wander.ox + px + std::sin(pyaw + 3.14159265f - 0.7f) * 80.0f, wantZ = c.wander.oz + pz + std::cos(pyaw + 3.14159265f - 0.7f) * 80.0f;
     float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
     if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
         if (c.placed) CatPoof(play, c.x, c.y, c.z);
