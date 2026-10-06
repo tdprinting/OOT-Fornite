@@ -1228,12 +1228,29 @@ static void ClothAndWind() {
     for (int i = 0; i < 120; i++) run.Step(1.0f / 60.0f, 0, -300, 0, 0.0f, 0.0f, 0);   // air streaming back past him at 300 a second
     HatSpring stand;
     for (int i = 0; i < 120; i++) stand.Step(1.0f / 60.0f, 0, 300, 0, 0.0f, 0.0f, 0);  // the opposite direction
-    CHECK(run.fore > 0.3f && stand.fore < -0.3f && run.fore <= 0.7f);
+    CHECK(run.fore > 0.3f && stand.fore < -0.3f && run.fore <= 1.1f);
     for (int i = 0; i < 240; i++) run.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
     CHECK(std::fabs(run.fore) < 0.06f);
     HatSpring junk;
     junk.Step(10.0f, 1e9f, -1e9f, 1e9f, 9.0f, 1e9f, 5);
-    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::fabs(junk.fore) <= 0.7f + 1e-4f);
+    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::fabs(junk.fore) <= 1.1f + 1e-4f && std::fabs(junk.twist) <= 0.6f + 1e-4f);
+    junk.Step(NAN, NAN, NAN, NAN, NAN, NAN, 0, NAN, NAN, NAN);
+    CHECK(std::isfinite(junk.fore) && std::isfinite(junk.side) && std::isfinite(junk.twist));
+    // Turning drags the cap out to the other side and rolls it, then it settles; a hard turn throws it further than a gentle one.
+    HatSpring left, gentle, none;
+    float leftMax = 0, gentleMax = 0, twistMax = 0, noneMax = 0;
+    for (int i = 0; i < 90; i++) {
+        left.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 8.0f); gentle.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 2.0f); none.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+        leftMax = (std::max)(leftMax, left.side); gentleMax = (std::max)(gentleMax, gentle.side); twistMax = (std::max)(twistMax, left.twist); noneMax = (std::max)(noneMax, std::fabs(none.side));
+    }
+    CHECK(leftMax > 0.25f && leftMax > gentleMax * 1.5f && twistMax > 0.1f && noneMax < 0.02f);
+    for (int i = 0; i < 300; i++) left.Step(1.0f / 60.0f, 0, 0, 0, 0.0f, 0.0f, 0);
+    CHECK(std::fabs(left.side) < 0.05f && std::fabs(left.twist) < 0.05f);
+    // The skirt swings out in a turn too.
+    ClothSwing spin;
+    float spinMax = 0;
+    for (int i = 0; i < 90; i++) { spin.Step(kSkirtSwing, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, 0.0f, 0, 0, 0, 8.0f); spinMax = (std::max)(spinMax, spin.side); }
+    CHECK(spinMax > 0.03f);
     // The wind spins the cap more in a gale than a breeze.
     float breeze = 0, gale = 0;
     HatSpring h1, h2;
@@ -1302,6 +1319,17 @@ static void TheSignInTheMiddle() {
     CHECK(sign.Triangles() >= 24 && mx[1] > 140 && mx[1] < 170 && mx[0] - mn[0] > 130 && mx[0] - mn[0] < 160);
     const MeshData frame = BuildMesh(MeshKind::GliderFrame, 0);
     CHECK(frame.Triangles() >= 24 && frame.Triangles() < BuildMesh(MeshKind::Glider, 0).Triangles());   // the cloth version has no wings of its own
+    {   // The Blender glider: the handle bar sits at the origin with a leather grip either side, and the live cloth wing starts exactly at its frame.
+        using namespace glider_model;
+        bool grips = false, gold = false;
+        for (int i = 0; i < kFrameCount; i++) {
+            grips |= kFrame[i].colour == 1 && std::fabs(kFrame[i].p[1]) < 8.0f && std::fabs(kFrame[i].p[0]) <= kGripOuter + 1.0f;
+            gold |= kFrame[i].colour == 2;
+        }
+        CHECK(grips && gold && kFrameCount > 100 && kWingCount > 60);
+        GliderCloth fit;
+        CHECK(Len(fit.left.Rest(0, 0) - ClothV3{kNose[0], kNose[1], kNose[2]}) < 0.01f && Len(fit.right.Rest(kClothChord, kClothSpan) - ClothV3{kTip[0], kTip[1], kTip[2]}) < 0.5f + Len(ClothV3{kTail[0] - kTip[0], kTail[1] - kTip[1], kTail[2] - kTip[2]}) * 0.0f);
+    }
 }
 
 static void HireableAllies() {
@@ -2652,12 +2680,12 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (static_cast<MeshKind>(k) == MeshKind::Scenery ? 600u : 420u));   // a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && mn[1] >= -0.01f);                                                          // nothing below the ground
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame)));   // nothing below the ground (the glider's origin is its handle bar, not the ground)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
@@ -2670,7 +2698,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Boulder) CHECK(mx[0] - mn[0] > 100 && mx[0] - mn[0] < 260 && std::fabs(mx[1] - BoulderHeight(static_cast<int>(variant) % kBoulderShapes)) < 1.0f);
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
-            if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > 50 && mx[1] < 170 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280);
+            if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > -15 && mn[1] < 5 && mx[1] > 70 && mx[1] < 110 && mx[0] - mn[0] > 230 && mx[0] - mn[0] < 300);   // the handle bar is the origin; the wing is above it
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
