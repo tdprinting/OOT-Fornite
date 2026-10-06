@@ -1,0 +1,19 @@
+diff --git a/soh/src/overlays/actors/ovl_player_actor/z_player.c b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+index 6638893..5dc2a96 100644
+--- a/soh/src/overlays/actors/ovl_player_actor/z_player.c
++++ b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+@@ -2939,9 +2939,13 @@ int func_80834E7C(PlayState* play) {
+            ((play->shootingGalleryStatus < 0) || CHECK_BTN_ANY(sControlInput->cur.button, buttonsToCheck));
+ }
+ 
++// OOT Royale: set by the mod during a match so the bow, slingshot, boomerang and hookshot ready and fire in place (as when Z-targeting)
++// instead of switching to the first-person aiming view when there is nothing to Z-target.
++s32 gRoyaleNoAimView = 0;
++
+ s32 func_80834EB8(Player* this, PlayState* play) {
+     if ((this->unk_6AD == 0) || (this->unk_6AD == 2)) {
+-        if (Player_IsZTargeting(this) || (Camera_CheckValidMode(Play_GetCamera(play, 0), 7) == 0)) {
++        if (Player_IsZTargeting(this) || gRoyaleNoAimView || (Camera_CheckValidMode(Play_GetCamera(play, 0), 7) == 0)) {
+             return 1;
+         }
+         this->unk_6AD = 2;
