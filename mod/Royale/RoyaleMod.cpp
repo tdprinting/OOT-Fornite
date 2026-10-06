@@ -170,6 +170,15 @@ bool gSkyStars = true;              // the local option: stars in the night sky
 bool gSkyBodies = true;             // the local option: the sun and the moon
 float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (none) to 2
 float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
+int gWaterDetail = 1;               // the local option: how fine the water surface is, 0 low, 1 normal, 2 high
+float gWaterWaves = 1.0f;           // the local option: how high the swell is, 0 (flat) to 2
+bool gWaterFxOn = true;             // the local option: the game's own splashes, ripples and bubbles
+bool gWaterWakes = true;            // the local option: swimmers, bots and carts push the surface and leave wakes
+bool gWaterRain = true;             // the local option: rain makes rings on the water
+bool gWaterSkyOn = true;            // the local option: the sky, the sun and the moon in the water
+bool gWaterBodiesRefl = true;       // the local option: reflections of whoever is at the water
+bool gWaterUnder = true;            // the local option: the underwater look
+bool gWaterCurrent = true;          // the local option: a current carries a swimming player
 bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
@@ -282,7 +291,7 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Fog", "Fog banks (low volumetric-style fog)" },
     { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
     { "IslandPuddles", "Fortnite Map standing puddles" },
-    { "Water", "Realistic water (waves, splashes, wakes, swim current, underwater look)" },
+    { "Water", "Realistic water (waves, splashes, wakes, reflections, swim current, underwater look)" },
     { "Avriella", "Avriella the baby pet (the pet picker)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
@@ -8342,13 +8351,17 @@ void EnsureSolidScenery() {
 }
 
 // ---- water ---------------------------------------------------------------------------------------------------------------------------
-// The game's own water is a flat sheet. This adds, on top of every water box (lakes, rivers) and the Fortnite map's sea:
-//   * a rolling surface: a coarse grid round the camera that rises and falls in waves (bigger in wind and storms), tinted from sea-green over
-//     shallows to deep blue by the depth beneath it, with foam bands where it gets shallow and a sun glint, lit by the time of day;
-//   * splashes (droplets, rings, foam) where players, bots and carts enter the water, a V-shaped wake while they move and ripples while they tread;
-//   * a gentle current that carries a swimming player (swim physics), and bubbles when diving;
-//   * an underwater look when the camera is below the surface: blue tint, drifting light shafts.
-// Everything is cosmetic and local (nothing is sent), apart from the swimmer's own drift. Debug switch "Water".
+// The game's own water is a flat, scrolling-texture sheet. This adds, on top of every water box (lakes, rivers) and the Fortnite map's sea:
+//   * splashes, ripples and bubbles made with the game's own effects (EffectSsGSplash, EffectSsGRipple, EffectSsBubble: the very sprites Link
+//     makes) for everyone but the local player, whom the game already splashes itself; rings falling on the water in the rain;
+//   * displacement: swimmers, bots and carts push the surface down under them and ahead of them, and leave rings that spread out and fade,
+//     with a trail of foam, all in a height field that also rolls with gentle swell (bigger in wind and storms);
+//   * a light, translucent surface over the game's (finer near the camera) that is tinted by depth, foams in the shallows, and shows the
+//     sky in it (stronger the lower you look: a Fresnel curve) and a glitter path for the sun and the moon;
+//   * a stylised reflection of anyone standing or swimming at the water: a smeared, wobbling strip in their colours, mirrored over the surface
+//     toward the camera. It is not a true mirror image of the scene (the N64 renderer has no render-to-texture), and trees and cliffs are not mirrored;
+//   * a gentle current that carries a swimming player, and an underwater look (blue tint, light shafts) when the camera is below the surface.
+// Everything is cosmetic and local (nothing is sent), apart from the swimmer's own drift. Debug switch "Water"; the Graphics page has the rest.
 bool WaterSurfaceAt(float x, float z, float* y) {
     namespace fn = royale::fortnite;
     if (OnIsland()) {
@@ -8363,15 +8376,16 @@ bool WaterSurfaceAt(float x, float z, float* y) {
     return true;
 }
 
+// The swell: three crossing waves, about 4 units high in calm air.
 float WaveHeight(float x, float z, float t, float amp) {
-    return amp * (3.2f * std::sin(x * 0.0042f + z * 0.0023f + t * 1.3f) + 2.2f * std::sin(-x * 0.0031f + z * 0.0057f + t * 1.7f + 1.3f) +
-                  1.2f * std::sin(x * 0.011f + z * 0.009f - t * 2.6f));
+    return amp * (2.0f * std::sin(x * 0.0042f + z * 0.0023f + t * 1.3f) + 1.4f * std::sin(-x * 0.0031f + z * 0.0057f + t * 1.7f + 1.3f) +
+                  0.7f * std::sin(x * 0.011f + z * 0.009f - t * 2.6f));
 }
 
 float WaveAmp() {
     float wx, wz, wind;
     WindNow(&wx, &wz, &wind);
-    return 1.0f + 1.4f * std::clamp(wind, 0.0f, 1.0f);
+    return gWaterWaves * (0.8f + 1.1f * std::clamp(wind, 0.0f, 1.0f));
 }
 
 // Daylight on the water, 0.38 at night to 1 at noon (the game's own clock).
@@ -8391,84 +8405,160 @@ void WaterCurrentAt(float x, float z, float t, float* cx, float* cz) {
     *cz = std::sin(ang) * m + wz * 0.1f;
 }
 
-struct WaterFx {
-    enum Kind : uint8_t { Drop, Ring, Foam, Bubble } kind = Drop;
-    float x = 0, y = 0, z = 0, vx = 0, vy = 0, vz = 0, age = 0, life = 1, size = 4, surface = 0;
-};
-std::vector<WaterFx> gWaterFx;
-constexpr size_t kMaxWaterFx = 240;
-struct WaterTrack { float x = 0, y = 0, z = 0, ring = 0; bool in = false; int seen = 0; };
+// ---- displacement: rings that spread over the surface, and the dip and bow wave under and ahead of whoever is in it
+struct WaterDisturb { float x, z, birth, strength, size; };
+std::vector<WaterDisturb> gWaterDist;
+constexpr size_t kMaxWaterDist = 40;
+struct WaterBodyNow { float x, z, size, dx, dz, speed; };
+std::vector<WaterBodyNow> gWaterBodies;
+struct WaterRefl { float x, z, surface, h, w; float c1[3], c2[3]; };
+std::vector<WaterRefl> gWaterRefl;
+struct WaterTrack { float x = 0, y = 0, z = 0, ring = 0, spawn = 0, dist = 0; bool in = false; int seen = 0; };
 std::unordered_map<const void*, WaterTrack> gWaterTrack;
-int gWaterFrame = 0;
+int gWaterFrame = 0, gWaterBudget = 0;
 float gCamUnder = 0.0f;   // 0 above the surface .. 1 below it (eased), for the underwater overlay
+float gWaterNow = 0.0f;   // the clock the displacement runs on (seconds)
 
-void AddWaterFx(WaterFx f) { if (gWaterFx.size() < kMaxWaterFx) gWaterFx.push_back(f); }
-
-void WaterSplash(float x, float z, float surface, float size, float strength) {
-    const int drops = static_cast<int>(6.0f + 10.0f * strength);
-    for (int i = 0; i < drops; i++) {
-        const float ang = static_cast<float>(i) * 2.399f + strength, r = (0.3f + 0.7f * Flora01(i, gWaterFrame, 501)) * size;
-        WaterFx d; d.kind = WaterFx::Drop; d.x = x + std::cos(ang) * r * 0.4f; d.z = z + std::sin(ang) * r * 0.4f; d.y = surface + 2.0f; d.surface = surface;
-        d.vx = std::cos(ang) * r * 2.2f; d.vz = std::sin(ang) * r * 2.2f; d.vy = 90.0f + 150.0f * strength * (0.5f + Flora01(i, gWaterFrame, 502));
-        d.life = 1.4f; d.size = 2.2f + 1.6f * Flora01(i, gWaterFrame, 503);
-        AddWaterFx(d);
-    }
-    for (int i = 0; i < 2; i++) { WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * (1.0f + 0.9f * i); r.life = 1.1f + 0.4f * i; r.age = -0.12f * i; AddWaterFx(r); }
-    for (int i = 0; i < 3; i++) {
-        const float ang = static_cast<float>(i) * 2.094f + 0.5f;
-        WaterFx f; f.kind = WaterFx::Foam; f.x = x + std::cos(ang) * size * 0.5f; f.z = z + std::sin(ang) * size * 0.5f; f.y = surface; f.surface = surface;
-        f.vx = std::cos(ang) * 14.0f; f.vz = std::sin(ang) * 14.0f; f.size = size * (0.55f + 0.3f * strength); f.life = 1.8f;
-        AddWaterFx(f);
-    }
+void AddWaterDisturb(float x, float z, float strength, float size) {
+    if (gWaterDist.size() >= kMaxWaterDist) gWaterDist.erase(gWaterDist.begin());
+    gWaterDist.push_back({ x, z, gWaterNow, strength, size });
 }
 
-// One body in the water this frame: a splash as it goes in, a wake while it moves, ripples while it treads, bubbles when the local player dives.
+// How far the displacement lifts the surface here (it can be negative), and how much foam is on it (0 to 1).
+float WaterDisplaceAt(float x, float z, float* foam) {
+    float h = 0.0f, f = 0.0f;
+    for (const WaterDisturb& d : gWaterDist) {
+        const float dx = x - d.x, dz = z - d.z, r2 = dx * dx + dz * dz, a = gWaterNow - d.birth;
+        const float front = 120.0f * a, band = 26.0f + d.size * 1.3f;
+        const float reach = front + band * 2.5f + d.size * 2.0f;
+        if (r2 > reach * reach) continue;
+        const float r = std::sqrt(r2), off = r - front, env = std::exp(-(off * off) / (band * band));
+        h += d.strength * d.size * 0.28f * env * std::exp(-a * 0.9f) / (1.0f + r / (d.size * 6.0f)) * std::cos(off * 0.09f);
+        if (a < 1.6f) f += d.strength * 0.7f * std::exp(-r2 / (d.size * d.size * 1.5f)) * (1.0f - a / 1.6f);
+    }
+    for (const WaterBodyNow& b : gWaterBodies) {
+        const float dx = x - b.x, dz = z - b.z, r2 = dx * dx + dz * dz, s2 = b.size * b.size;
+        if (r2 > s2 * 40.0f) continue;
+        h -= b.size * 0.22f * std::exp(-r2 / (s2 * 3.0f));   // the dip under it
+        const float run = std::min(1.0f, b.speed / 120.0f);
+        if (run > 0.05f) {
+            const float bx = x - (b.x + b.dx * b.size * 1.6f), bz = z - (b.z + b.dz * b.size * 1.6f);
+            h += b.size * 0.14f * run * std::exp(-(bx * bx + bz * bz) / (s2 * 2.0f));   // the bow wave ahead
+            const float tx = x - (b.x - b.dx * b.size * 1.4f), tz = z - (b.z - b.dz * b.size * 1.4f);
+            f += 0.45f * run * std::exp(-(tx * tx + tz * tz) / (s2 * 2.5f));   // and foam in its wake
+        }
+    }
+    *foam = std::min(1.0f, f);
+    return h;
+}
+
+// ---- the game's own effects (the sprites Link makes), kept to a few a frame so the effect table is never swamped
+void WaterRipple(float x, float z, float surface, float scale, int delay) {
+    if (!gWaterFxOn || gWaterBudget <= 0) return;
+    gWaterBudget--;
+    Vec3f p = { x, surface, z };
+    EffectSsGRipple_Spawn(gPlayState, &p, static_cast<s16>(100.0f * scale), static_cast<s16>(std::min(30000.0f, 500.0f * scale)), static_cast<s16>(delay));
+}
+
+void WaterSplashFx(float x, float z, float surface, float size, float strength) {
+    if (!gWaterFxOn || gWaterBudget <= 1) return;
+    gWaterBudget -= 2;
+    Vec3f p = { x, surface, z };
+    const s16 scale = static_cast<s16>(std::clamp(550.0f * (size / 16.0f) * (0.5f + strength), 250.0f, 3200.0f));
+    EffectSsGSplash_Spawn(gPlayState, &p, nullptr, nullptr, strength > 0.9f ? 1 : 0, scale);   // type 1 throws a second, smaller splash after it
+    WaterRipple(x, z, surface, size / 16.0f, 0);
+}
+
+// One body in the water this frame. The local player is splashed, rippled and bubbled by the game itself; everyone else gets the same
+// effects from here. All of them push the surface (displacement) and leave foam.
 void WaterBody(const void* key, float x, float y, float z, float size, float dt, bool local) {
     WaterTrack& t = gWaterTrack[key];
     float surface = 0, floorY = 0;
     const bool have = WaterSurfaceAt(x, z, &surface);
-    bool in = have && y < surface + 8.0f && (!RawFloorAt(x, z, &floorY) || floorY < surface - 4.0f);
+    const bool in = have && y < surface + 8.0f && (!RawFloorAt(x, z, &floorY) || floorY < surface - 4.0f);
     const float mx = x - t.x, mz = z - t.z, my = y - t.y;
     const bool jumped = t.seen == 0 || std::hypot(mx, mz) > 500.0f || std::fabs(my) > 400.0f || dt <= 0.0001f;
     const float speed = jumped ? 0.0f : std::hypot(mx, mz) / dt;
     const float eyeD = std::hypot(x - gPlayState->view.eye.x, z - gPlayState->view.eye.z);
-    if (!jumped && eyeD < 5000.0f) {
-        if (in && !t.in) {
-            WaterSplash(x, z, surface, size, std::clamp(0.35f + std::max(0.0f, -my / dt) / 500.0f + speed / 400.0f, 0.3f, 1.5f));
-        } else if (in) {
-            t.ring -= dt;
-            if (speed > 25.0f && t.ring <= 0.0f) {
-                t.ring = std::clamp(0.14f - speed / 4000.0f, 0.05f, 0.14f);
-                const float inv = 1.0f / std::max(1.0f, speed), dx = mx / dt * inv, dz = mz / dt * inv;
-                WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * 0.7f; r.life = 0.9f; AddWaterFx(r);
-                for (int s = -1; s <= 1; s += 2) {   // the two arms of the V behind the body, drifting outwards
-                    WaterFx f; f.kind = WaterFx::Foam; f.x = x - dx * size * 0.6f - dz * s * size * 0.5f; f.z = z - dz * size * 0.6f + dx * s * size * 0.5f; f.y = surface; f.surface = surface;
-                    f.vx = -dz * s * 22.0f - dx * 8.0f; f.vz = dx * s * 22.0f - dz * 8.0f; f.size = size * 0.45f; f.life = 1.5f; AddWaterFx(f);
+    if (!jumped && eyeD < 4500.0f) {
+        if (in) {
+            const float inv = 1.0f / std::max(1.0f, speed), dx = mx / dt * inv, dz = mz / dt * inv;
+            if (gWaterWakes) gWaterBodies.push_back({ x, z, size, speed > 8.0f ? dx : 0.0f, speed > 8.0f ? dz : 0.0f, speed });
+            if (!t.in) {   // going in
+                const float strength = std::clamp(0.35f + std::max(0.0f, -my / dt) / 500.0f + speed / 400.0f, 0.3f, 1.5f);
+                if (gWaterWakes) AddWaterDisturb(x, z, strength * 1.2f, size);
+                if (!local) WaterSplashFx(x, z, surface, size, strength);
+            } else {
+                t.ring -= dt;
+                t.spawn -= dt;
+                if (speed > 25.0f) {
+                    if (t.spawn <= 0.0f) {   // a ring left in the water every so often along the way
+                        t.spawn = std::clamp(0.30f - speed / 1500.0f, 0.1f, 0.3f);
+                        if (gWaterWakes) AddWaterDisturb(x - dx * size * 0.4f, z - dz * size * 0.4f, std::min(1.0f, 0.25f + speed / 250.0f), size);
+                    }
+                    if (!local && t.ring <= 0.0f) {
+                        t.ring = std::clamp(0.45f - speed / 900.0f, 0.12f, 0.45f);
+                        WaterRipple(x, z, surface, size / 16.0f, 0);
+                        if (speed > 150.0f) WaterSplashFx(x - dx * size * 0.4f, z - dz * size * 0.4f, surface, size * 0.6f, 0.25f);   // fast (a cart, a sprint): spray off the bow
+                    }
+                } else if (t.ring <= 0.0f) {   // treading water
+                    t.ring = 0.9f;
+                    if (gWaterWakes) AddWaterDisturb(x, z, 0.35f, size * 0.8f);
+                    if (!local) WaterRipple(x, z, surface, size / 16.0f * 0.8f, 0);
                 }
-                if (speed > 150.0f) {   // fast (a cart, a sprint): spray off the bow
-                    WaterFx d; d.kind = WaterFx::Drop; d.x = x; d.z = z; d.y = surface + 3.0f; d.surface = surface; d.vx = -dz * 40.0f; d.vz = dx * 40.0f; d.vy = 110.0f; d.life = 1.0f; d.size = 2.4f; AddWaterFx(d);
+                if (!local && y + 38.0f < surface && gWaterFxOn && gWaterBudget > 0 && Flora01(gWaterFrame, 7, 504) < dt * 2.0f) {   // someone under water: bubbles
+                    gWaterBudget--;
+                    Vec3f p = { x, y, z };
+                    EffectSsBubble_Spawn(gPlayState, &p, 20.0f, 10.0f, 20.0f, 0.13f);
                 }
-            } else if (speed <= 25.0f && t.ring <= 0.0f) {   // treading water
-                t.ring = 0.75f;
-                WaterFx r; r.kind = WaterFx::Ring; r.x = x; r.z = z; r.y = surface; r.surface = surface; r.size = size * 0.6f; r.life = 1.4f; AddWaterFx(r);
             }
-            if (local && y + 38.0f < surface && Flora01(gWaterFrame, 7, 504) < dt * 3.0f) {   // diving: bubbles
-                WaterFx b; b.kind = WaterFx::Bubble; b.x = x + (Flora01(gWaterFrame, 8, 505) - 0.5f) * 14.0f; b.z = z + (Flora01(gWaterFrame, 9, 506) - 0.5f) * 14.0f; b.y = y + 28.0f;
-                b.surface = surface; b.vy = 55.0f; b.life = 3.0f; b.size = 2.0f + 2.0f * Flora01(gWaterFrame, 10, 507); AddWaterFx(b);
+            if (gWaterRefl.size() < 12 && gWaterSkyOn && gWaterBodiesRefl && y + size * 3.4f > surface + 6.0f) {
+                const bool cart = size > 30.0f;
+                WaterRefl r;
+                r.x = x; r.z = z; r.surface = surface; r.h = std::min(size * (cart ? 1.4f : 3.6f), y + size * (cart ? 1.4f : 3.6f) - surface); r.w = size * (cart ? 1.0f : 0.5f);
+                const float c1[3] = { cart ? 120.0f : 52.0f, cart ? 80.0f : 110.0f, cart ? 46.0f : 58.0f }, c2[3] = { cart ? 190.0f : 226.0f, cart ? 150.0f : 186.0f, cart ? 100.0f : 150.0f };
+                for (int i = 0; i < 3; i++) { r.c1[i] = c1[i]; r.c2[i] = c2[i]; }
+                gWaterRefl.push_back(r);
             }
-        } else if (t.in) {   // climbing out: a few drips
-            for (int i = 0; i < 4; i++) {
-                WaterFx d; d.kind = WaterFx::Drop; d.x = x; d.z = z; d.y = y + 10.0f + 6.0f * i; d.surface = surface; d.vx = (Flora01(i, gWaterFrame, 508) - 0.5f) * 30.0f; d.vz = (Flora01(i, gWaterFrame, 509) - 0.5f) * 30.0f;
-                d.vy = 20.0f; d.life = 0.9f; d.size = 2.0f; AddWaterFx(d);
-            }
+        } else if (t.in) {   // climbing out: the ring it leaves
+            if (gWaterWakes) AddWaterDisturb(x, z, 0.5f, size);
+            if (!local) WaterRipple(x, z, surface, size / 16.0f, 0);
         }
     }
     t.x = x; t.y = y; t.z = z; t.in = in; t.seen = gWaterFrame;
 }
 
-void PushVtx(Vtx& o, float x, float y, float z, u8 r, u8 g, u8 b, u8 a) {
-    o.v.ob[0] = static_cast<s16>(std::lround(x)); o.v.ob[1] = static_cast<s16>(std::lround(y)); o.v.ob[2] = static_cast<s16>(std::lround(z));
-    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0; o.v.cn[0] = r; o.v.cn[1] = g; o.v.cn[2] = b; o.v.cn[3] = a;
+// Rain falling on the water makes the game's own rings, near the camera.
+void WaterRain(PlayState* play, float dt) {
+    if (!gWaterRain || !gWaterFxOn) return;
+    float amount = 0.0f;
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Rain: amount = WeatherAmount(); break;
+        case royale::Sky::Thunder: amount = WeatherAmount() * 1.3f; break;
+        default: break;
+    }
+    if (amount < 0.05f) return;
+    static float carry = 0.0f;
+    carry += dt * 10.0f * amount;
+    const Vec3f eye = play->view.eye;
+    for (; carry >= 1.0f && gWaterBudget > 0; carry -= 1.0f) {
+        const float a = Flora01(gWaterFrame, 31, 601) * 6.2831853f, r = 120.0f + 900.0f * Flora01(gWaterFrame, 32, 602);
+        const float x = eye.x + std::cos(a) * r, z = eye.z + std::sin(a) * r;
+        float s = 0, fy = 0;
+        if (WaterSurfaceAt(x, z, &s) && (!RawFloorAt(x, z, &fy) || fy < s - 8.0f)) WaterRipple(x, z, s, 0.3f + 0.2f * Flora01(gWaterFrame, 33, 603), 0);
+    }
+    carry = std::min(carry, 3.0f);
+}
+
+// ---- the surface -----------------------------------------------------------------------------------------------------------------------
+// Vertex positions are kept in quarter units (the matrix scales them back) so a swell of a few units does not step by whole units.
+void PushVtx4(Vtx& o, float x, float y, float z, float r, float g, float b, float a) {
+    o.v.ob[0] = static_cast<s16>(std::lround(std::clamp(x * 4.0f, -32000.0f, 32000.0f)));
+    o.v.ob[1] = static_cast<s16>(std::lround(std::clamp(y * 4.0f, -32000.0f, 32000.0f)));
+    o.v.ob[2] = static_cast<s16>(std::lround(std::clamp(z * 4.0f, -32000.0f, 32000.0f)));
+    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+    o.v.cn[0] = static_cast<u8>(std::clamp(r, 0.0f, 255.0f)); o.v.cn[1] = static_cast<u8>(std::clamp(g, 0.0f, 255.0f));
+    o.v.cn[2] = static_cast<u8>(std::clamp(b, 0.0f, 255.0f)); o.v.cn[3] = static_cast<u8>(std::clamp(a, 0.0f, 255.0f));
 }
 
 void SetupWaterXlu(PlayState* play) {
@@ -8480,133 +8570,192 @@ void SetupWaterXlu(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
-// The rolling, tinted surface: a 15x15 grid of squares that follows the camera, snapped to its own cells so the waves do not slide.
+// What the water sees above it: the colours of the sky at the horizon and overhead, and where the sun and the moon are (the same as DrawSky).
+struct WaterSky { float hor[3], zen[3], sun[3], moon[3], sunA, moonA, sunWarm; };
+WaterSky WaterSkyNow() {
+    WaterSky s;
+    const SkyLight L = SkyLightNow();
+    float tint[3];
+    const float ov = SkyOvercast(tint);
+    auto mix = [](float a, float b, float k) { return a + (b - a) * k; };
+    const float nz[3] = { 5, 8, 30 }, nh[3] = { 22, 28, 66 }, dz[3] = { 62, 122, 224 }, dh[3] = { 168, 206, 242 };
+    const float glow[3] = { 255, 128, 62 }, glowZ[3] = { 96, 78, 150 };
+    const float dim = 1.0f - 0.55f * ov * L.day;
+    for (int i = 0; i < 3; i++) {
+        s.zen[i] = mix(nz[i], dz[i], L.day); s.hor[i] = mix(nh[i], dh[i], L.day);
+        s.zen[i] = mix(s.zen[i], glowZ[i], L.twilight * 0.55f); s.hor[i] = mix(s.hor[i], glow[i], L.twilight * 0.8f);
+        const float grey = tint[i] * (0.25f + 0.75f * L.day);
+        s.zen[i] = mix(s.zen[i], grey * 0.8f, ov * 0.85f) * dim; s.hor[i] = mix(s.hor[i], grey, ov * 0.85f) * dim;
+    }
+    const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
+    s.sun[0] = std::cos(0.6f) * c; s.sun[1] = L.sunH; s.sun[2] = std::sin(0.6f) * c;
+    s.moon[0] = -s.sun[0]; s.moon[1] = -s.sun[1]; s.moon[2] = -s.sun[2];
+    s.sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
+    s.moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
+    s.sunWarm = L.twilight;
+    return s;
+}
+
+// What lies under the grid points: whether there is water, its surface and its depth. The points sit on the world's own grid, so what is found
+// once stays right while the camera moves (only the new row and column are looked up); it is forgotten now and then, and when the map changes.
+struct WaterCell { float surface, depth; bool have; };
+std::unordered_map<uint64_t, WaterCell> gWaterCells;
+int gWaterCellsCell = 0, gWaterCellsAge = 0;
+bool gWaterCellsIsland = false;
+
+// The rolling, tinted, reflecting surface: a grid of squares that follows the camera, snapped to the world's own grid so the waves do not slide.
 void DrawWaterSheet(PlayState* play, float t, float light) {
-    constexpr int N = 15, V = N + 1;
+    const int detail = std::clamp(gWaterDetail, 0, 2);
+    const int N = detail == 0 ? 14 : detail == 1 ? 22 : 30, V = N + 1;
+    const bool island = OnIsland();
     const Vec3f eye = play->view.eye;
-    const float cell = OnIsland() ? 340.0f : 210.0f, half = N * 0.5f * cell;
-    const float cx = std::round(eye.x / cell) * cell, cz = std::round(eye.z / cell) * cell, amp = WaveAmp();
-    float anySurface = 0; bool any = false;
-    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(V) * V * sizeof(Vtx)));
-    if (v == nullptr) return;
+    const float half = island ? 2550.0f : 1575.0f, cell = std::round(2.0f * half / N);
+    const int icell = static_cast<int>(cell);
+    if (icell != gWaterCellsCell || island != gWaterCellsIsland || ++gWaterCellsAge > 1200 || gWaterCells.size() > 5000) {
+        gWaterCells.clear(); gWaterCellsCell = icell; gWaterCellsIsland = island; gWaterCellsAge = 0;
+    }
+    const int gi0 = static_cast<int>(std::lround(eye.x / cell)), gj0 = static_cast<int>(std::lround(eye.z / cell));
+    const float cx = gi0 * cell, cz = gj0 * cell, amp = WaveAmp();
+
+    // 1. what is under each point (looked up once, then remembered)
+    static std::vector<WaterCell> cells;
+    cells.assign(static_cast<size_t>(V) * V, WaterCell{ 0, 0, false });
+    float baseY = 0; bool any = false;
     for (int j = 0; j < V; j++) {
         for (int i = 0; i < V; i++) {
-            const float lx = (i - N * 0.5f) * cell, lz = (j - N * 0.5f) * cell, wx = cx + lx, wz = cz + lz;
-            float surface = 0, floorY = -1.0e6f;
-            const bool have = WaterSurfaceAt(wx, wz, &surface);
-            if (have) { any = true; anySurface = surface; RawFloorAt(wx, wz, &floorY); }
-            const float depth = have ? surface - floorY : 0.0f;
-            float a = 0.0f, r = 0, g = 0, b = 0, y = have ? surface : anySurface;
-            if (have && depth > 2.0f) {
-                const float k = std::clamp(depth / 420.0f, 0.0f, 1.0f), ease = k * k * (3.0f - 2.0f * k);
-                const float d = std::hypot(wx - eye.x, wz - eye.z), fade = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
-                y += 4.0f + WaveHeight(wx, wz, t, amp) * std::min(1.0f, depth / 90.0f);
-                r = 96.0f + (14.0f - 96.0f) * ease; g = 196.0f + (62.0f - 196.0f) * ease; b = 200.0f + (122.0f - 200.0f) * ease;
-                const float glint = std::pow(std::max(0.0f, std::sin(wx * 0.021f + t * 2.1f) * std::sin(wz * 0.019f - t * 1.7f)), 4.0f);
-                r += 120.0f * glint * light; g += 120.0f * glint * light; b += 110.0f * glint * light;
-                a = (62.0f + 96.0f * ease + 40.0f * glint) * fade;
-                if (depth < 46.0f) {   // foam along the shallows, its edge washing in and out
-                    const float f = std::clamp(1.0f - depth / (30.0f + 16.0f * std::sin(t * 1.6f + wx * 0.03f + wz * 0.025f)), 0.0f, 1.0f);
-                    r += (240.0f - r) * f; g += (248.0f - g) * f; b += (250.0f - b) * f; a += (210.0f * fade - a) * f;
+            const int gi = gi0 + i - N / 2, gj = gj0 + j - N / 2;
+            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000);
+            auto it = gWaterCells.find(key);
+            if (it == gWaterCells.end()) {
+                WaterCell c{ 0, 0, false };
+                const float wx = gi * cell, wz = gj * cell;
+                if (WaterSurfaceAt(wx, wz, &c.surface)) {
+                    float fy = 0;
+                    c.have = true;
+                    c.depth = RawFloorAt(wx, wz, &fy) ? c.surface - fy : 1000.0f;
                 }
-                r *= light; g *= light; b *= light;
+                it = gWaterCells.emplace(key, c).first;
             }
-            PushVtx(v[j * V + i], lx, y, lz, static_cast<u8>(std::clamp(r, 0.0f, 255.0f)), static_cast<u8>(std::clamp(g, 0.0f, 255.0f)), static_cast<u8>(std::clamp(b, 0.0f, 255.0f)),
-                    static_cast<u8>(std::clamp(a, 0.0f, 255.0f)));
+            cells[j * V + i] = it->second;
+            if (it->second.have && !any) { any = true; baseY = it->second.surface; }
         }
     }
     if (!any) return;
-    SetupWaterXlu(play);
-    OPEN_DISPS(play->state.gfxCtx);
-    Matrix_Translate(cx, 0.0f, cz, MTXMODE_NEW);
-    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    for (int j = 0; j < N; j++) {   // two rows of vertices (32) a time
-        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[j * V]), 2 * V, 0);
-        for (int i = 0; i < N; i++) gSP2Triangles(POLY_XLU_DISP++, i, i + 1, V + i + 1, 0, i, V + i + 1, V + i, 0);
-    }
-    CLOSE_DISPS(play->state.gfxCtx);
-}
 
-void DrawWaterFx(PlayState* play, float dt, float t, float light) {
-    if (gWaterFx.empty()) return;
-    const Vec3f eye = play->view.eye;
-    const float amp = WaveAmp();
-    size_t verts = 0;
-    for (size_t i = 0; i < gWaterFx.size();) {   // move them on, drop the finished
-        WaterFx& f = gWaterFx[i];
-        f.age += dt;
-        bool dead = f.age >= f.life;
-        if (f.age > 0.0f) {
-            f.x += f.vx * dt; f.z += f.vz * dt;
-            if (f.kind == WaterFx::Drop) {
-                f.vy -= 430.0f * dt; f.y += f.vy * dt;
-                if (f.y < f.surface) {
-                    dead = true;
-                    if (Flora01(static_cast<int>(f.x), static_cast<int>(f.z), 510) < 0.4f) { WaterFx r; r.kind = WaterFx::Ring; r.x = f.x; r.z = f.z; r.y = f.surface; r.surface = f.surface; r.size = 5.0f; r.life = 0.7f; AddWaterFx(r); }
+    // 2. the surface's look at each point
+    const WaterSky sky = WaterSkyNow();
+    Vtx* v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(V) * V * sizeof(Vtx)));
+    if (v == nullptr) return;
+    static std::vector<uint8_t> clear;   // a point where there is nothing to show
+    clear.assign(static_cast<size_t>(V) * V, 1);
+    float lastSurface = baseY;
+    for (int j = 0; j < V; j++) {
+        for (int i = 0; i < V; i++) {
+            const WaterCell& c = cells[j * V + i];
+            const float lx = (i - N / 2) * cell, lz = (j - N / 2) * cell, wx = cx + lx, wz = cz + lz;
+            float r = 0, g = 0, b = 0, a = 0, y = lastSurface;
+            if (c.have) {
+                lastSurface = c.surface;
+                y = c.surface;
+                if (c.depth > 2.0f) {
+                    const float d = std::hypot(wx - eye.x, wz - eye.z), fade = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
+                    if (fade > 0.0f) {
+                        clear[j * V + i] = 0;
+                        float foamWake = 0.0f;
+                        const float swell = WaveHeight(wx, wz, t, amp), push = WaterDisplaceAt(wx, wz, &foamWake);
+                        const float shore = std::min(1.0f, c.depth / 90.0f);
+                        y += 3.0f + (swell + push) * shore;
+                        // depth tint: sea-green over the shallows to deep blue
+                        const float k = std::clamp(c.depth / 420.0f, 0.0f, 1.0f), ease = k * k * (3.0f - 2.0f * k);
+                        r = (96.0f + (14.0f - 96.0f) * ease) * light; g = (196.0f + (62.0f - 196.0f) * ease) * light; b = (200.0f + (122.0f - 200.0f) * ease) * light;
+                        a = 34.0f + 70.0f * ease;
+                        // the slope of the swell, for the sky and the glitter
+                        const float e = 30.0f, hx = (WaveHeight(wx + e, wz, t, amp) - WaveHeight(wx - e, wz, t, amp)) / (2.0f * e),
+                                    hz = (WaveHeight(wx, wz + e, t, amp) - WaveHeight(wx, wz - e, t, amp)) / (2.0f * e);
+                        float nx = -hx * 3.0f, ny = 1.0f, nz = -hz * 3.0f;
+                        const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
+                        float vx = eye.x - wx, vy = eye.y - y, vz = eye.z - wz;
+                        const float vl = std::max(1.0f, std::sqrt(vx * vx + vy * vy + vz * vz)); vx /= vl; vy /= vl; vz /= vl;
+                        const float cosv = std::clamp(nx * vx + ny * vy + nz * vz, 0.0f, 1.0f);
+                        if (gWaterSkyOn && vy > 0.0f) {
+                            // Fresnel: the lower you look across the water, the more it is a mirror of the sky
+                            const float fres = 0.06f + 0.94f * std::pow(1.0f - cosv, 3.0f), kz = std::pow(cosv, 0.6f), m = std::min(0.9f, fres);
+                            for (int q = 0; q < 3; q++) { const float skyc = sky.hor[q] + (sky.zen[q] - sky.hor[q]) * kz; (q == 0 ? r : q == 1 ? g : b) = (q == 0 ? r : q == 1 ? g : b) * (1.0f - m) + skyc * m; }
+                            a += 150.0f * fres;
+                            // the glitter path of the sun and the moon, twinkling
+                            const float tw = 0.65f + 0.35f * std::sin(t * 5.0f + Flora01(i + gi0, j + gj0, 611) * 40.0f);
+                            for (int body = 0; body < 2; body++) {
+                                const float* l = body == 0 ? sky.sun : sky.moon;
+                                const float amt = body == 0 ? sky.sunA : sky.moonA;
+                                if (amt < 0.02f || l[1] < 0.02f) continue;
+                                float hxv = l[0] + vx, hyv = l[1] + vy, hzv = l[2] + vz;
+                                const float hl = std::max(0.001f, std::sqrt(hxv * hxv + hyv * hyv + hzv * hzv));
+                                const float nh = std::max(0.0f, (nx * hxv + ny * hyv + nz * hzv) / hl);
+                                const float spec = (std::pow(nh, 160.0f) * tw + 0.12f * std::pow(nh, 14.0f)) * amt * (body == 0 ? 1.0f : 0.55f);
+                                const float cr = body == 0 ? 255.0f : 215.0f, cg = body == 0 ? 236.0f - 90.0f * sky.sunWarm : 225.0f, cb = body == 0 ? 205.0f - 120.0f * sky.sunWarm : 245.0f;
+                                r += (cr - r) * std::min(1.0f, spec * 2.0f); g += (cg - g) * std::min(1.0f, spec * 2.0f); b += (cb - b) * std::min(1.0f, spec * 2.0f);
+                                a += 220.0f * spec;
+                            }
+                        }
+                        // foam where it is shallow (its edge washing in and out) and in the wake of whoever swims
+                        float foam = foamWake * 0.8f;
+                        if (c.depth < 56.0f) foam = std::max(foam, std::clamp(1.0f - c.depth / (38.0f + 16.0f * std::sin(t * 1.6f + wx * 0.03f + wz * 0.025f)), 0.0f, 1.0f));
+                        foam = std::clamp(foam, 0.0f, 1.0f);
+                        r += (238.0f * (0.6f + 0.4f * light) - r) * foam; g += (246.0f * (0.6f + 0.4f * light) - g) * foam; b += (250.0f * (0.6f + 0.4f * light) - b) * foam;
+                        a += (200.0f - a) * foam;
+                        a *= fade;
+                    }
                 }
-            } else if (f.kind == WaterFx::Bubble) {
-                f.y += f.vy * dt; f.x += std::sin(t * 3.0f + f.size * 7.0f) * 6.0f * dt;
-                if (f.y >= f.surface) dead = true;
-            } else if (f.kind == WaterFx::Foam) {
-                f.vx *= 1.0f - 0.8f * dt; f.vz *= 1.0f - 0.8f * dt;
             }
+            PushVtx4(v[j * V + i], lx, y - baseY, lz, r, g, b, a);
         }
-        if (dead) { gWaterFx[i] = gWaterFx.back(); gWaterFx.pop_back(); continue; }
-        verts += f.kind == WaterFx::Ring ? 24 : f.kind == WaterFx::Foam ? 9 : 8;
-        i++;
     }
-    if (gWaterFx.empty()) return;
-    Vtx* base = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, verts * sizeof(Vtx)));
-    if (base == nullptr) return;
+
     SetupWaterXlu(play);
     OPEN_DISPS(play->state.gfxCtx);
-    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    Matrix_Translate(cx, baseY, cz, MTXMODE_NEW);
+    Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    Vtx* o = base;
-    const u8 lt = static_cast<u8>(255.0f * (0.55f + 0.45f * light));
-    for (const WaterFx& f : gWaterFx) {
-        if (f.age < 0.0f) continue;
-        const float u = f.age / f.life, rx = f.x - eye.x, rz = f.z - eye.z;
-        switch (f.kind) {
-            case WaterFx::Ring: {
-                const float rad = f.size * (0.4f + 3.2f * u), w = 0.16f * rad + 1.5f, ry = f.surface + 6.0f + WaveHeight(f.x, f.z, t, amp) - eye.y;
-                const u8 a = static_cast<u8>(150.0f * (1.0f - u) * (1.0f - u));
-                for (int s = 0; s < 12; s++) {
-                    const float ca = std::cos(s * 0.5236f), sa = std::sin(s * 0.5236f);
-                    PushVtx(o[s * 2], rx + ca * (rad - w), ry, rz + sa * (rad - w), lt, lt, lt, static_cast<u8>(a / 8));
-                    PushVtx(o[s * 2 + 1], rx + ca * (rad + w), ry, rz + sa * (rad + w), lt, lt, lt, a);
+    // a row of squares at a time, in runs of 15 (two rows of 16 points fill the 32 the RSP holds)
+    for (int j = 0; j < N; j++) {
+        for (int c0 = 0; c0 < N; c0 += 15) {
+            const int m = std::min(15, N - c0);
+            bool skip = true;
+            for (int i = c0; i <= c0 + m && skip; i++) skip = clear[j * V + i] && clear[(j + 1) * V + i];
+            if (skip) continue;
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[j * V + c0]), m + 1, 0);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[(j + 1) * V + c0]), m + 1, m + 1);
+            for (int i = 0; i < m; i++) gSP2Triangles(POLY_XLU_DISP++, i, i + 1, m + 1 + i + 1, 0, i, m + 1 + i + 1, m + 1 + i, 0);
+        }
+    }
+    // the reflections of whoever stands or swims here: a strip from the feet toward the camera, in their colours, wobbling with the swell
+    if (!gWaterRefl.empty() && gWaterSkyOn && gWaterBodiesRefl) {
+        constexpr int S = 4;   // slices
+        Vtx* rv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, gWaterRefl.size() * 2 * S * sizeof(Vtx)));
+        if (rv != nullptr) {
+            Vtx* o = rv;
+            for (const WaterRefl& w : gWaterRefl) {
+                const float height = eye.y - w.surface;
+                if (height < 5.0f) continue;
+                const float tt = height / (height + w.h);   // where the line to the mirrored head meets the surface
+                const float fx = w.x - eye.x, fz = w.z - eye.z, fl = std::max(1.0f, std::hypot(fx, fz)), pxn = -fz / fl, pzn = fx / fl;
+                const float cosv = std::clamp(height / std::sqrt(height * height + fl * fl), 0.0f, 1.0f);
+                const float fres = 0.28f + 0.6f * std::pow(1.0f - cosv, 2.0f);
+                for (int s = 0; s < S; s++) {
+                    const float u = static_cast<float>(s) / (S - 1);
+                    const float px = w.x - fx * (1.0f - tt) * u, pz = w.z - fz * (1.0f - tt) * u;   // from the feet (u 0) to the mirrored head (u 1)
+                    const float wob = std::sin(t * 4.0f + u * 3.0f + w.x * 0.02f) * w.w * 0.2f * (0.5f + amp);
+                    const float wd = w.w * (1.0f - 0.3f * u);
+                    float col[3];
+                    for (int q = 0; q < 3; q++) col[q] = (w.c1[q] + (w.c2[q] - w.c1[q]) * u) * (0.45f + 0.55f * light);
+                    const float al = 150.0f * fres * (1.0f - 0.75f * u) * std::min(1.0f, (eye.y - w.surface) / 60.0f);
+                    const float oy = w.surface + 3.5f - baseY;
+                    PushVtx4(o[s * 2], px - cx + pxn * (wob - wd), oy, pz - cz + pzn * (wob - wd), col[0], col[1], col[2], al * (s == 0 ? 0.6f : 1.0f));
+                    PushVtx4(o[s * 2 + 1], px - cx + pxn * (wob + wd), oy, pz - cz + pzn * (wob + wd), col[0], col[1], col[2], al * (s == 0 ? 0.6f : 1.0f));
                 }
-                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 24, 0);
-                for (int s = 0; s < 12; s++) {
-                    const int n = (s + 1) % 12;
-                    gSP2Triangles(POLY_XLU_DISP++, s * 2, s * 2 + 1, n * 2 + 1, 0, s * 2, n * 2 + 1, n * 2, 0);
-                }
-                o += 24;
-                break;
-            }
-            case WaterFx::Foam: {
-                const float rad = f.size * (1.0f + 0.7f * u), ry = f.surface + 6.0f + WaveHeight(f.x, f.z, t, amp) - eye.y;
-                const u8 a = static_cast<u8>(190.0f * (1.0f - u) * std::min(1.0f, u * 8.0f + 0.25f));
-                PushVtx(o[0], rx, ry, rz, lt, lt, lt, a);
-                for (int s = 0; s < 8; s++) PushVtx(o[1 + s], rx + std::cos(s * 0.7854f) * rad, ry, rz + std::sin(s * 0.7854f) * rad, lt, lt, lt, 0);
-                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 9, 0);
-                for (int s = 0; s < 8; s++) gSP1Triangle(POLY_XLU_DISP++, 0, 1 + s, 1 + (s + 1) % 8, 0);
-                o += 9;
-                break;
-            }
-            default: {   // a drop or a bubble: two crossed quads
-                const float s = f.size * (f.kind == WaterFx::Bubble ? 0.8f : 1.0f), ry = f.y - eye.y;
-                const bool bub = f.kind == WaterFx::Bubble;
-                const u8 r = bub ? 190 : 225, g = bub ? 230 : 240, b = 255, a = static_cast<u8>((bub ? 150.0f : 220.0f) * (1.0f - u * u));
-                PushVtx(o[0], rx - s, ry - s, rz, r, g, b, a); PushVtx(o[1], rx + s, ry - s, rz, r, g, b, a);
-                PushVtx(o[2], rx + s, ry + s, rz, r, g, b, a); PushVtx(o[3], rx - s, ry + s, rz, r, g, b, a);
-                PushVtx(o[4], rx, ry - s, rz - s, r, g, b, a); PushVtx(o[5], rx, ry - s, rz + s, r, g, b, a);
-                PushVtx(o[6], rx, ry + s, rz + s, r, g, b, a); PushVtx(o[7], rx, ry + s, rz - s, r, g, b, a);
-                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 8, 0);
-                gSP2Triangles(POLY_XLU_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
-                gSP2Triangles(POLY_XLU_DISP++, 4, 5, 6, 0, 4, 6, 7, 0);
-                o += 8;
-                break;
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), 2 * S, 0);
+                for (int s = 0; s + 1 < S; s++) gSP2Triangles(POLY_XLU_DISP++, s * 2, s * 2 + 1, s * 2 + 3, 0, s * 2, s * 2 + 3, s * 2 + 2, 0);
+                o += 2 * S;
             }
         }
     }
@@ -8615,30 +8764,36 @@ void DrawWaterFx(PlayState* play, float dt, float t, float light) {
 
 // Drawn every frame with the other world effects (Projectile_Draw).
 void DrawWater(PlayState* play) {
-    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterFx.clear(); gWaterTrack.clear(); gCamUnder = 0.0f; return; }
+    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCamUnder = 0.0f; return; }
     Feat("draw: water");
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
     gWaterFrame++;
-    gWaterFx.reserve(kMaxWaterFx + 16);   // so adding one while they are being moved on never moves the list
+    gWaterNow = t;
+    const bool paused = play->pauseCtx.state != 0;
+    gWaterBudget = paused ? 0 : 4;   // effects the game's own effect table takes this frame
+    for (size_t i = 0; i < gWaterDist.size();) { if (t - gWaterDist[i].birth > 3.2f) gWaterDist.erase(gWaterDist.begin() + i); else i++; }
+    gWaterBodies.clear();
+    gWaterRefl.clear();
     Player* player = GET_PLAYER(play);
     if (player == nullptr) return;
-    WaterBody(player, player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z, 16.0f, dt, true);
+    const float pdt = paused ? 0.0f : dt;
+    WaterBody(player, player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z, 16.0f, pdt, true);
     for (const auto& [id, actor] : gActorOf) {
         if (actor == nullptr || actor == &player->actor) continue;
-        WaterBody(actor, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, 16.0f * actor->scale.y / 0.01f, dt, false);
+        WaterBody(actor, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, 16.0f * actor->scale.y / 0.01f, pdt, false);
     }
     for (const auto& [index, c] : gCarts) {
         if (c.actor == nullptr || c.wrecked) continue;
-        WaterBody(&c, c.body.x, c.body.y, c.body.z, 46.0f, dt, false);
+        WaterBody(&c, c.body.x, c.body.y, c.body.z, 46.0f, pdt, false);
     }
     for (auto it = gWaterTrack.begin(); it != gWaterTrack.end();) it = it->second.seen != gWaterFrame ? gWaterTrack.erase(it) : std::next(it);
+    WaterRain(play, pdt);
     // Is the camera under the surface?
     float surface = 0, floorY = 0;
     const Vec3f eye = play->view.eye;
-    const bool under = WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!RawFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
+    const bool under = gWaterUnder && WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!RawFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
     gCamUnder += ((under ? 1.0f : 0.0f) - gCamUnder) * std::min(1.0f, dt * 8.0f);
     DrawWaterSheet(play, t, light);
-    DrawWaterFx(play, dt, t, light);
 }
 
 // The look from below the surface: the screen goes blue-green, darker with depth, with slow light shafts drifting down from above.
@@ -8659,7 +8814,7 @@ void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds) {
 // Swim physics, once per game update: in the water a current carries you along (so treading water drifts and swimming against it is slower),
 // and you bob with the swell. Only the local player's own body; the server and the others are unaffected.
 void ApplySwimPhysics(Player* player) {
-    if (!DebugOn(kDbgWater) || !InField() || player == nullptr) return;
+    if (!DebugOn(kDbgWater) || !gWaterCurrent || !InField() || player == nullptr) return;
     Feat("swim physics");
     if (!(player->stateFlags1 & PLAYER_STATE1_IN_WATER)) return;
     const float t = static_cast<float>(ImGui::GetTime()), dt = 1.0f / royale::kTickHz;
@@ -8673,6 +8828,7 @@ void ApplySwimPhysics(Player* player) {
     }
     player->actor.velocity.y += std::sin(t * 2.4f) * 0.04f * WaveAmp();
 }
+
 
 // ---- the Fortnite map ---------------------------------------------------------------------------------------------------------
 // The island (shared/fortnite_map.h) is played inside Hyrule Field's scene. patches/0013 lets us do three things there:
@@ -12501,6 +12657,15 @@ UiState& Ui() {
         gSkyBodies = CVarGetInteger(ROYALE_CVAR("SkyBodies"), 1) != 0;
         gSkyClouds = std::clamp(CVarGetInteger(ROYALE_CVAR("SkyClouds"), 100), 0, 200) / 100.0f;
         gFogAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("FogAmount"), 100), 0, 200) / 100.0f;
+        gWaterDetail = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterDetail"), 1), 0, 2);
+        gWaterWaves = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterWaves"), 100), 0, 200) / 100.0f;
+        gWaterFxOn = CVarGetInteger(ROYALE_CVAR("WaterFx"), 1) != 0;
+        gWaterWakes = CVarGetInteger(ROYALE_CVAR("WaterWakes"), 1) != 0;
+        gWaterRain = CVarGetInteger(ROYALE_CVAR("WaterRain"), 1) != 0;
+        gWaterSkyOn = CVarGetInteger(ROYALE_CVAR("WaterSky"), 1) != 0;
+        gWaterBodiesRefl = CVarGetInteger(ROYALE_CVAR("WaterBodies"), 1) != 0;
+        gWaterUnder = CVarGetInteger(ROYALE_CVAR("WaterUnder"), 1) != 0;
+        gWaterCurrent = CVarGetInteger(ROYALE_CVAR("WaterCurrent"), 1) != 0;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
@@ -13604,7 +13769,25 @@ void DrawGraphicsUi() {
         ImGui::PopID();
     }
     // Features that arrive in other changes get their section here once they have a Debug switch in the build.
-    if (GfxSection("Water", "Water")) { ImGui::PushID("water"); GfxSwitch("Water", "Water (waves, splashes, wakes, underwater look)"); ImGui::PopID(); }
+    if (GfxSection("Water", "Water")) {
+        ImGui::PushID("water");
+        if (GfxSwitch("Water", "Water (waves, splashes, wakes, reflections, underwater look)")) {
+            static int waves = -1;
+            if (waves < 0) waves = static_cast<int>(gWaterWaves * 100.0f + 0.5f);
+            if (GfxPercent("Swell height (%, 0 = flat)", "WaterWaves", &waves)) gWaterWaves = waves / 100.0f;
+            ImGui::SetNextItemWidth(280);
+            static const char* kDetail[] = { "Low (fastest)", "Normal", "High (finest)" };
+            if (ImGui::Combo("Surface detail", &gWaterDetail, kDetail, 3)) { CVarSetInteger(ROYALE_CVAR("WaterDetail"), gWaterDetail); SaveGfx(); }
+            GfxCheck("Splashes, ripples and bubbles (the game's own effects)", "WaterFx", &gWaterFxOn);
+            GfxCheck("Displacement: wakes and rings that push the surface", "WaterWakes", &gWaterWakes);
+            GfxCheck("Rain rings on the water", "WaterRain", &gWaterRain);
+            GfxCheck("Reflections: sky, sun and moon", "WaterSky", &gWaterSkyOn);
+            GfxCheck("Reflections: players, bots and carts", "WaterBodies", &gWaterBodiesRefl);
+            GfxCheck("Underwater look", "WaterUnder", &gWaterUnder);
+            GfxCheck("Current that carries a swimmer", "WaterCurrent", &gWaterCurrent);
+        }
+        ImGui::PopID();
+    }
     if (GfxSection("Fortnite Map scenery", "Scenery")) { ImGui::PushID("scenery"); GfxSwitch("Scenery", "Oaks, cliffs, crags and flowers on the Fortnite Map"); ImGui::PopID(); }
     if (GfxSection("Fortnite Map puddles", "IslandPuddles")) { ImGui::PushID("ipud"); GfxSwitch("IslandPuddles", "Standing puddles on the Fortnite Map"); ImGui::PopID(); }
     if (GfxSection("Effects", "BossFx")) {
