@@ -13,3 +13,8 @@ __pycache__/
 assets/lilo/lilo.fbx
 assets/lilo/lilo.blend1
 assets/lilo/previews/
+
+# Avriella: the FBX export is large and made from the .blend (tools/avriella/build_avriella.py); the previews are rendered on demand
+assets/avriella/avriella.fbx
+assets/avriella/avriella.blend1
+assets/avriella/previews/
