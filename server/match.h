@@ -5,6 +5,7 @@
 #include "../shared/boss.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
+#include "../shared/convergence_data.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
 #include "../shared/storm.h"
@@ -1254,6 +1255,10 @@ class Match {
             MiniBoss b;
             b.id = kBossIdBase + static_cast<uint32_t>(bosses.size());
             b.kind = MapOf(mapId).minis[rng.Below(2)];   // the ones that suit this place
+            if (mapId == kConvergenceMapIndex) {
+                for (const auto& region : convergence::kRegions)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
             b.home = b.pos = at;
             b.maxHealth = b.health = BossOf(b.kind).health;
             bosses.push_back(b);

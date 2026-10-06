@@ -62,7 +62,14 @@ inline const char* const kPoiNames[] = {
     "Block Course",            "Cover Yard",            "Grove",                   "Plateau",
     "Test Spot 13",            "Test Spot 14",          "Test Spot 15",            "Test Spot 16",
     "Test Spot 17",            "Test Spot 18",          "Test Spot 19",            "Test Spot 20",
-    "Test Spot 21",            "Test Spot 22",          "Test Spot 23",            "Test Spot 24",};
+    "Test Spot 21",            "Test Spot 22",          "Test Spot 23",            "Test Spot 24",
+    // Hyrule Convergence: fixed authored landmarks, keeping existing map IDs stable.
+    "Triforce Market", "Lon Lon Crossroads", "Lostwood Sanctuary", "Ember Quarry",
+    "Frostwatch Lodge", "Spirit Caravanserai", "Lake Lantern", "Whispering Graveyard",
+    "Royal Ruins", "Royal Pavilion", "Lantern Jetty", "Caravan Colonnade",
+    "Old Mill", "Forest Trail", "Quarry Road", "Snow Pass",
+    "Ranch Gate", "Market Gardens", "Spirit Road", "Graveyard Chapel",
+    "West Watch", "East Watch", "South Causeway", "Coastal Walk",};
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
 // the centre of the walkable ground and a radius that holds most of it. The host's game still measures the live scene when a match starts.
@@ -95,6 +102,8 @@ constexpr MapDef kMaps[] = {
     // The Sandbox is a test map (shared/sandbox_terrain.h): the Fortnite Map's mesh with a flat arena and a test course on it. It is only offered by its own
     // menu button, never as a lobby map. No bosses of its own: you spawn them where you like.
     {"Sandbox", "A test arena with ramps, cliffs, water, a loot plaza and a button for everything", 0x51, {{0.0f, 0.0f}, 3300.0f}, 3400.0f, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    {"Hyrule Convergence", "An open world of furnished villages, royal spires and seven themed miniboss regions", 0x51, {{0.0f, 0.0f}, 6500.0f}, 6600.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
@@ -164,10 +173,12 @@ inline constexpr const char* kMayaCompanionLines[kMayaCompanionLineCount] = {
 
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 constexpr int kSandboxMapIndex = 6;   // the test map (it has the island's terrain machinery, with its own ground)
-constexpr int kPlayableMapCount = 6;  // the places a lobby can be played on: the Sandbox is not one of them
-constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex; }   // played in Hyrule Field's scene with swapped collision
+constexpr int kConvergenceMapIndex = 7;
+constexpr int kPlayableMapCount = kMapCount - 1;
+constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && id != kSandboxMapIndex; }
+constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex || id == kConvergenceMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
-static_assert(kFortniteMapIndex < kMapCount && kSandboxMapIndex < kMapCount && kSandboxMapIndex == kPlayableMapCount, "the Fortnite Map is the sixth place, the Sandbox the seventh");
+static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7, "preserve network map IDs");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
 

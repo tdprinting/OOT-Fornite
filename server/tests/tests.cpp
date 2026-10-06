@@ -2505,7 +2505,7 @@ static void SoloTestHasNoBotsAndKeepsGoing() {
 
 static void SandboxTerrainAndLayout() {
     namespace fn = royale::fortnite;
-    CHECK(kSandboxMapIndex == kPlayableMapCount && kSandboxMapIndex < kMapCount && IsIslandMap(kSandboxMapIndex) && IsIslandMap(kFortniteMapIndex) && !IsIslandMap(0));
+    CHECK(!IsPlayableMap(kSandboxMapIndex) && kSandboxMapIndex < kMapCount && IsIslandMap(kSandboxMapIndex) && IsIslandMap(kFortniteMapIndex) && !IsIslandMap(0));
     CHECK(std::string(MapOf(kSandboxMapIndex).name) == "Sandbox" && MapOf(kSandboxMapIndex).scene == kHyruleFieldScene);
     fn::UseTerrain(true);
     float y = 0;
