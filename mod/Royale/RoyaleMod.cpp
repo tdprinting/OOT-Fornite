@@ -450,6 +450,7 @@ std::vector<size_t> gPlatformIdx;
 const royale::Prop* gPlatformSrc = nullptr;
 size_t gPlatformSrcCount = 0;
 std::unordered_map<size_t, float> gPlatformBase;   // floor height under each block's middle
+std::unordered_map<size_t, float> gPlatformFoot;   // the lowest ground under each block's footprint (PlatformFoot)
 
 void RefreshPlatforms() {
     if (!gSession.Client()) { gPlatformIdx.clear(); gPlatformSrc = nullptr; gPlatformSrcCount = 0; return; }
@@ -459,6 +460,7 @@ void RefreshPlatforms() {
     gPlatformSrcCount = props.size();
     gPlatformIdx.clear();
     gPlatformBase.clear();
+    gPlatformFoot.clear();
     for (size_t i = 0; i < props.size(); i++) if (royale::IsPlatform(props[i].kind)) gPlatformIdx.push_back(i);
 }
 
@@ -3011,8 +3013,9 @@ void ApplyTrees(Player* player) {
 }
 
 // The island's oaks and boulders are solid too (shared/fortnite_scenery.h, SceneryRadius).
+bool SolidActive();
 void ApplyScenery(Player* player) {
-    if (!OnIsland() || gFoliage <= 0.01f) return;
+    if (!OnIsland() || gFoliage <= 0.01f || SolidActive()) return;   // with the game's own collision in place (see "solid scenery") the oaks and boulders are real
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z, cell = royale::fortnite::kSceneryCell;
     gFloraBudget = 6;
     for (int cz = static_cast<int>(std::floor((pz - 140.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 140.0f) / cell)); cz++)
@@ -8146,7 +8149,7 @@ SurfaceType gSolidSurfaces[2] = {
 CollisionHeader gSolidHeader;
 Actor* gSolidActor = nullptr;
 bool gSolidFailed = false;            // the game had no free collision slot: fall back to ApplyPlatforms / ApplyRocks
-std::vector<size_t> gSolidSet;         // the props in the mesh now
+std::vector<uint64_t> gSolidSet;       // the props (their index) and the island's scenery (SceneryKey) in the mesh now, sorted
 royale::Vec2 gSolidCentre = { 1e9f, 1e9f };
 int gSolidAge = 0;
 
@@ -8176,11 +8179,18 @@ struct SolidBuilder {
         p.normal = { 0, 0x7FFF, 0 };   // filled in properly by the game when it takes the mesh
     }
     // A stone: a ring of `sides` points round the foot, a smaller ring at the top, and a flat top to stand on. A box is the same with four sides.
-    void Prism(float x, float z, float baseY, float topY, float footR, float topR, int sides, float turn, u16 type, u16 xp) {
-        const int foot = nv;
-        for (int i = 0; i < sides; i++) { const float a = turn + 6.2831853f * i / sides; V(x + std::sin(a) * footR, baseY, z + std::cos(a) * footR); }
-        const int top = nv;
-        for (int i = 0; i < sides; i++) { const float a = turn + 6.2831853f * i / sides; V(x + std::sin(a) * topR, topY, z + std::cos(a) * topR); }
+    // The rings can be ellipses (half-widths along x and z before `yaw` turns the whole stone, the game's own Y turn), for the island's cliff slabs.
+    void Stone(float x, float z, float baseY, float topY, float footX, float footZ, float topX, float topZ, int sides, float turn, float yaw, u16 type, u16 xp) {
+        const float cy = std::cos(yaw), sy = std::sin(yaw);
+        auto ring = [&](float rx, float rz, float y) {
+            const int first = nv;
+            for (int i = 0; i < sides; i++) {
+                const float a = turn + 6.2831853f * i / sides, lx = std::sin(a) * rx, lz = std::cos(a) * rz;
+                V(x + lx * cy + lz * sy, y, z - lx * sy + lz * cy);
+            }
+            return first;
+        };
+        const int foot = ring(footX, footZ, baseY), top = ring(topX, topZ, topY);
         const Vec3f inside = { x, (baseY + topY) * 0.5f, z };
         for (int i = 0; i < sides; i++) {
             const int j = (i + 1) % sides;
@@ -8189,6 +8199,9 @@ struct SolidBuilder {
         }
         const Vec3f below = { x, topY - 50.0f, z };
         for (int i = 1; i + 1 < sides; i++) T(top, top + i, top + i + 1, below, type, xp);
+    }
+    void Prism(float x, float z, float baseY, float topY, float footR, float topR, int sides, float turn, u16 type, u16 xp) {
+        Stone(x, z, baseY, topY, footR, footR, topR, topR, sides, turn, 0.0f, type, xp);
     }
 };
 constexpr int PrismVtx(int sides) { return sides * 2; }
@@ -8210,10 +8223,61 @@ int SolidPolyBudget() {
     return std::clamp(room, 0, kSolidMaxPoly);
 }
 
+// The island's own scenery that has a solid body (shared/fortnite_scenery.h): the cliff slabs and crags are walls and ledges, the boulders and
+// oaks are stones and trunks. Each piece is cheap to rebuild from its cell, so the mesh only remembers which cells are in it.
+struct SolidScenery { int cx, cz; royale::fortnite::SceneryPiece pc; float base; };
+constexpr float kSolidSceneryRadius = 900.0f;
+bool SceneryIsSolid(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Cliff || k == SceneryKind::Crag || k == SceneryKind::Boulder || k == SceneryKind::Oak;
+}
+int SceneryPolys(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Crag ? 3 * PrismPoly(6) : k == SceneryKind::Cliff ? PrismPoly(10) : PrismPoly(6);
+}
+int SceneryVtx(royale::fortnite::SceneryKind k) {
+    using royale::fortnite::SceneryKind;
+    return k == SceneryKind::Crag ? 3 * PrismVtx(6) : k == SceneryKind::Cliff ? PrismVtx(10) : PrismVtx(6);
+}
+// The scenery within kSolidSceneryRadius of (x, z) that is standing (the same pieces DrawIslandScenery draws), nearest first.
+void NearbySolidScenery(float x, float z, std::vector<std::pair<float, SolidScenery>>* out) {
+    if (!OnIsland() || !DebugOn(kDbgScenery) || gFoliage <= 0.01f) return;
+    const float cell = royale::fortnite::kSceneryCell, dens = std::min(1.3f, gFoliage);
+    gFloraBudget = 60;   // measuring each piece's ground is cached, so this only spreads the first look over a few frames
+    for (int cz = static_cast<int>(std::floor((z - kSolidSceneryRadius) / cell)); cz <= static_cast<int>(std::floor((z + kSolidSceneryRadius) / cell)); cz++)
+        for (int cx = static_cast<int>(std::floor((x - kSolidSceneryRadius) / cell)); cx <= static_cast<int>(std::floor((x + kSolidSceneryRadius) / cell)); cx++) {
+            royale::fortnite::SceneryPiece pc;
+            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc) || !SceneryIsSolid(pc.kind)) continue;
+            const float d = std::hypot(pc.x - x, pc.z - z);
+            if (d > kSolidSceneryRadius) continue;
+            const FloraSpot* spot = FloraSpotAt(7, cx, cz, pc.x, pc.z);
+            if (spot == nullptr || !spot->ok) continue;
+            out->push_back({ d, { cx, cz, pc, spot->y } });
+        }
+}
+uint64_t SceneryKey(const SolidScenery& s) { return (1ull << 62) | (static_cast<uint64_t>(s.cx + 65536) << 24) | static_cast<uint64_t>(s.cz + 65536); }
+
+// The lowest ground under a block's footprint (its middle and corners), so a block on a slope reaches down to the low side instead of floating over it.
+float PlatformFoot(size_t i) {
+    auto it = gPlatformFoot.find(i);
+    if (it != gPlatformFoot.end()) return it->second;
+    const float mid = PlatformBase(i);
+    if (mid < -1.0e8f) return mid;
+    const royale::Prop& p = gSession.Client()->Props()[i];
+    float low = mid;
+    for (int k = 0; k < 4; k++) {
+        float y = 0;
+        if (RawFloorAt(p.pos.x + (k & 1 ? 1 : -1) * royale::kPlatformHalf, p.pos.z + (k & 2 ? 1 : -1) * royale::kPlatformHalf, &y)) low = std::min(low, y);
+    }
+    gPlatformFoot[i] = low;
+    return low;
+}
+
 // Fill the mesh with the scenery nearest (x, z). Returns false if the same pieces are already in it.
 bool BuildSolidMesh(float x, float z, bool force) {
     const auto& props = gSession.Client()->Props();
-    std::vector<std::pair<float, size_t>> near;
+    struct Cand { float d; bool scenery; size_t i; };
+    std::vector<Cand> near;
     for (size_t i = 0; i < props.size(); i++) {
         const royale::Prop& p = props[i];
         if (!IsSolidKind(p.kind) || gBrokenProps.count(i)) continue;
@@ -8221,36 +8285,72 @@ bool BuildSolidMesh(float x, float z, bool force) {
         if (d > kSolidRadius) continue;
         auto pa = gProps.find(i);   // a rock someone has picked up and carried off is not where its footprint is any more
         if (pa != gProps.end() && pa->second.actor != nullptr && std::hypot(pa->second.actor->world.pos.x - p.pos.x, pa->second.actor->world.pos.z - p.pos.z) > 30.0f) continue;
-        near.push_back({ d, i });
+        near.push_back({ d, false, i });
     }
-    std::sort(near.begin(), near.end());
+    std::vector<std::pair<float, SolidScenery>> scenery;
+    NearbySolidScenery(x, z, &scenery);
+    for (size_t k = 0; k < scenery.size(); k++) near.push_back({ scenery[k].first, true, k });
+    std::sort(near.begin(), near.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
     const int budget = SolidPolyBudget();
-    std::vector<size_t> chosen;
+    std::vector<Cand> chosen;
+    std::vector<uint64_t> keys;
     int polys = 1, vtx = 3;   // the placeholder below
-    for (const auto& [d, i] : near) {
-        const int sides = SolidSides(props[i].kind);
-        if (polys + PrismPoly(sides) > budget || vtx + PrismVtx(sides) > kSolidMaxVtx) break;
-        if (PlatformBase(i) < -1.0e8f) continue;   // its ground isn't loaded yet
-        polys += PrismPoly(sides);
-        vtx += PrismVtx(sides);
-        chosen.push_back(i);
+    for (const Cand& c : near) {
+        const int addPoly = c.scenery ? SceneryPolys(scenery[c.i].second.pc.kind) : PrismPoly(SolidSides(props[c.i].kind));
+        const int addVtx = c.scenery ? SceneryVtx(scenery[c.i].second.pc.kind) : PrismVtx(SolidSides(props[c.i].kind));
+        if (polys + addPoly > budget || vtx + addVtx > kSolidMaxVtx) break;
+        if (!c.scenery && PlatformFoot(c.i) < -1.0e8f) continue;   // its ground isn't loaded yet
+        polys += addPoly;
+        vtx += addVtx;
+        chosen.push_back(c);
+        keys.push_back(c.scenery ? SceneryKey(scenery[c.i].second) : static_cast<uint64_t>(c.i));
     }
-    std::sort(chosen.begin(), chosen.end());
-    if (!force && chosen == gSolidSet) return false;
-    gSolidSet = chosen;
+    std::sort(keys.begin(), keys.end());
+    if (!force && keys == gSolidSet) return false;
+    gSolidSet = keys;
 
     SolidBuilder b;
     // Always one triangle, so the mesh is never empty (the game divides by its vertex count): a sliver of wall far below the map, out of everyone's way.
     const float lowY = -31000.0f;
     const int a = b.V(x, lowY, z), c = b.V(x + 1.0f, lowY, z), e = b.V(x, lowY + 1.0f, z);
     b.T(a, c, e, { x, lowY, z + 1.0f }, 0, 1);
-    for (size_t i : chosen) {
+    for (const Cand& cand : chosen) {
+        if (cand.scenery) {
+            using royale::fortnite::SceneryKind;
+            const SolidScenery& sc = scenery[cand.i].second;
+            const float sk = sc.pc.scale, base = sc.base, yaw = sc.pc.yaw;
+            auto local = [&](float lx, float lz, float* wx, float* wz) { *wx = sc.pc.x + (lx * std::cos(yaw) + lz * std::sin(yaw)) * sk; *wz = sc.pc.z + (-lx * std::sin(yaw) + lz * std::cos(yaw)) * sk; };
+            switch (sc.pc.kind) {
+                case SceneryKind::Cliff:   // a slab 300 wide and 112 deep, 166 tall, a little narrower at the top (tools/scenery/build_scenery.py, build_cliff); you stand on its top from the high side
+                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 1);
+                    break;
+                case SceneryKind::Crag: {   // three spires: the snowy tips are too narrow to stand on, so each is a wall
+                    static const float spire[3][4] = { { 0.0f, 0.0f, 58.0f, 250.0f }, { 64.0f, 26.0f, 42.0f, 180.0f }, { -52.0f, -30.0f, 38.0f, 150.0f } };
+                    for (const auto& sp : spire) {
+                        float wx, wz;
+                        local(sp[0], sp[1], &wx, &wz);
+                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 1);
+                    }
+                    break;
+                }
+                case SceneryKind::Oak:   // the trunk only: the leaves are above your head
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 1);
+                    break;
+                default: {   // a boulder: wide at the foot, a flat crown you can climb onto
+                    const float r = royale::fortnite::SceneryRadius(sc.pc.kind, sk);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + royale::fortnite::SceneryTop(sc.pc.kind, sk) * 0.8f, r, r, r * 0.65f, r * 0.65f, 6, sc.pc.yaw, 0.0f, 0, 1);
+                    break;
+                }
+            }
+            continue;
+        }
+        const size_t i = cand.i;
         const royale::Prop& p = props[i];
         const float base = PlatformBase(i);
         const int sides = SolidSides(p.kind);
-        if (royale::IsPlatform(p.kind)) {   // a box, square to the map, sunk a little into the ground so a slope never leaves a gap under it
+        if (royale::IsPlatform(p.kind)) {   // a box, square to the map, reaching down to the low side of its footprint so a slope never leaves a gap under it
             const float h = royale::kPlatformHalf * 1.41421356f;
-            b.Prism(p.pos.x, p.pos.z, base - 40.0f, base + royale::PlatformHeight(p.kind), h, h, 4, 0.78539816f, 1, 0);
+            b.Prism(p.pos.x, p.pos.z, PlatformFoot(i) - 20.0f, base + royale::PlatformHeight(p.kind), h, h, 4, 0.78539816f, 1, 0);
         } else if (p.kind == royale::PropKind::Pillar) {
             b.Prism(p.pos.x, p.pos.z, base - 30.0f, base + 200.0f, royale::PropRadius(p.kind), royale::PropRadius(p.kind) * 0.85f, sides, 0.0f, 0, 1);
         } else {   // rocks and boulders: wide at the foot, a flat crown at the height you stand on (BoulderTop)
