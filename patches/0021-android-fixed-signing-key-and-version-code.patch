@@ -7,11 +7,11 @@ index eb2d4b5..4aebe90 100644
          minSdkVersion 24
          targetSdkVersion 33
 -        versionCode 8
-+        // OOT Royale (patches/0019): every CI build gets a higher number than the last, so Android always sees an update.
++        // OOT Royale (patches/0021): every CI build gets a higher number than the last, so Android always sees an update.
 +        versionCode Integer.parseInt(System.getenv("ROYALE_VERSION_CODE") ?: "8")
          versionName "9.0.2"
      }
-+    // OOT Royale (patches/0019): one fixed signing key for every build, so each build installs over the previous one.
++    // OOT Royale (patches/0021): one fixed signing key for every build, so each build installs over the previous one.
 +    // The key is passed in by CI (ROYALE_KEYSTORE); local builds without it fall back to the usual debug key.
 +    signingConfigs {
 +        royale {

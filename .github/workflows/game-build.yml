@@ -48,7 +48,7 @@ jobs:
       - name: Build the release APK (arm64-v8a)
         working-directory: third_party/Shipwright-Android/Android
         env:
-          # patches/0019: sign every build with our one fixed (throwaway, not secret) key and number builds by run, so each
+          # patches/0021: sign every build with our one fixed (throwaway, not secret) key and number builds by run, so each
           # build installs over the last. The old approach (copying the key to ~/.android) was silently ignored.
           ROYALE_KEYSTORE: ${{ github.workspace }}/scripts/royale-debug.keystore
           ROYALE_VERSION_CODE: ${{ github.run_number }}
