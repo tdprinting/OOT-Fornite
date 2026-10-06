@@ -18,7 +18,7 @@ What comes out (see shared/fortnite_map.h for how it is used):
 """
 import argparse, os, sys
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 ASSETS = os.path.join(ROOT, "assets", "fortnite")
@@ -28,10 +28,11 @@ COVER_OUT = os.path.join(ROOT, "shared", "fortnite_cover_data.h")
 XZ_SCALE = 880.0      # game units per unit of the model: the island holds a circle about as wide as Hyrule Field's floor (radius ~7400)
 Y_SCALE = 450.0       # game units of height per unit of the model: hills a few Links tall, cliffs about nine
 CELLS = 64            # collision squares per side (vertex indices in the game's collision are 13 bits, so 65*65 vertices is plenty of room)
-SUB = 4               # colour/visual squares per collision square, per side
+SUB = 6               # colour/visual squares per collision square, per side (more of them = a sharper picture on the ground)
 WATER_H = -0.32       # model height of the water surface: every lake, river and sea bed in the heightmap is lower than this
 H_REF = 0.185         # model height that becomes y = 0 (the typical land)
 H_MIN, H_MAX = -0.964222, 0.964222   # the heightmap file stores heights between these as 16 bit numbers
+MAX_STEP = 165        # steepest rise between two neighbouring collision vertices on land, in game units: about 35 degrees, which Link can stand on
 COVER = 256           # ground cover squares per side (what grows or stands on the ground, read from the texture)
 
 
@@ -122,6 +123,41 @@ def write_cover(cover):
     print("wrote", COVER_OUT, "cover: " + ", ".join("%s %.0f%%" % (nm, 100 * (cover == k).mean()) for k, nm in enumerate(["water", "meadow", "woods", "paving", "dirt"])))
 
 
+def easier_ground(ys, water_y):
+    """Makes the land easier to get about on: one light smoothing pass over the inland (the coast keeps its shape), then no step between two
+    neighbouring land vertices steeper than MAX_STEP, so hillsides can be walked rather than slid down. Returns the new integer heights."""
+    h = ys.astype(float)
+    land = h > water_y + 10
+    inner = land.copy()
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            inner &= np.roll(np.roll(land, dy, 0), dx, 1)
+    inner[0, :] = inner[-1, :] = False; inner[:, 0] = inner[:, -1] = False
+    p = np.pad(h, 1, mode="edge")
+    k = np.array([1, 2, 1], dtype=float) / 4.0
+    sm = sum(k[a] * k[b] * p[a:a + h.shape[0], b:b + h.shape[1]] for a in range(3) for b in range(3))
+    h = np.where(inner, sm, h)
+    for _ in range(40):                              # relax the steep steps until none is left
+        changed = False
+        for axis in (0, 1):
+            a = h; b = np.roll(h, -1, axis)
+            both = (a > water_y + 10) & (b > water_y + 10)
+            if axis == 0: both[-1, :] = False
+            else: both[:, -1] = False
+            diff = b - a
+            excess = np.where(both & (np.abs(diff) > MAX_STEP), np.abs(diff) - MAX_STEP, 0.0)
+            if excess.max() > 0.5:
+                changed = True
+                move = np.sign(diff) * excess * 0.5
+                h = h + move                          # the lower end of the pair comes up, the upper end goes down
+                h = h - np.roll(move, 1, axis)
+        if not changed:
+            break
+    steep = lambda g: float((np.abs(np.diff(g, axis=0)) > MAX_STEP).mean() + (np.abs(np.diff(g, axis=1)) > MAX_STEP).mean()) / 2
+    print("steps steeper than %d: %.1f%% before, %.1f%% after" % (MAX_STEP, 100 * steep(ys.astype(float)), 100 * steep(h)))
+    return np.round(h).astype(int)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from-obj", nargs=2, metavar=("OBJ", "TEXTURE"))
@@ -146,6 +182,7 @@ def main():
     coarse /= 81.0                                    # coarse[j][i]: j runs along z, i along x
     ys = np.round((coarse - H_REF) * Y_SCALE).astype(int)
     water_y = int(round((WATER_H - H_REF) * Y_SCALE))
+    ys = easier_ground(ys, water_y)
 
     # ---- fine grid heights: the same two triangles per square the collision uses (split from the low corner to the far corner) ------------
     F = CELLS * SUB
@@ -162,10 +199,17 @@ def main():
 
     # ---- colours: the texture at each fine vertex, plus a little hill shading --------------------------------------------------------
     tw = tex.shape[0]
-    blur = np.asarray(Image.fromarray(tex.astype(np.uint8)).resize((tw // 4, tw // 4), Image.BOX)).astype(np.float64)
-    px = fi / F * (blur.shape[1] - 1)
+    # Sample the picture finely (a light filter, not the old 4x box blur), then sharpen it and lift its colours a little, so roads, fields and
+    # painted detail stay readable on the ground at the size one vertex covers.
+    src = Image.fromarray(tex.astype(np.uint8)).resize((F * 2, F * 2), Image.LANCZOS)
+    px = fi / F * (F * 2 - 1)
     gx, gy = np.meshgrid(px, px)
-    rgb = bilinear(blur, gx, gy)
+    rgb = bilinear(np.asarray(src).astype(np.float64), gx, gy)
+    sharp = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).filter(ImageFilter.UnsharpMask(radius=1.4, percent=60, threshold=3))
+    rgb = np.asarray(sharp).astype(np.float64)
+    grey = rgb.mean(-1, keepdims=True)
+    rgb = np.clip(grey + (rgb - grey) * 1.05, 0, 255)                         # a touch more colour
+    rgb = np.clip(128 + (rgb - 128) * 1.04, 0, 255)                          # and contrast
     sx = (2 * half_x / F); sz = (2 * half_z / F)
     dzdy, dzdx = np.gradient(np.maximum(fh, water_y).astype(float), sz, sx)
     nrm = np.stack([-dzdx, np.ones_like(dzdx), -dzdy], -1)

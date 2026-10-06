@@ -13,6 +13,7 @@
 #include "nav.h"
 #include <algorithm>
 #include <array>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -23,7 +24,7 @@ struct Equipped {
     Rarity rarity;
 };
 
-enum class DamageKind : uint8_t { Normal, Storm, Fire, Explosion };
+enum class DamageKind : uint8_t { Normal, Storm, Fire, Explosion, Gas };
 
 struct PlayerState {
     uint32_t id = 0;
@@ -62,6 +63,7 @@ struct PlayerState {
 
     // ---- timed effects; every "...Until" is a match-clock time
     float burnUntil = 0, burnDps = 0;
+    float gasTime = 0;   // seconds spent in Lilo's cloud (builds while inside, drains outside); it hurts once it passes kFartGraceSeconds
     uint32_t burnBy = 0xFFFFFFFFu;
     float stunUntil = 0, frozenUntil = 0;
     float invulnUntil = 0;
@@ -304,6 +306,8 @@ class Match {
                     if (dps > 0) Damage(p.id, dps * dt, kNoPlayer, DamageKind::Storm, false);
                     if (!p.alive) continue;
                     if (clock < p.burnUntil) Damage(p.id, p.burnDps * dt, p.burnBy, DamageKind::Fire, false);
+                    if (!p.alive) continue;
+                    TickGas(p, dt);
                     if (!p.alive) continue;
                     if (clock < p.regenUntil && p.health < p.maxHealth) p.health = (std::min)(p.maxHealth, p.health + p.regenRate * dt);
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
@@ -1362,6 +1366,31 @@ class Match {
     void SetMajorBoss(bool on) { majorBoss = on; }
     bool MajorBossEnabled() const { return majorBoss; }
     const std::vector<Strike>& Strikes() const { return strikes; }
+
+    // ---- Lilo's toxic cloud
+    struct FartCloud { Vec2 at; float until; uint32_t by; };
+    const std::vector<FartCloud>& FartClouds() const { return fartClouds; }
+    // A player's Lilo made a cloud at `at`. Only while the match is on, from a living player standing near it, at most one every few seconds.
+    bool StartFartCloud(uint32_t playerId, Vec2 at) {
+        const PlayerState* p = Find(playerId);
+        if (!p || !p->alive || state != MatchState::InMatch || Distance(p->pos, at) > kFartCloudReach) return false;
+        if (fartClouds.size() >= 24) return false;
+        auto last = lastFartCloud.find(playerId);
+        if (last != lastFartCloud.end() && clock - last->second < kFartCloudCooldown) return false;
+        lastFartCloud[playerId] = clock;
+        fartClouds.push_back({at, clock + kFartCloudSeconds, playerId});
+        return true;
+    }
+    static bool InFartCloud(const std::vector<FartCloud>& clouds, Vec2 p, float now) {
+        for (const FartCloud& c : clouds) if (now < c.until && Distance(p, c.at) < kFartCloudRadius) return true;
+        return false;
+    }
+    void TickGas(PlayerState& p, float dt) {
+        fartClouds.erase(std::remove_if(fartClouds.begin(), fartClouds.end(), [&](const FartCloud& c) { return clock >= c.until; }), fartClouds.end());
+        if (InFartCloud(fartClouds, p.pos, clock)) p.gasTime += dt;
+        else p.gasTime = (std::max)(0.0f, p.gasTime - dt * 2.0f);
+        if (p.gasTime > kFartGraceSeconds) Damage(p.id, kFartDps * dt, kNoPlayer, DamageKind::Gas, false);
+    }
     // The walkability grid the host's game measured (the same one the bots use). Bosses path around walls, water and cliffs with it, and use
     // their own way across when there is no path. Without one (the tests, a plain match) they walk straight.
     void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); }
@@ -2377,6 +2406,8 @@ class Match {
         }
         state = s;
         stateTime = 0;
+        fartClouds.clear();
+        lastFartCloud.clear();
         MatchEvent e{MatchEvent::Type::StateChanged};
         e.state = s;
         events.push_back(e);
@@ -2705,6 +2736,8 @@ class Match {
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
     std::vector<Strike> strikes;
+    std::vector<FartCloud> fartClouds;
+    std::map<uint32_t, float> lastFartCloud;   // when each player last started a cloud
     std::shared_ptr<const NavGrid> nav;
     std::vector<AllyState> allies;
     std::vector<VehicleState> vehicles;
