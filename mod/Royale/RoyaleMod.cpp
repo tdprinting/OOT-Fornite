@@ -41,6 +41,18 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <sstream>
+#include <cstdarg>
+#include <cstring>
+#include <fstream>
+#ifdef __ANDROID__
+#include <csignal>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <unwind.h>
+#include <sys/syscall.h>
+#endif
 
 #include "soh/ShipInit.hpp"
 #include "soh/ActorDB.h"
@@ -6420,14 +6432,111 @@ std::filesystem::path MusicFolder() { return std::filesystem::path(Ship::Context
 
 // A breadcrumb trail for crashes the phone gives no log for: each step is written to royale-trace.txt (next to the music folder) and closed
 // again straight away, so the last line says how far the game got. The file starts afresh each run.
+char gTraceLast[160] = "(nothing yet)";   // the newest step, for the crash report
 void Trace(const char* step) {
     static bool fresh = true;
     static std::string last;
     if (last == step) return;   // a step drawn every frame is written once
     last = step;
+    std::snprintf(gTraceLast, sizeof(gTraceLast), "%s", step);
     std::ofstream out(std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt")), fresh ? std::ios::trunc : std::ios::app);
     fresh = false;
     if (out) out << step << "\n";
+}
+
+// ---- crash report ---------------------------------------------------------------------------------------------------------------
+// When the game dies from a native crash (a bad pointer, an abort), Android gives the player nothing to send. So a handler writes
+// royale-crash.txt next to the music folder: which signal, where it faulted (library, offset and name for each step of the call stack) and the
+// last step of the breadcrumb trail. The next time the Battle Royale menu opens it shows that text so it can be photographed, and the file stays
+// until dismissed. The offsets are looked up against the symbols file that the game build publishes.
+#ifdef __ANDROID__
+char gCrashPath[600] = "";
+struct sigaction gOldAction[6];
+const int kCrashSignals[6] = { SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGTRAP };
+
+struct CrashStack { void* pc[40]; int n; };
+_Unwind_Reason_Code CrashUnwind(struct _Unwind_Context* ctx, void* arg) {
+    CrashStack* st = static_cast<CrashStack*>(arg);
+    const uintptr_t pc = _Unwind_GetIP(ctx);
+    if (pc == 0) return _URC_NO_REASON;
+    if (st->n >= 40) return _URC_END_OF_STACK;
+    st->pc[st->n++] = reinterpret_cast<void*>(pc);
+    return _URC_NO_REASON;
+}
+void CrashLine(int fd, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
+void CrashLine(int fd, const char* fmt, ...) {
+    char buf[400];
+    va_list args;
+    va_start(args, fmt);
+    const int n = std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (n > 0) { const ssize_t ignored = write(fd, buf, std::min<int>(n, sizeof(buf) - 1)); (void)ignored; }
+}
+void CrashHandler(int sig, siginfo_t* info, void*) {
+    static volatile sig_atomic_t busy = 0;
+    if (!busy) {
+        busy = 1;
+        const int fd = open(gCrashPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            CrashLine(fd, "Version %s\nSignal %d code %d fault address %p thread %ld\nLast step: %s\n", ROYALE_BUILD_VERSION, sig, info ? info->si_code : 0,
+                      info ? info->si_addr : nullptr, static_cast<long>(syscall(SYS_gettid)), gTraceLast);
+            CrashStack st;
+            st.n = 0;
+            _Unwind_Backtrace(CrashUnwind, &st);
+            for (int i = 0; i < st.n; i++) {
+                Dl_info di;
+                if (dladdr(st.pc[i], &di) && di.dli_fname != nullptr) {
+                    const char* base = std::strrchr(di.dli_fname, '/');
+                    CrashLine(fd, "#%d %s+0x%lx %s\n", i, base ? base + 1 : di.dli_fname,
+                              static_cast<unsigned long>(reinterpret_cast<uintptr_t>(st.pc[i]) - reinterpret_cast<uintptr_t>(di.dli_fbase)), di.dli_sname ? di.dli_sname : "");
+                } else {
+                    CrashLine(fd, "#%d %p\n", i, st.pc[i]);
+                }
+            }
+            close(fd);
+        }
+    }
+    // Hand over to whoever was there before (Android's own crash reporter), so the game still ends the usual way.
+    for (int i = 0; i < 6; i++) if (kCrashSignals[i] == sig) sigaction(sig, &gOldAction[i], nullptr);
+    if (info != nullptr && info->si_code <= 0) raise(sig);   // sent by abort() and the like: send it again; a real fault just happens again on return
+}
+void InstallCrashReporter() {
+    const std::string path = Ship::Context::GetPathRelativeToAppDirectory("royale-crash.txt");
+    std::snprintf(gCrashPath, sizeof(gCrashPath), "%s", path.c_str());
+    for (int i = 0; i < 6; i++) {
+        struct sigaction sa;
+        std::memset(&sa, 0, sizeof(sa));
+        sa.sa_sigaction = CrashHandler;
+        sa.sa_flags = SA_SIGINFO;
+        sigemptyset(&sa.sa_mask);
+        sigaction(kCrashSignals[i], &sa, &gOldAction[i]);
+    }
+}
+#else
+void InstallCrashReporter() {}
+#endif
+
+// A crash report from the last run, shown at the top of the Battle Royale menu until dismissed.
+void DrawCrashReport() {
+    static int state = 0;   // 0: not looked yet, 1: showing, 2: none or dismissed
+    static std::string text;
+    const std::filesystem::path file(Ship::Context::GetPathRelativeToAppDirectory("royale-crash.txt"));
+    if (state == 0) {
+        std::ifstream in(file);
+        std::stringstream ss;
+        if (in) ss << in.rdbuf();
+        text = ss.str();
+        state = text.empty() ? 2 : 1;
+    }
+    if (state != 1) return;
+    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "The game closed unexpectedly last time. Please send a photo of this to Claude:");
+    ImGui::TextWrapped("%s", text.c_str());
+    if (ImGui::Button("Dismiss crash report")) {
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        state = 2;
+    }
+    ImGui::Separator();
 }
 
 void QueueOotSongs();
@@ -8554,13 +8663,17 @@ void DriveStart(const royale::HudState& hud) {
     if (!gPendingStart) return;
     if (!gSession.Joined() || !hud.isHost || hud.state != royale::MatchState::Lobby) { gPendingStart = false; return; }
     if (!InGame()) return;
-    if (!InField()) { WantsWaitingRoom = false; GoToField(); gInFieldFrames = 0; return; }
+    if (!InField()) { Trace("start: going to the field"); WantsWaitingRoom = false; GoToField(); gInFieldFrames = 0; return; }
     if (gPlayState->transitionTrigger != TRANS_TRIGGER_OFF || ++gInFieldFrames < royale::kTickHz) return; // let the scene settle
+    Trace("start: measuring the field");
     royale::Circle measured;
     if (MeasureField(&measured)) {
+        Trace("start: configuring the map");
         gSession.ConfigureMap(measured, WalkableAt, [](royale::Vec2 p, float* y) { return RawFloorAt(p.x, p.z, y); });   // the bots learn the ledges and cliffs
     }
+    Trace("start: starting the match");
     gSession.StartMatch();
+    Trace("start: match started");
     gPendingStart = false;
 }
 
@@ -10180,6 +10293,7 @@ void OnSceneInit(int16_t) {
 }
 
 void RegisterRoyaleMod() {
+    InstallCrashReporter();
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
@@ -10905,6 +11019,7 @@ void DrawRoyaleUi() {
         }
         ImGui::TextColored(kGrey, "Version %s", ROYALE_BUILD_VERSION);
     }
+    DrawCrashReport();
 
     if (h.mode == royale::HudState::Mode::Idle) {
         DrawMainMenu(ui, h);
