@@ -108,6 +108,7 @@ void Player_UseItem(PlayState* play, Player* player, s32 item);
 s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
+extern s32 gRoyaleNoAimView;    // 1 = bow, slingshot, boomerang and hookshot ready and fire in place, never the first-person aiming view (patches/0019)
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 }
@@ -9469,6 +9470,7 @@ void CancelGameDeath(Player* player) {
 void OnPlayerUpdate() {
     Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
+    gRoyaleNoAimView = 0;
     if (!gSession.Joined() || !InGame()) return;
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
@@ -9519,6 +9521,9 @@ void OnPlayerUpdate() {
     if (gSession.Joined() && IsLive(hud) && hud.selfAlive && InField()) HeldGlow(gPlayState, player, hud.weaponRarity, true);
     NoticePoi(player, hud);
     if (gActionFrames > 0) gActionFrames--;
+    // Shots are aimed by where Link faces, with a target or without: with nothing to Z-target the game would otherwise swing the camera into the
+    // first-person aiming view (a mode this match never uses), so ready and fire in place as it does when locked on.
+    gRoyaleNoAimView = gSession.Joined() && IsLive(hud) ? 1 : 0;
     SyncLocalWeapon(player, hud);
     DriveFortnite(player, hud);
     EnsureSolidScenery();
