@@ -14,6 +14,8 @@
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
+#include "fortnite_puddles.h"
+#include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
 #include "names.h"
@@ -162,6 +164,10 @@ float gClothScale = 1.0f;           // the local option: cloth and wind physics 
 bool gWindOn = true;                // the local option: a breeze that moves cloth, grass and trees (off: still air)
 float gWindScale = 1.0f;            // how strong the breeze is, 0 to 2 (the slider)
 bool gWindStreaks = true;           // the local option: streaks in the air that show which way the wind blows
+bool gSkyStars = true;              // the local option: stars in the night sky
+bool gSkyBodies = true;             // the local option: the sun and the moon
+float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (none) to 2
+float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
 bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
@@ -270,11 +276,15 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Minimap", "Minimap switching" },
     { "Wind", "Wind streaks in the air" },
     { "Tornado", "Tornado easter egg" },
+    { "Sky", "Sky: gradient, stars, sun, moon and clouds" },
+    { "Fog", "Fog banks (low volumetric-style fog)" },
+    { "Scenery", "Fortnite Map scenery (oaks, cliffs, crags, flowers)" },
+    { "IslandPuddles", "Fortnite Map standing puddles" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgRagdoll };
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgRagdoll };
 static_assert(kDbgRagdoll + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
@@ -2135,6 +2145,7 @@ void PlayOneShot(int kind);
 void DrawGliderAim(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale); // below, with the skydive
 void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale);   // below, with Lilo
+void AddToxicCloud(float x, float y, float z, bool mine);   // below, with Lilo
 bool LiloNear();
 void TalkToLilo();
 void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
@@ -2589,7 +2600,7 @@ int gFloraScene = -1;
 int gFloraBudget = 0;
 
 // Is there good ground at (x, z)? Cached per cell. `kind`: 0 grass, 1 a tree, 2 a snow mound, 3 a puddle, 4 a snow blanket, 5 small scenery
-// (Decor), 6 a town's clutter (cell = the town and the piece).
+// (Decor), 6 a town's clutter (cell = the town and the piece), 7 a piece of the Fortnite Map's scenery (fortnite_scenery.h: any slope is fine).
 // nullptr = not measured yet (the per-frame budget of measurements ran out).
 const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     const uint64_t key = (static_cast<uint64_t>(kind) << 58) | (static_cast<uint64_t>(cx + 65536) << 29) | static_cast<uint64_t>(cz + 65536);
@@ -2610,6 +2621,12 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
             spot.sz = (y3 - y5) / 90.0f;
         } else if (kind == 0 || kind == 1 || kind == 5 || kind == 6) {   // grass, trees and the small things stay off steep ground (and cliff edges)
             spot.ok = RawFloorAt(x + 45.0f, z, &y2) && RawFloorAt(x, z + 45.0f, &y3) && std::fabs(y2 - y) < 26.0f && std::fabs(y3 - y) < 26.0f;
+        }
+        if (spot.ok && kind == 7 && gSession.Client()) {   // island scenery keeps clear of props and the middle of the towns, whose own pieces stand there
+            for (const royale::Prop& p : gSession.Client()->Props())
+                if (std::fabs(p.pos.x - x) < 100.0f && std::fabs(p.pos.z - z) < 100.0f) { spot.ok = false; break; }
+            for (const royale::Poi& poi : gSession.Client()->Pois())
+                if (std::hypot(poi.center.x - x, poi.center.z - z) < poi.radius * 0.55f) { spot.ok = false; break; }
         }
         if (spot.ok && kind == 1 && gSession.Client()) {   // a tree keeps clear of scenery, towns and loot sites
             for (const royale::Prop& p : gSession.Client()->Props())
@@ -2976,6 +2993,102 @@ void DrawFlora(PlayState* play) {
     }
 }
 
+// The Fortnite Map's Hyrule Field scenery (shared/fortnite_scenery.h, meshes.h Scenery): oaks on the hilltops, hedges along the woods and the towns,
+// flowers by the roads, cliffs on the steep ground and snowy crags on the high. Where each stands comes from the ground alone, so nothing is stored or
+// sent; only the near ones are drawn, the foliage option thins them, and each lives in the same cached-spot table as the trees.
+void DrawIslandScenery(PlayState* play) {
+    if (!OnIsland() || gPlayState == nullptr || gFoliage <= 0.01f) return;
+    const int season = FloraSeason();
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
+    const float t = static_cast<float>(ImGui::GetTime());
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
+    gFloraBudget = 30;
+    {
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Opa(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    // Nothing behind the camera is drawn (see DrawFlora).
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;
+    if (cull) { vx /= vl; vz /= vl; }
+    const float dens = std::min(1.3f, gFoliage), reachScale = 0.5f + 0.5f * std::min(1.0f, gFoliage);
+    const float maxReach = royale::fortnite::kSceneryMaxReach * reachScale, cellSize = royale::fortnite::kSceneryCell;
+    const int c0x = static_cast<int>(std::floor((px - maxReach) / cellSize)), c1x = static_cast<int>(std::floor((px + maxReach) / cellSize));
+    const int c0z = static_cast<int>(std::floor((pz - maxReach) / cellSize)), c1z = static_cast<int>(std::floor((pz + maxReach) / cellSize));
+    const float tamp = 0.008f + 0.03f * wind;
+    for (int cz = c0z; cz <= c1z; cz++)
+        for (int cx = c0x; cx <= c1x; cx++) {
+            if (std::hypot((static_cast<float>(cx) + 0.5f) * cellSize - px, (static_cast<float>(cz) + 0.5f) * cellSize - pz) > maxReach + cellSize) continue;
+            royale::fortnite::SceneryPiece pc;
+            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc)) continue;
+            const float d = std::hypot(pc.x - px, pc.z - pz), reach = royale::fortnite::SceneryReach(pc.kind) * reachScale;
+            if (d > reach) continue;
+            const float size = 260.0f * pc.scale;
+            if (cull && (pc.x - eye.x) * vx + (pc.z - eye.z) * vz < -size) continue;
+            const FloraSpot* spot = FloraSpotAt(7, cx, cz, pc.x, pc.z);
+            if (spot == nullptr || !spot->ok) continue;
+            const GpuMesh* m = GpuMeshFor(royale::MeshKind::Scenery, static_cast<uint32_t>(pc.kind) + 8u * static_cast<uint32_t>(season));
+            if (m == nullptr || m->dl.empty()) continue;
+            const float f = std::clamp((reach - d) / (reach * 0.25f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
+            if (fade < 0.02f) continue;
+            using royale::fortnite::SceneryKind;
+            const bool soft = pc.kind == SceneryKind::FlowersWhite || pc.kind == SceneryKind::FlowersPink || pc.kind == SceneryKind::Reeds;
+            const float a = soft ? (0.05f + 0.2f * wind) * std::sin(t * (1.6f + 2.4f * wind) + pc.x * 0.011f + pc.z * 0.009f) + 0.05f + 0.3f * wind
+                                 : (pc.kind == SceneryKind::Oak || pc.kind == SceneryKind::Hedge) ? tamp * std::sin(t * (1.1f + wind) + pc.x * 0.004f) + wind * 0.02f : 0.0f;
+            const float sink = pc.kind == SceneryKind::Cliff ? 14.0f * pc.scale : pc.kind == SceneryKind::Boulder ? 6.0f : 1.0f;   // rock sits in the ground, not on it
+            DrawFloraMesh(play, m, pc.x, spot->y - sink, pc.z, pc.yaw, dz * a, -dx * a, pc.scale * fade);
+        }
+}
+
+// The Fortnite Map's standing puddles (shared/fortnite_puddles.h): pools in the dips of level ground, in the boggy fields and by the water, there all
+// the time. They use the weather puddles' mesh (frozen over in winter) and grow a little in the rain.
+void DrawIslandPuddles(PlayState* play) {
+    if (!OnIsland() || gPlayState == nullptr) return;
+    Player* pl = GET_PLAYER(play);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z, reach = royale::fortnite::kPuddleReach, cellSize = royale::fortnite::kPuddleCellSize;
+    const int season = FloraSeason();
+    {
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+    const Vec3f eye = play->view.eye;
+    float vx = play->view.lookAt.x - eye.x, vz = play->view.lookAt.z - eye.z;
+    const float vl = std::hypot(vx, vz), vy = std::fabs(play->view.lookAt.y - eye.y);
+    const bool cull = vl > 1.0f && vl > vy * 0.5f;
+    if (cull) { vx /= vl; vz /= vl; }
+    const int c0x = static_cast<int>(std::floor((px - reach) / cellSize)), c1x = static_cast<int>(std::floor((px + reach) / cellSize));
+    const int c0z = static_cast<int>(std::floor((pz - reach) / cellSize)), c1z = static_cast<int>(std::floor((pz + reach) / cellSize));
+    for (int cz = c0z; cz <= c1z; cz++)
+        for (int cx = c0x; cx <= c1x; cx++) {
+            royale::fortnite::PuddlePiece pc;
+            if (!royale::fortnite::PuddleIn(cx, cz, &pc)) continue;
+            const float d = std::hypot(pc.x - px, pc.z - pz);
+            if (d > reach || (cull && (pc.x - eye.x) * vx + (pc.z - eye.z) * vz < -140.0f)) continue;
+            if (gSession.Client()) {   // not inside a town
+                bool inTown = false;
+                for (const royale::Poi& poi : gSession.Client()->Pois())
+                    if (std::hypot(poi.center.x - pc.x, poi.center.z - pc.z) < poi.radius * 0.8f) { inTown = true; break; }
+                if (inTown) continue;
+            }
+            const GpuMesh* m = GpuMeshFor(royale::MeshKind::Puddle, pc.shape + (season == 3 ? 4u : 0u));
+            if (m == nullptr || m->dl.empty()) continue;
+            const float f = std::clamp((reach - d) / (reach * 0.3f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
+            if (fade < 0.02f) continue;
+            DrawGroundXlu(play, m, pc.x, pc.y, pc.z, pc.sx, pc.sz, pc.yaw, pc.size * (1.0f + 0.35f * gPuddleCover), static_cast<int>(225.0f * fade));
+        }
+}
+
 // Trunks are solid: stand against one and you are pushed out of it (the same sort of local solidity the climbing blocks have).
 void ApplyTrees(Player* player) {
     if (!InField() || gFoliage <= 0.01f) return;
@@ -2992,6 +3105,26 @@ void ApplyTrees(Player* player) {
                 player->actor.world.pos.x = tr.x + ddx / d * r;
                 player->actor.world.pos.z = tr.z + ddz / d * r;
             }
+        }
+}
+
+// The island's oaks and boulders are solid too (shared/fortnite_scenery.h, SceneryRadius).
+void ApplyScenery(Player* player) {
+    if (!OnIsland() || gFoliage <= 0.01f) return;
+    const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z, cell = royale::fortnite::kSceneryCell;
+    gFloraBudget = 6;
+    for (int cz = static_cast<int>(std::floor((pz - 140.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 140.0f) / cell)); cz++)
+        for (int cx = static_cast<int>(std::floor((px - 140.0f) / cell)); cx <= static_cast<int>(std::floor((px + 140.0f) / cell)); cx++) {
+            royale::fortnite::SceneryPiece pc;
+            if (!royale::fortnite::SceneryIn(cx, cz, std::min(1.3f, gFoliage), &pc)) continue;
+            const float r = royale::fortnite::SceneryRadius(pc.kind, pc.scale);
+            if (r <= 0.0f) continue;
+            const float ddx = px - pc.x, ddz = pz - pc.z, d = std::hypot(ddx, ddz);
+            if (d >= r || d < 0.01f) continue;
+            const FloraSpot* spot = FloraSpotAt(7, cx, cz, pc.x, pc.z);
+            if (spot == nullptr || !spot->ok || player->actor.world.pos.y > spot->y + royale::fortnite::SceneryTop(pc.kind, pc.scale)) continue;
+            player->actor.world.pos.x = pc.x + ddx / d * r;
+            player->actor.world.pos.z = pc.z + ddz / d * r;
         }
 }
 
@@ -3140,6 +3273,318 @@ void DrawWeatherParticles(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+// ---- the sky and the fog ------------------------------------------------------------------------------------------------------
+// A gradient sky dome (night, dawn, day and dusk colours, greyed by the weather), a field of stars that fades in at dusk and out at dawn, a sun
+// and a moon, drifting clouds, and low banks of fog. Nothing here is real volume rendering (that is far too heavy for a phone): a cloud or a
+// fog bank is a stack of soft flat discs, brighter on top and darker underneath, whose edges fade out; where the discs overlap they build up
+// into something that reads as a lit, thick body. All of it is drawn as translucent triangles round the camera and is switched on and off
+// with the "Sky" and "Fog" Debug switches. The game's own distance fog (DriveRealWeather) still does the close-in thickening.
+struct SkyLight {
+    float sunH;       // the sine of the sun's height: 1 at noon, 0 at dawn and dusk, -1 at midnight
+    float day;        // 0 night to 1 day
+    float night;      // 1 - day, but with a longer dark
+    float twilight;   // 1 at the moment of sunrise or sunset
+    bool morning;
+};
+SkyLight SkyLightNow() {
+    SkyLight l;
+    const float d = static_cast<float>(gSaveContext.dayTime) / 65536.0f;   // 0 midnight, 0.5 noon
+    l.sunH = -std::cos(d * 6.2831853f);
+    auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+    l.day = smooth(-0.12f, 0.35f, l.sunH);
+    l.night = smooth(0.12f, -0.3f, l.sunH);
+    l.twilight = std::clamp(1.0f - std::fabs(l.sunH) / 0.3f, 0.0f, 1.0f);
+    l.morning = d < 0.5f;
+    return l;
+}
+
+// How overcast the sky is, 0 to 1, from the weather and the storm; and the colour the overcast pulls it to.
+float SkyOvercast(float tint[3]) {
+    const float w = WeatherAmount();
+    float c = 0.0f;
+    tint[0] = 120.0f; tint[1] = 126.0f; tint[2] = 138.0f;
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Rain: c = 0.8f * w; break;
+        case royale::Sky::Thunder: c = 1.0f * w; tint[0] = 82; tint[1] = 88; tint[2] = 108; break;
+        case royale::Sky::Fog: c = 0.6f * w; tint[0] = 170; tint[1] = 176; tint[2] = 184; break;
+        case royale::Sky::Snow: c = 0.75f * w; tint[0] = 176; tint[1] = 184; tint[2] = 198; break;
+        case royale::Sky::Ash: c = 0.95f * w; tint[0] = 74; tint[1] = 52; tint[2] = 46; break;
+        case royale::Sky::Sandstorm: c = 0.8f * w; tint[0] = 196; tint[1] = 156; tint[2] = 100; break;
+        default: break;
+    }
+    if (gStormWeather > c) { c = gStormWeather * 0.9f; tint[0] = 80; tint[1] = 52; tint[2] = 120; }
+    return std::clamp(c, 0.0f, 1.0f);
+}
+
+void SetVtx(Vtx& o, float x, float y, float z, float r, float g, float b, float a) {
+    o.v.ob[0] = static_cast<s16>(std::lround(x)); o.v.ob[1] = static_cast<s16>(std::lround(y)); o.v.ob[2] = static_cast<s16>(std::lround(z));
+    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+    o.v.cn[0] = static_cast<u8>(std::clamp(r, 0.0f, 255.0f)); o.v.cn[1] = static_cast<u8>(std::clamp(g, 0.0f, 255.0f));
+    o.v.cn[2] = static_cast<u8>(std::clamp(b, 0.0f, 255.0f)); o.v.cn[3] = static_cast<u8>(std::clamp(a, 0.0f, 255.0f));
+}
+
+// The state every sky and fog layer is drawn with: translucent, vertex colour and alpha, no lighting, no fog, no culling, centred on the camera.
+void SkyBegin(PlayState* play) {
+    const Vec3f eye = play->view.eye;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Soft discs: a centre and an 8-point rim (9 vertices each). Three go in one vertex load.
+struct DiscSet {
+    Vtx* v = nullptr;
+    int n = 0, cap = 0;
+    bool Init(PlayState* play, int count) {
+        cap = count; n = 0;
+        v = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(std::max(1, count)) * 9 * sizeof(Vtx)));
+        return v != nullptr;
+    }
+    // A lumpy, slightly stretched disc at (x,y,z), centre colour/alpha `c`, rim colour with alpha `ra`.
+    void Add(float x, float y, float z, float r, const float c[4], const float rim[3], float ra, int seed) {
+        if (v == nullptr || n >= cap) return;
+        Vtx* q = &v[n * 9];
+        SetVtx(q[0], x, y, z, c[0], c[1], c[2], c[3]);
+        for (int k = 0; k < 8; k++) {
+            const float a = 6.2831853f * k / 8.0f + Flora01(seed, 3, 701) * 1.5f;
+            const float rr = r * (0.8f + 0.4f * Flora01(seed, k, 702));
+            SetVtx(q[1 + k], x + std::cos(a) * rr * 1.15f, y, z + std::sin(a) * rr, rim[0], rim[1], rim[2], ra);
+        }
+        n++;
+    }
+    void Draw(PlayState* play) {
+        if (v == nullptr || n == 0) return;
+        OPEN_DISPS(play->state.gfxCtx);
+        for (int first = 0; first < n; first += 3) {
+            const int count = std::min(3, n - first);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[first * 9]), count * 9, 0);
+            for (int d = 0; d < count; d++) {
+                const int o = d * 9;
+                for (int k = 0; k < 8; k++) gSP1Triangle(POLY_XLU_DISP++, o, o + 1 + k, o + 1 + (k + 1) % 8, 0);
+            }
+        }
+        CLOSE_DISPS(play->state.gfxCtx);
+    }
+};
+
+// A flat quad facing the camera's centre, in the direction (dx,dy,dz) at distance R, `size` wide.
+void SkyQuad(Vtx* q, float dx, float dy, float dz, float R, float size, float r, float g, float b, float a) {
+    const float len = std::max(0.001f, std::sqrt(dx * dx + dy * dy + dz * dz));
+    dx /= len; dy /= len; dz /= len;
+    float ux = -dz, uz = dx;                                           // a horizontal axis across the view
+    const float ul = std::max(0.001f, std::hypot(ux, uz));
+    ux /= ul; uz /= ul;
+    const float h = std::max(0.001f, std::hypot(dx, dz));
+    const float ax = ux * size, az = uz * size;
+    const float bx = -dy * uz * size, by = h * size, bz = dy * ux * size;   // up the sky, across the direction and the first axis
+    const float cx = dx * R, cy = dy * R, cz = dz * R;
+    SetVtx(q[0], cx - ax - bx, cy - by, cz - az - bz, r, g, b, a);
+    SetVtx(q[1], cx + ax - bx, cy - by, cz + az - bz, r, g, b, a);
+    SetVtx(q[2], cx + ax + bx, cy + by, cz + az + bz, r, g, b, a);
+    SetVtx(q[3], cx - ax + bx, cy + by, cz - az + bz, r, g, b, a);
+}
+
+void DrawSky(PlayState* play) {
+    if (!InField()) return;
+    constexpr float kR = 7000.0f;
+    const SkyLight L = SkyLightNow();
+    float tint[3];
+    const float ov = SkyOvercast(tint);
+    const float t = static_cast<float>(ImGui::GetTime());
+    auto mix = [](float a, float b, float k) { return a + (b - a) * k; };
+    // Palette: night, day, then the glow of sunrise and sunset on the horizon, then the weather greys it all.
+    float zen[3], hor[3];
+    const float nz[3] = { 5, 8, 30 }, nh[3] = { 22, 28, 66 }, dz[3] = { 62, 122, 224 }, dh[3] = { 168, 206, 242 };
+    const float glow[3] = { 255, 128, 62 }, glowZ[3] = { 96, 78, 150 };
+    const float dim = 1.0f - 0.55f * ov * L.day;
+    for (int i = 0; i < 3; i++) {
+        zen[i] = mix(nz[i], dz[i], L.day); hor[i] = mix(nh[i], dh[i], L.day);
+        zen[i] = mix(zen[i], glowZ[i], L.twilight * 0.55f); hor[i] = mix(hor[i], glow[i], L.twilight * 0.8f);
+        const float grey = tint[i] * (0.25f + 0.75f * L.day);
+        zen[i] = mix(zen[i], grey * 0.8f, ov * 0.85f) * dim; hor[i] = mix(hor[i], grey, ov * 0.85f) * dim;
+    }
+    SkyBegin(play);
+    // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
+    constexpr int kSegs = 14, kRings = 8;
+    static const float kElev[kRings] = { -0.12f, 0.0f, 0.07f, 0.16f, 0.30f, 0.52f, 0.78f, 1.0f };   // the sine of each ring's height
+    Vtx* dv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kRings) * (kSegs + 1) * sizeof(Vtx)));
+    if (dv == nullptr) return;
+    const float spin = static_cast<float>(gSaveContext.dayTime) / 65536.0f * 6.2831853f;
+    for (int r = 0; r < kRings; r++) {
+        const float s = kElev[r], c = std::sqrt(std::max(0.0f, 1.0f - s * s));
+        const float k = std::pow(std::clamp(s, 0.0f, 1.0f), 0.6f);
+        for (int j = 0; j <= kSegs; j++) {
+            const float a = 6.2831853f * j / kSegs;
+            // the glow sits toward the sun's side of the horizon
+            const float toSun = 0.5f + 0.5f * std::cos(a - 0.6f);
+            const float g = L.twilight * (0.35f + 0.65f * toSun) * (1.0f - k) * (1.0f - ov * 0.7f);
+            float col[3];
+            for (int i = 0; i < 3; i++) col[i] = mix(mix(hor[i], zen[i], k), glow[i], g * 0.35f);
+            SetVtx(dv[r * (kSegs + 1) + j], std::cos(a) * c * kR, s * kR, std::sin(a) * c * kR, col[0], col[1], col[2], r == 0 ? 255.0f : 232.0f);
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    for (int r = 0; r + 1 < kRings; r++) {
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&dv[r * (kSegs + 1)]), 2 * (kSegs + 1), 0);
+        for (int j = 0; j < kSegs; j++) gSP2Triangles(POLY_XLU_DISP++, j, j + 1, kSegs + 1 + j, 0, j + 1, kSegs + 2 + j, kSegs + 1 + j, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+
+    // Stars: a field that turns slowly through the night, twinkling, fading in as the sun sets and out as it rises (and behind cloud).
+    const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
+    if (starA > 0.03f && gSkyStars) {
+        constexpr int kStars = 220;
+        Vtx* sv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, static_cast<size_t>(kStars) * 4 * sizeof(Vtx)));
+        if (sv != nullptr) {
+            for (int i = 0; i < kStars; i++) {
+                const float a = Flora01(i, 5, 711) * 6.2831853f + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
+                const float c = std::sqrt(1.0f - s * s), big = Flora01(i, 13, 713);
+                const float tw = 0.65f + 0.35f * std::sin(t * (1.5f + 3.0f * Flora01(i, 17, 714)) + i * 2.3f);
+                const float fade = std::min(1.0f, s * 6.0f);   // dim near the horizon
+                const float warm = Flora01(i, 21, 715);        // blue-white to yellow
+                const float size = (9.0f + 20.0f * big * big) * (0.9f + 0.1f * tw);
+                SkyQuad(&sv[i * 4], std::cos(a) * c, s, std::sin(a) * c, kR * 0.97f, size, 205 + 50 * (1 - warm), 215 + 30 * (1 - warm), 255 - 70 * warm,
+                        255.0f * starA * tw * fade * (0.45f + 0.55f * big));
+            }
+            OPEN_DISPS(play->state.gfxCtx);
+            for (int first = 0; first < kStars; first += 8) {
+                const int count = std::min(8, kStars - first);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&sv[first * 4]), count * 4, 0);
+                for (int k = 0; k < count; k++) gSP2Triangles(POLY_XLU_DISP++, k * 4, k * 4 + 1, k * 4 + 2, 0, k * 4, k * 4 + 2, k * 4 + 3, 0);
+            }
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+    }
+
+    // The sun and the moon, opposite each other, hidden by thick cloud.
+    {
+        const float sunA = std::clamp(L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov), moonA = std::clamp(-L.sunH * 6.0f + 0.4f, 0.0f, 1.0f) * (1.0f - ov);
+        const float c = std::sqrt(std::max(0.0f, 1.0f - L.sunH * L.sunH));
+        Vtx* qv = static_cast<Vtx*>(Graph_Alloc(play->state.gfxCtx, 8 * sizeof(Vtx)));
+        if (gSkyBodies && qv != nullptr && (sunA > 0.02f || moonA > 0.02f)) {
+            const float warm = L.twilight;
+            SkyQuad(&qv[0], std::cos(0.6f) * c, L.sunH, std::sin(0.6f) * c, kR * 0.96f, 330.0f, 255, mix(244, 160, warm), mix(205, 90, warm), 255.0f * sunA);
+            SkyQuad(&qv[4], -std::cos(0.6f) * c, -L.sunH, -std::sin(0.6f) * c, kR * 0.96f, 250.0f, 226, 232, 245, 245.0f * moonA);
+            OPEN_DISPS(play->state.gfxCtx);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(qv), 8, 0);
+            gSP2Triangles(POLY_XLU_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
+            gSP2Triangles(POLY_XLU_DISP++, 4, 5, 6, 0, 4, 6, 7, 0);
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+    }
+
+    // Clouds: puffs of stacked soft discs that drift with the wind, wrapping round a box that follows the camera. More of them, and darker,
+    // the more overcast it is; lit warm at sunrise and sunset, dim blue at night.
+    if (gSkyClouds <= 0.01f) return;
+    const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
+    const int puffs = std::min(64, static_cast<int>((12.0f + 36.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity)) * gSkyClouds));
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dxw = wx / wl, dzw = wz / wl;
+    constexpr int kLayers = 5;
+    static const float kProfile[kLayers] = { 0.62f, 1.0f, 0.92f, 0.66f, 0.34f }, kLift[kLayers] = { 0.0f, 0.14f, 0.28f, 0.42f, 0.56f };
+    DiscSet cd;
+    if (!cd.Init(play, puffs * kLayers)) return;
+    const Vec3f eye = play->view.eye;
+    constexpr float kBox = 10000.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    for (int i = 0; i < puffs; i++) {
+        const float h1 = Flora01(i, 7, 721), h2 = Flora01(i, 11, 722), h3 = Flora01(i, 13, 723), h4 = Flora01(i, 17, 724);
+        const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
+        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float d = std::hypot(x, z);
+        const float edge = std::clamp((5000.0f - d) / 1800.0f, 0.0f, 1.0f) * std::clamp((d - 900.0f) / 900.0f, 0.0f, 1.0f);
+        if (edge <= 0.01f) continue;
+        const float y = 1150.0f + 950.0f * h3 - 160.0f * ov;
+        const float width = (650.0f + 800.0f * h4) * (1.0f + 0.5f * ov), thick = width * (0.34f + 0.2f * ov);
+        for (int k = 0; k < kLayers; k++) {
+            const float up = static_cast<float>(k) / (kLayers - 1);   // 0 underside, 1 top
+            float lit[3], shade[3];
+            for (int ch = 0; ch < 3; ch++) {
+                const float dayc = mix(250.0f, tint[ch], ov * 0.8f);
+                float c = mix(40.0f + ch * 6.0f, dayc, L.day);
+                c = mix(c, ch == 0 ? 255.0f : (ch == 1 ? 150.0f : 120.0f), L.twilight * 0.55f * (1.0f - ov * 0.6f));
+                lit[ch] = c; shade[ch] = c * (0.5f + 0.2f * (1.0f - ov));
+            }
+            float col[4], rim[3];
+            for (int ch = 0; ch < 3; ch++) { col[ch] = mix(shade[ch], lit[ch], up); rim[ch] = col[ch]; }
+            col[3] = (60.0f + 70.0f * (0.4f + 0.6f * ov)) * edge * (k == 0 ? 0.7f : 1.0f);
+            cd.Add(x, y + kLift[k] * thick * 2.0f, z, width * kProfile[k], col, rim, 0.0f, i * 8 + k);
+        }
+    }
+    cd.Draw(play);
+}
+
+// Fog banks: wide, low drifts of fog lying on the ground round the camera, thicker in fog, sandstorms, ash, rain and the storm, as a mist at dawn,
+// and pooled low over water. The game's own distance fog (DriveRealWeather) hazes the far view; these give the near ground its depth.
+void DrawFogBanks(PlayState* play) {
+    if (!InField()) return;
+    const SkyLight L = SkyLightNow();
+    const float w = WeatherAmount();
+    float dens = 0.0f, col[3] = { 214, 220, 228 };
+    auto kind = [&](float a, float d, float r, float g, float b) { if (a * d > dens) { dens = a * d; col[0] = r; col[1] = g; col[2] = b; } };
+    switch (gWeatherShown.sky) {
+        case royale::Sky::Fog: kind(w, 1.0f, 214, 220, 228); break;
+        case royale::Sky::Rain: kind(w, 0.35f, 150, 158, 170); break;
+        case royale::Sky::Thunder: kind(w, 0.45f, 110, 116, 134); break;
+        case royale::Sky::Snow: kind(w, 0.4f, 226, 232, 244); break;
+        case royale::Sky::Ash: kind(w, 0.6f, 84, 66, 62); break;
+        case royale::Sky::Sandstorm: kind(w, 0.75f, 214, 176, 118); break;
+        default: break;
+    }
+    kind(gStormWeather, 0.7f, 100, 64, 150);
+    const float mist = L.morning ? std::clamp(1.0f - std::fabs(L.sunH - 0.05f) / 0.3f, 0.0f, 1.0f) * (gWeatherShown.season == royale::Season::Autumn ? 0.5f : 0.28f) : 0.0f;
+    if (mist > dens) { dens = mist; col[0] = 218; col[1] = 222; col[2] = 232; }
+    const bool island = OnIsland();
+    const bool lake = gMapId == 1;
+    const float baseWater = (island ? 0.22f : (lake ? 0.14f : 0.0f)) * gFogAmount;   // sea mist and lake mist hang low all the time
+    dens = std::min(1.0f, dens * std::min(1.5f, std::max(0.3f, gWeatherDensity)) * gFogAmount);
+    if (dens + baseWater < 0.04f) return;
+    const float light = 0.35f + 0.65f * L.day;   // fog is lit by the sky: dim at night
+    const Vec3f eye = play->view.eye;
+    const float t = static_cast<float>(ImGui::GetTime());
+    float wx, wz, wind;
+    WindNow(&wx, &wz, &wind);
+    const float wl = std::max(1.0f, std::hypot(wx, wz)), dxw = wx / wl, dzw = wz / wl;
+    const int banks = std::min(22, static_cast<int>(6.0f + 16.0f * std::min(1.0f, dens + baseWater)));
+    constexpr int kLayers = 3;
+    DiscSet fd;
+    if (!fd.Init(play, banks * kLayers)) return;
+    SkyBegin(play);
+    constexpr float kBox = 5200.0f;
+    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    for (int i = 0; i < banks; i++) {
+        const float h1 = Flora01(i, 7, 731), h2 = Flora01(i, 11, 732), h3 = Flora01(i, 13, 733);
+        const float drift = t * (8.0f + 0.12f * wl) * (0.6f + 0.8f * h3);
+        const float x = wrap(h1 * kBox + eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox + eye.z + dzw * drift, kBox) - kBox * 0.5f;
+        const float d = std::hypot(x, z);
+        const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 150.0f) / 450.0f, 0.0f, 1.0f);
+        if (edge <= 0.01f) continue;
+        float gy = 0.0f;
+        if (!RawFloorAt(eye.x + x, eye.z + z, &gy)) { if (!island) continue; gy = static_cast<float>(royale::fortnite::kWaterY); }
+        float local = dens;
+        if (island) {   // lower ground and the sea's edge hold more mist
+            const float low = std::clamp(1.0f - (gy - static_cast<float>(royale::fortnite::kWaterY)) / 260.0f, 0.0f, 1.0f);
+            local = std::min(1.0f, dens + baseWater * low);
+            gy = std::max(gy, static_cast<float>(royale::fortnite::kWaterY));
+        } else local = std::min(1.0f, dens + baseWater);
+        if (local < 0.03f) continue;
+        const float width = 520.0f + 520.0f * h3 + 300.0f * local;
+        for (int k = 0; k < kLayers; k++) {
+            const float up = static_cast<float>(k) / (kLayers - 1);
+            float c[4] = { col[0] * light * (0.82f + 0.18f * up), col[1] * light * (0.82f + 0.18f * up), col[2] * light * (0.82f + 0.18f * up), (40.0f + 60.0f * local) * edge * (1.0f - 0.35f * up) };
+            const float rim[3] = { c[0], c[1], c[2] };
+            fd.Add(x, gy - eye.y + 14.0f + k * 55.0f * (0.6f + 0.6f * local), z, width * (1.0f - 0.2f * up), c, rim, 0.0f, i * 4 + k);
+        }
+    }
+    fd.Draw(play);
+}
 
 // ---- wind streaks and the tornado --------------------------------------------------------------------------------------------------
 // Wind streaks: thin pale lines that drift through the air round the camera along the wind, longer, quicker and more of them as it picks up
@@ -3619,8 +4064,16 @@ void DrawHeldFinds(PlayState* play) {
 
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
+    Feat("draw: sky");
+    if (DebugOn(kDbgSky)) DrawSky(play);
+    Feat("draw: fog banks");
+    if (DebugOn(kDbgFog)) DrawFogBanks(play);
     Feat("draw: foliage and puddles");
     if (DebugOn(kDbgFoliage)) DrawFlora(play);
+    Feat("draw: island scenery");
+    if (DebugOn(kDbgScenery)) DrawIslandScenery(play);
+    Feat("draw: island puddles");
+    if (DebugOn(kDbgIslandPuddles)) DrawIslandPuddles(play);
     Feat("draw: storm wall");
     if (DebugOn(kDbgStormWall)) DrawStormWall(play);
     Feat("draw: weather particles");
@@ -8030,19 +8483,18 @@ void BuildFortniteGpu() {
         for (int ci = 0; ci < kChunks; ci++) {
             for (int lod = 0; lod < fn::kLods; lod++) {
                 std::vector<Gfx>& dl = g.dl[lod][cj * kChunks + ci];
-                dl.assign(kChunk * kChunk * (1 + fn::kSub * fn::kSub * 2) + 1, Gfx{});
+                dl.assign(kChunk * kChunk * fn::kSub * (1 + fn::kSub * 2) + 1, Gfx{});   // a block loads its vertices a strip (two rows) at a time: the chip takes 32 at once
                 Gfx* p = dl.data();
                 for (int bj = cj * kChunk; bj < (cj + 1) * kChunk; bj++) {
                     for (int bi = ci * kChunk; bi < (ci + 1) * kChunk; bi++) {
                         const int use = fn::BlockIsOpenWater(bi, bj) ? fn::kLods - 1 : lod;   // open water is a flat square at any distance
                         const int n = fn::LodSquares(use), row = n + 1;
                         const Vtx* base = &g.vtx[use][(static_cast<size_t>(bj) * fn::kCells + bi) * fn::LodVerts(use)];
-                        gSPVertex(p++, reinterpret_cast<uintptr_t>(base), fn::LodVerts(use), 0);
                         for (int b = 0; b < n; b++) {
+                            gSPVertex(p++, reinterpret_cast<uintptr_t>(base + b * row), 2 * row, 0);   // rows b and b + 1
                             for (int a = 0; a < n; a++) {
-                                const int v = b * row + a;
-                                gSP1Triangle(p++, v, v + 1, v + row + 1, 0);
-                                gSP1Triangle(p++, v, v + row + 1, v + row, 0);
+                                gSP1Triangle(p++, a, a + 1, a + row + 1, 0);
+                                gSP1Triangle(p++, a, a + row + 1, a + row, 0);
                             }
                         }
                     }
@@ -8094,7 +8546,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
                 if (side - r > std::max(0.0f, ahead + r) * 2.4f) continue;
             }
             const float dist = std::hypot(dx, dz);
-            const int lod = dist < 2600.0f ? 0 : dist < 5200.0f ? 1 : 2;
+            const int lod = dist < 2300.0f ? 0 : dist < 5000.0f ? 1 : 2;
             gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(gFortniteGpu.dl[lod][c].data()));
         }
     }
@@ -9086,6 +9538,13 @@ void ReportEvents(const royale::HudState& hud) {
                 Audio_PlaySoundGeneral(BossArrivalSound(e.item), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                 break;
             }
+            case royale::ClientEvent::Type::FartCloud:   // somebody else's Lilo: mine was drawn the moment she did it
+                if (e.id != hud.selfId && InGame()) {
+                    float y = 0;
+                    Player* me = GET_PLAYER(gPlayState);
+                    AddToxicCloud(e.x, FloorAt(e.x, e.z, &y) ? y : me->actor.world.pos.y, e.z, false);
+                }
+                break;
             case royale::ClientEvent::Type::Strike:
                 AddStrikeFx(e.x, e.z, e.amount, e.health, e.id == royale::net::kNoPlayer16 ? static_cast<uint8_t>(royale::StrikeStyle::Bolt) : e.item, e.id);
                 break;
@@ -9525,8 +9984,8 @@ void DrawMaya(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // 32x32 face in three versions (eyes open, half shut, shut), a skeleton of 25 bones and eleven animation clips: idle, walk, run, jump, sit, talk,
 // groom, sleep, stretch, pounce and happy (shared/lilo_model.h). She is skinned on the CPU every frame (the way the game itself skins Epona), lit by
 // a fixed sun baked into the vertex colours, and drawn with her own two textures.
-constexpr float kLiloPetScale = 0.8f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52); Link is about 60
-constexpr float kLiloMapScale = 1.0f;
+constexpr float kLiloPetScale = 0.4f;   // the model stands about 50 units tall at 1.0 (sitting, ears up, about 52) and Link about 60: at 0.4 she is cat sized, about 20 units
+constexpr float kLiloMapScale = 0.5f;
 
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
     namespace L = royale::lilo;
@@ -9605,10 +10064,10 @@ void PlayMeow(int clip, float gain = 0.7f) {
 }
 
 // A little greenish cloud (a few brown puffs among it) that drifts up and thins out; called every tick while the cloud lasts.
-void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs) {
+void FartCloudStep(PlayState* play, float bx, float by, float bz, int puffs, float size = 1.0f) {
     for (int i = 0; i < puffs; i++) {
-        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f, by + 22.0f + Rand_ZeroOne() * 22.0f, bz + (Rand_ZeroOne() - 0.5f) * 34.0f };
-        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f, 0.5f + Rand_ZeroOne() * 0.7f, (Rand_ZeroOne() - 0.5f) * 0.9f }, accel = { 0.0f, 0.02f, 0.0f };
+        Vec3f pos = { bx + (Rand_ZeroOne() - 0.5f) * 34.0f * size, by + (22.0f + Rand_ZeroOne() * 22.0f) * size, bz + (Rand_ZeroOne() - 0.5f) * 34.0f * size };
+        Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 0.9f * size, (0.5f + Rand_ZeroOne() * 0.7f) * size, (Rand_ZeroOne() - 0.5f) * 0.9f * size }, accel = { 0.0f, 0.02f * size, 0.0f };
         const bool brown = Rand_ZeroOne() < 0.35f;
         Color_RGBA8 prim = brown ? Color_RGBA8{ 150, 130, 60, 255 } : Color_RGBA8{ 150, 200, 70, 255 };
         Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 30, 255 } : Color_RGBA8{ 90, 140, 40, 255 };
@@ -9639,9 +10098,99 @@ void FartReact(float x, float z) {
     }
 }
 
+// ---- Lilo's toxic cloud ---------------------------------------------------------------------------------------------------------
+// A big green cloud (shared/balance.h: kFartCloudRadius wide, kFartCloudSeconds long) that stays where she made it. The server owns the damage
+// (Match::TickGas: stand in it kFartGraceSeconds and it hurts kFartDps hearts a second) and tells everybody where each cloud is (EvFartCloud); here
+// every client draws it as a thick drifting bank of dust puffs with sparkles round its edge, and warns the player standing in it with the same
+// numbers: a green tint and a bar that fills over the grace time, then a red "taking damage" line.
+struct ToxicCloud { float x, y, z; double until; };
+std::vector<ToxicCloud> gToxicClouds;
+float gGasTime = 0.0f;      // my own count of the server's gasTime, for the warning only
+double gToxicPuffAcc = 0.0;
+double gBubbleUntil = 0.0;   // the pet's warning bubble, and where it floats (kept up to date by her)
+float gBubbleAt[3] = {};
+
+void ToxicPuff(PlayState* play, float x, float y, float z, bool burst) {
+    const float ang = Rand_ZeroOne() * 6.2831853f, r = std::sqrt(Rand_ZeroOne()) * royale::kFartCloudRadius * 0.92f;
+    Vec3f pos = { x + std::cos(ang) * r, y + 4.0f + Rand_ZeroOne() * 70.0f, z + std::sin(ang) * r };
+    Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 1.2f, 0.3f + Rand_ZeroOne() * 0.9f, (Rand_ZeroOne() - 0.5f) * 1.2f }, accel = { 0, 0.02f, 0 };
+    const bool brown = Rand_ZeroOne() < 0.2f;
+    Color_RGBA8 prim = brown ? Color_RGBA8{ 170, 150, 60, 255 } : Color_RGBA8{ 170, 235, 70, 255 };
+    Color_RGBA8 env = brown ? Color_RGBA8{ 90, 70, 20, 255 } : Color_RGBA8{ 70, 130, 30, 255 };
+    EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, burst ? 650 : 480, 7, burst ? 14 : 11, 0);   // flag 4: a little random colour variation
+}
+
+void AddToxicCloud(float x, float y, float z, bool mine) {
+    if (gPlayState == nullptr) return;
+    gToxicClouds.push_back({ x, y, z, ImGui::GetTime() + royale::kFartCloudSeconds });
+    if (gToxicClouds.size() > 24) gToxicClouds.erase(gToxicClouds.begin());
+    for (int i = 0; i < 70; i++) ToxicPuff(gPlayState, x, y, z, true);   // the big first whoosh
+    (void)mine;
+}
+
+void UpdateToxicClouds(const royale::HudState& hud) {
+    const double now = ImGui::GetTime();
+    const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f);
+    for (size_t i = 0; i < gToxicClouds.size();) {
+        if (now >= gToxicClouds[i].until || gPlayState == nullptr || !InGame()) gToxicClouds.erase(gToxicClouds.begin() + static_cast<long>(i));
+        else i++;
+    }
+    bool inside = false;
+    if (gPlayState != nullptr && InGame() && !gToxicClouds.empty()) {
+        Player* me = GET_PLAYER(gPlayState);
+        gToxicPuffAcc += dt;
+        const bool tick = gToxicPuffAcc >= 0.05;   // twenty times a second, like the game's own effects
+        if (tick) gToxicPuffAcc = 0.0;
+        for (const ToxicCloud& c : gToxicClouds) {
+            const float left = static_cast<float>(c.until - now), thin = std::clamp(left / 2.0f, 0.15f, 1.0f);   // it thins out over its last two seconds
+            if (tick) {
+                for (int i = 0; i < static_cast<int>(10.0f * thin); i++) ToxicPuff(gPlayState, c.x, c.y, c.z, false);
+                for (int i = 0; i < 2; i++) {   // sparkles round the edge, so the size of it is plain
+                    const float a = Rand_ZeroOne() * 6.2831853f;
+                    Vec3f pos = { c.x + std::cos(a) * royale::kFartCloudRadius, c.y + 6.0f + Rand_ZeroOne() * 30.0f, c.z + std::sin(a) * royale::kFartCloudRadius };
+                    Vec3f vel = { 0, 0.8f, 0 }, accel = { 0, 0, 0 };
+                    Color_RGBA8 prim = { 200, 255, 90, 255 }, env = { 90, 200, 40, 255 };
+                    EffectSsKiraKira_SpawnDispersed(gPlayState, &pos, &vel, &accel, &prim, &env, 150, 18);
+                }
+            }
+            if (me != nullptr && std::hypot(me->actor.world.pos.x - c.x, me->actor.world.pos.z - c.z) < royale::kFartCloudRadius && std::fabs(me->actor.world.pos.y - c.y) < 220.0f) inside = true;
+        }
+    }
+    const bool live = IsLive(hud) && hud.selfAlive;   // outside a live match the cloud is only for show: nothing hurts
+    if (inside && live) gGasTime += dt;
+    else gGasTime = std::max(0.0f, gGasTime - dt * 2.0f);
+    if (!inside || !live) { if (gGasTime <= 0.0f) gGasTime = 0.0f; }
+}
+
 void DrawFartReactions(ImDrawList* dl, ImFont* font, float scale) {
     static const char* const words[] = { "*cough*", "Ew!", "*gag*", "LILO!", "*sniff* ...ugh", "Who did that?!" };
     const double now = ImGui::GetTime();
+    if (gGasTime > 0.05f) {   // standing in the cloud: a green tint, a bar filling over the grace time, then the damage line
+        const ImVec2 ds = ImGui::GetIO().DisplaySize;
+        const float fill = std::clamp(gGasTime / royale::kFartGraceSeconds, 0.0f, 1.0f);
+        dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(110, 190, 40, static_cast<int>(40.0f + 60.0f * fill)));
+        const bool hurting = gGasTime > royale::kFartGraceSeconds;
+        const char* line = hurting ? "THE FART CLOUD IS HURTING YOU! GET OUT!" : "Toxic fart cloud! Get out of it!";
+        const float size = 30.0f * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, line);
+        const float cx = ds.x * 0.5f, y = ds.y * 0.22f;
+        const ImU32 col = hurting ? IM_COL32(255, 90, 70, 255) : IM_COL32(200, 255, 100, 255);
+        dl->AddText(font, size, ImVec2(cx - sz.x * 0.5f + 2, y + 2), IM_COL32(20, 30, 10, 230), line);
+        dl->AddText(font, size, ImVec2(cx - sz.x * 0.5f, y), col, line);
+        const float barW = 280.0f * scale, barH = 12.0f * scale;
+        dl->AddRectFilled(ImVec2(cx - barW * 0.5f - 2, y + sz.y + 6 - 2), ImVec2(cx + barW * 0.5f + 2, y + sz.y + 6 + barH + 2), IM_COL32(20, 30, 10, 200));
+        dl->AddRectFilled(ImVec2(cx - barW * 0.5f, y + sz.y + 6), ImVec2(cx - barW * 0.5f + barW * fill, y + sz.y + 6 + barH), hurting ? IM_COL32(255, 80, 60, 255) : IM_COL32(170, 235, 70, 255));
+    }
+    if (now < gBubbleUntil) {   // the pet warns you before she lets one go
+        ImVec2 at;
+        if (WorldToScreen(gBubbleAt[0], gBubbleAt[1] + 36.0f, gBubbleAt[2], &at)) {
+            const char* line = "I smell a fart nearby!";
+            const float size = 24.0f * scale;
+            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, line);
+            dl->AddRectFilled(ImVec2(at.x - sz.x * 0.5f - 8, at.y - sz.y - 6), ImVec2(at.x + sz.x * 0.5f + 8, at.y + 2), IM_COL32(250, 250, 240, 235), 6.0f);
+            dl->AddText(font, size, ImVec2(at.x - sz.x * 0.5f, at.y - sz.y - 2), IM_COL32(40, 60, 20, 255), line);
+        }
+    }
     for (size_t i = 0; i < gFartReactions.size();) {
         const FartReaction& r = gFartReactions[i];
         const float age = static_cast<float>(now - r.start);
@@ -9681,7 +10230,8 @@ struct CatBrain {
     int line = 0;    // what she says next (royale::kLiloPetLines)
     CatMood seen = CatMood::Follow;            // the mood last tick, to mew when it changes
     float meowIn = 25.0f, fartIn = 70.0f;      // seconds until a mew of her own, and until her next accident
-    float afterFartMew = -1.0f, cloudT = 0.0f; // the mew that follows an accident, and how long her cloud keeps drifting
+    float afterFartMew = -1.0f;                // the mew that follows an accident
+    bool warned = false;                       // has she said she smells one, for the accident that is coming
     int eyes = 0;
     royale::lilo::Animator anim;
 };
@@ -9691,7 +10241,7 @@ void SetMood(CatBrain& c, CatMood m) { c.mood = m; c.moodT = 0; }
 
 void CatPoof(PlayState* play, float x, float y, float z) {
     for (int i = 0; i < 7; i++) {
-        Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 30.0f, y + 10.0f + Rand_ZeroOne() * 22.0f, z + (Rand_ZeroOne() - 0.5f) * 30.0f };
+        Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * 18.0f, y + 5.0f + Rand_ZeroOne() * 12.0f, z + (Rand_ZeroOne() - 0.5f) * 18.0f };
         Vec3f vel = { (Rand_ZeroOne() - 0.5f) * 1.6f, 0.6f + Rand_ZeroOne(), (Rand_ZeroOne() - 0.5f) * 1.6f }, accel = { 0, 0, 0 };
         Color_RGBA8 prim = { 255, 245, 210, 255 }, env = { 200, 190, 255, 255 };
         EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 120, 26);
@@ -9708,7 +10258,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     const float pspeed = std::fabs(pl->linearVelocity);
     const bool playerStill = pspeed < 0.6f;
     // Her place beside you: behind and to the left.
-    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 95.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 95.0f;
+    const float wantX = px + std::sin(pyaw + 3.14159265f + 0.7f) * 75.0f, wantZ = pz + std::cos(pyaw + 3.14159265f + 0.7f) * 75.0f;
     float dx = wantX - c.x, dz = wantZ - c.z, d = std::hypot(dx, dz);
     if (!c.placed || d > 1400.0f || std::fabs(py - c.y) > 170.0f) {   // arrived, or left far behind: pop up beside you
         if (c.placed) CatPoof(play, c.x, c.y, c.z);
@@ -9724,7 +10274,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     if (!talking && c.mood == CatMood::Talk) {   // done talking: she stays sitting a while, and has something new to say next time
         SetMood(c, CatMood::Sit);
         c.sitT = 0; c.nextAt = 4.0f;
-        if (c.line == royale::kLiloPetLineCount - 1) c.fartIn = 0.9f;   // she said she smelled one, and now she has made one
+        if (c.line == royale::kLiloPetLineCount - 1) { c.fartIn = 0.9f; c.warned = true; }   // she said she smelled one, and now she has made one
         c.line = (c.line + 1) % royale::kLiloPetLineCount;
     }
     if (c.mood != CatMood::Talk) {
@@ -9756,9 +10306,17 @@ void Cat_Update(Actor* actor, PlayState* play) {
             c.meowIn = 25.0f + Rand_ZeroOne() * 30.0f;
         }
         c.fartIn -= dt;
+        if (c.fartIn <= 3.5f && !c.warned && c.fartIn > 0.9f) {   // a few seconds before: "I smell a fart nearby!" over her head
+            c.warned = true;
+            gBubbleUntil = ImGui::GetTime() + 3.2;
+            PlayMeow(kMewAsk, 0.6f);
+        }
         if (c.fartIn <= 0.0f && c.mood != CatMood::Pounce) {   // she farts a lot: now and then, wherever she is
             PlayOneShot(2);
-            c.cloudT = 2.0f;
+            c.warned = false;
+            const float bx = c.x - std::sin(c.yaw) * 30.0f, bz = c.z - std::cos(c.yaw) * 30.0f;
+            AddToxicCloud(bx, c.y, bz, true);
+            gSession.ReportFartCloud(bx, bz);
             FartReact(c.x, c.z);
             c.afterFartMew = 1.0f;
             c.fartIn = 55.0f + Rand_ZeroOne() * 75.0f;
@@ -9769,10 +10327,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
         c.afterFartMew -= dt;
         if (c.afterFartMew < 0.0f) PlayMeow(kMewFall, 0.5f);
     }
-    if (c.cloudT > 0.0f) {   // the cloud, behind her
-        c.cloudT -= dt;
-        FartCloudStep(play, c.x - std::sin(c.yaw) * 48.0f, c.y, c.z - std::cos(c.yaw) * 48.0f, 2);
-    }
+    if (ImGui::GetTime() < gBubbleUntil) { gBubbleAt[0] = c.x; gBubbleAt[1] = c.y; gBubbleAt[2] = c.z; }
 
     const float tm = static_cast<float>(play->gameplayFrames) * dt;
     bool moving = false;
@@ -9780,7 +10335,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     int clip = L::kIdle, eyes = L::kEyesOpen;
     float rate = 1.0f;
     auto follow = [&](float minSpeed) {   // go to her place: a walk when it is near, a run when you have gone on ahead
-        c.speed += (std::clamp((d - 40.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
+        c.speed += (std::clamp((d - 30.0f) * 2.8f, minSpeed, 290.0f) - c.speed) * 0.2f;
         heading = std::atan2(dx, dz);
         c.x += std::sin(heading) * c.speed * dt;
         c.z += std::cos(heading) * c.speed * dt;
@@ -9789,7 +10344,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
 
     switch (c.mood) {
         case CatMood::Follow: case CatMood::Stand: {
-            if (d > 58.0f) {
+            if (d > 46.0f) {
                 follow(45.0f);
                 c.mood = CatMood::Follow;
             } else {
@@ -9820,7 +10375,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
             clip = L::kSleep;
             eyes = L::kEyesShut;
             if (static_cast<int>(c.moodT * 10.0f) % 18 == 0 && play->gameplayFrames % 3 == 0) {
-                Vec3f pos = { c.x + std::sin(c.yaw) * 20.0f, c.y + 40.0f, c.z + std::cos(c.yaw) * 20.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
+                Vec3f pos = { c.x + std::sin(c.yaw) * 10.0f, c.y + 20.0f, c.z + std::cos(c.yaw) * 10.0f }, vel = { 0.15f, 0.5f, 0 }, accel = { 0, 0, 0 };
                 Color_RGBA8 prim = { 190, 210, 255, 255 }, env = { 90, 120, 255, 255 };
                 EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, 60, 40);
             }
@@ -9836,7 +10391,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
         case CatMood::Pounce: {   // crouch and wiggle, then a leap at nothing
             clip = L::kPounce;
             if (c.moodT < 0.9f) {
-                c.leapX = std::sin(c.yaw) * 75.0f; c.leapZ = std::cos(c.yaw) * 75.0f;
+                c.leapX = std::sin(c.yaw) * 45.0f; c.leapZ = std::cos(c.yaw) * 45.0f;
             } else if (c.moodT < 1.35f) {
                 c.x += c.leapX * dt / 0.45f; c.z += c.leapZ * dt / 0.45f;
             } else if (c.moodT > 1.5f) {
@@ -9883,7 +10438,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
     actor->world.pos.x = c.x; actor->world.pos.z = c.z; actor->world.pos.y = c.y;
     actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
     actor->focus.pos = actor->world.pos;
-    actor->focus.pos.y += 30.0f;
+    actor->focus.pos.y += 16.0f;
 }
 
 void Cat_Draw(Actor* actor, PlayState* play) {
@@ -9910,7 +10465,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
     a->destroy = Cat_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 18.0f;
+    a->shape.shadowScale = 9.0f;
     gCat.actor = a;
     gCat.placed = false;
     gCat.pickups = gPickupLog.size();
@@ -9926,7 +10481,7 @@ royale::Vec2 gLiloPos = {};
 bool gLiloKnown = false;
 double gLiloTalkStart = -100.0;
 bool gLiloFarted = true, gLiloHeard = false;
-double gFartCloudUntil = 0, gLiloMewAt = -1.0;
+double gLiloMewAt = -1.0;
 royale::lilo::Animator gLiloAnim;
 int gLiloEyes = 0;
 
@@ -9941,7 +10496,7 @@ void Lilo_Update(Actor* actor, PlayState* play) {
         actor->shape.rot.y = static_cast<s16>(actor->shape.rot.y + static_cast<s16>(want - actor->shape.rot.y) * (talking ? 0.25f : 0.1f));
     }
     actor->focus.pos = actor->world.pos;
-    actor->focus.pos.y += 40.0f;
+    actor->focus.pos.y += 20.0f;
     if (OfferTalk(actor, play, kTextLilo, royale::kHireRange)) TalkToLilo();
     gLiloAnim.Play(talking ? L::kTalk : L::kSit, 0.3f);
     gLiloAnim.Update(1.0f / royale::kTickHz);
@@ -9995,7 +10550,7 @@ void ReconcileLilo(const royale::HudState& hud) {
     a->destroy = Lilo_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
     a->uncullZoneForward = 4000.0f; a->uncullZoneScale = 1500.0f; a->uncullZoneDownward = 1500.0f;
-    a->shape.shadowScale = 22.0f;
+    a->shape.shadowScale = 11.0f;
     gLiloActor = a;
     gLiloAnim = royale::lilo::Animator{};
     gLiloAnim.Play(royale::lilo::kSit, 0.0f);
@@ -10023,17 +10578,16 @@ void UpdateLiloFx() {
         if (TalkingTo(gLiloActor)) gLiloHeard = true;
         else if (gLiloHeard || now - gLiloTalkStart > 4.0) {
             gLiloFarted = true;
-            gFartCloudUntil = now + 2.6;
             PlayOneShot(2);
+            const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
+            const float bx = gLiloPos.x - std::sin(yaw) * 30.0f, bz = gLiloPos.z - std::cos(yaw) * 30.0f;
+            AddToxicCloud(bx, gLiloActor->world.pos.y, bz, true);
+            gSession.ReportFartCloud(bx, bz);
             FartReact(gLiloPos.x, gLiloPos.z);
             gLiloMewAt = now + 1.0;
         }
     }
     if (gLiloMewAt > 0.0 && now >= gLiloMewAt) { gLiloMewAt = -1.0; PlayMeow(kMewFall, 0.6f); }   // a satisfied mew once the air has cleared a little
-    if (now < gFartCloudUntil) {
-        const float yaw = gLiloActor->shape.rot.y * (3.14159265f / 32768.0f);
-        FartCloudStep(gPlayState, gLiloPos.x - std::sin(yaw) * 48.0f, gLiloActor->world.pos.y, gLiloPos.z - std::cos(yaw) * 48.0f, 3);   // behind her
-    }
 }
 
 // Her name over her head (what she says is in the game's own text box).
@@ -10043,7 +10597,7 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     Player* pl = GET_PLAYER(gPlayState);
     const float d = std::hypot(pl->actor.world.pos.x - gLiloPos.x, pl->actor.world.pos.z - gLiloPos.z);
     ImVec2 at;
-    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 78.0f, gLiloPos.z, &at)) {
+    if (d < 1800.0f && WorldToScreen(gLiloPos.x, gLiloActor->world.pos.y + 42.0f, gLiloPos.z, &at)) {
         const float size = std::clamp(24.0f * scale * (1800.0f / (d + 900.0f)), 13.0f * scale, 28.0f * scale);
         const char* label = royale::kLiloName;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
@@ -10846,6 +11400,7 @@ void OnGameFrameUpdate() {
     if (gHealthOverridden && !(joined && IsLive(hud))) RestoreHealth();
     Feat("platforms, rocks and trees"); if (DebugOn(kDbgTerrain) && joined && InField() && gPlayState != nullptr) { ApplyPlatforms(GET_PLAYER(gPlayState)); ApplyRocks(GET_PLAYER(gPlayState)); ApplyTrees(GET_PLAYER(gPlayState)); }
     Feat("tornado"); if (DebugOn(kDbgTornado) && gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
+    Feat("island scenery collision"); if (DebugOn(kDbgScenery) && joined && InField() && gPlayState != nullptr) ApplyScenery(GET_PLAYER(gPlayState));
     Feat("storm"); DriveStorm(hud);
     Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
@@ -10862,7 +11417,7 @@ void OnGameFrameUpdate() {
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
     Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
-    Feat("Lilo effects"); if (DebugOn(kDbgAllies)) UpdateLiloFx();
+    Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
     Feat("carts"); if (DebugOn(kDbgCarts)) ReconcileCarts(hud);
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
@@ -11085,6 +11640,10 @@ UiState& Ui() {
         gWindOn = ui.windOn;
         gWindScale = ui.windStrength / 100.0f;
         gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f;
+        gSkyStars = CVarGetInteger(ROYALE_CVAR("SkyStars"), 1) != 0;
+        gSkyBodies = CVarGetInteger(ROYALE_CVAR("SkyBodies"), 1) != 0;
+        gSkyClouds = std::clamp(CVarGetInteger(ROYALE_CVAR("SkyClouds"), 100), 0, 200) / 100.0f;
+        gFogAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("FogAmount"), 100), 0, 200) / 100.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
@@ -11812,6 +12371,8 @@ void UpdaterCall(const char* method) {
 
 void DrawUpdater() {
     if (!ImGui::CollapsingHeader("Game updates")) return;
+    // Test builds are made from branches that are not merged yet, so a change can be tried before it is accepted
+    static bool includeTests = false;
     const int state = UpdaterInt("getState");
     if (state < 0) {
         ImGui::TextColored(kRed, "The updater is missing from this build.");
@@ -11826,18 +12387,19 @@ void DrawUpdater() {
         case kUpdIdle:
         case kUpdError:
             if (state == kUpdError) ImGui::TextColored(kRed, "%s", message.c_str());
-            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall("check");
+            ImGui::Checkbox("Include test builds (changes not merged yet)", &includeTests);
+            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall(includeTests ? "checkWithTests" : "check");
             break;
         case kUpdChecking:
             ImGui::Text("%s", message.c_str());
             break;
         case kUpdChecked:
             if (latest > own) {
-                ImGui::TextColored(kGold, "Version 0.%d is ready (%lld MB).", latest, static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
+                ImGui::TextColored(kGold, "%s is ready (%lld MB).", UpdaterString("getLatestName").c_str(), static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
                 if (ImGui::Button("Download and install", ImVec2(260, 0))) UpdaterCall("download");
             } else {
                 ImGui::Text("You have the newest build (0.%d is the newest on GitHub).", latest);
-                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall("check");
+                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall(includeTests ? "checkWithTests" : "check");
                 ImGui::SameLine();
                 if (ImGui::Button("Reinstall it anyway", ImVec2(260, 0))) UpdaterCall("download");
             }
@@ -11919,6 +12481,144 @@ void DrawRoyaleUi() {
     DrawDebug(ui);
 }
 
+// ---- the Graphics page ---------------------------------------------------------------------------------------------------------
+// One collapsible section per graphics feature: an on/off switch (the feature's Debug switch, so the two always agree) and, where it makes
+// sense, its sliders. Everything is local and saved at once. A section whose Debug switch does not exist in this build is left out, so
+// features added later show up here as soon as they have a switch.
+int DebugIndex(const char* key) {
+    for (int i = 0; i < kDebugCount; i++)
+        if (std::strcmp(kDebugSwitches[i].key, key) == 0) return i;
+    return -1;
+}
+
+void SaveGfx() { Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame(); }
+
+// The on/off box of a section; returns whether the feature is on (the sliders below it only show then).
+bool GfxSwitch(const char* debugKey, const char* label) {
+    const int i = DebugIndex(debugKey);
+    if (i < 0) return true;
+    if (!gDebugLoaded) LoadDebugSwitches();
+    bool on = gDebugOn[i];
+    const std::string id = std::string(label) + "##gfxsw" + debugKey;
+    if (ImGui::Checkbox(id.c_str(), &on)) {
+        gDebugOn[i] = on;
+        const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + debugKey;
+        CVarSetInteger(key.c_str(), on ? 1 : 0);
+        SaveGfx();
+    }
+    return on;
+}
+
+bool GfxCheck(const char* label, const char* cvar, bool* value) {
+    if (!ImGui::Checkbox(label, value)) return false;
+    CVarSetInteger((std::string(CVAR_SETTING("Royale.")) + cvar).c_str(), *value ? 1 : 0);
+    SaveGfx();
+    return true;
+}
+
+// A per-cent slider kept in a CVar. Returns true when it moved.
+bool GfxPercent(const char* label, const char* cvar, int* value) {
+    ImGui::SetNextItemWidth(280);
+    if (!ImGui::SliderInt(label, value, 0, 200)) return false;
+    CVarSetInteger((std::string(CVAR_SETTING("Royale.")) + cvar).c_str(), *value);
+    SaveGfx();
+    return true;
+}
+
+// A section is left out when its Debug switch is not in this build.
+bool GfxSection(const char* title, const char* debugKey) {
+    if (DebugIndex(debugKey) < 0) return false;
+    return ImGui::CollapsingHeader(title);
+}
+
+void DrawGraphicsUi() {
+    UiState& ui = Ui();
+    Heading("GRAPHICS");
+    ImGui::TextColored(kGrey, "One section for each look of the game. Open one to switch it on or off and set how strong it is. Only you see these, and they are saved.");
+    ImGui::Spacing();
+
+    if (GfxSection("Cloth physics", "Cloth")) {
+        ImGui::PushID("cloth");
+        if (GfxSwitch("Cloth", "Cloth physics (caps, tunics, sheaths, gliders)")) {
+            if (ImGui::Checkbox("Cloth moves", &ui.clothOn)) { gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0.0f; SaveUi(ui); }
+            if (ui.clothOn) {
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Cloth strength (%)", &ui.clothPhysics, 0, 200)) { gClothScale = ui.clothPhysics / 100.0f; SaveUi(ui); }
+            }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Wind", "Wind")) {
+        ImGui::PushID("wind");
+        if (GfxSwitch("Wind", "Wind streaks in the air")) {
+            if (ImGui::Checkbox("Wind and breeze (moves cloth, grass and trees)", &ui.windOn)) { gWindOn = ui.windOn; SaveUi(ui); }
+            if (ui.windOn) {
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Wind strength (%)", &ui.windStrength, 0, 200)) { gWindScale = ui.windStrength / 100.0f; SaveUi(ui); }
+                if (ImGui::Checkbox("Wind streaks (show which way it blows)", &ui.windStreaks)) { gWindStreaks = ui.windStreaks; SaveUi(ui); }
+            }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Tornado", "Tornado")) {
+        ImGui::PushID("tornado");
+        if (GfxSwitch("Tornado", "Allow the tornado")) {
+            bool on = gTornadoOn;
+            if (ImGui::Checkbox("Show the tornado (easter egg, only you can see it)", &on)) gTornadoOn = on;
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Weather", "Weather")) {
+        ImGui::PushID("weather");
+        if (GfxSwitch("Weather", "Weather (rain, snow, ash, sand and the fog they bring)")) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Weather effects on my screen (%)", &ui.weatherDensity, 0, 200)) { gWeatherDensity = ui.weatherDensity / 100.0f; SaveUi(ui); }
+            ImGui::TextColored(kGrey, "The host picks the season and how strong the weather is, in the lobby.");
+        }
+        GfxSwitch("StormWall", "Storm wall around the safe zone");
+        ImGui::PopID();
+    }
+    if (GfxSection("Grass, trees, snow and puddles", "Foliage")) {
+        ImGui::PushID("foliage");
+        if (GfxSwitch("Foliage", "Grass, trees, snow cover and puddles")) {
+            ImGui::SetNextItemWidth(280);
+            if (ImGui::SliderInt("Grass and trees (%)", &ui.foliage, 0, 200)) { gFoliage = ui.foliage / 100.0f; SaveUi(ui); }
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Sky", "Sky")) {
+        ImGui::PushID("sky");
+        if (GfxSwitch("Sky", "Sky (gradient dome, stars, sun, moon, clouds)")) {
+            static int clouds = -1;
+            if (clouds < 0) clouds = static_cast<int>(gSkyClouds * 100.0f + 0.5f);
+            GfxCheck("Stars at night", "SkyStars", &gSkyStars);
+            GfxCheck("Sun and moon", "SkyBodies", &gSkyBodies);
+            if (GfxPercent("Clouds (%, 0 = none)", "SkyClouds", &clouds)) gSkyClouds = clouds / 100.0f;
+        }
+        ImGui::PopID();
+    }
+    if (GfxSection("Fog", "Fog")) {
+        ImGui::PushID("fog");
+        if (GfxSwitch("Fog", "Fog banks (low mist on the ground)")) {
+            static int fog = -1;
+            if (fog < 0) fog = static_cast<int>(gFogAmount * 100.0f + 0.5f);
+            if (GfxPercent("Fog thickness (%, 0 = none)", "FogAmount", &fog)) gFogAmount = fog / 100.0f;
+        }
+        ImGui::PopID();
+    }
+    // Features that arrive in other changes get their section here once they have a Debug switch in the build.
+    if (GfxSection("Water", "Water")) { ImGui::PushID("water"); GfxSwitch("Water", "Water (waves, splashes, wakes, underwater look)"); ImGui::PopID(); }
+    if (GfxSection("Fortnite Map scenery", "Scenery")) { ImGui::PushID("scenery"); GfxSwitch("Scenery", "Oaks, cliffs, crags and flowers on the Fortnite Map"); ImGui::PopID(); }
+    if (GfxSection("Fortnite Map puddles", "IslandPuddles")) { ImGui::PushID("ipud"); GfxSwitch("IslandPuddles", "Standing puddles on the Fortnite Map"); ImGui::PopID(); }
+    if (GfxSection("Effects", "BossFx")) {
+        ImGui::PushID("fx");
+        GfxSwitch("BossFx", "Boss effects in the world");
+        GfxSwitch("Projectiles", "Arrows, bombs and chest reveals");
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+}
+
 // Adds a top-level "Battle Royale" entry to the port menu (opened with F1 on Windows, Back/Select on Android) through the
 // fork's own menu registration hook, so no patch to the fork's menu code is needed.
 void RegisterRoyaleMenu() {
@@ -11927,6 +12627,9 @@ void RegisterRoyaleMenu() {
     WidgetPath path = { "Battle Royale", "Play", SECTION_COLUMN_1 };
     mSohMenu->AddSidebarEntry("Battle Royale", path.sidebarName, 1);
     mSohMenu->AddWidget(path, "OOT Royale##royale_ui", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawRoyaleUi(); });
+    WidgetPath gfx = { "Battle Royale", "Graphics", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", gfx.sidebarName, 1);
+    mSohMenu->AddWidget(gfx, "Royale graphics##royale_gfx", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawGraphicsUi(); });
 }
 
 RegisterMenuInitFunc royaleMenuInit(RegisterRoyaleMenu);

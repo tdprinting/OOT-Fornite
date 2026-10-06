@@ -7,6 +7,8 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/fortnite_scenery.h"
+#include "../../shared/fortnite_puddles.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -1484,7 +1486,7 @@ static void HeartChestsAndAdultPower() {
     CHECK(grown.ok && grown.damage > plain * 1.3f);
     CHECK(m.SpeedMultiplier(*me) > 1.09f);
     const float hp = me->health;
-    me->invulnUntil = 0;
+    me->invulnUntil = 0; me->armor = 0;
     m.Damage(1, 0.5f, 1000);
     CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken) < 0.01f);
     // A second one straight away is not wasted; near the end it tops you up.
@@ -2018,6 +2020,42 @@ static void BotsPlayLikePlayers() {
     }
 }
 
+static void LilosToxicCloud() {
+    Simulation sim(77, MapCircle(), 0);
+    sim.match.AddHuman(1);
+    sim.match.AddHuman(2);   // somebody else alive, so the match goes on
+    PlayerState* me = sim.match.Find(1);
+    me->pos = {0, 0};
+    CHECK(!sim.match.StartFartCloud(1, {0, 0}));   // not while the match is off
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 2) p.alive = false;
+    me = sim.match.Find(1);
+    me->pos = {0, 0};
+    sim.match.Find(2)->pos = {1800, 1800};
+    me->maxHealth = me->health = 10.0f;
+    me->invulnUntil = 0; me->armor = 0;
+    CHECK(!sim.match.StartFartCloud(1, {kFartCloudReach + 50.0f, 0}));   // Lilo is beside you, not across the map
+    CHECK(sim.match.StartFartCloud(1, {0, 0}));
+    CHECK(!sim.match.StartFartCloud(1, {0, 0}));   // not again straight away
+    auto run = [&](float seconds) { for (int i = 0; i < static_cast<int>(seconds * kTickHz); i++) { sim.match.Tick(kDt); me->pos = me->pos; } };
+    run(kFartGraceSeconds - 0.4f);
+    CHECK(me->health == 10.0f);                    // the first seconds do nothing
+    run(0.4f + 2.0f);
+    CHECK(me->health < 10.0f && me->health > 10.0f - 2.0f * kFartDps - 0.2f);   // then a small tick, about kFartDps a second
+    // walking out drains the count, and nothing happens outside
+    me->pos = {kFartCloudRadius + 100.0f, 0};
+    run(kFartGraceSeconds);
+    CHECK(me->gasTime == 0.0f);
+    const float outside = me->health;
+    run(2.0f);
+    CHECK(me->health == outside);
+    // and a cloud expires
+    CHECK(sim.match.FartClouds().size() == 1);
+    run(kFartCloudSeconds + 1.0f);
+    CHECK(sim.match.FartClouds().empty());
+}
+
 static void BotsLeaveBlastRings() {
     // Hard bots standing in a marked blast walk or roll out before it lands; they are not stuck there taking it.
     int escaped = 0, trials = 0;
@@ -2455,6 +2493,84 @@ static void CustomObjModels() {
     CHECK(neg.ok && neg.triangles == 1);
 }
 
+// The Fortnite Map's Hyrule Field scenery: every model (eight pieces in four seasons) is a few hundred triangles at most and the same every time,
+// and the placement follows the ground: cliffs on steep ground facing downhill, nothing in the water or on the towns' paving, a bit of every kind.
+static void IslandScenery() {
+    namespace fn = royale::fortnite;
+    for (uint32_t variant = 0; variant < kMeshVariantSlots; variant++) {
+        const MeshData m = BuildMesh(MeshKind::Scenery, variant), again = BuildMesh(MeshKind::Scenery, variant);
+        float mn[3], mx[3];
+        m.Bounds(mn, mx);
+        CHECK(m.Triangles() >= 60 && m.Triangles() <= 600 && mn[1] >= -0.01f && mx[1] > 20 && mx[0] - mn[0] < 700 && mx[2] - mn[2] < 700);
+        bool same = again.v.size() == m.v.size();
+        for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].g == m.v[i].g;
+        CHECK(same);
+    }
+    float mn[3], mx[3];
+    BuildMesh(MeshKind::Scenery, 1 * 8 + 3).Bounds(mn, mx);
+    CHECK(mx[1] > 150 && mx[0] - mn[0] > 250);                                  // a cliff slab is wide and tall
+    BuildMesh(MeshKind::Scenery, 1 * 8 + 4).Bounds(mn, mx);
+    CHECK(mx[1] > 220);                                                         // and a crag is the tallest thing there
+    int count[static_cast<int>(fn::SceneryKind::Count)] = {}, total = 0, offGround = 0, steepCliffs = 0, downhill = 0, cliffs = 0, onTown = 0, none = 0;
+    for (int cz = -52; cz <= 52; cz++)
+        for (int cx = -52; cx <= 52; cx++) {
+            fn::SceneryPiece p, q;
+            const bool has = fn::SceneryIn(cx, cz, 1.0f, &p);
+            CHECK(has == fn::SceneryIn(cx, cz, 1.0f, &q) && (!has || (p.x == q.x && p.kind == q.kind && p.yaw == q.yaw)));   // the same for everyone
+            if (fn::SceneryIn(cx, cz, 0.0f, &q)) none++;
+            if (!has) continue;
+            total++;
+            count[static_cast<int>(p.kind)]++;
+            float y;
+            if (!fn::GroundHeight(p.x, p.z, &y) || y < fn::kWaterY || std::fabs(y - p.y) > 0.01f) offGround++;
+            if (fn::CoverAt(p.x, p.z) == fn::Cover::Paving) onTown++;
+            if (p.kind == fn::SceneryKind::Cliff) {   // faces downhill: the ground a little way in front is lower than behind
+                cliffs++;
+                if (fn::GroundUp(p.x, p.z) < 0.84f) steepCliffs++;
+                float front, back;
+                if (fn::GroundHeight(p.x + std::sin(p.yaw) * 60, p.z + std::cos(p.yaw) * 60, &front) && fn::GroundHeight(p.x - std::sin(p.yaw) * 60, p.z - std::cos(p.yaw) * 60, &back) && front < back) downhill++;
+            }
+        }
+    CHECK(total > 800 && total < 5000);
+    for (int k = 0; k < static_cast<int>(fn::SceneryKind::Count); k++) CHECK(count[k] > 0);
+    CHECK(offGround == 0 && onTown == 0 && none == 0);
+    CHECK(cliffs > 50 && steepCliffs == cliffs && downhill * 10 >= cliffs * 9);
+    CHECK(fn::SceneryRadius(fn::SceneryKind::Oak, 1.0f) > 0 && fn::SceneryRadius(fn::SceneryKind::FlowersWhite, 1.0f) == 0);
+}
+
+// The Fortnite Map's standing puddles lie on level land (never in the sea, on a road or in a wood), are the same for everyone, and there are plenty;
+// and the ground is walkable inland: no steep ground away from the coast.
+static void IslandPuddles() {
+    namespace fn = royale::fortnite;
+    int n = 0, bad = 0, mud = 0;
+    for (int cz = -45; cz <= 45; cz++)
+        for (int cx = -45; cx <= 45; cx++) {
+            fn::PuddlePiece p, q;
+            const bool has = fn::PuddleIn(cx, cz, &p);
+            CHECK(has == fn::PuddleIn(cx, cz, &q) && (!has || (p.x == q.x && p.size == q.size)));
+            if (!has) continue;
+            n++;
+            float y;
+            const fn::Cover c = fn::CoverAt(p.x, p.z);
+            if (!fn::GroundHeight(p.x, p.z, &y) || y < fn::kWaterY || (c != fn::Cover::Meadow && c != fn::Cover::Dirt) || fn::GroundUp(p.x, p.z) < 0.98f || p.size < 0.5f || p.size > 2.2f) bad++;
+            if (c == fn::Cover::Dirt) mud++;
+        }
+    CHECK(n > 150 && n < 900 && bad == 0 && mud > 5);
+    int steepInland = 0, land = 0;   // away from the water, the ground can be stood on
+    for (float z = -fn::kHalfZ + 10; z < fn::kHalfZ; z += 90)
+        for (float x = -fn::kHalfX + 10; x < fn::kHalfX; x += 90) {
+            float y, q;
+            if (!fn::GroundHeight(x, z, &y) || y < fn::kWaterY + 2) continue;
+            bool coast = false;
+            for (const float d : {200.0f, -200.0f})
+                coast = coast || (fn::GroundHeight(x + d, z, &q) && q < fn::kWaterY + 20) || (fn::GroundHeight(x, z + d, &q) && q < fn::kWaterY + 20);
+            if (coast) continue;
+            land++;
+            if (fn::GroundUp(x, z) < 0.8f) steepInland++;
+        }
+    CHECK(land > 10000 && steepInland * 100 < land);   // under one percent of the inland is too steep to stand on
+}
+
 static void BouldersAndFormations() {
     // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
     // budget, and each map's stone a different colour.
@@ -2600,7 +2716,7 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
@@ -3825,14 +3941,14 @@ static void BotsUseCoverAndHighGround() {
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
+    LiloTheCatModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
