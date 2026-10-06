@@ -51,6 +51,7 @@
 #include <unistd.h>
 #include <unwind.h>
 #include <sys/syscall.h>
+#include <jni.h>
 #endif
 
 #include "soh/ShipInit.hpp"
@@ -11364,6 +11365,140 @@ void DrawResults(const royale::HudState& h) {
     if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
 }
 
+// ---- in-game updater (Android) --------------------------------------------------------------------------------------------------
+// "Game updates" on the Battle Royale page: asks GitHub for the newest published build (RoyaleUpdater.java, patches/0018), downloads it
+// and opens Android's installer. The game build workflow publishes every main-branch build as a release tagged "build-<number>", and our
+// version is "0.<number>", so the numbers compare directly.
+#ifdef __ANDROID__
+enum UpdaterState { kUpdIdle = 0, kUpdChecking, kUpdChecked, kUpdDownloading, kUpdNeedPermission, kUpdInstalling, kUpdError };
+
+// The build number in ROYALE_BUILD_VERSION ("0.123" -> 123); 0 for a developer build ("dev").
+int OwnBuildNumber() {
+    const char* dot = std::strchr(ROYALE_BUILD_VERSION, '.');
+    return dot != nullptr ? std::atoi(dot + 1) : 0;
+}
+
+// RoyaleUpdater, found through the activity's class loader (FindClass on the game thread only sees Android's own classes).
+jclass UpdaterClass(JNIEnv* env) {
+    static jclass cls = nullptr;
+    if (cls != nullptr) return cls;
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (activity == nullptr) return nullptr;
+    jclass activityCls = env->GetObjectClass(activity);
+    jobject loader = env->CallObjectMethod(activity, env->GetMethodID(activityCls, "getClassLoader", "()Ljava/lang/ClassLoader;"));
+    jclass loaderCls = env->FindClass("java/lang/ClassLoader");
+    jstring name = env->NewStringUTF("com.dishii.soh.RoyaleUpdater");
+    jobject found = env->CallObjectMethod(loader, env->GetMethodID(loaderCls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"), name);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); found = nullptr; }
+    if (found != nullptr) cls = static_cast<jclass>(env->NewGlobalRef(found));
+    env->DeleteLocalRef(name);
+    env->DeleteLocalRef(loaderCls);
+    env->DeleteLocalRef(loader);
+    env->DeleteLocalRef(activityCls);
+    env->DeleteLocalRef(activity);
+    if (found != nullptr) env->DeleteLocalRef(found);
+    return cls;
+}
+
+jint UpdaterInt(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return -1;
+    const jint v = env->CallStaticIntMethod(cls, env->GetStaticMethodID(cls, method, "()I"));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return -1; }
+    return v;
+}
+
+jlong UpdaterLong(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return 0;
+    const jlong v = env->CallStaticLongMethod(cls, env->GetStaticMethodID(cls, method, "()J"));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    return v;
+}
+
+std::string UpdaterString(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    if (cls == nullptr) return "";
+    jstring s = static_cast<jstring>(env->CallStaticObjectMethod(cls, env->GetStaticMethodID(cls, method, "()Ljava/lang/String;")));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return ""; }
+    if (s == nullptr) return "";
+    const char* chars = env->GetStringUTFChars(s, nullptr);
+    std::string out = chars != nullptr ? chars : "";
+    if (chars != nullptr) env->ReleaseStringUTFChars(s, chars);
+    env->DeleteLocalRef(s);
+    return out;
+}
+
+// check / download / install, each taking the activity as its Context
+void UpdaterCall(const char* method) {
+    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
+    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
+    jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+    if (cls == nullptr || activity == nullptr) return;
+    env->CallStaticVoidMethod(cls, env->GetStaticMethodID(cls, method, "(Landroid/content/Context;)V"), activity);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(activity);
+}
+
+void DrawUpdater() {
+    if (!ImGui::CollapsingHeader("Game updates")) return;
+    const int state = UpdaterInt("getState");
+    if (state < 0) {
+        ImGui::TextColored(kRed, "The updater is missing from this build.");
+        return;
+    }
+    const int own = OwnBuildNumber();
+    const int latest = UpdaterInt("getLatestBuild");
+    const std::string message = UpdaterString("getMessage");
+    ImGui::TextColored(kGrey, "You have version %s. New builds are published on GitHub each time a change is merged.", ROYALE_BUILD_VERSION);
+
+    switch (state) {
+        case kUpdIdle:
+        case kUpdError:
+            if (state == kUpdError) ImGui::TextColored(kRed, "%s", message.c_str());
+            if (ImGui::Button("Check for updates", ImVec2(260, 0))) UpdaterCall("check");
+            break;
+        case kUpdChecking:
+            ImGui::Text("%s", message.c_str());
+            break;
+        case kUpdChecked:
+            if (latest > own) {
+                ImGui::TextColored(kGold, "Version 0.%d is ready (%lld MB).", latest, static_cast<long long>(UpdaterLong("getSizeKb") / 1024));
+                if (ImGui::Button("Download and install", ImVec2(260, 0))) UpdaterCall("download");
+            } else {
+                ImGui::Text("You have the newest build (0.%d is the newest on GitHub).", latest);
+                if (ImGui::Button("Check again", ImVec2(200, 0))) UpdaterCall("check");
+                ImGui::SameLine();
+                if (ImGui::Button("Reinstall it anyway", ImVec2(260, 0))) UpdaterCall("download");
+            }
+            break;
+        case kUpdDownloading: {
+            const int pct = UpdaterInt("getProgress");
+            const long long kb = UpdaterLong("getDownloadedKb");
+            ImGui::Text("%s", message.c_str());
+            char label[64];
+            std::snprintf(label, sizeof(label), "%lld MB", kb / 1024);
+            ImGui::ProgressBar(pct >= 0 ? pct / 100.0f : 0.0f, ImVec2(360, 0), label);
+            break;
+        }
+        case kUpdNeedPermission:
+            ImGui::TextWrapped("%s", message.c_str());
+            if (ImGui::Button("Install", ImVec2(260, 0))) UpdaterCall("install");
+            break;
+        case kUpdInstalling:
+            ImGui::TextWrapped("%s", message.c_str());
+            if (ImGui::Button("Open the installer again", ImVec2(260, 0))) UpdaterCall("install");
+            break;
+    }
+    ImGui::Spacing();
+}
+#else
+void DrawUpdater() {}
+#endif
+
 void DrawDebug(UiState& ui) {
     if (!ImGui::CollapsingHeader("Developer tools")) return;
     ImGui::Checkbox("Show Link position (for measuring the map)", &ui.showPosition);
@@ -11413,6 +11548,7 @@ void DrawRoyaleUi() {
         }
     }
     ImGui::Spacing();
+    DrawUpdater();
     DrawDebug(ui);
 }
 
