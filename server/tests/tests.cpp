@@ -628,7 +628,7 @@ static void PickupRulesForEveryKind() {
     for (auto& e : m.Loot()) takenAfter += e.taken;
     CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(kMaxPotions));
 
-    // Everyone starts with 7 hearts; opening a chest spills a few rupees, and some Rare chests hold a Piece of Heart.
+    // Everyone starts with 7 hearts; opening a chest spills a few rupees, and now and then a Piece of Heart pops out too.
     {
         Simulation chestSim = Duel(1, {1500, 0}, {0, 0});
         Match& cm = chestSim.match;
@@ -645,13 +645,20 @@ static void PickupRulesForEveryKind() {
         int money = 0;
         for (size_t i = before; i < cm.Loot().size(); i++) money += cm.Loot()[i].spawn.item == ItemId::Rupees && !cm.Loot()[i].spawn.container;
         CHECK(spilled >= 2 && spilled <= 3 && static_cast<size_t>(money) == spilled);
-        int pieces = 0, rare = 0;
-        for (uint64_t sd = 1; sd <= 40; sd++) {
-            Simulation s2 = Duel(sd, {1500, 0}, {0, 0});
-            s2.match.RegenerateLoot(300, 0.5f);
-            for (const auto& e : s2.match.Loot()) if (e.spawn.container && !e.spawn.special && e.spawn.rarity == Rarity::Rare) { rare++; pieces += e.spawn.item == ItemId::HeartPiece; }
+        int pieces = 0;
+        const int trials = 400;
+        for (int n = 0; n < trials; n++) {
+            Simulation s2 = Duel(static_cast<uint64_t>(n + 1), {1500, 0}, {0, 0});
+            Match& m2 = s2.match;
+            m2.ClearLoot();
+            LootSpawn sword = chest; sword.item = ItemId::MasterSword; sword.rarity = Rarity::Legendary;
+            const size_t c2 = m2.AddLoot(sword);
+            const size_t base = m2.Loot().size();
+            m2.Find(1000)->pos = {0, 0};
+            m2.PickUp(1000, c2);
+            for (size_t i = base; i < m2.Loot().size(); i++) pieces += m2.Loot()[i].spawn.item == ItemId::HeartPiece;
         }
-        CHECK(rare > 100 && pieces > 0 && pieces < rare / 4);
+        CHECK(pieces > trials / 25 && pieces < trials / 4);   // about 1 in 10
     }
 
     // Instant: a heart at full health is left on the ground, and used once you are hurt.
