@@ -299,11 +299,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "IslandPuddles", "Fortnite Map standing puddles" },
     { "Water", "Realistic water (waves, splashes, wakes, swim current, underwater look)" },
     { "Avriella", "Avriella the baby pet (the pet picker)" },
+    { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgWater, kDbgAvriella };
-static_assert(kDbgAvriella + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgIslandPuddles, kDbgWater, kDbgAvriella, kDbgRagdoll };
+static_assert(kDbgRagdoll + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -1711,6 +1712,32 @@ constexpr uint16_t kAllyIdBase = 0xE000;   // puppet ids from here up to the cor
 constexpr float kCorpseSeconds = 150.0f;   // how long a body lies there
 constexpr size_t kMaxCorpses = 16;         // more than this and the oldest one goes
 constexpr float kBodyRadius = 8.0f;        // half the thickness of Link lying down: how far the body's middle is off the ground
+// The loose joints of a body. The first nine are the original limbs (kept as they were); the rest are the extra points: spine, neck, pelvis,
+// wrists and ankles. `parent` is the joint this one hangs from: it is dragged along when the parent swings and whips past it. `side` is -1 on
+// Link's left, +1 on his right and in the middle; `limit` is how far (radians) it can bend; `reach` scales the angle added to the animation;
+// `droop` is how much gravity pulls it when the body lies on its side; `stiff` is how hard it springs back.
+struct RagJoint { int limb; int parent; float side; float reach; float limit; float droop; float stiff; };
+constexpr int kOriginalJoints = 9;
+constexpr int kJoints = 17;
+const RagJoint kRagJoints[kJoints] = {
+    { PLAYER_LIMB_HEAD,        10,  1.0f, 0.50f, 1.2f, 0.0f, 28.0f },
+    { PLAYER_LIMB_L_SHOULDER,   9, -1.0f, 1.00f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_R_SHOULDER,   9,  1.0f, 1.00f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_L_FOREARM,    1, -1.0f, 0.90f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_R_FOREARM,    2,  1.0f, 0.90f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_L_THIGH,     12, -1.0f, 0.60f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_R_THIGH,     12,  1.0f, 0.60f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_L_SHIN,       5, -1.0f, 0.70f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_R_SHIN,       6,  1.0f, 0.70f, 1.2f, 0.7f, 28.0f },
+    { PLAYER_LIMB_UPPER,       11,  1.0f, 0.25f, 0.9f, 0.3f, 40.0f },   // chest
+    { PLAYER_LIMB_COLLAR,       9,  1.0f, 0.30f, 0.9f, 0.3f, 34.0f },   // neck
+    { PLAYER_LIMB_LOWER,       12,  1.0f, 0.20f, 0.8f, 0.2f, 44.0f },   // lower spine
+    { PLAYER_LIMB_WAIST,       -1,  1.0f, 0.18f, 0.7f, 0.2f, 48.0f },   // pelvis
+    { PLAYER_LIMB_L_HAND,       3, -1.0f, 0.80f, 1.2f, 0.7f, 22.0f },   // wrists
+    { PLAYER_LIMB_R_HAND,       4,  1.0f, 0.80f, 1.2f, 0.7f, 22.0f },
+    { PLAYER_LIMB_L_FOOT,       7, -1.0f, 0.60f, 1.0f, 0.7f, 22.0f },   // ankles
+    { PLAYER_LIMB_R_FOOT,       8,  1.0f, 0.60f, 1.0f, 0.7f, 22.0f },
+};
 struct Corpse {
     Actor* actor = nullptr;
     royale::Vec2 vel = {};       // horizontal speed, units per second
@@ -1724,10 +1751,13 @@ struct Corpse {
     float pitch = 0, pitchVel = 0;        // tumbling head over heels in the air (radians)
     royale::Vec2 lastVel = {};
     float lastVy = 0, lastRollVel = 0;
-    float limb[9][2] = {}, limbVel[9][2] = {};   // loose limbs: two swing angles each (radians)
+    float limb[kJoints][2] = {}, limbVel[kJoints][2] = {};   // loose joints: two swing angles each (radians)
     int bounces = 0;
     float still = 0;             // seconds it has lain still; a body at rest skips the ground checks
     bool dying = false;          // asked the game to remove it
+    bool test = false;           // a lobby test ragdoll: never ages out, can be hit and grabbed
+    bool held = false;           // being carried (the grab button is held)
+    float hitCooldown = 0;
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
 };
@@ -1775,7 +1805,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
         return;
     }
     const float dt = 1.0f / royale::kTickHz;
-    c.age += dt;
+    if (!c.test) c.age += dt;
     if (c.age > kCorpseSeconds) { c.dying = true; Actor_Kill(actor); return; }
 
     // Walking into a body shoves it (and sets it rolling). Not while invisible: a spectator stands on their own body.
@@ -1789,6 +1819,29 @@ void Corpse_Update(Actor* actor, PlayState* play) {
             c.vel.x += dx / d * push * dt * 8.0f;
             c.vel.z += dz / d * push * dt * 8.0f;
             c.still = 0;
+        }
+        if (c.test) {   // the lobby test ragdoll can also be hit with a sword and carried (hold L)
+            Feat("ragdoll: test dummy");
+            c.hitCooldown -= dt;
+            if (local->meleeWeaponState != 0 && c.hitCooldown <= 0.0f && d < 75.0f && d > 0.01f) {
+                c.vel.x += dx / d * 320.0f; c.vel.z += dz / d * 320.0f;
+                c.vy = std::max(c.vy, 260.0f);
+                c.pitchVel += -4.0f; c.rollVel += (dx > 0 ? 3.0f : -3.0f);
+                c.hitCooldown = 0.4f; c.bounces = 0; c.still = 0;
+                for (auto& l : c.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 8.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 8.0f; }
+            }
+            const bool grabbing = (gPlayState->state.input[0].cur.button & BTN_L) != 0 && d < (c.held ? 220.0f : 140.0f);
+            c.held = grabbing;
+            if (grabbing) {   // pulled to a spot in front of the player, hanging loose
+                const float fy = local->actor.shape.rot.y * (3.14159265f / 32768.0f);
+                const float tx = local->actor.world.pos.x + std::sin(fy) * 45.0f, tz = local->actor.world.pos.z + std::cos(fy) * 45.0f;
+                const float ty = local->actor.world.pos.y + 35.0f;
+                const float k = std::min(1.0f, 10.0f * dt);
+                c.vel.x += ((tx - actor->world.pos.x) * 8.0f - c.vel.x) * k;
+                c.vel.z += ((tz - actor->world.pos.z) * 8.0f - c.vel.z) * k;
+                c.vy += ((ty - actor->world.pos.y) * 8.0f - c.vy) * k + 980.0f * dt;   // gravity is taken off again below
+                c.pitchVel *= 0.9f; c.rollVel *= 0.9f; c.bounces = 0; c.still = 0;
+            }
         }
     }
 
@@ -1862,24 +1915,33 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.z = static_cast<s16>(c.roll * (32768.0f / 3.14159265f));
     actor->shape.shadowAlpha = 255;
 
-    // Limp limbs: they lag behind every change of speed and of roll (the blow, each bounce, each turn over), flop toward the ground when the body
-    // lies on its side, and only weak springs pull them back.
+    // Limp joints: they lag behind every change of speed and of roll (the blow, each bounce, each turn over), flop toward the ground when the body
+    // lies on its side, and only weak springs pull them back. A joint is also dragged along by the one it hangs from, so a swinging shoulder whips
+    // the forearm and the wrist after it. Without the Ragdoll debug switch only the original nine limbs move.
+    const int joints = DebugOn(kDbgRagdoll) ? kJoints : kOriginalJoints;
     {
+        Feat("ragdoll: joints");
         const float ax = (c.vel.x - c.lastVel.x) / dt, az = (c.vel.z - c.lastVel.z) / dt, ay = (c.vy - c.lastVy) / dt;
         const float ar = (c.rollVel - c.lastRollVel) / dt;
         c.lastVel = c.vel; c.lastVy = c.vy; c.lastRollVel = c.rollVel;
         const float kick = std::clamp((std::fabs(ax) + std::fabs(az) + std::fabs(ay) * 0.4f) * 0.0009f, 0.0f, 1.4f);
         const float droop = std::sin(c.roll) * 0.7f;   // gravity, sideways across the body
-        for (int i = 0; i < 9; i++) {
-            const float sign = i % 2 ? -1.0f : 1.0f;
+        float before[kJoints][2];                      // last frame's speeds, so the order of the joints does not matter
+        for (int i = 0; i < joints; i++) { before[i][0] = c.limbVel[i][0]; before[i][1] = c.limbVel[i][1]; }
+        for (int i = 0; i < joints; i++) {
+            const RagJoint& jt = kRagJoints[i];
+            const bool original = i < kOriginalJoints;
             for (int a = 0; a < 2; a++) {
-                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f - ar * 0.004f)) * sign + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
+                const float push = (a == 0 ? ay * 0.00032f : (ax * 0.0003f + az * 0.0003f - ar * 0.004f)) * jt.side + kick * (Rand_ZeroOne() - 0.5f) * 0.5f;
                 c.limbVel[i][a] += push;
                 if (!onGround && !resting) c.limbVel[i][a] += std::sin(c.age * (7.0f + i) + a) * 0.9f * dt * 20.0f;   // flailing through the air
-                const float target = a == 1 && i > 0 ? droop : 0.0f;
-                c.limbVel[i][a] += (target - c.limb[i][a]) * 28.0f * dt;
+                if (!original && jt.parent >= 0 && jt.parent < joints) c.limbVel[i][a] += before[jt.parent][a] * 5.0f * dt;
+                const float target = a == 1 ? droop * (jt.droop / 0.7f) : 0.0f;
+                c.limbVel[i][a] += (target - c.limb[i][a]) * jt.stiff * dt;
                 c.limbVel[i][a] *= std::max(0.0f, 1.0f - 4.0f * dt);
-                c.limb[i][a] = std::clamp(c.limb[i][a] + c.limbVel[i][a] * dt, -1.2f, 1.2f);
+                const float next = c.limb[i][a] + c.limbVel[i][a] * dt;
+                if (std::fabs(next) > jt.limit) c.limbVel[i][a] *= -0.3f;   // hit the end of its range: it bounces back a little
+                c.limb[i][a] = std::clamp(next, -jt.limit, jt.limit);
             }
         }
     }
@@ -1889,15 +1951,13 @@ void Corpse_Update(Actor* actor, PlayState* play) {
         c.animStarted = true;
     }
     LinkAnimation_Update(play, &player->skelAnime);
-    {   // the loose limbs, on top of the knocked-down pose
-        static const int kLimbs[9] = { PLAYER_LIMB_HEAD, PLAYER_LIMB_L_SHOULDER, PLAYER_LIMB_R_SHOULDER, PLAYER_LIMB_L_FOREARM, PLAYER_LIMB_R_FOREARM,
-                                       PLAYER_LIMB_L_THIGH, PLAYER_LIMB_R_THIGH, PLAYER_LIMB_L_SHIN, PLAYER_LIMB_R_SHIN };
-        static const float kReach[9] = { 0.5f, 1.0f, 1.0f, 0.9f, 0.9f, 0.6f, 0.6f, 0.7f, 0.7f };
+    {   // the loose joints, on top of the knocked-down pose
         Vec3s* j = player->skelAnime.jointTable;
         const float bin = 32768.0f / 3.14159265f;
-        for (int i = 0; i < 9; i++) {
-            j[kLimbs[i]].x = static_cast<s16>(j[kLimbs[i]].x + c.limb[i][0] * kReach[i] * bin);
-            j[kLimbs[i]].z = static_cast<s16>(j[kLimbs[i]].z + c.limb[i][1] * kReach[i] * bin);
+        for (int i = 0; i < joints; i++) {
+            const RagJoint& jt = kRagJoints[i];
+            j[jt.limb].x = static_cast<s16>(j[jt.limb].x + c.limb[i][0] * jt.reach * bin);
+            j[jt.limb].z = static_cast<s16>(j[jt.limb].z + c.limb[i][1] * jt.reach * bin);
         }
     }
     Vec3f ignored;
@@ -1974,6 +2034,61 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     c.rollVel = -sideways / kBodyRadius * 0.5f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
+    gCorpses[id] = c;
+    gCorpseOf[actor] = id;
+}
+
+// ---- the lobby test ragdoll ---------------------------------------------------------------------------------------------------
+// A dummy that looks like the local player, to try the ragdoll with while waiting: walk into it, hit it with the sword, or hold L to carry it.
+// It never ages out and is not counted with the bodies of eliminated players.
+constexpr size_t kMaxTestRagdolls = 3;
+
+size_t CountTestRagdolls() {
+    size_t n = 0;
+    for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) n++;
+    return n;
+}
+
+void RemoveTestRagdolls() {
+    for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) { body.dying = true; Actor_Kill(body.actor); }
+}
+
+void FlingTestRagdolls() {
+    for (auto& [cid, body] : gCorpses) {
+        if (!body.test || body.dying) continue;
+        body.vel = { (Rand_ZeroOne() - 0.5f) * 700.0f, (Rand_ZeroOne() - 0.5f) * 700.0f };
+        body.vy = 420.0f + Rand_ZeroOne() * 200.0f;
+        body.pitchVel = -9.0f + Rand_ZeroOne() * 4.0f;
+        body.rollVel = (Rand_ZeroOne() - 0.5f) * 14.0f;
+        body.spin = (Rand_ZeroOne() - 0.5f) * 8.0f;
+        body.bounces = 0; body.still = 0;
+        for (auto& l : body.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 12.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 12.0f; }
+    }
+}
+
+void SpawnTestRagdoll(const royale::HudState& hud) {
+    Feat("ragdoll: spawn test dummy");
+    if (gPlayState == nullptr || !InGame()) return;
+    if (CountTestRagdolls() >= kMaxTestRagdolls) {   // the oldest one goes
+        for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) { body.dying = true; Actor_Kill(body.actor); break; }
+    }
+    const Player* self = GET_PLAYER(gPlayState);
+    const float yaw = self->actor.shape.rot.y * (3.14159265f / 32768.0f);
+    const uint16_t id = gNextCorpse++;
+    if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
+    const float x = self->actor.world.pos.x + std::sin(yaw) * 70.0f, z = self->actor.world.pos.z + std::cos(yaw) * 70.0f;
+    gSpawningPuppet = id;
+    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, x, self->actor.world.pos.y + 60.0f, z, 0, self->actor.shape.rot.y + 0x8000, 0, 0, false);
+    gSpawningPuppet = 0;
+    if (actor == nullptr) return;
+    actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);
+    Corpse c;
+    c.actor = actor;
+    c.test = true;
+    c.weapon = hud.weapon;
+    c.tunic = gLocalTunic;
+    c.vy = 120.0f;
+    c.pitchVel = -3.0f;
     gCorpses[id] = c;
     gCorpseOf[actor] = id;
 }
@@ -9970,8 +10085,10 @@ void ReportEvents(const royale::HudState& hud) {
                 }
                 // The server stops sending eliminated players, so their puppet just vanishes: leave their body here instead, thrown away
                 // from whoever got them (or backwards, for the storm). Your own body is made in OnPlayerUpdate.
-                if (!me && InField() && !royale::IsBossId(e.id) && gState.count(e.id) && gState[e.id].scene == gPlayState->sceneNum) {
-                    royale::PuppetState body = gState[e.id];
+                // (A player who was only just seen, or just went out of range, is found in gLastSeen: any kind of death leaves a body.)
+                const royale::PuppetState* known = gState.count(e.id) ? &gState[e.id] : gLastSeen.count(e.id) ? &gLastSeen[e.id] : nullptr;
+                if (!me && InField() && !royale::IsBossId(e.id) && known != nullptr && known->scene == gPlayState->sceneNum) {
+                    royale::PuppetState body = *known;
                     auto actor = gActorOf.find(e.id);
                     if (actor != gActorOf.end() && actor->second != nullptr) {   // where it is drawn right now, not the last network sample
                         body.x = actor->second->world.pos.x; body.y = actor->second->world.pos.y; body.z = actor->second->world.pos.z;
@@ -13169,6 +13286,15 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
     if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
     ImGui::EndDisabled();
+
+    ImGui::Spacing();
+    Heading("Ragdoll test");
+    ImGui::BeginDisabled(!InGame() || !DebugOn(kDbgRagdoll));
+    if (ImGui::Button("Spawn a test ragdoll", ImVec2(220, 0))) SpawnTestRagdoll(h);
+    if (ImGui::Button("Fling the test ragdolls", ImVec2(220, 0))) FlingTestRagdolls();
+    if (ImGui::Button("Remove the test ragdolls", ImVec2(220, 0))) RemoveTestRagdolls();
+    ImGui::EndDisabled();
+    ImGui::TextColored(kGrey, "Walk into it to shove it, hit it with your sword, or hold L next to it to carry it around. (Needs the Ragdoll switch in Debug.)");
 
     ImGui::Spacing();
     if (ImGui::Button("Leave lobby", ImVec2(220, 0))) gSession.Leave();
