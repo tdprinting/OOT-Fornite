@@ -1235,6 +1235,41 @@ static void ClothAndWind() {
     HatSpring h1, h2;
     for (int i = 0; i < 600; i++) { h1.Step(1.0f / 60.0f, 20, 10, 0, 0.1f, i / 60.0f, 2); h2.Step(1.0f / 60.0f, 20, 10, 0, 1.0f, i / 60.0f, 2); breeze = (std::max)(breeze, std::fabs(h1.fore)); gale = (std::max)(gale, std::fabs(h2.fore)); }
     CHECK(gale > breeze);
+    // The tunic's skirt and the sheath: still when he stands on a calm day, trail back when he runs, swing past and settle when he stops,
+    // flap more at a run than a walk, and stay finite and in reach whatever they are fed.
+    for (const SwingTune* tune : {&kSkirtSwing, &kSheathSwing}) {
+        ClothSwing calm;
+        for (int i = 0; i < 240; i++) calm.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, i / 60.0f, 0);
+        CHECK(std::fabs(calm.fore) < 0.03f && std::fabs(calm.side) < 0.03f);
+        ClothSwing runs;
+        float trail = 0;
+        for (int i = 0; i < 240; i++) { runs.Step(*tune, 1.0f / 60.0f, 0, -300, 300, 0, 0.0f, i / 60.0f, 0); if (i > 120) trail += runs.fore / 119.0f; }
+        CHECK(trail > 0.05f && trail <= tune->maxFore);
+        float past = 0;   // a sudden stop throws it forward (negative) before it settles
+        runs.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, 4.0f, 0, -300.0f, 0.0f);
+        for (int i = 0; i < 30; i++) { runs.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, 4.0f + i / 60.0f, 0); past = (std::min)(past, runs.fore); }
+        CHECK(past < -0.02f);
+        for (int i = 0; i < 300; i++) runs.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, 0.0f, 0);
+        CHECK(std::fabs(runs.fore) < 0.02f);
+        ClothSwing walk, sprint;
+        float walkSwing = 0, sprintSwing = 0;
+        for (int i = 0; i < 300; i++) {
+            walk.Step(*tune, 1.0f / 60.0f, 0, 0, 120, 0, 0.0f, 0.0f, 0); sprint.Step(*tune, 1.0f / 60.0f, 0, 0, 450, 0, 0.0f, 0.0f, 0);
+            if (i > 60) { walkSwing = (std::max)(walkSwing, std::fabs(walk.side)); sprintSwing = (std::max)(sprintSwing, std::fabs(sprint.side)); }
+        }
+        CHECK(sprintSwing > walkSwing && walkSwing > 0.005f);
+        ClothSwing still, windy;
+        float stillMax = 0, windyMax = 0;
+        for (int i = 0; i < 600; i++) {
+            still.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 0.0f, i / 60.0f, 1); windy.Step(*tune, 1.0f / 60.0f, 0, 0, 0, 0, 1.0f, i / 60.0f, 1);
+            stillMax = (std::max)(stillMax, std::fabs(still.fore)); windyMax = (std::max)(windyMax, std::fabs(windy.fore));
+        }
+        CHECK(windyMax > stillMax * 2.0f);
+        ClothSwing wild;
+        wild.Step(*tune, 10.0f, 1e9f, -1e9f, 1e9f, -1e9f, 9.0f, 1e9f, 5, 1e9f, -1e9f);
+        wild.Step(*tune, NAN, NAN, NAN, NAN, NAN, NAN, 0.0f, 5, NAN, NAN);
+        CHECK(std::isfinite(wild.fore) && std::isfinite(wild.side) && std::fabs(wild.fore) <= tune->maxFore * 1.5f + 1e-4f && std::fabs(wild.side) <= tune->maxSide * 1.5f + 1e-4f);
+    }
 }
 
 static void TheSignInTheMiddle() {

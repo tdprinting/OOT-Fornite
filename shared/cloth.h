@@ -4,6 +4,8 @@
 //     centre keel are fixed to the frame; the rest of the sheet is free, so it billows when air pushes up from below, flutters at the
 //     trailing edge and ripples in gusts. The airflow is the glider's own movement through the air plus the wind.
 //   HatSpring: the tail of Link's cap, a damped spring in two directions (fore-aft and sideways) pushed by the same airflow.
+//   ClothSwing: the same idea for the heavier clothes (the tunic's skirt, the sheath on its strap): a pendulum that lags Link's movement,
+//     flaps with his stride, streams away from the air and flutters in the wind, tuned per piece with a SwingTune.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -181,6 +183,67 @@ struct HatSpring {
         if (!std::isfinite(baseFore) || !std::isfinite(baseSide) || !std::isfinite(tipFore) || !std::isfinite(tipSide)) { baseFore = baseSide = tipFore = tipSide = vFore = vSide = vTipFore = vTipSide = 0; }
         fore = std::clamp(baseFore + 0.5f * (baseFore - tipFore), -0.7f, 0.7f);
         side = std::clamp(baseSide + 0.5f * (baseSide - tipSide), -0.6f, 0.6f);
+    }
+};
+
+// How one piece of clothing swings. Angles are radians of the piece's limb; fore is positive when the piece trails back (air from in front).
+struct SwingTune {
+    float k, damp;            // the spring (how fast it swings back) and how quickly a swing dies away
+    float airGain;            // radians per (unit per second) of air streaming past
+    float maxFore, maxSide;   // never swings further than this
+    float flutter;            // wind flutter at full gale
+    float stride;             // flap per (unit per second) of running speed, at the stride's rhythm
+    float kick;               // how much a sudden start, stop or landing throws it
+};
+// The tunic's skirt: heavy cloth, swings a little and slowly. The sheath: a stiff thing on a strap, a smaller, quicker bob.
+constexpr SwingTune kSkirtSwing = {22.0f, 4.2f, 0.00055f, 0.2f, 0.16f, 0.06f, 0.00016f, 0.0026f};
+constexpr SwingTune kSheathSwing = {38.0f, 5.5f, 0.0004f, 0.22f, 0.18f, 0.04f, 0.00022f, 0.0032f};
+
+struct ClothSwing {
+    float fore = 0, side = 0;                         // what the limb is turned by
+    float baseFore = 0, baseSide = 0, vFore = 0, vSide = 0, stridePhase = 0, flapAmp = 0, flutterAmp = 0;
+    // `air` in Link's own frame (x to his left, z in front of him), `speed` how fast he moves over the ground, `fall` how fast he drops
+    // (units per second, positive falling), `accFore`/`accSide` his change of velocity this step in his frame.
+    // A spring carries the slow part (trailing in the airflow, lagging a start, swinging past a stop); the stride's flap and the wind's
+    // flutter ride on top of it, so they stay lively instead of being smoothed away by the heavy spring.
+    void Step(const SwingTune& t, float dt, float airX, float airZ, float speed, float fall, float wind01, float time, float phase,
+              float accFore = 0.0f, float accSide = 0.0f) {
+        if (!std::isfinite(dt) || dt <= 0.0f) return;
+        dt = (std::min)(dt, 0.1f);
+        auto safe = [](float v, float lim) { return std::isfinite(v) ? std::clamp(v, -lim, lim) : 0.0f; };
+        airX = safe(airX, 2000.0f); airZ = safe(airZ, 2000.0f); speed = std::fabs(safe(speed, 2000.0f)); fall = safe(fall, 3000.0f);
+        accFore = safe(accFore, 3000.0f); accSide = safe(accSide, 3000.0f); wind01 = std::clamp(std::isfinite(wind01) ? wind01 : 0.0f, 0.0f, 1.0f);
+        if (!std::isfinite(time)) time = 0.0f;
+        time = std::fmod(time, 10000.0f);
+        const float targetFore = std::clamp(-airZ * t.airGain, -t.maxFore, t.maxFore);
+        const float targetSide = std::clamp(-airX * t.airGain, -t.maxSide, t.maxSide);
+        // His own acceleration throws the cloth the other way: it lags a start and swings on past a stop.
+        vFore += std::clamp(accFore * t.kick, -4.0f, 4.0f);
+        vSide += std::clamp(accSide * t.kick, -4.0f, 4.0f);
+        const int steps = (std::max)(1, (std::min)(6, static_cast<int>(dt / (1.0f / 120.0f) + 0.5f)));
+        const float h = dt / steps;
+        for (int s = 0; s < steps; s++) {
+            vFore += ((targetFore - baseFore) * t.k - vFore * t.damp) * h;
+            vSide += ((targetSide - baseSide) * t.k - vSide * t.damp) * h;
+            baseFore += vFore * h;
+            baseSide += vSide * h;
+        }
+        if (!std::isfinite(baseFore) || !std::isfinite(baseSide) || !std::isfinite(vFore) || !std::isfinite(vSide)) baseFore = baseSide = vFore = vSide = 0;
+        const float limF = t.maxFore * 1.2f, limS = t.maxSide * 1.2f;   // a hard throw may overshoot the usual reach a little, never more
+        if (baseFore > limF || baseFore < -limF) { baseFore = std::clamp(baseFore, -limF, limF); vFore = 0; }
+        if (baseSide > limS || baseSide < -limS) { baseSide = std::clamp(baseSide, -limS, limS); vSide = 0; }
+        // Stride: about two and a half steps a second at a walk, quicker at a run. The cloth rocks side to side once a stride and flaps fore
+        // and aft with each step. The size eases in and out so starting and stopping don't jump.
+        stridePhase = std::fmod(stridePhase + dt * (5.0f + (std::min)(speed, 600.0f) * 0.022f), 6.2831853f);
+        const float ease = (std::min)(1.0f, dt * 6.0f);
+        flapAmp += ((std::min)(speed, 600.0f) * t.stride - flapAmp) * ease;
+        // Wind flutter, and falling (a jump, the skydive) makes the cloth stream and snap hard.
+        const float fallFlutter = std::clamp(fall / 900.0f, 0.0f, 1.0f);
+        flutterAmp += (((0.15f + 0.85f * wind01) + fallFlutter * 1.4f) * t.flutter - flutterAmp) * ease;
+        const float flutterFore = (std::sin(time * 8.3f + phase) + 0.4f * std::sin(time * 15.1f + phase * 0.7f)) * flutterAmp;
+        const float flutterSide = std::sin(time * 6.7f + phase * 1.9f) * flutterAmp * 0.8f;
+        fore = std::clamp(baseFore + std::sin(stridePhase * 2.0f) * flapAmp * 0.6f + flutterFore, -t.maxFore * 1.5f, t.maxFore * 1.5f);
+        side = std::clamp(baseSide + std::sin(stridePhase) * flapAmp + flutterSide, -t.maxSide * 1.5f, t.maxSide * 1.5f);
     }
 };
 
