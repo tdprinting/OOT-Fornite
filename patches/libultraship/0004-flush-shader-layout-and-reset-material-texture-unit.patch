@@ -47,7 +47,7 @@ diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.c
  static void gfx_opengl_upload_texture(const uint8_t* rgba32_buf, uint32_t width, uint32_t height) {
      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba32_buf);
  }
-@@ -1094,7 +1098,8 @@
+@@ -1094,8 +1098,9 @@
                                            gfx_opengl_delete_texture,
                                            gfx_opengl_set_texture_filter,
                                            gfx_opengl_get_texture_filter,
@@ -57,3 +57,4 @@ diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.c
 
  #endif
 
+ #pragma clang diagnostic pop
