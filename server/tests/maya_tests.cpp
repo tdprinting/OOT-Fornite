@@ -1,4 +1,5 @@
 #include "maya_anim.h"
+#include "maya_sounds.h"
 #include "map.h"
 #include <cassert>
 #include <cmath>
@@ -46,6 +47,13 @@ int main() {
     assert(M::Expression(M::kIdle,0,3.18f)==M::kFaceShut);
     bool blended=false;for(const auto& v:M::kVerts) blended|=v.b0!=v.b1 && v.w0<255;assert(blended);
     for(int f=0;f<M::kFrameCount;f++)assert(M::kFrameFaces[f]<M::kFaceCount);
+    static_assert(royale::maya_snd::kClipCount==2);
+    for(const auto& clip:royale::maya_snd::kClips) {
+        assert(clip.count>1000 && clip.count<royale::maya_snd::kRate*2);
+        assert(clip.data[0]==0 && clip.data[clip.count-1]==0);
+        int peak=0;for(int i=0;i<clip.count;i++)peak=std::max(peak,std::abs(static_cast<int>(clip.data[i])));
+        assert(peak>20000 && peak<=24576);
+    }
     // Every hobby reveals exactly its own prop; walking parks all five.
     const int clips[]={M::kTablet,M::kDraw,M::kPizza,M::kScooter,M::kLearn};
     const char* names[]={"tablet","draw","pizza","scooter","learn"};

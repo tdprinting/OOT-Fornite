@@ -16,6 +16,7 @@
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
 #include "maya_anim.h"
+#include "maya_sounds.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -6926,7 +6927,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -11949,13 +11950,30 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
 
 
 
+// Maya's two real, user-confirmed playful responses. A dedicated mixer slot
+// respects game volume and never interrupts Lilo, Avriella, music or other SFX.
+double gMayaVoiceQuietUntil=0;
+void StopMayaVoice() { StopVoice(kVoiceMaya); gMayaVoiceQuietUntil=0; }
+bool PlayMayaVoice(int clip, bool force=false) {
+    namespace S=royale::maya_snd;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    const double now=ImGui::GetTime();
+    const float volume=GameVolume(false)*.8f;
+    if (!CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1) || volume<.01f || clip<0 || clip>=S::kClipCount ||
+        !VoiceDone(kVoiceMaya) || (!force && now<gMayaVoiceQuietUntil)) return false;
+    if(!cache[clip])cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoiceMaya,cache[clip],false,S::kRate,false,volume);
+    gMayaVoiceQuietUntil=now+static_cast<double>(S::kClips[clip].count)/S::kRate+3.0+Rand_ZeroOne()*2.0;
+    return true;
+}
+
 // Maya is a local cosmetic companion. Original mesh/rig: tools/maya/.
 struct MayaCompanionState {
     Actor* actor = nullptr;
     royale::maya::Animator anim;
     float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0, speed = 0, expressionClock = 0, greeting = 2.8f;
     int line = 0, hobby = 0;
-    bool talking = false;
+    bool talking = false, greeted = false, voiceReplyPlayed = false;
 };
 MayaCompanionState gMayaCompanion;
 
@@ -11971,7 +11989,7 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
     float distance = std::hypot(dx, dz);
     c.expressionClock += dt; c.greeting = std::max(0.0f,c.greeting-dt);
     bool talking = TalkingTo(actor);
-    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 8; c.hobbyTime = 0; }
+    if (c.talking && !talking) { c.voiceReplyPlayed=false; c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 8; c.hobbyTime = 0; }
     c.talking = talking;
     int clip = M::kIdle;
     if (distance > 115.0f && !talking) {
@@ -12009,6 +12027,9 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
     if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
+    if (!c.greeted && c.greeting>0) c.greeted=PlayMayaVoice(royale::maya_snd::kHappy);
+    if (talking && !c.voiceReplyPlayed) c.voiceReplyPlayed=PlayMayaVoice(c.line>=10 ? royale::maya_snd::kHappy : royale::maya_snd::kPlayful,true);
+    if (clip!=c.anim.clip && (clip==M::kCheer || clip==M::kHop || clip==M::kGiggle)) PlayMayaVoice(royale::maya_snd::kHappy);
     c.anim.Play(clip,.35f);
     const float rate=clip==M::kWalk ? std::clamp(c.speed/65.0f,.55f,1.8f) : clip==M::kRun ? std::clamp(c.speed/130.0f,.7f,1.5f) : 1.0f;
     c.anim.Update(dt,rate);
@@ -12021,11 +12042,11 @@ void MayaCompanion_Draw(Actor* actor, PlayState* play) {
     const int face = royale::maya::Expression(gMayaCompanion.anim.clip,gMayaCompanion.anim.time,gMayaCompanion.expressionClock);
     DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,royale::maya::kWorldScale,pose,face);
 }
-void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
+void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) { StopMayaVoice(); gMayaCompanion = MayaCompanionState{}; } }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
     const bool want = DebugOn(kDbgAllies) && MapOption("LiloPet",false) && PetKind()==2 && gSession.Joined() &&
         (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
-    if (!want) { if (gMayaCompanion.actor) Actor_Kill(gMayaCompanion.actor); gMayaCompanion = MayaCompanionState{}; return; }
+    if (!want) { if (gMayaCompanion.actor) { Actor_Kill(gMayaCompanion.actor); StopMayaVoice(); } gMayaCompanion = MayaCompanionState{}; return; }
     if (gMayaCompanion.actor) return;
     Player* player=GET_PLAYER(gPlayState);
     const auto& p=player->actor.world.pos;
@@ -13947,6 +13968,7 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
+    StopMayaVoice();
     gMayaCompanion = MayaCompanionState{};
     gActorOf.clear();
     gPlaying.clear();
@@ -14243,6 +14265,14 @@ void DrawPetOptions() {
                            "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
     else
         ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
+    if (kind == 2) {
+        bool voice=CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1)!=0;
+        if(ImGui::Checkbox("Play Maya's voice",&voice)) {
+            CVarSetInteger(CVAR_SETTING("Royale.MayaVoice"),voice ? 1 : 0);
+            if(!voice)StopVoice(kVoiceMaya);
+            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+        }
+    }
     if (!DebugOn(kDbgAllies) && kind == 2) ImGui::TextColored(kRed, "Maya is switched off with Allies in the Debug section.");
     if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");
 }

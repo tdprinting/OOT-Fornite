@@ -17,3 +17,7 @@ Props use baked two-bone arm IK: palms meet tablet/book edges and scooter grips,
 From the repository root: `blender -b --python tools/maya/build_maya.py`, then `blender -b --python tools/maya/export_maya.py`. `personality.py` authors motion and painted textures. `preview_motion.py` renders review frames. Source Blender/GLB, texture PNGs and generated game data are included. Generated previews are ignored by Git.
 
 `server/tests/maya_tests.cpp` checks mesh batches, all joint transforms and clips, expression frames and blinks, child scale, blended skinning, prop visibility, cross-fades, hand contact throughout tablet/drawing/scooter clips, and pencil-tip contact with the page. Full game compilation and actual handheld playtesting remain separate checks.
+
+## Real voice
+
+Two user-confirmed Maya-only playful responses from the supplied family recording are included as mono 16 kHz PCM16 WAVs. The opening adult line and surrounding adult speech are excluded. Clips have light background-noise cleanup, fades and matched levels without pitch or speed changes. They play on greeting, conversation and happy reactions through a dedicated mixer voice, with cooldowns, game-volume support and a voice toggle. Switching pets, leaving a scene or disabling voice stops playback. The original MOV and its metadata are not included. Rebuild the game header with `python scripts/make_maya_sounds.py`; `sounds/manifest.json` records the selected source intervals.
