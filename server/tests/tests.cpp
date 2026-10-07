@@ -3601,6 +3601,31 @@ static void ShockwaveGrenade() {
     CHECK(used);
 }
 
+// A boss's swing or a helper's strike follows the same rules a player's weapon does: rolling dodges it, a raised shield in front takes most of it.
+static void BlowsFollowThePlayersRules() {
+    Simulation sim = Duel(5, {100, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* h = m.Find(1);
+    h->health = h->maxHealth = 7.0f;
+    h->invulnUntil = 0; h->armor = 0; h->hasShield = false;
+    m.DrainEvents();
+    CHECK(m.Blow(*h, {0, 0}, 1.0f, 1000));                                                    // a plain blow lands
+    CHECK(std::fabs((7.0f - h->health) - kPlayerDamageScale) < 0.001f);
+    h->health = 7.0f;
+    CHECK(m.StartRoll(1));
+    CHECK(!m.Blow(*h, {0, 0}, 1.0f, 1000) && h->health == 7.0f);                              // rolled clean through it
+    Run(sim, Match::kRollSeconds + 0.2f);
+    h->invulnUntil = 0;
+    h->hasShield = true; h->shield = {ItemId::HylianShield, Rarity::Common};
+    h->anim = static_cast<uint8_t>(Anim::Guard); h->rot = 0;
+    const float before = h->health;
+    CHECK(m.Blow(*h, {0, 500}, 1.0f, 1000));                                                  // from in front: shield and guard
+    const float guarded = before - h->health;
+    h->health = before; h->anim = 0;
+    CHECK(m.Blow(*h, {0, 500}, 1.0f, 1000));
+    CHECK(guarded < (before - h->health) * 0.5f);
+}
+
 static void ShieldBar() {
     Simulation sim = Duel(5, {100, 0}, {0, 0});
     Match& m = sim.match;
@@ -4349,7 +4374,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();

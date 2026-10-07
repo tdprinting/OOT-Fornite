@@ -10427,6 +10427,20 @@ void ApplyRocks(Player* player) {
 static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
     uint16_t best = 0;
     float bestDist = 1e9f;
+    // Z-targeting something (a player, a mini boss, a major boss) is choosing it: the blow goes to that one while it is in reach, whichever way the
+    // sticks point (the game turns Link to face it, so the usual cone is not needed).
+    if (const Actor* locked = player->focusActor) {
+        uint16_t id = 0; float tx = 0, tz = 0, edge = 0;
+        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive) { tx = st->second.x; tz = st->second.z; } else id = 0; }
+        else if (auto b = gBossOf.find(locked); b != gBossOf.end() && b->second <= 0xFFFFu) {
+            id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
+            if (!KnownPosition(id, &tx, &tz)) id = 0;
+        }
+        if (id != 0) {
+            const float d = std::hypot(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) - edge;
+            if (d <= range * 1.05f) { *outDist = (std::max)(0.0f, d); return id; }
+        }
+    }
     for (const auto& [id, actor] : gActorOf) {
         auto st = gState.find(id);
         if (st == gState.end() || !st->second.alive) continue;
@@ -13692,6 +13706,12 @@ void Ally_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.y = a.rot;
     actor->world.rot.y = a.rot;
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 55.0f;
+    // Z-targeting, as with the game's own NPCs (the white reticle, not the red one an enemy gets): works on the free ones and on the helpers
+    // alike, so you can face them to talk or see who is fighting for whom.
+    actor->targetMode = 3;
+    actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED;
+    actor->flags &= ~ACTOR_FLAG_HOSTILE;
 
     const NpcSpec spec = NpcOf(a.kind);
     if (!a.skReady) {

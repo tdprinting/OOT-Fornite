@@ -1125,6 +1125,17 @@ void Boss_Update(Actor* actor, PlayState* play) {
         want = d < 160.0f ? 0.6f : 0.12f;   // ...a shimmer you can just make out, until it strikes
     }
     b.fade += (want - b.fade) * (want > b.fade ? 0.35f : 0.12f);
+    // Z-targeting, like any enemy: aim at the middle of the body, from as far off as the game allows for a big one. Not while it is hidden
+    // (underground, under water, in shadow) or melted into the grass: nothing can hit it then, so there is nothing to lock on to.
+    {
+        const bool major = royale::IsDragonKind(KindOf(b));
+        const float body = (major ? 90.0f : 60.0f) * royale::kBossDefs[b.kind].scale;
+        actor->focus.pos = actor->world.pos;
+        actor->focus.pos.y += body;
+        actor->targetMode = major ? 5 : 4;   // the game's own ranges: 1000 and 700 units
+        if (b.fade > 0.5f && mode != BM::Hidden) actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE;
+        else actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);
+    }
     // Spins and rolls.
     if ((KindOf(b) == BK::Tide || KindOf(b) == BK::Lava) && mode == BM::Charge) b.spin += KindOf(b) == BK::Tide ? 0.9f : 0.6f;
     else b.spin = 0.0f;

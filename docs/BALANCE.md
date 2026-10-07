@@ -48,6 +48,8 @@ Hits to take a full 7 hearts with no shield, Common / Legendary. Time is the fas
 
 ## Bosses and hazards
 
+Mini boss swing wind-up is 0.7 s (was 0.55 s) so there is time to roll or raise a shield, swings come 0.2 s less often, and they rest a second longer between special moves. Walking speed (player run = 100, sprint = 135): Stalfos 72 → 66, Magma Dodongo 58 → 55, White Wolfos 88 → 80, Lizalfos 76 → 70, Big Octo 70 → 66, Dead Hand 50 → 48, Iron Knuckle 55 → 52. Major bosses: attack gap 3.0 → 3.4 s and speeds Volvagia 150 → 135, Morpha 120 → 110, Phantom Ganon 160 → 140, Bongo Bongo 130 → 120, Twinrova 190 → 160. A heavy hit (8% of its health, e.g. a Master Sword swing on a Stalfos) knocks a mini boss out of a wind-up.
+
 Every boss hit is 75% of what it was: a Stalfos swing goes from 0.8 to 0.6 hearts, a White Wolfos from 1.2 to 0.9, the major boss's fire blast from 1.0 to 0.75 and its breath from 0.6 to 0.45 hearts a second. Lightning goes from 0.75 to 0.56 hearts, a wrecked cart's blast nobody caused from 1.5 to 1.1.
 
 ## Bot matches (`royale_balance 8 normal 0 24`)
@@ -57,3 +59,11 @@ Every boss hit is 75% of what it was: a Stalfos swing goes from 0.8 to 0.6 heart
 | Match length | 349 s | 404 s |
 | Alive at 1:00 / 3:00 (of 23) | 20.6 / 12.9 | 20.1 / 12.4 |
 | Storm eliminations per match | 4.2 | 3.5 |
+
+## One set of hit rules
+
+A boss's swing or charge and a hired helper's strike now go through `Match::Blow`, the same rules a player's weapon follows: rolling dodges it, a shield's own reduction comes off, and a raised shield facing it blocks most of the rest. Rolling also dodges marked blasts (not lightning). Breath, explosions and magic still ignore shields, as they do for players.
+
+## Z-targeting
+
+Mini bosses, major bosses (while visible) and hireable helpers can be Z-targeted like the game's own enemies and NPCs (red reticle for bosses, white for helpers). While locked on a player or boss, your blow goes to that target when it is in reach, whichever way the stick points.
