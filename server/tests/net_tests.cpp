@@ -1016,6 +1016,8 @@ static void ReliableEventsSurviveLoss() {
     rig.Run(120.0f);                            // bots loot and fight; humans stand still and get hunted
     rig.network.Advance(2.0f);
     rig.Run(2.0f);
+    rig.network.Advance(1.0f);                  // let what is still in flight arrive, without the server making more (a bot can grab loot on the last tick)
+    for (auto& c : rig.clients) c->Update(kDt);
     // Every client's loot table must equal the server's, even though 30% of snapshots were lost.
     for (GameClient* g : {&a, &b, &c}) {
         CHECK(g->Loot().size() == rig.M().Loot().size());

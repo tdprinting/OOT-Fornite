@@ -63,9 +63,9 @@ static void StormTimeline() {
     float last = 1e9f;
     for (float t = 0; t < s.TotalDuration(); t += 1.0f) { float r = s.SafeZoneAt(t).radius; CHECK(r <= last + 1e-3f); last = r; }
     CHECK(s.DamagePerSecond({1999, 0}, 0) == 0.0f);     // inside the map, phase 1 holds
-    CHECK(std::abs(s.DamagePerSecond({5000, 0}, 0) - 0.5f * (2000.0f / 3500.0f)) < 1e-4f);     // outside the map (a small map's storm hurts a little less)
+    CHECK(std::abs(s.DamagePerSecond({5000, 0}, 0) - kStormPhases[0].damagePerSec * (2000.0f / 3500.0f)) < 1e-4f);     // outside the map (a small map's storm hurts a little less)
     Storm big(7, {{0, 0}, 5000});
-    CHECK(big.DamagePerSecond({9000, 0}, 0) == 0.5f);
+    CHECK(big.DamagePerSecond({9000, 0}, 0) == kStormPhases[0].damagePerSec);
 }
 static void LootDeterministicAndValid() {
     auto a = GenerateLoot(99, MapCircle(), 400, 0.15f), b = GenerateLoot(99, MapCircle(), 400, 0.15f);
@@ -582,7 +582,7 @@ static void GearChangesDamageDealtAndTaken() {
     };
     const ItemId none = ItemId::Count;
     float plain = hit(none, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Normal);
-    CHECK(std::abs(plain - 0.8f) < 0.001f);                                       // Kokiri Sword at Common
+    CHECK(std::abs(plain - 0.8f * kPlayerDamageScale) < 0.001f);                  // Kokiri Sword at Common
     CHECK(hit(ItemId::SpiritMedallion, GearSlot::Charm, none, GearSlot::Mask, DamageKind::Normal) > plain);   // melee gear hits harder
     CHECK(hit(ItemId::SkullMask, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Normal) == plain);          // ranged gear doesn't help a sword
     CHECK(hit(none, GearSlot::Mask, ItemId::LightMedallion, GearSlot::Charm, DamageKind::Normal) < plain);    // damage reduction
@@ -590,7 +590,7 @@ static void GearChangesDamageDealtAndTaken() {
     float storm = hit(none, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Storm);
     CHECK(std::abs(storm - 1.0f) < 0.001f);
     CHECK(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Storm) < storm);
-    CHECK(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Fire) == storm);            // Zora Mask doesn't stop fire
+    CHECK(std::abs(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Fire) - storm * kHazardDamageScale) < 0.001f); // Zora Mask doesn't stop fire
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Fire) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Explosion) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Storm) == storm);
@@ -721,11 +721,11 @@ static void PotionVariants() {
     CHECK(m.UsePotion(1000));
     float before = p->health;
     m.Damage(1000, 1.0f, 1);
-    CHECK(std::abs((before - p->health) - 0.5f) < 0.001f);
+    CHECK(std::abs((before - p->health) - 0.5f * kPlayerDamageScale) < 0.001f);
     for (int i = 0; i < 7 * kTickHz; i++) m.Tick(kDt);
     before = p->health;
     m.Damage(1000, 1.0f, 1);
-    CHECK(std::abs((before - p->health) - 1.0f) < 0.001f);
+    CHECK(std::abs((before - p->health) - kPlayerDamageScale) < 0.001f);
     CHECK(!m.UsePotion(1000));                                                         // empty bag
 }
 
@@ -773,7 +773,7 @@ static void WeaponEffects() {
         t->pos = {50, 0};
         float before = t->health;
         m.Damage(1000, 1.0f, 1);
-        CHECK(std::abs((before - t->health) - 1.25f) < 0.001f);
+        CHECK(std::abs((before - t->health) - 1.25f * kPlayerDamageScale) < 0.001f);
         for (int i = 0; i < 3 * kTickHz; i++) m.Tick(kDt);
         CHECK(!m.Stunned(*t));
     }
@@ -1519,7 +1519,7 @@ static void HeartChestsAndAdultPower() {
     const float hp = me->health;
     me->invulnUntil = 0; me->armor = 0;
     m.Damage(1, 0.5f, 1000);
-    CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken) < 0.01f);
+    CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken * kPlayerDamageScale) < 0.01f);
     // A second one straight away is not wasted; near the end it tops you up.
     const size_t again = m.AddLoot({{0, 0}, ItemId::AdultPower, Rarity::Legendary, true});
     CHECK(!m.PickUp(1, again, false));
@@ -3116,7 +3116,7 @@ static void TheMajorBoss() {
         Run(on, half - 10.0f);
         CHECK(on.match.FindBoss(kDragonId) == nullptr);
         bool announced = false;
-        for (int i = 0; i < 20 * 25; i++) {
+        for (int i = 0; i < 20 * 25 && !announced; i++) {                                         // look as it arrives, before its first dive
             on.Tick(kDt);
             for (const auto& e : on.match.DrainEvents()) announced |= e.type == MatchEvent::Type::BossSpawned;
         }
@@ -3164,7 +3164,7 @@ static void TheMajorBoss() {
         Run(sim, 0.5f);
         CHECK(h->health > 99.99f);
         Run(sim, 1.0f);
-        CHECK(h->health < 100.0f - 1.2f);
+        CHECK(h->health < 100.0f - 1.2f * kBossDamageScale);
         Run(sim, 4.0f);                                                                              // let the burn finish
         const float after = h->health;
         h->pos = {1500, 0};
@@ -3609,14 +3609,15 @@ static void ShieldBar() {
     h->health = h->maxHealth = 3.0f;
     h->armor = 2.0f;
     m.DrainEvents();
+    const float k = 1.0f / kPlayerDamageScale;   // hits below are given before the overall damage dial, so they land as written
     // The shield soaks damage before health does.
-    m.Damage(1, 1.5f, 1000);
+    m.Damage(1, 1.5f * k, 1000);
     CHECK(std::fabs(h->armor - 0.5f) < 0.001f && h->health == 3.0f);
     float announced = 0;
     for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Damaged && e.a == 1) announced = e.amount;
     CHECK(std::fabs(announced - 1.5f) < 0.001f);                                          // the hit marker shows the whole hit
     const float dealt = b->damageDealt;
-    m.Damage(1, 1.0f, 1000);
+    m.Damage(1, 1.0f * k, 1000);
     CHECK(h->armor == 0 && std::fabs(h->health - 2.5f) < 0.001f);                         // what is left goes to health
     CHECK(std::fabs(b->damageDealt - dealt - 1.0f) < 0.001f);                              // damage dealt counts shield and health
     h->armor = 2.0f;

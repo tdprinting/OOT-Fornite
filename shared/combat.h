@@ -44,11 +44,11 @@ constexpr WeaponStats WeaponOf(ItemId id) {
         case ItemId::Bombchus:      return {1.5f, 900, 2.5f, true, E::None, 0, 0, 100};
         case ItemId::DekuNuts:      return {0.3f, 450, 3.0f, true, E::Stun, 2.0f};
         case ItemId::TripleSlingshot: return {0.45f, 800, 0.9f, true, E::None, 0, 0, 0, 3};
-        case ItemId::GiantsHammer:  return {3.2f, 150, 1.7f, false, E::None, 0, 0, 220};
+        case ItemId::GiantsHammer:  return {2.8f, 150, 1.7f, false, E::None, 0, 0, 220};
         case ItemId::HomingBombchus: return {1.6f, 1000, 2.4f, true, E::None, 0, 0, 110, 1, true};
         case ItemId::FireArrows:    return {0.9f, 1200, 1.2f, true, E::Burn, 3.0f, 0.25f};
         case ItemId::IceArrows:     return {0.8f, 1200, 1.4f, true, E::Freeze, 1.5f};
-        case ItemId::LightArrows:   return {1.8f, 1500, 1.8f, true, E::PierceShield};
+        case ItemId::LightArrows:   return {1.6f, 1500, 1.8f, true, E::PierceShield};
         default:                    return {0, 0, 1, false};
     }
 }

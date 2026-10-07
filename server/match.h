@@ -347,6 +347,7 @@ class Match {
         if (clock < p->dmgTakenUntil) mult *= p->dmgTakenMult;
         if (clock < p->adultUntil) mult *= kAdultTaken;
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
+        if (kind != DamageKind::Storm) mult *= IsBossId(attacker) ? kBossDamageScale : attacker == kNoPlayer ? kHazardDamageScale : kPlayerDamageScale;
         hearts *= mult;
 
         // The shield bar takes the hit first (the storm goes straight through it).
