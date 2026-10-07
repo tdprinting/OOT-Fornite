@@ -1,0 +1,4190 @@
+[
+  {
+    "name": "Triforce Market house floor",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.002",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house floor.002",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.008",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.009",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.004",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.010",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.011",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.004",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.004",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.008",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.009",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.010",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.011",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house pitched roof.002",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.004",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.005",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house floor.003",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.012",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.013",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.006",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.014",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house doorway flank.015",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house door lintel.007",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.006",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.006",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.012",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.013",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house sill.007",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house window header.007",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.014",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house side pier.015",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house pitched roof.003",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.006",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house floor",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.008",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.009",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.010",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.011",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house floor.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.008",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.009",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.010",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.011",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.008",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.009",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.010",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.011",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house pitched roof.002",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.012",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.013",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house floor.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.012",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.013",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.014",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house doorway flank.015",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house door lintel.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.012",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.013",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house sill.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house window header.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.014",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house side pier.015",
+    "collision": "static"
+  },
+  {
+    "name": "Lon Lon Crossroads house pitched roof.003",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.014",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.015",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.016",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.017",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.018",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.019",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.020",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.021",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Ember Quarry outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.022",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.023",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.024",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.025",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Frostwatch Lodge outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.026",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.027",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.028",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.029",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Spirit Caravanserai outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.030",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.031",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.032",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.033",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lake Lantern outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.034",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.035",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.036",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.037",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Whispering Graveyard outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.038",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.039",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost floor",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost sill",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost window header",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.040",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.041",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost floor.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.004",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.005",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost door lintel.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.006",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost doorway flank.007",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost door lintel.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost sill.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost window header.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.004",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.005",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost sill.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost window header.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.006",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost side pier.007",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Ruins outpost pitched roof.001",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.042",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.043",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion floor",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion doorway flank",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion doorway flank.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion door lintel",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion doorway flank.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion doorway flank.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion door lintel.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion sill",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion window header",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion side pier",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion side pier.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion sill.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion window header.001",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion side pier.002",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion side pier.003",
+    "collision": "static"
+  },
+  {
+    "name": "Royal Pavilion pitched roof",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.044",
+    "collision": "static"
+  },
+  {
+    "name": "Threshold ramp.045",
+    "collision": "static"
+  },
+  {
+    "name": "Royal spire tower",
+    "collision": "static"
+  },
+  {
+    "name": "Turquoise castle spire",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.001",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.002",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.003",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.004",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.005",
+    "collision": "static"
+  },
+  {
+    "name": "Royal spire tower.001",
+    "collision": "static"
+  },
+  {
+    "name": "Turquoise castle spire.001",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.006",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.007",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.008",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.009",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.010",
+    "collision": "static"
+  },
+  {
+    "name": "Tower climbing steps.011",
+    "collision": "static"
+  },
+  {
+    "name": "Desert colonnade",
+    "collision": "static"
+  },
+  {
+    "name": "Desert colonnade.001",
+    "collision": "static"
+  },
+  {
+    "name": "Caravan shade",
+    "collision": "static"
+  },
+  {
+    "name": "Desert colonnade.002",
+    "collision": "static"
+  },
+  {
+    "name": "Desert colonnade.003",
+    "collision": "static"
+  },
+  {
+    "name": "Caravan shade.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ruins tower",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ruins tower.001",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.002",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ruins tower.002",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.004",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.005",
+    "collision": "static"
+  },
+  {
+    "name": "Ruins tower.003",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.006",
+    "collision": "static"
+  },
+  {
+    "name": "Battlement.007",
+    "collision": "static"
+  },
+  {
+    "name": "Lake jetty",
+    "collision": "static"
+  },
+  {
+    "name": "Jetty support",
+    "collision": "static"
+  },
+  {
+    "name": "Jetty support.001",
+    "collision": "static"
+  },
+  {
+    "name": "Jetty support.002",
+    "collision": "static"
+  },
+  {
+    "name": "Jetty support.003",
+    "collision": "static"
+  },
+  {
+    "name": "Jetty support.004",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.004",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.005",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.006",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence.007",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.001",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.002",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.003",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.004",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.005",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.006",
+    "collision": "static"
+  },
+  {
+    "name": "Ranch fence post.007",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.001",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.002",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.003",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.004",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.005",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.006",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.007",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.008",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.009",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.010",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.011",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.012",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.013",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.014",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.015",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.016",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.017",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.018",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.019",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.020",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.021",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.022",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.023",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.024",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.025",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.026",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.027",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.028",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.029",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.030",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.031",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.032",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.033",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.034",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.035",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.036",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.037",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.038",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.039",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.040",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.041",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.042",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.043",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.044",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.045",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.046",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.047",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.048",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.049",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.050",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.051",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.052",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.053",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.054",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.055",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.056",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.057",
+    "collision": "static"
+  },
+  {
+    "name": "Tree trunk.058",
+    "collision": "static"
+  },
+  {
+    "name": "Triforce Market house table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house table.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house bed frame.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house table.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Triforce Market house bed frame.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house table.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house bed frame.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house table.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lon Lon Crossroads house bed frame.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lostwood Sanctuary outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.004",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.005",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.006",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.007",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ember Quarry outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ember Quarry outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ember Quarry outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ember Quarry outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.008",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.009",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.010",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.011",
+    "collision": "nearby"
+  },
+  {
+    "name": "Frostwatch Lodge outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Frostwatch Lodge outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Frostwatch Lodge outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Frostwatch Lodge outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.040",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.041",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.012",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.013",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Spirit Caravanserai outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Spirit Caravanserai outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.042",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.043",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.044",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.014",
+    "collision": "nearby"
+  },
+  {
+    "name": "Spirit Caravanserai outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Spirit Caravanserai outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.045",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.046",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.047",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.015",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lake Lantern outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lake Lantern outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.048",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.049",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.050",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.016",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lake Lantern outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Lake Lantern outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.051",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.052",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.053",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.017",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.023",
+    "collision": "nearby"
+  },
+  {
+    "name": "Whispering Graveyard outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Whispering Graveyard outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.054",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.055",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.056",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.018",
+    "collision": "nearby"
+  },
+  {
+    "name": "Whispering Graveyard outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Whispering Graveyard outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.057",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.058",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.059",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.019",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.024",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.025",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.026",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.027",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Ruins outpost table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.040",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.041",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Ruins outpost bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.060",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.061",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.062",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.040",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.041",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.040",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.041",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.040",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.041",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.020",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Ruins outpost table.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.042",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.043",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Ruins outpost bed frame.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.063",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.064",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.065",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.042",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.043",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.042",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.043",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.042",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.043",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.021",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Pavilion table",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.044",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table leg.045",
+    "collision": "nearby"
+  },
+  {
+    "name": "Royal Pavilion bed frame",
+    "collision": "nearby"
+  },
+  {
+    "name": "Woven bedcover.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.066",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.067",
+    "collision": "nearby"
+  },
+  {
+    "name": "Pantry shelf.068",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.044",
+    "collision": "nearby"
+  },
+  {
+    "name": "Shelf upright.045",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth back.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.044",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth cheek.045",
+    "collision": "nearby"
+  },
+  {
+    "name": "Hearth mantel.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Table jug.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.044",
+    "collision": "nearby"
+  },
+  {
+    "name": "Bench foot.045",
+    "collision": "nearby"
+  },
+  {
+    "name": "Storage barrel.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Chimney.022",
+    "collision": "nearby"
+  },
+  {
+    "name": "Quarry forge",
+    "collision": "nearby"
+  },
+  {
+    "name": "Anvil",
+    "collision": "nearby"
+  },
+  {
+    "name": "Quarry forge.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Anvil.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ranch hay bale",
+    "collision": "nearby"
+  },
+  {
+    "name": "Milk churn",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ranch hay bale.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Milk churn.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Ranch hay bale.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Milk churn.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.028",
+    "collision": "nearby"
+  },
+  {
+    "name": "Forest rune lantern",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.029",
+    "collision": "nearby"
+  },
+  {
+    "name": "Forest rune lantern.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.030",
+    "collision": "nearby"
+  },
+  {
+    "name": "Forest rune lantern.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Grave marker",
+    "collision": "nearby"
+  },
+  {
+    "name": "Grave marker.001",
+    "collision": "nearby"
+  },
+  {
+    "name": "Grave marker.002",
+    "collision": "nearby"
+  },
+  {
+    "name": "Grave marker.003",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.031",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.032",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.033",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.034",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.035",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.036",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.037",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.038",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.039",
+    "collision": "nearby"
+  },
+  {
+    "name": "Cover boulder.040",
+    "collision": "nearby"
+  }
+]

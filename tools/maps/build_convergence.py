@@ -48,7 +48,9 @@ def mesh(name,v,f,mat,c='Architecture'):
 def box(name,loc,size,mat,c='Architecture'):
     x,y,z=loc; a,b,d=[v/2 for v in size]
     o=mesh(name,[(x+i*a,y+j*b,z+k*d) for k in [-1,1] for j in [-1,1] for i in [-1,1]],[(0,2,3,1),(4,5,7,6),(0,1,5,4),(2,6,7,3),(0,4,6,2),(1,3,7,5)],mat,c)
-    o['collision']=c=='Architecture' and ('post' not in name and 'table' not in name)
+    # "outpost" is a building name, not a decorative post. Only the corner oak trim
+    # overlaps an already-solid wall and can be omitted from the structural mesh.
+    o['collision']=c=='Architecture' and not name.endswith(' oak post')
     if c not in ['Terrain','Water']:
         bevel=o.modifiers.new('Worn edges','BEVEL');bevel.width=.045;bevel.segments=2
     return o

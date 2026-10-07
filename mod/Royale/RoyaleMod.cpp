@@ -465,6 +465,7 @@ s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "sol
 // On the Fortnite map the scene's ground is the island's own triangles (shared/fortnite_map.h), so its height, slope and water are worked out
 // directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
 bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
@@ -8837,6 +8838,17 @@ struct SolidBuilder {
                           static_cast<s16>(std::lround(std::clamp(z, -32000.0f, 32000.0f))) };
         return nv++;
     }
+    void Box(const royale::convergence::PropCollider& c) {
+        const int first=nv;
+        for(int y=0;y<2;++y) for(int z=0;z<2;++z) for(int x=0;x<2;++x)
+            V(x?c.x1:c.x0,y?c.y1:c.y0,z?c.z1:c.z0);
+        const Vec3f inside={(c.x0+c.x1)*.5f,(c.y0+c.y1)*.5f,(c.z0+c.z1)*.5f};
+        const int faces[6][4]={{0,2,3,1},{4,5,7,6},{0,1,5,4},{2,6,7,3},{0,4,6,2},{1,3,7,5}};
+        for(const auto& f:faces) {
+            T(first+f[0],first+f[1],first+f[2],inside,0,0);
+            T(first+f[0],first+f[2],first+f[3],inside,0,0);
+        }
+    }
     // A triangle facing away from `inside` (the game works out the normal from the winding, so the winding is fixed to point outwards).
     void T(int a, int b, int c, const Vec3f& inside, u16 type, u16 xp) {
         const Vec3s &A = gSolidVtx[a], &B = gSolidVtx[b], &C = gSolidVtx[c];
@@ -8949,6 +8961,30 @@ float PlatformFoot(size_t i) {
 
 // Fill the mesh with the scenery nearest (x, z). Returns false if the same pieces are already in it.
 bool BuildSolidMesh(float x, float z, bool force) {
+    if (OnConvergenceTerrain()) {
+        const Player* player=GET_PLAYER(gPlayState);
+        const size_t limit=static_cast<size_t>(std::max(0,std::min((SolidPolyBudget()-1)/12,(kSolidMaxVtx-3)/8)));
+        const auto chosen=royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
+        std::vector<uint64_t> keys;
+        for(size_t i:chosen) keys.push_back((1ull<<62)|i);
+        std::sort(keys.begin(),keys.end());
+        if(!force && keys==gSolidSet) return false;
+        gSolidSet=keys;
+        SolidBuilder b;
+        // Keep a valid header even where there are no nearby objects.
+        b.V(-10,-10000,-10);b.V(10,-10000,-10);b.V(0,-10000,10);
+        b.T(0,1,2,{0,-10010,0},0,0);
+        for(size_t i:chosen) b.Box(royale::convergence::kPropColliders[i]);
+        gSolidHeader={};gSolidHeader.numVertices=static_cast<u16>(b.nv);gSolidHeader.vtxList=gSolidVtx;
+        gSolidHeader.numPolygons=static_cast<u16>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
+        Vec3s lo=gSolidVtx[0],hi=lo;
+        for(int i=1;i<b.nv;++i) {
+            lo.x=std::min(lo.x,gSolidVtx[i].x);lo.y=std::min(lo.y,gSolidVtx[i].y);lo.z=std::min(lo.z,gSolidVtx[i].z);
+            hi.x=std::max(hi.x,gSolidVtx[i].x);hi.y=std::max(hi.y,gSolidVtx[i].y);hi.z=std::max(hi.z,gSolidVtx[i].z);
+        }
+        gSolidHeader.minBounds=lo;gSolidHeader.maxBounds=hi;
+        return true;
+    }
     const auto& props = gSession.Client()->Props();
     struct Cand { float d; bool scenery; size_t i; };
     std::vector<Cand> near;
@@ -9073,11 +9109,11 @@ void Solid_Destroy(Actor* actor, PlayState* play) {
 
 // The mesh only changes here, in the actor's own update: the game takes it in right after every actor has updated, in the same frame.
 void Solid_Update(Actor* actor, PlayState* play) {
-    if (!gSession.Client() || !InField()) return;
+    if (!OnConvergenceTerrain() && (!gSession.Client() || !InField())) return;
     const Player* player = GET_PLAYER(play);
     if (player == nullptr) return;
     const float x = player->actor.world.pos.x, z = player->actor.world.pos.z;
-    if (++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // a few times a second, or sooner on the move
+    if (!OnConvergenceTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
     gSolidAge = 0;
     gSolidCentre = { x, z };
     if (BuildSolidMesh(x, z, false)) play->colCtx.dyna.bitFlag |= DYNAPOLY_INVALIDATE_LOOKUP;
@@ -9103,7 +9139,10 @@ int SolidActorId() {
 
 // Called every frame: the collision actor exists while you are in a match's field, and only then.
 void EnsureSolidScenery() {
-    const bool want = gSession.Client() != nullptr && InField() && gInFieldFrames > 20 && !gSession.Client()->Props().empty();
+    // Authored props must be solid in the map lobby too, before the host requests
+    // a match measurement and even if the custom scene outlives the connection.
+    const bool want = OnConvergenceTerrain() || (gInFieldFrames > 20 &&
+        gSession.Client() != nullptr && InField() && !gSession.Client()->Props().empty());
     if (want && gSolidActor == nullptr && !gSolidFailed) {
         gSolidCentre = { 1e9f, 1e9f };
         gSolidActor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, static_cast<s16>(SolidActorId()), 0, 0, 0, 0, 0, 0, 0, false);
@@ -9681,13 +9720,15 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
     Actor_SetScale(actor, 1.0f);
     actor->world.pos = actor->home.pos = { 0, 0, 0 };
 }
-void FortniteTerrain_Update(Actor*, PlayState*) {}
+void FortniteTerrain_Update(Actor*, PlayState*) {
+    if (OnConvergenceTerrain()) EnsureSolidScenery();
+}
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
 // Authored structures use the same geometry as the Blender source and scene collision.
 // Persistent buffers keep display-list pointers valid; spatial batches limit draw cost.
 void DrawConvergenceStructures(PlayState* play) {
-    if (royale::fortnite::gTerrainMapId != royale::kConvergenceMapIndex) return;
+    if (!OnConvergenceTerrain()) return;
     namespace cv = royale::convergence;
     static std::vector<Vtx> vertices;
     static std::vector<std::vector<Gfx>> lists;

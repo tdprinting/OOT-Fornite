@@ -35,3 +35,6 @@ assets/maya/*-preview.png
 /create_maya.py
 /tools/maya/test_maya.cmd
 /tools/maya/check_all.cmd
+
+# Local map validation builds
+/build-map-tests/
