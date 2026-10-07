@@ -348,6 +348,7 @@ struct WarPainter {
         guMtxIdent(&f.identity);
         f.viewport = {{{640,480,G_MAXZ/2,0},{640,480,G_MAXZ/2,0}}};
         gDPPipeSync(out++);
+        gSPSurfaceMap(out++,0); // World material effects must not leak into menu text or art.
         gSPViewport(out++,&f.viewport);
         gDPSetScissor(out++,G_SC_NON_INTERLACE,0,0,320,240);
         gSPMatrix(out++,&f.projection,G_MTX_PROJECTION|G_MTX_LOAD|G_MTX_NOPUSH);
@@ -496,7 +497,14 @@ const unsigned char* WarMapPixels(int map) {
 void WarPortrait() {
     if(!InGame())return;
     Player* player=GET_PLAYER(gPlayState);
-    if(!player->skelAnime.skeleton || !player->skelAnime.jointTable)return;
+    if(!player->skelAnime.skeleton || !player->skelAnime.jointTable || player->actor.objBankIndex<0 || player->actor.objBankIndex>=OBJECT_EXCHANGE_BANK_MAX)return;
+    void* keep=gPlayState->objectCtx.status[gPlayState->objectCtx.mainKeepIndex].segment;
+    void* link=gPlayState->objectCtx.status[player->actor.objBankIndex].segment;
+    if(!keep||!link)return;
+    // Segment 6 belongs to the last world actor drawn, which need not be Link.
+    const auto saved4=gSegments[4], saved6=gSegments[6];
+    gSegments[4]=VIRTUAL_TO_PHYSICAL(keep);gSegments[6]=VIRTUAL_TO_PHYSICAL(link);
+    Matrix_Push();
     Vec3f pos={0,LINK_IS_ADULT?-180.0f:-130.0f,-40};
     Vec3s rot={0,static_cast<s16>(31000+(gWar.reduced?0:std::sin(gWar.clock*0.6f)*1100)),0};
     Vec3f eye={0,0,-400},at={0,0,0};
@@ -508,13 +516,15 @@ void WarPortrait() {
     OPEN_DISPS(gPlayState->state.gfxCtx);
     gsSPSetFB(WORK_DISP++,gPauseLinkFrameBuffer);
     CLOSE_DISPS(gPlayState->state.gfxCtx);
-    Player_DrawPauseImpl(gPlayState,reinterpret_cast<void*>(gSegments[4]),reinterpret_cast<void*>(gSegments[6]),
+    Player_DrawPauseImpl(gPlayState,keep,link,
                         &player->skelAnime,&pos,&rot,LINK_IS_ADULT?0.047f:0.046f,
                         LINK_IS_ADULT?PLAYER_SWORD_MASTER:PLAYER_SWORD_KOKIRI,PLAYER_TUNIC_KOKIRI,PLAYER_SHIELD_HYLIAN,PLAYER_BOOTS_KOKIRI,
                         PAUSE_EQUIP_PLAYER_WIDTH,PAUSE_EQUIP_PLAYER_HEIGHT,&eye,&at,60,color.data(),depth.data());
     OPEN_DISPS(gPlayState->state.gfxCtx);
     gsSPResetFB(WORK_DISP++);
     CLOSE_DISPS(gPlayState->state.gfxCtx);
+    Matrix_Pop();
+    gSegments[4]=saved4;gSegments[6]=saved6;
     CVarSetInteger(CVAR_COSMETIC("Link.KokiriTunic.Changed"),changed);
     CVarSetColor24(CVAR_COSMETIC("Link.KokiriTunic.Value"),saved);
 }

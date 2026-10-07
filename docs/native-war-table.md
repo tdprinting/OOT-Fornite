@@ -8,6 +8,7 @@ Battle Royale now boots through the engine file-selection state into a native Fa
 - Play: live Link portrait, battlefield preview, Host Game, Join Game and Practice.
 - Lobby: host start, guest readiness, map and match rules, paged player roster and host LAN address/port.
 - Practice: all twelve existing Sandbox courses, equipment/bots/bosses/world tools, and solo exploration of playable battlefields.
+- Results retain the integrated gameplay recap (standings, score breakdown, replay and spectating); Start opens matching native result actions.
 - Start menu: resume, practice tools where applicable, settings, guide and confirmed Quit to Main Menu. Multiplayer simulation continues while menus are open.
 - Quit: leave networking, clear pending starts and practice commands, restore overridden state, travel back to the waiting room and return to Play with menu music.
 - Settings: audio, graphics, comfort, host match rules and existing Android updater integration.
@@ -26,6 +27,6 @@ Apply patches in order and run `scripts/link_mod.sh` as normal. Patch 0025 integ
 
 To regenerate artwork textures, run `python tools/build_war_table_assets.py` with Pillow. The committed generated header keeps release builds independent of Python/font tooling. RGBA16 background/map tiles are 32 x 32 (2 KiB); IA8 glyphs are 24 x 32. Source art and font license are under `assets/menu/war_table`.
 
-`royale_war_table_tests` covers map cycling, start permissions, input repeat, spatial navigation, animation timing, address/port validation and aspect-fit pointer coordinates. The complete local server/session suite passed (10 tests). `tools/check_war_table_windows.py` supports a supplemental syntax check against the pinned engine and an existing Windows dependency build selected by `ROYALE_WINDOWS_DEPS`; CI remains the full Android compile/link/signing check.
+`royale_war_table_tests` covers map cycling, start permissions, input repeat, spatial navigation, animation timing, address/port validation and aspect-fit pointer coordinates. The complete local server/session suite passed after integration (12 tests). `tools/check_war_table_windows.py` supports a supplemental syntax check against the pinned engine and an existing Windows dependency build selected by `ROYALE_WINDOWS_DEPS`; CI remains the full Android compile/link/signing check.
 
 Runtime acceptance still requires a device with extracted game resources: launch/save creation, portrait/render alignment at multiple aspect ratios, controller/touch interaction, audible transitions, two-client host/join/start, practice entry, disconnect and quit/rejoin. Compilation and unit tests do not establish these visual/device results.
