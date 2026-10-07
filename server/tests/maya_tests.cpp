@@ -11,7 +11,7 @@
 #define assert(expr) do { if (!(expr)) { std::cerr << "Maya validation failed: " << #expr << " at " << __LINE__ << "\n"; std::exit(1); } } while (0)
 int main() {
     namespace M = royale::maya;
-    static_assert(M::kClipCount==18 && M::kFaceCount==8);
+    static_assert(M::kClipCount==19 && M::kFaceCount==8);
     assert(royale::kMayaCompanionLineCount==14);
     for (const auto& batch:M::kBatches) {
         assert(batch.vertCount>0 && batch.vertCount<=32);
@@ -162,5 +162,5 @@ int main() {
     }
     M::Animator a;a.Play(M::kTablet);a.Update(.1f);a.Play(M::kWalk);a.Update(.1f);M::Pose p;a.Evaluate(p);
     for(const auto& bone:p.bone)for(float q:bone.q)assert(std::isfinite(q));
-    std::cout<<"Maya: all batches, rig transforms, all eighteen clips, child scale and expressions, prop visibility and transitions passed\n";
+    std::cout<<"Maya: all batches, rig transforms, all nineteen clips, child scale and expressions, prop visibility and transitions passed\n";
 }

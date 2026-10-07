@@ -8,7 +8,7 @@ from mathutils import Euler, Vector, Quaternion, Matrix
 sys.path.insert(0,os.path.join(os.path.dirname(__file__),'../lilo'))
 import build_lilo as B
 FACES=('smile','half','shut','giggle','oh','talk','focus','wink')
-CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.0,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False),('sit',6.4,True),('sleep',6.0,True),('videochat',3.8,False)]]
+CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.0,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False),('sit',6.4,True),('sleep',6.0,True),('videochat',3.8,False),('dance',2.0,True)]]
 SCREENS=('building','mom','momtalk','fart')
 SCREEN_W,SCREEN_H=32,20
 VIDEOCHAT_FART=2.6      # the call's mom lets one go (the screen turns green)
@@ -136,6 +136,7 @@ def face_for(name,t,T):
     if name in ('draw','learn'):return 'focus' if t<T*.68 else 'smile'
     if name=='pizza':return 'talk' if 2.2<t<3.1 and int(t*8)%2 else 'smile'
     if name=='point':return 'oh' if .7<t<1.7 else 'smile'
+    if name=='dance':return 'giggle' if int(t*2)%2 else 'smile'
     if name=='videochat':return 'smile' if t<.7 else ('talk','smile','talk','giggle')[int(t*5)%4] if t<2.65 else 'oh'
     if name=='sleep':return 'half' if 2.1<t<2.3 else 'shut'
     if name=='sit':return 'half' if 4.4<t<4.65 else 'giggle' if 2.5<t<3.2 else 'smile'
@@ -192,6 +193,18 @@ def animate(rig,name,t,T):
             for pt in ((sx,-.085,.017),(sx,.035,.025)):low=min(low,(m@Vector(pt)).z)
         flight=.032*max(0,-math.cos(2*ph)) if fast else 0
         move('root',(sway_x,0,.0-low+.017+flight))
+    elif name=='dance':
+        # Group dance: a bouncy side-to-side step on every half beat with knee lifts, pumping arms, hip twist and a bobbing head.
+        b=math.sin(ph*2)
+        move('root',(.03*b,0,.018*abs(b)))
+        rot('pelvis',y=.12*b,z=.16*b);rot('torso',z=-.22*b,x=.04+.03*math.sin(ph*4))
+        rot('head',z=.16*math.sin(ph*2+.5),x=.05*math.sin(ph*4)-.02)
+        for label,sign in (('L',1),('R',-1)):
+            up=max(0,sign*b)
+            rot('leg'+label,x=-.50*up,y=sign*.04);rot('shin'+label,x=.55*up);rot('foot'+label,x=.28*up)
+            pump=max(0,-sign*b)
+            rot('arm'+label,x=-.25-1.45*pump,y=-sign*(.30+.25*pump));rot('forearm'+label,x=-.55-.7*pump);rot('hand'+label,z=sign*.25*math.sin(ph*8))
+        rot('ponytail',x=.10+.25*math.sin(ph*4-.6),y=.30*math.sin(ph*2-.4));rot('ponytail2',x=.28*math.sin(ph*4-1.4),y=.35*math.sin(ph*2-1.1))
     elif name=='sit':
         sway=math.sin(ph)
         move('root',(0,0,-.505+.004*math.sin(ph*3)))
