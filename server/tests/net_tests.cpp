@@ -1401,7 +1401,7 @@ static void ReconfigureRebuildsTheLobbyWorld() {
 
     for (GameClient* g : {&a, &b}) {
         CHECK(g->Map().radius == 800 && g->Map().center.x == 500);
-        CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 120);   // 120 scattered, plus a chest for each spot in the buildings
+        CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 30);   // chests go beside scenery now (at most a fifth of the 120 in the open), plus a chest for each spot in the buildings
         CHECK(!g->Pois().empty() && g->Props().size() > 100 && g->Pois().size() == rig.server.Pois().size());
         for (const Poi& poi : g->Pois()) CHECK(Distance(poi.center, real.center) <= 800.01f && poi.name < kPoiNameTotal);
         bool eventSeen = false;
