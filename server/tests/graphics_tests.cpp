@@ -20,5 +20,9 @@ int main() {
         require(close(WaterOffset(float(swell),-20,0),3));
     }
     require(close(WaterOffset(5,2,.5f),6.5f));
+    // The drawn water: on the island it may dip well under its level, over the game's own water it stops just above it, and calm water sits at its base.
+    require(close(WaterSurfaceOffset(0, 0, 1, 0, -34), 0) && close(WaterSurfaceOffset(0, 0, 1, 5, 1), 5));
+    require(close(WaterSurfaceOffset(-3, -9, 1, 0, -34), -12) && close(WaterSurfaceOffset(-40, -40, 1, 0, -34), -34));
+    require(close(WaterSurfaceOffset(-40, -40, 1, 5, 1), 1) && close(WaterSurfaceOffset(-9, -9, 0, 5, 1), 5));
     std::cout << "graphics regression tests passed\n";
 }
