@@ -23,6 +23,8 @@ assets/avriella/previews/
 assets/fish/*.blend1
 assets/fish/previews/
 
+# Local graphics validation build
+build-graphics-tests/
 # Maya authoring backups and local validation
 assets/maya/*.blend1
 assets/maya/*-preview.png

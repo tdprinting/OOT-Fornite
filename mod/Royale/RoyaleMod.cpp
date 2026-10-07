@@ -33,6 +33,7 @@
 #include "objmodel.h"
 #include "skins.h"
 #include "sky_model.h"
+#include "graphics_stability.h"
 #include "tune.h"
 #include "basic_pitch.h"
 #include "oot_arrange.h"
@@ -152,6 +153,20 @@ namespace {
 // *different* functions from the game's, which the linker then can't find. These are the missing definitions: they just call the real ones.
 void FrameInterpolation_RecordOpenChild(const void* a, int b) { ::FrameInterpolation_RecordOpenChild(a, b); }
 void FrameInterpolation_RecordCloseChild(void) { ::FrameInterpolation_RecordCloseChild(); }
+
+// Stable child identities keep culled instances from interpolating into their neighbours.
+struct DrawIdentity {
+    DrawIdentity(const void* kind, int x, int z) {
+        FrameInterpolation_RecordOpenChild(kind, x);
+        FrameInterpolation_RecordOpenChild(kind, z);
+    }
+    ~DrawIdentity() {
+        FrameInterpolation_RecordCloseChild();
+        FrameInterpolation_RecordCloseChild();
+    }
+    DrawIdentity(const DrawIdentity&) = delete;
+    DrawIdentity& operator=(const DrawIdentity&) = delete;
+};
 
 royale::RoyaleSession gSession;
 
@@ -2794,6 +2809,7 @@ void TownClutter(const royale::Poi& poi, std::vector<ClutterPiece>& out) {
 }
 
 void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
+    DrawIdentity identity(m, static_cast<int>(std::lround(x * 4.0f)), static_cast<int>(std::lround(z * 4.0f)));
     OPEN_DISPS(play->state.gfxCtx);
     Matrix_Translate(x, y, z, MTXMODE_NEW);
     Matrix_RotateY(yaw, MTXMODE_APPLY);
@@ -2997,6 +3013,7 @@ void RefreshFloraWorld(PlayState* play) {
 // Something lying on (possibly gently sloping) ground: stretched `a` along its long axis and `b` across it, `rise` as tall as it is wide, turned by `yaw`.
 // `alpha` < 0 draws it solid, otherwise see-through with that alpha (0-255).
 void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float a, float rise, float b, int alpha, Gfx* dl = nullptr) {
+    DrawIdentity identity(m, static_cast<int>(std::lround(x * 4.0f)), static_cast<int>(std::lround(z * 4.0f)));
     OPEN_DISPS(play->state.gfxCtx);
     if (dl == nullptr) dl = const_cast<Gfx*>(m->dl.data());
     Matrix_Translate(x, y, z, MTXMODE_NEW);
@@ -3393,6 +3410,8 @@ void DriveStorm(const royale::HudState& h) {
 // up, with bands of light rolling along it. It is drawn without the game's distance fog, so it shows from anywhere on the map (out to the
 // game's own draw distance), and the hills and buildings in front of it hide it as they should.
 void DrawStormWall(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (gWallAlpha <= 0.0f || gWallZone.radius <= 0.0f || !gWallBaseKnown) return;
     const float r = gWallZone.radius;
     const float shrink = std::max(1.0f, r / 30000.0f);   // vertex positions are 16 bit: scale them down for a huge circle
@@ -3441,6 +3460,8 @@ void DrawStormWall(PlayState* play) {
 // Ash and blowing sand: specks drifting through the air all around the camera, in the world (they pass in front of and behind things, and
 // you fly through them), carried by the wind. Embers glow and rise; sand streaks along the wind. "Weather density" sets how many (0: none).
 void DrawWeatherParticles(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     const royale::Sky sky = gWeatherShown.sky;
     if (sky != royale::Sky::Ash && sky != royale::Sky::Sandstorm) return;
     const float amount = WeatherAmount() * gWeatherDensity;
@@ -3562,16 +3583,22 @@ void SetVtx(Vtx& o, float x, float y, float z, float r, float g, float b, float 
 }
 
 // The state every sky and fog layer is drawn with: translucent, vertex colour and alpha, no lighting, no fog, no culling, centred on the camera.
-void SkyBegin(PlayState* play) {
-    const Vec3f eye = play->view.eye;
+bool SkyBegin(PlayState* play, const Vec3f* origin = nullptr) {
+    Mtx* matrix = static_cast<Mtx*>(FrameAlloc(play, sizeof(Mtx)));
+    if (matrix == nullptr) return false;
+    const Vec3f eye = origin != nullptr ? *origin : play->view.eye;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
     gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
     gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
-    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    // This is a world/camera transform, independent of the dummy actor's transform.
+    MtxF worldMatrix;
+    Matrix_Get(&worldMatrix);
+    gSPMatrix(POLY_XLU_DISP++, Matrix_MtxFToMtx(&worldMatrix, matrix), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     CLOSE_DISPS(play->state.gfxCtx);
+    return true;
 }
 
 // Soft discs: a centre and an 8-point rim (9 vertices each). Three go in one vertex load.
@@ -3687,13 +3714,15 @@ struct SkyBatch {
 
 // The sky with the Blender models. `zen` and `hor` are the zenith and horizon colours DrawSky worked out for the time of day and weather.
 void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[3], const float zen[3], const float hor[3]) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     using namespace royale::sky_model;
     constexpr float kR = 7000.0f;
     const float t = static_cast<float>(ImGui::GetTime());
     auto mix = [](float a, float b, float k) { return a + (b - a) * k; };
     const float kTau = 6.2831853f;
     const float yAxis[3] = { 0, 1, 0 };
-    SkyBegin(play);
+    if (!SkyBegin(play)) return;
 
     // The dome, from the modelled rings: horizon colour up to zenith colour, with the glow of sunrise and sunset on the sun's side.
     {
@@ -3811,7 +3840,7 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
     }
     sky.Draw(play);
 
-    // Clouds: the four modelled loaves, drifting round the sky on the Blender loop (quicker with the wind), more of them and greyer the more overcast
+    // Clouds: the four modelled loaves, drifting in world space with the wind, more of them and greyer the more overcast
     // it is; warm at sunrise and sunset, dim blue at night.
     if (gSkyClouds <= 0.01f) return;
     float wx, wz, wind;
@@ -3819,6 +3848,10 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
     const float wl = std::max(1.0f, std::hypot(wx, wz));
     const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
     const int puffs = std::min(30, static_cast<int>((8.0f + 22.0f * cover) * std::min(1.5f, std::max(0.4f, gWeatherDensity)) * gSkyClouds));
+    const Vec3f cloudEye = play->view.eye;
+    const Vec3f cloudOrigin = {std::floor(cloudEye.x / 12000.0f) * 12000.0f, 0.0f, std::floor(cloudEye.z / 12000.0f) * 12000.0f};
+    DrawIdentity cloudIdentity(&kClouds, static_cast<int>(cloudOrigin.x), static_cast<int>(cloudOrigin.z));
+    if (!SkyBegin(play, &cloudOrigin)) return;
     SkyBatch cl;
     if (!cl.Init(play, 1100)) return;
     float lit[3];
@@ -3830,19 +3863,22 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
     }
     for (int i = 0; i < puffs; i++) {
         const float h1 = Flora01(i, 7, 751), h2 = Flora01(i, 11, 752), h3 = Flora01(i, 13, 753), h4 = Flora01(i, 17, 754);
-        const float a = h1 * kTau + t * kTau / kCloudDrift * (0.7f + 0.6f * h4) * (1.0f + 0.01f * wl);
-        const float el = 0.12f + 0.45f * h2 * h2 + 0.12f * h2;
-        const float ce = std::cos(el), dx = std::cos(a) * ce, dy = std::sin(el), dz = std::sin(a) * ce;
-        const float R = kR * 0.9f, size = R * (0.065f + 0.06f * h3) * (1.0f + 0.5f * ov);
-        const float o[3] = { dx * R, dy * R, dz * R };
-        // the cloud's long axis lies across the sky and its flat underside stays level, whatever its height
-        const float ax[3] = { -dz / ce, 0.0f, dx / ce }, cz[3] = { -dx / ce, 0.0f, -dz / ce };
-        cl.Add(kClouds[i % 4], o, ax, yAxis, cz, size, lit, (0.55f + 0.45f * ov) * std::min(1.0f, (el - 0.04f) * 12.0f));
+        const Vec3f eye = cloudEye;
+        const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
+        const auto cloud = royale::graphics::CloudPosition(h1, h2, h3, eye.x, eye.y, eye.z, wx / wl * drift, wz / wl * drift);
+        const float a = h4 * kTau, ca = std::cos(a), sa = std::sin(a);
+        const float size = (420.0f + 380.0f * h3) * (1.0f + 0.5f * ov);
+        const float o[3] = { cloud.x + eye.x - cloudOrigin.x, cloud.y + eye.y, cloud.z + eye.z - cloudOrigin.z };
+        // World orientation and height stay fixed as the camera moves or turns.
+        const float ax[3] = { -sa, 0.0f, ca }, cz[3] = { -ca, 0.0f, -sa };
+        cl.Add(kClouds[i % 4], o, ax, yAxis, cz, size, lit, (0.55f + 0.45f * ov) * cloud.fade);
     }
     cl.Draw(play);
 }
 
 void DrawSky(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (!InField()) return;
     constexpr float kR = 7000.0f;
     const SkyLight L = SkyLightNow();
@@ -3862,7 +3898,7 @@ void DrawSky(PlayState* play) {
         zen[i] = mix(zen[i], grey * 0.8f, ov * 0.85f) * dim; hor[i] = mix(hor[i], grey, ov * 0.85f) * dim;
     }
     if (gSkyOot) { DrawSkyOot(play, L, ov, tint, zen, hor); return; }
-    SkyBegin(play);
+    if (!SkyBegin(play)) return;
     // The dome: rings from just below the horizon up to the zenith, blended from the horizon colour to the zenith colour.
     constexpr int kSegs = 14, kRings = 8;
     static const float kElev[kRings] = { -0.12f, 0.0f, 0.07f, 0.16f, 0.30f, 0.52f, 0.78f, 1.0f };   // the sine of each ring's height
@@ -3932,7 +3968,7 @@ void DrawSky(PlayState* play) {
         }
     }
 
-    // Clouds: puffs of stacked soft discs that drift with the wind, wrapping round a box that follows the camera. More of them, and darker,
+    // Clouds: puffs of stacked soft discs at fixed world heights, drifting with the wind. More of them, and darker,
     // the more overcast it is; lit warm at sunrise and sunset, dim blue at night.
     if (gSkyClouds <= 0.01f) return;
     const float cover = std::clamp(0.3f + 0.7f * ov, 0.0f, 1.0f);
@@ -3945,16 +3981,17 @@ void DrawSky(PlayState* play) {
     DiscSet cd;
     if (!cd.Init(play, puffs * kLayers)) return;
     const Vec3f eye = play->view.eye;
-    constexpr float kBox = 10000.0f;
-    auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    const Vec3f cloudOrigin = {std::floor(eye.x / 12000.0f) * 12000.0f, 0.0f, std::floor(eye.z / 12000.0f) * 12000.0f};
+    static const char cloudKey = 0;
+    DrawIdentity cloudIdentity(&cloudKey, static_cast<int>(cloudOrigin.x), static_cast<int>(cloudOrigin.z));
+    if (!SkyBegin(play, &cloudOrigin)) return;
     for (int i = 0; i < puffs; i++) {
         const float h1 = Flora01(i, 7, 721), h2 = Flora01(i, 11, 722), h3 = Flora01(i, 13, 723), h4 = Flora01(i, 17, 724);
         const float drift = t * (18.0f + 0.25f * wl) * (0.7f + 0.6f * h4);
-        const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
-        const float d = std::hypot(x, z);
-        const float edge = std::clamp((5000.0f - d) / 1800.0f, 0.0f, 1.0f) * std::clamp((d - 900.0f) / 900.0f, 0.0f, 1.0f);
+        const auto cloud = royale::graphics::CloudPosition(h1, h2, h3, eye.x, eye.y, eye.z, dxw * drift, dzw * drift);
+        const float x = cloud.x + eye.x - cloudOrigin.x, z = cloud.z + eye.z - cloudOrigin.z, edge = cloud.fade;
         if (edge <= 0.01f) continue;
-        const float y = 1150.0f + 950.0f * h3 - 160.0f * ov;
+        const float y = cloud.y + eye.y - 160.0f * ov;
         const float width = (650.0f + 800.0f * h4) * (1.0f + 0.5f * ov), thick = width * (0.34f + 0.2f * ov);
         for (int k = 0; k < kLayers; k++) {
             const float up = static_cast<float>(k) / (kLayers - 1);   // 0 underside, 1 top
@@ -3977,6 +4014,8 @@ void DrawSky(PlayState* play) {
 // Fog banks: wide, low drifts of fog lying on the ground round the camera, thicker in fog, sandstorms, ash, rain and the storm, as a mist at dawn,
 // and pooled low over water. The game's own distance fog (DriveRealWeather) hazes the far view; these give the near ground its depth.
 void DrawFogBanks(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (!InField()) return;
     const SkyLight L = SkyLightNow();
     const float w = WeatherAmount();
@@ -4009,7 +4048,7 @@ void DrawFogBanks(PlayState* play) {
     constexpr int kLayers = 3;
     DiscSet fd;
     if (!fd.Init(play, banks * kLayers)) return;
-    SkyBegin(play);
+    if (!SkyBegin(play)) return;
     constexpr float kBox = 5200.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
     for (int i = 0; i < banks; i++) {
@@ -4042,6 +4081,8 @@ void DrawFogBanks(PlayState* play) {
 // Light effects tied to the sky: shafts of sun (gold at sunrise and sunset) or moon (cool blue) fanning out from the sun or moon, strongest in broken cloud, mist and
 // at the low sun, gone in a storm or heavy overcast; and fireflies that glow and drift near the ground at dusk and through clear nights.
 void DrawSkyLight(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (!InField() || !gSkyOot) return;
     const SkyLight L = SkyLightNow();
     float tint[3];
@@ -4077,7 +4118,7 @@ void DrawSkyLight(PlayState* play) {
             SetVtx(v[i * 3 + 1], p1[0], p1[1], p1[2], col[0], col[1], col[2], a0);
             SetVtx(v[i * 3 + 2], p2[0], p2[1], p2[2], col[0], col[1], col[2], 0.0f);
         }
-        SkyBegin(play);
+        if (!SkyBegin(play)) return;
         OPEN_DISPS(play->state.gfxCtx);
         gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v), kShafts * 3, 0);
         for (int i = 0; i < kShafts; i++) gSP1Triangle(POLY_XLU_DISP++, i * 3, i * 3 + 1, i * 3 + 2, 0);
@@ -4096,7 +4137,7 @@ void DrawSkyLight(PlayState* play) {
         const float blink = std::max(0.0f, std::sin(t * (1.1f + Flora01(i, 9, 774)) + i * 3.1f));
         SkyQuad(&q[i * 4], x, y, z, std::sqrt(x * x + y * y + z * z), 5.0f + 4.0f * blink, 220, 255, 120, 255.0f * ff * (0.25f + 0.75f * blink));
     }
-    SkyBegin(play);
+    if (!SkyBegin(play)) return;
     OPEN_DISPS(play->state.gfxCtx);
     for (int first = 0; first < kFlies; first += 8) {
         const int n = std::min(8, kFlies - first);
@@ -4110,6 +4151,8 @@ void DrawSkyLight(PlayState* play) {
 // Wind streaks: thin pale lines that drift through the air round the camera along the wind, longer, quicker and more of them as it picks up
 // (so a storm's squalls show), which is how you see which way it blows. Ash and sand have their own specks, so those skies skip this.
 void DrawWindParticles(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (!gWindStreaks || !gWindOn || !InField()) return;
     if (gWeatherShown.sky == royale::Sky::Ash || gWeatherShown.sky == royale::Sky::Sandstorm) return;
     float wx, wz, wind;
@@ -4223,6 +4266,8 @@ void UpdateTornado(Player* player) {
 }
 
 void DrawTornado(PlayState* play) {
+    static const char drawKey = 0;
+    DrawIdentity identity(&drawKey, 0, 0);
     if (!gTornado.active || !gTornadoOn || !InField() || gTornado.scene != play->sceneNum) return;
     Feat("tornado draw");
     const float t = static_cast<float>(ImGui::GetTime());
@@ -9384,7 +9429,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                         float foamWake = 0.0f;
                         const float swell = WaveHeight(wx, wz, t, amp), push = WaterDisplaceAt(wx, wz, &foamWake);
                         const float shore = std::min(1.0f, c.depth / 90.0f);
-                        y += 3.0f + (swell + push) * shore;
+                        y += royale::graphics::WaterOffset(swell, push, shore);
                         // depth tint: sea-green over the shallows to deep blue
                         const float k = std::clamp(c.depth / 420.0f, 0.0f, 1.0f), ease = k * k * (3.0f - 2.0f * k);
                         r = (96.0f + (14.0f - 96.0f) * ease) * light; g = (196.0f + (62.0f - 196.0f) * ease) * light; b = (200.0f + (122.0f - 200.0f) * ease) * light;
@@ -9431,6 +9476,9 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         }
     }
 
+    // The vertex grid is rebuilt at its new origin immediately. Interpolating the
+    // old origin with these new vertices would move the entire sheet between cells.
+    DrawIdentity identity(&gWaterCells, gi0, gj0);
     SetupWaterXlu(play);
     OPEN_DISPS(play->state.gfxCtx);
     Matrix_Translate(cx, baseY, cz, MTXMODE_NEW);
