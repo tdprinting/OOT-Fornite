@@ -170,6 +170,10 @@ def main():
     o.append("inline constexpr const char* kBoneNames[kBoneCount] = { %s };" % ", ".join('"%s"' % b for b in bones))
     o.append("inline constexpr bool kBoneIsProp[kBoneCount] = { %s };" % ", ".join("true" if b in ("tablet", "draw", "pizza", "scooter", "learn", "pencil", "tablet_cursor", "wheelF", "wheelR") else "false" for b in bones))
     o.append("")
+    o.append("inline constexpr int8_t kBoneParents[kBoneCount] = { %s };" % ", ".join(str(bone_index[b.parent.name]) if b.parent else "-1" for b in rig.data.bones))
+    o.append("inline constexpr float kBoneHeads[kBoneCount][3] = { %s };" % ", ".join("{%.4ff, %.4ff, %.4ff}" % tuple(to_game(b.head_local)*SCALE) for b in rig.data.bones))
+    links={"forearmL","forearmR","handL","handR","shinL","shinR","footL","footR","ponytail","indexR","curlR"}
+    o.append("inline constexpr bool kKeepJointLink[kBoneCount] = { %s };" % ", ".join("true" if n in links else "false" for n in bones))
     o.append("// A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).")
     o.append("struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };")
     o.append("enum Texture : uint8_t { kCloth = 0, kSkin = 1, kFace = 2 };")

@@ -61,7 +61,7 @@ int main() {
             assert(d<tolerance*tolerance);
         }
     };
-    const float tabletGrip[3]={12.7f,84,22.6f},paperGrip[3]={12.6f,84,22.4f},pencilGrip[3]={12,83.7f,23},handleL[3]={15.5f,87,21},handleR[3]={-15.5f,87,21};
+    const float tabletGrip[3]={-12.7f,84,22.6f},paperGrip[3]={-12.6f,84,22.4f},pencilGrip[3]={12,83.7f,23},handleL[3]={15.5f,87,21},handleR[3]={-15.5f,87,21};
     contact(M::kTablet,"tablet","handL",tabletGrip,2.7f);
     contact(M::kDraw,"draw","handL",paperGrip,2.7f);
     contact(M::kDraw,"pencil","handR",pencilGrip,2.7f);
@@ -80,6 +80,21 @@ int main() {
         const float tip[3]={-18.8f,64.95f,.6f},cursor[3]={0,85,25.2f};float a[3],b[3];point(p,boneOf("indexR"),tip,a);point(p,boneOf("tablet_cursor"),cursor,b);
         float d=0;for(int k=0;k<3;k++)d+=(a[k]-b[k])*(a[k]-b[k]);
         assert(d<2.0f*2.0f);
+    }
+    // The visible page/screen points toward Maya and upward, not toward the camera.
+    for(int clip:{M::kTablet,M::kDraw,M::kLearn}) {
+        M::Pose p;M::SampleClip(clip,.9f,p);float front[3];const float restFront[3]={0,0,1};
+        M::Rotate(p.bone[boneOf(clip==M::kTablet ? "tablet" : clip==M::kDraw ? "draw" : "learn")].q,restFront,front);
+        assert(front[1]>.5f && front[2]<-.2f); // game +Y up, -Z is toward Maya
+    }
+    for(int start:{M::kWave,M::kTablet,M::kCheer}) {
+        M::Animator a;a.Play(start,0,true);a.Update(M::ClipSeconds(start)*.7f);a.Play(M::kIdle,.4f);
+        for(int tick=0;tick<9;tick++) {a.Update(.05f);M::Pose p;a.Evaluate(p);
+            for(int b=0;b<M::kBoneCount;b++)if(M::kKeepJointLink[b]) {
+                float joint[3],parent[3];point(p,b,M::kBoneHeads[b],joint);point(p,M::kBoneParents[b],M::kBoneHeads[b],parent);
+                for(int k=0;k<3;k++)assert(std::fabs(joint[k]-parent[k])<.002f);
+            }
+        }
     }
     M::Animator a;a.Play(M::kTablet);a.Update(.1f);a.Play(M::kWalk);a.Update(.1f);M::Pose p;a.Evaluate(p);
     for(const auto& bone:p.bone)for(float q:bone.q)assert(std::isfinite(q));

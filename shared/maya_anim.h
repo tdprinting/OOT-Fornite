@@ -49,6 +49,8 @@ inline float ClipSeconds(int clip) {
     return static_cast<float>(c.loops ? c.frames : c.frames - 1) / c.fps;
 }
 
+inline void PreserveJointLinks(Pose& p);
+
 // The pose `seconds` into a clip: loops wrap round, one-shots hold their last frame.
 inline void SampleClip(int clip, float seconds, Pose& out) {
     const ClipInfo& c = InfoOf(clip);
@@ -67,6 +69,7 @@ inline void SampleClip(int clip, float seconds, Pose& out) {
     }
     const float k = std::clamp(f - static_cast<float>(a), 0.0f, 1.0f);
     for (int i = 0; i < kBoneCount; i++) out.bone[i] = Mix(FrameXform(c.firstFrame + a, i), FrameXform(c.firstFrame + b, i), k);
+    PreserveJointLinks(out);
 }
 
 inline void BlendPoses(const Pose& a, const Pose& b, float k, Pose& out) {
@@ -79,6 +82,17 @@ inline void Rotate(const float q[4], const float v[3], float out[3]) {
     out[0] = v[0] + q[3] * tx + (q[1] * tz - q[2] * ty);
     out[1] = v[1] + q[3] * ty + (q[2] * tx - q[0] * tz);
     out[2] = v[2] + q[3] * tz + (q[0] * ty - q[1] * tx);
+}
+
+// Keep connected joints attached during frame interpolation and cross-fades.
+// Global skinning transforms otherwise lerp joint offsets through the body,
+// shortening the long arms and making a lowering elbow bend unnaturally.
+inline void PreserveJointLinks(Pose& p) {
+    for (int b=0;b<kBoneCount;b++) if(kKeepJointLink[b] && kBoneParents[b]>=0) {
+        const auto& parent=p.bone[kBoneParents[b]];float target[3],rotated[3];
+        Rotate(parent.q,kBoneHeads[b],target);Rotate(p.bone[b].q,kBoneHeads[b],rotated);
+        for(int k=0;k<3;k++)p.bone[b].t[k]=target[k]+parent.t[k]-rotated[k];
+    }
 }
 
 // Where a vertex ends up in a pose, and which way its normal (unit length) then points.
@@ -140,6 +154,7 @@ struct Animator {
             float k = std::clamp(fade / fadeLen, 0.0f, 1.0f);
             k = k * k * (3.0f - 2.0f * k);
             BlendPoses(old, out, k, out);
+            PreserveJointLinks(out);
         }
     }
 };

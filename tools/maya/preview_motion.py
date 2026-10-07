@@ -14,6 +14,8 @@ scene.render.engine='BLENDER_EEVEE';scene.render.resolution_x=320;scene.render.r
 face=next(n for n in bpy.data.materials['MayaFace'].node_tree.nodes if n.type=='TEX_IMAGE')
 selected=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else ('walk','wave','giggle','draw','tablet','cheer')
 for clip in selected:
+    cam.location=(1.6,2.7,1.85) if clip in ('tablet','draw') else (2,-3,1.8)
+    cam.rotation_euler=(Vector((0,0,.69))-cam.location).to_track_quat('-Z','Y').to_euler()
     T=next(c[1] for c in P.CLIPS if c[0]==clip)
     rig.animation_data.action=bpy.data.actions[clip]
     for i in range(12):
