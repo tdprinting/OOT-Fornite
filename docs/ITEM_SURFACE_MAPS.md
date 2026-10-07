@@ -1,6 +1,6 @@
 # Sword and shield normal and bump maps
 
-Engine patches `libultraship/0003` and `0023` add scoped surface materials to
+Engine patches `libultraship/0003` and `0024` add scoped surface materials to
 the Fast3D interpreter and the OpenGL/GLES shaders used on Android. Equipped
 Kokiri, Master and Biggoron swords and Deku, Hylian and Mirror shields use
 generated original wood-grain / polished-metal microdetail. Basic Sword uses
@@ -55,3 +55,4 @@ rotate Link at noon/dawn/night, compare both strengths at zero, inspect bots,
 raise shields while moving, switch maps and leave a match, and compare frame
 rate with a busy lobby. Check that skin and surrounding effects keep their
 original appearance and graphics-layer "Left out" counters do not increase.
+
