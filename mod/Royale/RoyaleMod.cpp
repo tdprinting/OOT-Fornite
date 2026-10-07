@@ -204,7 +204,7 @@ float gFogAmount = 1.0f;            // the local option: how thick the fog banks
 bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
 bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
 float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
-bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true;   // the local options: hit feedback (see "hit feedback")
+bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true, gHitReact = true;   // the local options: hit feedback (see "hit feedback")
 float gHitAmount = 1.0f;            // the local option: how many hit particles, 0 (none) to 2
 int gWaterDetail = 1;               // the local option: how fine the water surface is, 0 low, 1 normal, 2 high
 float gWaterWaves = 1.0f;           // the local option: how high the swell is, 0 (flat) to 2
@@ -829,6 +829,17 @@ void ApplyChickenDance(Player* p, float t) {
 }
 
 std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
+// A recoil laid over whatever a bot or mini boss is doing: it rocks away from the blow and settles back, without touching its animation.
+struct HitRecoil { float amp = 0, age = 10.0f, dx = 0, dz = 0; };   // amp in radians at the peak; (dx, dz) the direction it is pushed
+std::unordered_map<uint16_t, HitRecoil> gHitRecoil;
+// The pitch (+ forward) and roll the recoil `r` gives something facing `yaw` (radians) right now.
+void RecoilTilt(const HitRecoil& r, float yaw, float* pitch, float* roll) {
+    *pitch = *roll = 0.0f;
+    if (r.age > 0.5f || r.amp <= 0.0f) return;
+    const float k = r.amp * std::exp(-r.age * 9.0f) * std::cos(r.age * 20.0f);   // a quick rock away, a small swing back, then still
+    *pitch = k * (r.dx * std::sin(yaw) + r.dz * std::cos(yaw));
+    *roll = -k * (r.dx * std::cos(yaw) - r.dz * std::sin(yaw));
+}
 std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a flinch left (set when they are seen getting hurt)
 std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
 std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
@@ -1494,6 +1505,17 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     actor->world.pos.y = s.isBot ? BotY(play, s.x, s.z, s.y) : s.y;
     actor->shape.rot.y = s.rot;
     actor->world.rot.y = s.rot;
+    {   // the recoil of a blow, tilted about the feet on top of the animation (a rider's seat sets its own tilt later)
+        auto rc = gHitRecoil.find(idIt->second);
+        float pitch = 0, roll = 0;
+        if (rc != gHitRecoil.end()) {
+            rc->second.age += 1.0f / royale::kTickHz;
+            RecoilTilt(rc->second, s.rot * (3.14159265f / 32768.0f), &pitch, &roll);
+            if (rc->second.age > 0.5f) gHitRecoil.erase(rc);
+        }
+        actor->shape.rot.x = static_cast<s16>(pitch * (32768.0f / 3.14159265f));
+        actor->shape.rot.z = static_cast<s16>(roll * (32768.0f / 3.14159265f));
+    }
     actor->shape.shadowAlpha = 255;
     actor->focus.pos = actor->world.pos;
     actor->focus.pos.y += 50.0f;
@@ -6624,6 +6646,13 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
     }
     if (!self && std::hypot(pos.x - GET_PLAYER(gPlayState)->actor.world.pos.x, pos.z - GET_PLAYER(gPlayState)->actor.world.pos.z) > 2400.0f) return;   // too far to see
     const Vec3f at = HitPoint(pos, height, fromX, fromZ, haveFrom, boss != nullptr ? 22.0f * royale::kBossDefs[boss->kind].scale : 14.0f);
+    if (gHitReact && (boss == nullptr || !royale::IsDragonKind(KindOf(*boss)))) {   // rock away from the attacker, harder for a harder hit
+        float dx = 0, dz = 0;
+        if (haveFrom) { dx = pos.x - fromX; dz = pos.z - fromZ; const float d = std::hypot(dx, dz); if (d > 1.0f) { dx /= d; dz /= d; } else dx = dz = 0.0f; }
+        const float amp = std::clamp(0.10f + hearts * 0.05f, 0.12f, 0.3f) * (boss != nullptr ? 0.7f : 1.0f);
+        if (boss != nullptr) { boss->recoilAge = 0.0f; boss->recoilAmp = amp; boss->recoilDx = dx; boss->recoilDz = dz; }
+        else { HitRecoil& r = gHitRecoil[id]; r.amp = amp; r.age = 0.0f; r.dx = dx; r.dz = dz; }
+    }
     if (gHitFlash && !self) {
         const int frames = std::clamp(static_cast<int>(8 + 5 * size), 8, 20);
         if (boss != nullptr) {
@@ -10637,6 +10666,22 @@ void OnPlayerUpdate() {
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
     ApplySwimPhysics(player);
+    {   // the rock of a blow on your own Link, tilted about the feet on top of whatever he is doing (not on the cart saddle: that sets its own tilt)
+        static bool tilted = false;
+        auto rc = gHitRecoil.find(hud.selfId);
+        if (rc != gHitRecoil.end() && player->actor.draw != LocalRide_Draw) {
+            rc->second.age += 1.0f / royale::kTickHz;
+            float pitch = 0, roll = 0;
+            RecoilTilt(rc->second, player->actor.shape.rot.y * (3.14159265f / 32768.0f), &pitch, &roll);
+            player->actor.shape.rot.x = static_cast<s16>(pitch * (32768.0f / 3.14159265f));
+            player->actor.shape.rot.z = static_cast<s16>(roll * (32768.0f / 3.14159265f));
+            tilted = true;
+            if (rc->second.age > 0.5f) gHitRecoil.erase(rc);
+        } else if (tilted) {
+            if (player->actor.draw != LocalRide_Draw) player->actor.shape.rot.x = player->actor.shape.rot.z = 0;
+            tilted = false;
+        }
+    }
 
     // The server moves everyone to spawn points when the match starts. It only knows x and z, so drop from above. This only
     // happens once the player has actually arrived in the field (they may still be loading in from the waiting room).
@@ -14295,6 +14340,7 @@ UiState& Ui() {
         gHitBlood = CVarGetInteger(ROYALE_CVAR("HitBlood"), 1) != 0;
         gHitScaled = CVarGetInteger(ROYALE_CVAR("HitScaled"), 1) != 0;
         gHitOnSelf = CVarGetInteger(ROYALE_CVAR("HitOnSelf"), 1) != 0;
+        gHitReact = CVarGetInteger(ROYALE_CVAR("HitReact"), 1) != 0;
         gHitAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("HitAmount"), 100), 0, 200) / 100.0f;
         gWaterDetail = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterDetail"), 1), 0, 2);
         gWaterWaves = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterWaves"), 100), 0, 200) / 100.0f;
@@ -15487,6 +15533,7 @@ void DrawGraphicsUi() {
             GfxCheck("Particles at the point of impact", "HitParticles", &gHitParticles);
             GfxCheck("Red blood-style drops on living targets (off: pale sparks)", "HitBlood", &gHitBlood);
             GfxCheck("Bigger hits throw bigger bursts", "HitScaled", &gHitScaled);
+            GfxCheck("Bots and mini bosses rock away from the blow (on top of their animation)", "HitReact", &gHitReact);
             GfxCheck("Also show it when you are the one hit", "HitOnSelf", &gHitOnSelf);
             if (GfxPercent("How many particles (%, 0 = none)", "HitAmount", &amount)) gHitAmount = amount / 100.0f;
             ImGui::TextWrapped("Players and bots bleed red, skeletons shed bone dust, armour rings with sparks, and each mini boss and major boss has its own kind of burst.");
