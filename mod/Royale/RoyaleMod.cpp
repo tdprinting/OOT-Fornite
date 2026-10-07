@@ -17,6 +17,7 @@
 #include "avriella_anim.h"
 #include "maya_anim.h"
 #include "maya_sounds.h"
+#include "maya_phone.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -7368,7 +7369,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -12745,7 +12746,14 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
 // Maya's two real, user-confirmed playful responses. A dedicated mixer slot
 // respects game volume and never interrupts Lilo, Avriella, music or other SFX.
 double gMayaVoiceQuietUntil=0;
-void StopMayaVoice() { StopVoice(kVoiceMaya); gMayaVoiceQuietUntil=0; }
+void StopMayaVoice() { StopVoice(kVoiceMaya); StopVoice(kVoicePhone); gMayaVoiceQuietUntil=0; }
+// Mom's cartoon phone babble on the video call (synthesised, shared/maya_phone.h).
+void PlayMayaPhone() {
+    static const auto babble = std::make_shared<const std::vector<int16_t>>(royale::maya_phone::kData, royale::maya_phone::kData + royale::maya_phone::kCount);
+    const float volume = GameVolume(false);
+    if (volume < 0.01f || !CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1)) return;
+    StartVoice(kVoicePhone, babble, false, royale::maya_phone::kRate, false, volume * 0.8f);
+}
 bool PlayMayaVoice(int clip, bool force=false) {
     namespace S=royale::maya_snd;
     static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
@@ -12767,7 +12775,7 @@ struct MayaCompanionState {
     // The video-chat scene: 1 chatting, 2 running from the cloud, 3 watching it clear and then going back for the tablet; 0 none.
     int scene = 0;
     float sceneT = 0, cloudX = 0, cloudY = 0, cloudZ = 0;
-    bool fartHeard = false;
+    bool fartHeard = false, phoneHeard = false;
     royale::TabletBody tablet;   // the dropped tablet, a physics object lying about until she fetches it
     bool tabletLive = false;
     float tabletAge = 0;
@@ -12828,7 +12836,7 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
     float distance = std::hypot(dx, dz);
     c.expressionClock += dt; c.greeting = std::max(0.0f,c.greeting-dt);
     bool talking = TalkingTo(actor);
-    if (c.scene && talking) c.scene = 0;   // you spoke to her: the scene is over (a dropped tablet stays where it fell)
+    if (c.scene && talking) { c.scene = 0; StopVoice(kVoicePhone); }   // you spoke to her: the scene is over (a dropped tablet stays where it fell)
     if (c.tabletLive) {   // the dropped tablet bounces and settles; it is gone once she has fetched it or after a while
         const float groundY = actor->world.pos.y;
         auto floorAt = [groundY](float x, float z) { float y; return FloorAt(x, z, &y) ? y : groundY; };
@@ -12875,7 +12883,7 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
             FartCloudStep(play, c.cloudX, c.cloudY - 12.0f, c.cloudZ, 3, 2.4f);
         } else if (c.scene >= 2 && c.sceneT < 3.2f) FartCloudStep(play, c.cloudX, c.cloudY - 12.0f, c.cloudZ, 1, 2.6f);
     } else if (distance > 115.0f && !talking) {
-        if (c.scene == 1) c.scene = 0;   // she was called away mid-chat
+        if (c.scene == 1) { c.scene = 0; StopVoice(kVoicePhone); }   // she was called away mid-chat
         c.still = 0; c.hobbyTime = 0;
         const float yaw = std::atan2(dx, dz);
         c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.18f;
@@ -12910,14 +12918,15 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         // Hobbies first; after a long wait she sits down, and after a longer one she nods off hugging her knees.
         clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 45 ? M::kSleep : c.still > 24 ? M::kSit : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
-    if (c.scene == 0 && clip == M::kVideochat && !talking) { c.scene = 1; c.sceneT = 0; c.fartHeard = false; c.tabletLive = false; }
+    if (c.scene == 0 && clip == M::kVideochat && !talking) { c.scene = 1; c.sceneT = 0; c.fartHeard = false; c.phoneHeard = false; c.tabletLive = false; }
     if (c.scene == 1) {
         clip = M::kVideochat;
         const float t = c.anim.clip == M::kVideochat ? c.anim.time : 0.0f;
         M::Pose pose; M::SampleClip(M::kVideochat, t, pose);
         float tp[3], tq[4];
         MayaTabletWorld(pose, actor->world.pos, c.yaw, M::kWorldScale, tp, tq);
-        if (t >= M::kVideoChatFartTime + 0.15f && !c.fartHeard) { c.fartHeard = true; PlayOneShot(2); }
+        if (t >= 0.55f && !c.phoneHeard && t < M::kVideoChatFartTime) { c.phoneHeard = true; PlayMayaPhone(); }   // mom's cartoon babble
+        if (t >= M::kVideoChatFartTime && !c.fartHeard) { c.fartHeard = true; StopVoice(kVoicePhone); PlayOneShot(2); }   // ...cut off by the big one
         if (t >= M::kVideoChatFartTime + 0.15f && t < M::kVideoChatDropTime)   // the cloud pours out of the screen, thicker and thicker
             FartCloudStep(play, tp[0], tp[1] - 12.0f, tp[2], 2, 0.7f + 1.2f * (t - M::kVideoChatFartTime));
         if (t >= M::kVideoChatDropTime && !c.tabletLive) {   // it leaves her hands: from here on it is a falling object
