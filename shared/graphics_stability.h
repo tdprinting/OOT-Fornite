@@ -21,4 +21,11 @@ inline Cloud CloudPosition(float hx, float hz, float height, float eyeX, float e
 inline float WaterOffset(float swell, float push, float shore) {
     return std::max(0.75f, 3.0f + (swell + push) * shore);
 }
+// The drawn water's height above the level the game reports. `base` is where calm water sits (the island's sea bed is drawn well below its
+// sheet, so the sheet rides at the level itself; on lakes and rivers the game draws its own water there, so ours rides a little over it) and
+// `lowest` is how far under the level a trough or a swimmer's dip may go: on the island the bed is 40 units down, so dips show; over the game's own
+// water they would vanish behind it, so they stop just above it.
+inline float WaterSurfaceOffset(float swell, float push, float shore, float base, float lowest) {
+    return std::max(lowest, base + (swell + push) * shore);
+}
 }
