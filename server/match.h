@@ -225,7 +225,7 @@ class Match {
         std::vector<Vec2> taken = lootSpots;
         for (const ChestSite& s : chestSites) taken.push_back(s.pos);
         if (lootPlan) {
-            for (const LootSpawn& l : GenerateAnchoredLoot(seed, *lootPlan, count, chestFraction, &taken, (std::max)(240.0f, map.radius * 0.05f))) loot.push_back({l, false});
+            for (const LootSpawn& l : GenerateAnchoredLoot(seed, *lootPlan, count * 7 / 10, chestFraction, &taken, (std::max)(450.0f, map.radius * 0.08f))) loot.push_back({l, false});
         } else {
             for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
         }

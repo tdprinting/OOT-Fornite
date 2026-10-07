@@ -12,7 +12,7 @@ Everything is laid out by `shared/placement.h` (`PlaceMap`) from the match seed,
 | Scattered chests | `GenerateAnchoredLoot`: one per anchor, picked at random: boulder nooks, groves, stone clusters, cliff feet and, on the Fortnite Map, the oaks and cliff slabs of its own scenery (`island_anchors.h`). On Convergence, its authored buildings and walls. |
 
 A chest spot (`ChestSpotOk`) must be level (slope 0.3 or less), have floor right round it, be clear of every solid piece and the map's edge, and not be on a town's streets (the
-towns have their own chests indoors). Scattered chests keep `max(240, 5% of the radius)` apart. At most a fifth of the requested count is ever put in the
+towns have their own chests indoors). Scattered chests are 70% of the requested count and keep `max(450, 8% of the radius)` apart; the towns keep one chest per 320 units. Boulders only come in groups of two or more. At most a fifth of the requested count is ever put in the
 open, so a map with little scenery has fewer chests instead of chests with nothing round them.
 
 The sandbox is laid out by hand (`sandbox_layout.h`) and is not touched.

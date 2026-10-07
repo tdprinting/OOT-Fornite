@@ -230,6 +230,16 @@ inline MapPlacement PlaceMap(uint64_t seed, Circle map, int mapId, int poiCount,
             made++;
         }
     }
+    // The towns' own chests were four to a house, a few steps apart: keep one of any that are closer than 320 to one already kept.
+    {
+        std::vector<Vec2> kept;
+        for (const Vec2& s : layout.lootSpots) {
+            bool close = false;
+            for (const Vec2& k : kept) if (Distance(s, k) < 320.0f) { close = true; break; }
+            if (!close) kept.push_back(s);
+        }
+        layout.lootSpots = kept;
+    }
     // Chests that landed on a bank or a cliff edge are dropped (the towns' own, indoors, only on the worst ground).
     auto keep = [&](Vec2 p, float steepest) { return ground.Slope(p) <= steepest; };
     layout.lootSpots.erase(std::remove_if(layout.lootSpots.begin(), layout.lootSpots.end(), [&](Vec2 p) { return !keep(p, 0.7f); }), layout.lootSpots.end());

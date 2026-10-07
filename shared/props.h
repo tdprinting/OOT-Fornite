@@ -105,16 +105,15 @@ inline std::vector<Prop> GenerateProps(uint64_t seed, Circle map, int count, con
         }
         const Vec2 centre = RandomPointIn(rng, map, valid, 0.97f);
         if (!land.Valid(centre) || land.Slope(centre) > 0.35f || inTown(centre)) continue;
-        if (roll < 0.06) {   // a lone rock or bush
-            add(centre, rng.Below(2) ? PropKind::Rock : PropKind::Bush);
-        } else if (roll < 0.55) {   // a grove: bushes crowded together round one or two rocks
+        if (roll < 0.52) {   // a grove: bushes crowded together round one or two rocks
             const int bushes = 4 + static_cast<int>(rng.Below(4));
             for (int k = 0; k < bushes; k++) add(around(centre, 25.0f, 220.0f), PropKind::Bush);
             if (rng.Unit() < 0.5) add(around(centre, 40.0f, 140.0f), PropKind::Rock);
         } else {   // a rock field: a few boulders with smaller rocks about them, and sometimes a standing stone in the middle
             if (rng.Unit() < 0.7) add(centre, PropKind::Pillar);
             if (rng.Unit() < 0.3) add(around(centre, 120.0f, 240.0f), PropKind::Pillar);
-            const int boulders = 1 + static_cast<int>(rng.Below(2)), rocks = 3 + static_cast<int>(rng.Below(3));
+            const int boulders = 2 + static_cast<int>(rng.Below(2)),   // never one boulder on its own
+                       rocks = 3 + static_cast<int>(rng.Below(3));
             for (int k = 0; k < boulders; k++) add(around(centre, 100.0f, 220.0f), PropKind::Boulder);
             for (int k = 0; k < rocks; k++) add(around(centre, 60.0f, 280.0f), PropKind::Rock);
         }
