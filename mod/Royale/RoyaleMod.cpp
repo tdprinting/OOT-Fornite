@@ -2607,6 +2607,9 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     Matrix_RotateY(yaw * (3.14159265f / 32768.0f), MTXMODE_APPLY);
     Matrix_RotateZ(roll + std::sin(t * 3.1f + scheme) * 0.04f, MTXMODE_APPLY);               // gentle sway in the wind
     Matrix_RotateX((diving ? 0.5f : 0.1f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.025f, MTXMODE_APPLY); // nose down for a dive
+    // Smaller than the model, and flatter so the wing sits just over his head with short struts: it hangs on his hands, not high above him.
+    // The scale is about the bar, so the grips stay in his hands (the live cloth wing is drawn in this same space, so it shrinks with the frame).
+    Matrix_Scale(0.7f * size, 0.58f * size, 0.7f * size, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
