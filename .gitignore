@@ -38,3 +38,5 @@ assets/maya/*-preview.png
 
 # Local map validation builds
 /build-map-tests/
+/build-war-table/
+/war-table-compile/
