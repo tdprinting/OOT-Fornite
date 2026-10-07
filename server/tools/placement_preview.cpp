@@ -35,6 +35,9 @@ int main(int argc, char** argv) {
     if (mapId == kConvergenceMapIndex) {
         valid = [](Vec2 p) { return ConvergenceDryGround(p) && !ConvergenceObstacleAt(p); };
         height = [](Vec2 p, float* y) { *y = ConvergenceGroundHeight(p); return true; };
+    } else if (mapId == kKingdomMapIndex) {
+        valid = [](Vec2 p) { float y; return KingdomLootHeightAt(p, &y) || (KingdomDryGround(p) && !KingdomObstacleAt(p)); };
+        height = [](Vec2 p, float* y) { float s; *y = KingdomLootHeightAt(p, &s) ? s : KingdomGroundHeight(p); return true; };
     } else if (IsIslandMap(mapId)) {
         fn::UseTerrainForMap(mapId);
         valid = [](Vec2 p) { float y; return fn::GroundHeight(p.x, p.z, &y) && y > fn::kWaterY + 10.0f && fn::GroundUp(p.x, p.z) >= 0.8f; };
@@ -89,6 +92,9 @@ int main(int argc, char** argv) {
         if (mapId == kConvergenceMapIndex) {   // its scenery is authored geometry, not props
             for (const auto& b : convergence::kBuildings) if (std::fabs(at.x - b.x) < b.halfWidth + 150.0f && std::fabs(at.z - b.z) < b.halfDepth + 150.0f) near = true;
             for (const auto& o : convergence::kObstacles) if (at.x > o.x0 - 150.0f && at.x < o.x1 + 150.0f && at.z > o.z0 - 150.0f && at.z < o.z1 + 150.0f) near = true;
+        }
+        if (mapId == kKingdomMapIndex) {
+            for (const auto& b : kingdom::kBuildings) if (KingdomInBuilding(b, at, 150.0f)) near = true;
         }
         if (mapId == kFortniteMapIndex) {      // the island's own oaks, cliff slabs and boulders (shared/fortnite_scenery.h)
             for (int cz = static_cast<int>(std::floor((at.z - 150.0f) / fn::kSceneryCell)); cz <= static_cast<int>(std::floor((at.z + 150.0f) / fn::kSceneryCell)); cz++)

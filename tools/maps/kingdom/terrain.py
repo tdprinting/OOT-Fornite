@@ -113,8 +113,8 @@ def height(x, z):
     d = np.hypot(x - px, z - pz)
     h = np.minimum(h, -330 + (h + 330) * smoothstep(pr * 0.55, pr + 280, d))
     # The sea
-    h = np.where(cd > 0, -250 + (SEA_FLOOR + 250) * smoothstep(0, 1100, cd), h)
-    h = np.where(cd > 1100, SEA_FLOOR, h)
+    h = np.where(cd > 0, -250 + (SEA_FLOOR + 250) * smoothstep(0, 700, cd), h)
+    h = np.where(cd > 700, SEA_FLOOR, h)
     return np.maximum(h, SEA_FLOOR)
 
 def ramp(x, z, h, pts, half, blend):

@@ -6,6 +6,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
+#include "../shared/kingdom_data.h"
 #include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
@@ -1280,6 +1281,10 @@ class Match {
             b.kind = MapOf(mapId).minis[rng.Below(2)];   // the ones that suit this place
             if (mapId == kConvergenceMapIndex) {
                 for (const auto& region : convergence::kRegions)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
+            if (mapId == kKingdomMapIndex) {
+                for (const auto& region : kingdom::kRegions)
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
             b.home = b.pos = at;

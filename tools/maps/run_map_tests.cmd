@@ -6,6 +6,10 @@ cl /nologo /std:c++17 /EHsc /bigobj /O2 /Ishared /Iserver /Iclient /Imod\Royale 
 if errorlevel 1 exit /b 1
 build-map-tests\convergence_tests.exe
 if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /EHsc /bigobj /O2 /Ishared /Iserver /Iclient /Imod\Royale /Febuild-map-tests\kingdom_tests.exe /Fobuild-map-tests\kingdom_tests.obj server\tests\kingdom_tests.cpp
+if errorlevel 1 exit /b 1
+build-map-tests\kingdom_tests.exe
+if errorlevel 1 exit /b 1
 cl /nologo /std:c++17 /EHsc /bigobj /O2 /Ishared /Iserver /Iclient /Imod\Royale /Febuild-map-tests\royale_tests.exe /Fobuild-map-tests\tests.obj server\tests\tests.cpp
 if errorlevel 1 exit /b 1
 build-map-tests\royale_tests.exe

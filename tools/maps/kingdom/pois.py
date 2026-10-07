@@ -41,7 +41,7 @@ def clock_town(w):
         x, z = cx + r * math.cos(a), cz + r * math.sin(a)
         stall(w, x, z, a + math.pi / 2, k)
     # Lamps along the north street to the bridge
-    for z in (420, 260):
+    for z in (760, 640):
         for x in (-150, 150): lamp(w, x, z)
 
 def stall(w, x, z, yaw, k):
@@ -51,7 +51,7 @@ def stall(w, x, z, yaw, k):
         for sz in (-1, 1):
             px, pz = f.p(sx * 85, sz * 55)
             w.box(px, y, pz, 10, 170, 10, 'timber', yaw, col='none')
-    w.hip(x, z, 190, 130, y + 170, 45, 'banner_red' if k % 2 else 'banner_blue', yaw, overhang=12, col=None)
+    w.hip(x, z, 190, 130, y + 170, 45, 'roof_red' if k % 2 else 'roof_blue', yaw, overhang=12, col=None)
     w.box(x, y, z, 170, 75, 60, 'planks', yaw, col='prop', surf='wood')
     px, pz = f.p(40, 0); pot(w, px, pz, y + 75, 14)
     px, pz = f.p(-60, 70); crate(w, px, pz, y, 55, yaw)
@@ -65,13 +65,13 @@ def lamp(w, x, z):
 # ---- Castle Bridge and Hyrule Castle -----------------------------------------------------------------------------------------------
 def castle_bridge(w):
     """A long arched stone viaduct from Clock Town's north gate, high over Zora's River, up to the castle gate (the Twilight Princess view)."""
-    a = (0.0, H(0, 120) + 6, 120.0); b = (0.0, 534.0, -800.0)
+    a = (0.0, H(0, 560) + 6, 560.0); b = (0.0, 526.0, -1020.0)
     width = 330
     beam(w, a, b, width, 60, 'cobble', surf='stone')
     # parapets you can hide behind
     for side in (-1, 1):
         ox = side * (width / 2 - 14)
-        beam(w, (ox, a[1] + 85, a[2]), (ox, b[1] + 85, b[2]), 28, 85, 'castle_stone', surf='stone')
+        beam(w, (ox, a[1] + 85, a[2]), (ox, b[1] + 85, b[2]), 28, 85, 'castle_stone', surf='stone', block=True)
         # stone posts on the parapet
         for t in np.linspace(0.05, 0.95, 9):
             y = a[1] + (b[1] - a[1]) * t; z = a[2] + (b[2] - a[2]) * t
@@ -181,7 +181,7 @@ def great_bridge(w):
     beam(w, (mid1, y, za), (xb, yb, za), 300, 50, 'cobble')
     for side in (-1, 1):
         zz = za + side * 136
-        beam(w, (mid0, y + 80, zz), (mid1, y + 80, zz), 26, 80, 'moss_stone')
+        beam(w, (mid0, y + 80, zz), (mid1, y + 80, zz), 26, 80, 'moss_stone', block=True)
         for xp in np.linspace(mid0, mid1, 8):
             w.box(xp, y + 75, zz, 36, 30, 36, 'moss_stone', col='none')
     for xp in (1700, 2100):
@@ -201,6 +201,8 @@ DECK_Y = -165
 
 def stilts_deck(w, x, z, sx, sz, yaw=0.0, y=DECK_Y):
     w.box(x, y - 22, z, sx, 22, sz, 'planks', yaw, surf='wood', hookshot=True)
+    f0 = Frame(x, z, yaw); a = f0.p(-sx / 2, 0); b = f0.p(sx / 2, 0)
+    w.walkways.append((a[0], a[1], b[0], b[1], sz / 2, y, y))
     f = Frame(x, z, yaw)
     for lx in np.linspace(-sx / 2 + 15, sx / 2 - 15, max(2, int(sx / 220) + 1)):
         for lz in np.linspace(-sz / 2 + 15, sz / 2 - 15, max(2, int(sz / 220) + 1)):
@@ -222,19 +224,19 @@ def lake_stilts(w):
     cx, cz = -2950, 2350
     w.markers.append({'name': 'Lake Hylia Stilts', 'kind': 'region', 'x': cx, 'z': cz})
     ls = HouseStyle(wall='planks', base='timber', trim='timber', roof='thatch', roof_kind='gable', floor='planks', climb=True, surf='wood')
-    decks = [(-2700, 2150, 560, 520, 0.2), (-3150, 2050, 520, 480, -0.3), (-2850, 2650, 600, 520, 0.1), (-3350, 2550, 480, 480, 0.5), (-2450, 2550, 420, 420, 0.0)]
+    decks = [(-2600, 2050, 560, 520, 0.2), (-3350, 1950, 520, 480, -0.3), (-2900, 2800, 600, 520, 0.1), (-3450, 3000, 480, 480, 0.5), (-2200, 2700, 420, 420, 0.0)]
     for i, (x, z, sx, sz, yaw) in enumerate(decks):
         stilts_deck(w, x, z, sx, sz, yaw)
         if i < 4:
             house(w, x, z, 360, 330, yaw + (math.pi if i % 2 else 0), 1, ls, back_door=True, name=f'stilt hut {i}', floor_y=DECK_Y, roof_rise=170, footing=False)
     # Boardwalks between the decks and to the east shore
-    walks = [((-2700, 2150), (-3150, 2050)), ((-2700, 2150), (-2850, 2650)), ((-2850, 2650), (-3350, 2550)), ((-2850, 2650), (-2450, 2550)),
-             ((-2450, 2550), (-2050, 2450)), ((-2700, 2150), (-2300, 1850)), ((-3350, 2550), (-3700, 2580))]
+    walks = [((-2600, 2050), (-3350, 1950)), ((-2600, 2050), (-2900, 2800)), ((-2900, 2800), (-3450, 3000)), ((-2900, 2800), (-2200, 2700)),
+             ((-2200, 2700), (-1900, 2550)), ((-2600, 2050), (-2250, 1800)), ((-3450, 3000), (-3800, 2850))]
     for a, b in walks: boardwalk(w, a, b)
     # steps out of the water at the ends of the decks
-    for x, z in [(-3330, 2300), (-2600, 2900), (-3550, 2750), (-2350, 2250)]:
+    for x, z in [(-3350, 2230), (-2700, 3080), (-3900, 2850), (-2300, 2300)]:
         w.box(x, WATER_Y - 30, z, 120, 70, 80, 'planks', surf='wood')
-    for x, z in [(-2600, 2300), (-3100, 2700)]:
+    for x, z in [(-2500, 2250), (-3000, 3000)]:
         barrel(w, x, z, DECK_Y); crate(w, x + 70, z - 40, DECK_Y, 60)
     # Fishing boats moored by the decks
     for x, z, yaw in [(-3250, 1800, 0.4), (-2350, 2800, -0.6)]:
@@ -318,7 +320,7 @@ def tent(w, x, z, k):
     for sx in (-1, 1):
         px, pz = f.p(sx * 150, 0)
         w.box(px, y, pz, 12, 200, 12, 'timber', k * 0.7, col='none')
-    w.gable(x, z, 300, 320, y, 200, 'banner_red' if k % 2 else 'cloth', k * 0.7, overhang=0, col=None)
+    w.gable(x, z, 300, 320, y, 200, 'roof_red' if k % 2 else 'cloth', k * 0.7, overhang=0, col=None)
 
 # ---- Snowpeak ----------------------------------------------------------------------------------------------------------------------
 def snowpeak(w):
@@ -482,7 +484,7 @@ def kokiri(w):
              (-5500, -700, 120, 1000, 0, False), (-5050, -1950, 110, 900, 280, False)]
     for k, (x, z, r, hgt, plat, hut) in enumerate(trees):
         giant_tree(w, x, z, r, hgt, 500 + k, platform=plat or None, hut=hut)
-    for k, (x, z) in enumerate([(-5100, -1100), (-4800, -1050), (-5300, -1150)]):
+    for k, (x, z) in enumerate([(-5150, -900), (-4700, -1100), (-4950, -1350)]):
         stump_house(w, x, z, 170, 600 + k, math.atan2(cz - z, cx - x) + 0.5)
     # rope bridges between the two tree decks with huts
     deku_tree(w, -5750, -2300)
@@ -611,12 +613,12 @@ def temple_ruins(w):
             px, pz = f.p(sx * 230, lz)
             hgt = 520 if (k + (sx > 0)) % 3 else 200
             w.cylinder(px, pz, 40, base, base + hgt, 'moss_stone', n=8, col='prop')
-    a = f.p(-120, -100); b = f.p(160, 60)
+    a = f.p(-330, 60); b = f.p(-190, 230)
     beam(w, (a[0], base + 70, a[1]), (b[0], base + 70, b[1]), 80, 70, 'moss_stone', col='prop')
     # the bell tower stump at the back corner, open at the top
     tx, tz = f.p(-330, -230)
     spiral_tower(w, tx, tz, 360, 700, yaw=yaw, wall='moss_stone', floor='cobble', roof='moss_stone', name='Temple bell tower', cap='hip', y0=base)
-    w.loot.append((*f.p(0, -100), base, 'temple altar'))
+    _lx, _lz = f.p(0, -100); w.loot.append((_lx, base, _lz, 'temple altar'))
     for k in range(4):
         bush(w, *f.p(-480 + k * 320, -460), 0.9, 30 + k, 'leaves_dark')
 
@@ -727,7 +729,7 @@ def field(w):
         w.box(px, H(px, pz) - 30, pz, 150, 640 if side < 0 else 420, 160, 'moss_stone', yaw, surf='stone', climb=(1,))
     a = f.p(-160, 0); b = f.p(60, 0)
     beam(w, (a[0], H(gx, gz) + 610, a[1]), (b[0], H(gx, gz) + 540, b[1]), 140, 80, 'moss_stone')
-    w.loot.append((*f.p(-230, 0), H(*f.p(-230, 0)) + 610, 'old gate top'))
+    _lx, _lz = f.p(-230, 0); w.loot.append((_lx, H(_lx, _lz) + 610, _lz, 'old gate top'))
     w.markers.append({'name': 'Old Gate', 'kind': 'landmark', 'x': gx, 'z': gz})
     fence(w, [f.p(320, 60), f.p(1200, 260)], 100)
     fence(w, [f.p(-320, 60), f.p(-1100, 300)], 100)
@@ -753,7 +755,15 @@ def poisson(rng, lo, hi, r, n_try):
         if all((x - px) ** 2 + (z - pz) ** 2 > r * r for px, pz in pts): pts.append((x, z))
     return pts
 
+_WORLD = [None]
+
 def near_any(x, z, margin):
+    w = _WORLD[0]
+    if w is not None:
+        for bx, bz, hw, hd, *_ in w.buildings:
+            if math.hypot(x - bx, z - bz) < max(hw, hd) + 260: return True
+        for lx, ly, lz, *_ in w.loot:
+            if math.hypot(x - lx, z - lz) < 220: return True
     for name, px, pz, rad, *_ in POIS:
         if name in ('Hyrule Field',): continue
         if math.hypot(x - px, z - pz) < rad * 0.75 + margin: return True
@@ -771,6 +781,7 @@ BUILDERS = [
 
 
 def build_all(w, only=None):
+    _WORLD[0] = w
     for name, fn in BUILDERS:
         if isinstance(only, str): only = only.split(',')
         if only and 'all' not in only and name not in only: continue

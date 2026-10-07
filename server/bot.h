@@ -898,6 +898,7 @@ class BotController {
             const LootSpawn& s = loot[i].spawn;
             const float d = Distance(p.pos, s.pos);
             if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) continue;
+            if (nav && !nav->Connected(p.pos, s.pos)) continue;   // a chest upstairs or on an island with no way up is not for the bots
             const float value = LootValue(p, s) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
             if (value <= 0) continue;
             const float score = value * (0.6f + mem.greed) / (d + 150.0f);

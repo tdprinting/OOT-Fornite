@@ -13,8 +13,9 @@ SUN = np.array([-0.45, 0.78, -0.43]); SUN /= np.linalg.norm(SUN)   # late mornin
 SURFACES = {'ground': 0, 'sand': 1, 'stone': 2, 'dirt': 3, 'grass': 8, 'wood': 10, 'ice': 12, 'iron': 13, 'snow': 3}
 
 class Tri:
-    __slots__ = ('p', 'uv', 'shade', 'mat', 'group', 'far')
-    def __init__(self, p, uv, shade, mat, group, far):
+    __slots__ = ('p', 'uv', 'shade', 'mat', 'group', 'far', 'normal', 'inside')
+    def __init__(self, p, uv, shade, mat, group, far, normal=(0.0, 1.0, 0.0), inside=False):
+        self.normal = normal; self.inside = inside
         self.p = p; self.uv = uv; self.shade = shade; self.mat = mat; self.group = group; self.far = far
 
 class World:
@@ -28,6 +29,7 @@ class World:
         self.blockers = []             # every solid: ('poly', outline, y0, y1) or ('box', x0, x1, z0, z1, y0, y1); the exporter keeps the
                                        # parts that stand up out of the floor round them as navigation obstacles
         self.buildings = []            # (x, z, halfw, halfd, floorY, yaw) floors that are higher than the terrain
+        self.walkways = []             # (x0, z0, x1, z1, halfwidth, y0, y1): decks, bridges, boardwalks and log ramps that stand over lower ground
         self.floor_patches = []        # (x, z, radius, y)
         self.loot = []                 # (x, y, z, name)
         self.markers = []              # dicts
@@ -57,6 +59,11 @@ class World:
         self.col_tris.append((ia, ib, ic, surf))
 
     # ---- drawing ------------------------------------------------------------------------------------------------------------------
+    def in_interior(self, p):
+        for x0, x1, z0, z1, y0, y1 in self.interior:
+            if x0 <= p[0] <= x1 and z0 <= p[2] <= z1 and y0 <= p[1] <= y1: return True
+        return False
+
     def light(self, p, n):
         d = max(0.0, float(np.dot(n, SUN)))
         s = 0.58 + 0.42 * d + 0.06 * n[1]
@@ -93,9 +100,12 @@ class World:
             tp = [P[i] for i in idx]
             tuv = [uvs[i] for i in idx]
             sh = [tuple(min(1.2, self.light(p, n) * t) for t in tint) for p in tp]
-            self.tris.append(Tri(tp, tuv, sh, mat, self.group, self.far))
+            inside = any(self.in_interior(p) for p in tp)
+            nn = (float(n[0]), float(n[1]), float(n[2]))
+            self.tris.append(Tri(tp, tuv, sh, mat, self.group, self.far, nn, inside))
             if double:
-                self.tris.append(Tri(tp[::-1], tuv[::-1], [tuple(min(1.2, self.light(p, -n) * t) for t in tint) for p in tp[::-1]], mat, self.group, self.far))
+                self.tris.append(Tri(tp[::-1], tuv[::-1], [tuple(min(1.2, self.light(p, -n) * t) for t in tint) for p in tp[::-1]], mat, self.group, self.far,
+                                     (-nn[0], -nn[1], -nn[2]), inside))
             if col is not None:
                 self.col_tri(tp[0], tp[1], tp[2], col)
 
@@ -237,7 +247,7 @@ class World:
                 else:
                     self.face([a, b, c], mat, out=inside); self.face([a, c, d], mat, out=inside)
 
-    def solid(self, pts, faces, mat, col='static', surf='stone', climb=False, mats=None):
+    def solid(self, pts, faces, mat, col='static', surf='stone', climb=False, mats=None, block=True):
         """Any closed convex-ish solid: points and faces (index lists); each face is turned outwards."""
         cen = tuple(np.mean(np.array(pts, dtype=float), axis=0))
         sid = self.surface(surf, climb=climb) if col == 'static' else None
@@ -246,7 +256,7 @@ class World:
         P = np.array(pts); lo = P.min(axis=0); hi = P.max(axis=0)
         if col == 'prop':
             self.props.append((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], self.group))
-        if col in ('static', 'prop'):
+        if col in ('static', 'prop') and block:
             self.blockers.append(('box', lo[0], hi[0], lo[2], hi[2], lo[1], hi[1]))
 
     def quad(self, p0, p1, p2, p3, mat, double=False, uvs=None, col=None):

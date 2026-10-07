@@ -199,7 +199,7 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
         par = [(-g / 2, -D / 2), (-W / 2, -D / 2), (-W / 2, D / 2), (W / 2, D / 2), (W / 2, -D / 2), (g / 2, -D / 2), (g / 2, -D / 2 + 22),
                (W / 2 - 22, -D / 2 + 22), (W / 2 - 22, D / 2 - 22), (-W / 2 + 22, D / 2 - 22), (-W / 2 + 22, -D / 2 + 22), (-g / 2, -D / 2 + 22)]
         w.prism(f.outline(par), top, top + 85, st.base, surf='stone')
-        w.loot.append((*f.p(W / 4, D / 4), top, name + ' roof'))
+        _lx, _lz = f.p(W / 4, D / 4); w.loot.append((_lx, top, _lz, name + ' roof'))
     old = w.tint
     if furnish:
         furnish_room(w, f, W, D, y0, name, ramp=storeys > 1 or st.roof_kind == 'flat')
@@ -264,8 +264,11 @@ def spiral_tower(w, x, z, size, height, yaw=0.0, wall='castle_stone', floor='cob
     if climb:   # ivy on the climbable face (the left one, local -x)
         nx, nz = f.dir(-1, 0)
         px, pz = f.p(-size / 2, 0)
-        for k in range(int((top - y0) / 200)):
-            w.decal(px, y0 + 20 + k * 200, pz, size * 0.8, 205, nx, nz, 'leaves', off=3, uvs=[(0, 2), (3, 2), (3, 0), (0, 0)])
+        tx, tz = -nz, nx
+        for k in range(int((top - y0) / 200)):   # a ragged vine: narrower and wandering, so the stone shows round it
+            wid = size * (0.38 + 0.14 * math.sin(k * 1.7 + x * 0.01))
+            sh = size * 0.12 * math.sin(k * 0.9 + z * 0.01)
+            w.decal(px + tx * sh, y0 + 20 + k * 200, pz + tz * sh, wid, 205, nx, nz, 'leaves_dark', off=3, uvs=[(0, 2), (1.5, 2), (1.5, 0), (0, 0)])
     w.interior.append(_aabb(f, size, size, y0 - 5, top))
     # Ramps up the inside, round the walls: each flight along one wall, with a landing in each corner
     y = y0
@@ -301,7 +304,7 @@ def spiral_tower(w, x, z, size, height, yaw=0.0, wall='castle_stone', floor='cob
         else:
             pts.append((px, pz))
     w.prism(f.outline(pts), yl - 20, yl, floor, surf='stone')
-    w.loot.append((*f.p(-sx * inner / 4, -sz * inner / 4), yl, name + ' top'))
+    _lx, _lz = f.p(-sx * inner / 4, -sz * inner / 4); w.loot.append((_lx, yl, _lz, name + ' top'))
     # Battlements round the top floor's edge (on the walls)
     for (lx0, lz0, lx1, lz1) in [(-size / 2, -size / 2, size / 2, -size / 2), (size / 2, -size / 2, size / 2, size / 2),
                                  (size / 2, size / 2, -size / 2, size / 2), (-size / 2, size / 2, -size / 2, -size / 2)]:
@@ -330,7 +333,7 @@ def spiral_tower(w, x, z, size, height, yaw=0.0, wall='castle_stone', floor='cob
     w.far = old_far
     return y0, top
 
-def beam(w, a, b, width, height, mat, col='static', surf='stone', climb=False):
+def beam(w, a, b, width, height, mat, col='static', surf='stone', climb=False, block=False):
     """A straight sloped slab from a = (x, y, z) to b (its top surface runs from a to b), `height` thick: bridge decks and their
     parapets, walkways, fallen columns. Unlike a ramp it has nothing under it."""
     ax, ay, az = a; bx, by, bz = b
@@ -338,7 +341,8 @@ def beam(w, a, b, width, height, mat, col='static', surf='stone', climb=False):
     pts = [(ax + nx, ay, az + nz), (ax - nx, ay, az - nz), (bx - nx, by, bz - nz), (bx + nx, by, bz + nz)]
     pts += [(p[0], p[1] - height, p[2]) for p in pts]
     faces = [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
-    w.solid(pts, faces, mat, col=col, surf=surf, climb=climb)
+    w.solid(pts, faces, mat, col=col, surf=surf, climb=climb, block=block)
+    if not block and col == 'static' and abs(by - ay) < L * 0.75: w.walkways.append((ax, az, bx, bz, width / 2, ay, by))
 
 def ring_wall(w, cx, cz, r, t, y0, y1, mat, gaps=(), n=16, surf='stone', climb=False):
     """A round wall (n sides) with doorways: gaps = [(angle, width)] (angle 0 = +x, counter clockwise towards +z).

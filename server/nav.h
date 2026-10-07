@@ -93,6 +93,58 @@ class NavGrid {
     }
     float StandHeight(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return floor[Index(cx, cz)] + lift[Index(cx, cz)]; }
 
+    // Which stretch of ground a cell belongs to: cells joined by steps no taller than a clamber (kClimbUp) in either direction are one stretch. An
+    // upper floor, a roof or an island the bots have no way onto is a stretch of its own. Call once the scenery is added, before bots use Connected.
+    void BuildRegions() {
+        region.assign(cells.size(), -1);
+        regionSize.clear();
+        std::vector<int> stack;
+        for (size_t s = 0; s < cells.size(); s++) {
+            if (cells[s] == kBlocked || region[s] >= 0) continue;
+            const int id = static_cast<int>(regionSize.size());
+            int count = 0;
+            region[s] = id;
+            stack.push_back(static_cast<int>(s));
+            while (!stack.empty()) {
+                const int a = stack.back();
+                stack.pop_back();
+                count++;
+                const int ax = a % w, az = a / w;
+                for (int dz = -1; dz <= 1; dz++) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        const int x = ax + dx, z = az + dz;
+                        if ((!dx && !dz) || x < 0 || z < 0 || x >= w || z >= h) continue;
+                        const int b = Index(x, z);
+                        if (cells[b] == kBlocked || region[b] >= 0) continue;
+                        if (dx && dz && (cells[Index(ax + dx, az)] == kBlocked || cells[Index(ax, az + dz)] == kBlocked)) continue;   // no squeezing between corners
+                        if (std::fabs(Height(b) - Height(a)) > kClimbUp) continue;
+                        region[b] = id;
+                        stack.push_back(b);
+                    }
+                }
+            }
+            regionSize.push_back(count);
+        }
+    }
+    // A chest on an upper floor or a roof stands over ground that is open: the cell below it is walkable, but a bot there could not reach it.
+    void MarkUpper(Vec2 p) {
+        int cx, cz;
+        if (!ToCell(p, cx, cz)) return;
+        if (upper.empty()) upper.assign(cells.size(), 0);
+        upper[Index(cx, cz)] = 1;
+    }
+    // Can a bot standing at a get to b? True when either is not on known ground, or when a is on a scrap of ground too small to say (a bot dropped
+    // onto a stray ledge should not stop wanting everything).
+    bool Connected(Vec2 a, Vec2 b) const {
+        if (region.empty()) return true;
+        int ax, az, bx, bz;
+        if (!ToCell(a, ax, az) || !ToCell(b, bx, bz)) return true;
+        if (!upper.empty() && upper[Index(bx, bz)]) return false;
+        const int ra = region[Index(ax, az)], rb = region[Index(bx, bz)];
+        if (ra < 0 || rb < 0 || ra == rb) return true;
+        return regionSize[static_cast<size_t>(ra)] < 150;
+    }
+
     // A step from a to b for a bot: b can be stood on and the height between them can be walked, climbed or dropped.
     static bool StepOk(float fromY, float toY) { return toY - fromY <= kClimbUp && fromY - toY <= kDropDown; }
     bool CanStep(Vec2 a, Vec2 b) const {
@@ -176,7 +228,7 @@ class NavGrid {
         bool reached = false;
         static const int dxs[8] = {1, -1, 0, 0, 1, 1, -1, -1};
         static const int dzs[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-        while (!open.empty() && expansions < kMaxExpansions) {
+        while (!open.empty() && expansions < MaxExpansions()) {
             const Node n = open.top();
             open.pop();
             if (n.idx == goal) { reached = true; break; }
@@ -228,7 +280,8 @@ class NavGrid {
     }
 
   private:
-    static constexpr int kMaxExpansions = 6000;
+    // Enough to cross the whole grid: a big map (the Kingdom is 220 cells across) has rivers to go round.
+    int MaxExpansions() const { return (std::max)(6000, static_cast<int>(cells.size() / 2)); }
     // What a cell holds: nothing to stand on, open ground, ground right beside scenery, the top of scenery.
     static constexpr uint8_t kBlocked = 0, kOpen = 1, kNearScenery = 2, kLifted = 3;
 
@@ -269,6 +322,9 @@ class NavGrid {
     int w = 0, h = 0;
     std::vector<uint8_t> cells;
     std::vector<float> floor, lift, cover;   // per cell: the scene's floor, what stands on it to be stood on, and how tall the tallest thing on it is
+    std::vector<int> region;       // BuildRegions: the stretch of ground each cell is on (-1 for none)
+    std::vector<int> regionSize;
+    std::vector<uint8_t> upper;    // MarkUpper: cells with something out of reach standing over them
     bool heights = false;
 };
 
