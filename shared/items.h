@@ -120,7 +120,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::DinsFire, "Din's Fire", kAbility, rR, rL, "Fire burst around you"},
     {ItemId::FaroresWind, "Farore's Wind", kAbility, rE, rL, "Mark a spot, then jump back to it"},
     {ItemId::NayrusLove, "Nayru's Love", kAbility, rE, rL, "Invulnerable for 4 seconds"},
-    {ItemId::Hookshot, "Hookshot", kAbility, rR, rE, "Pull the player in front of you to you"},
+    {ItemId::Hookshot, "Hookshot", kAbility, rU, rE, "Pull the player in front of you to you"},
     {ItemId::Longshot, "Longshot", kAbility, rE, rL, "Pull from much farther away"},
     {ItemId::LensOfTruth, "Lens of Truth", kAbility, rU, rE, "See every player for 10 seconds"},
     {ItemId::MagicBeans, "Magic Beans", kAbility, rC, rR, "Heal over time for 10 seconds"},
@@ -138,7 +138,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
-    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rU, rL, "Launches you high into the air; no fall damage until you land"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rC, rL, "Launches you high into the air; no fall damage until you land"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
