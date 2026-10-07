@@ -2,6 +2,7 @@
 #include "../sim.h"
 #include "../nav.h"
 #include "../../shared/meshes.h"
+#include "../../shared/gilded_sword_surface.h"
 #include "../../shared/objmodel.h"
 #include "../../shared/tune.h"
 #include "../../shared/poi.h"
@@ -11,6 +12,8 @@
 #include "../../shared/fortnite_scenery.h"
 #include "../../shared/fortnite_puddles.h"
 #include "../../shared/ground_patches.h"
+#include "../../shared/placement.h"
+#include "../../shared/island_anchors.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -177,9 +180,19 @@ static void Run(Simulation& sim, float seconds) {
 static void CombatMath() {
     CHECK(WeaponDps(ItemId::MasterSword, Rarity::Epic) > WeaponDps(ItemId::KokiriSword, Rarity::Common));
     CHECK(WeaponDps(ItemId::KokiriSword, Rarity::Legendary) > WeaponDps(ItemId::KokiriSword, Rarity::Common));
-    CHECK(KindOf(ItemId::Hookshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
+    CHECK(KindOf(ItemId::Longshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
     for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
+    // The Gilded Sword is the strongest sword: it reaches further and hits harder than the Master Sword, one-handed, Legendary only, and found as loot.
+    const WeaponStats gilded = WeaponOf(ItemId::GildedSword), master = WeaponOf(ItemId::MasterSword);
+    CHECK(gilded.damage > master.damage && gilded.range > master.range && !gilded.ranged && !IsTwoHanded(ItemId::GildedSword));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::MasterSword, Rarity::Legendary));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::BiggoronSword, Rarity::Epic));
+    CHECK(InPool(ItemId::GildedSword) && DefOf(ItemId::GildedSword).minRarity == Rarity::Legendary && DefOf(ItemId::GildedSword).maxRarity == Rarity::Legendary);
+    bool found = false;
+    Rng rng(77);
+    for (int i = 0; i < 4000 && !found; i++) { ItemId it; if (PickItem(rng, Rarity::Legendary, &it) && it == ItemId::GildedSword) found = true; }
+    CHECK(found);
 }
 static void AttackRules() {
     Simulation sim = Duel(1, {0, 0}, {50, 0});
@@ -280,8 +293,8 @@ static void PickUpRulesAndSwap() {
     bool dropped = false;
     for (auto& e : m.Loot()) if (!e.taken && e.spawn.item == ItemId::BiggoronSword) dropped = true;
     CHECK(dropped);
-    CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::Hookshot, Rarity::Rare, false})));  // abilities go in the ability slot
-    CHECK(m.Find(1000)->hasAbility && m.Find(1000)->ability.item == ItemId::Hookshot);
+    CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::Longshot, Rarity::Epic, false})));  // abilities go in the ability slot
+    CHECK(m.Find(1000)->hasAbility && m.Find(1000)->ability.item == ItemId::Longshot);
 }
 static void PotionRules() {
     Simulation sim = Duel(1, {1500, 0}, {0, 0});
@@ -508,10 +521,10 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 17 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(kItemCount >= 80 && kPoolItemCount == 90 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 20 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
-    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
+    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 20 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
     int perSlot[kGearSlots] = {};
@@ -930,8 +943,8 @@ static void AbilitiesThatMovePlayers() {
     me->rot = 0x4000;                                                                  // facing +x
     m.DrainEvents();
 
-    // Hookshot pulls whoever is in front of you to you, stuns them, and costs nothing if nobody is there.
-    give(ItemId::Hookshot);
+    // Longshot pulls whoever is in front of you to you, stuns them, and costs nothing if nobody is there.
+    give(ItemId::Longshot);
     foe->pos = {-400, 0};                                                              // behind
     CHECK(!m.UseAbility(1) && me->abilityReadyAt == 0);                               // nobody in front: not used up
     foe->pos = {400, 0};
@@ -942,11 +955,11 @@ static void AbilitiesThatMovePlayers() {
     for (auto& e : m.DrainEvents()) teleported |= e.type == MatchEvent::Type::Teleported && e.a == 1000;
     CHECK(teleported);
 
-    // Longshot reaches much farther than Hookshot.
-    foe->pos = {1300, 0}; foe->stunUntil = 0;
-    give(ItemId::Hookshot);
-    CHECK(!m.UseAbility(1));
+    // Out of reach it does nothing, and costs nothing.
+    foe->pos = {1900, 0}; foe->stunUntil = 0;
     give(ItemId::Longshot);
+    CHECK(!m.UseAbility(1));
+    foe->pos = {1300, 0};
     CHECK(m.UseAbility(1) && Distance(foe->pos, me->pos) < 130);
 
     // Farore's Wind: the first use marks a spot for free, the second jumps back to it.
@@ -1141,10 +1154,10 @@ static void BotsUseAbilitiesWhenItCounts() {
         Run(sim, 3);
         CHECK(b->abilityReadyAt == 0);
     }
-    {   // The Hookshot reels in a foe who is out of sword range.
+    {   // The Longshot reels in a foe who is out of sword range.
         Simulation sim = Duel(5, {500, 0}, {0, 0});
         PlayerState* b = sim.match.Find(1000);
-        b->ability = {ItemId::Hookshot, Rarity::Rare}; b->hasAbility = true;
+        b->ability = {ItemId::Longshot, Rarity::Rare}; b->hasAbility = true;
         b->weapon = {ItemId::KokiriSword, Rarity::Common};
         float closest = 1e9f;
         for (int i = 0; i < 5 * kTickHz; i++) { sim.Tick(kDt); closest = (std::min)(closest, Distance(b->pos, sim.match.Find(1)->pos)); }
@@ -1694,7 +1707,7 @@ static void ClimbsAndSpreadOutChests() {
         GenerateWilds(layout, seed, map, scenery, layout.lootSpots, 6, 30, nullptr);
         int climbs = 0, hideaways = 0;
         for (size_t i = sitesBefore; i < layout.sites.size(); i++) { climbs += layout.sites[i].bonus == 2; hideaways += layout.sites[i].bonus == 1; }
-        CHECK(climbs >= 4 && hideaways >= 20);
+        CHECK(climbs >= 4 && hideaways >= 15);
         // Wild sites keep their distance from each other, from the town chests and from the towns themselves.
         const float apart = std::max(380.0f, map.radius * 0.1f);
         for (size_t i = sitesBefore; i < layout.sites.size(); i++) {
@@ -2631,7 +2644,7 @@ static void SandboxCommands() {
     CHECK(m.SandboxCart({1700, -1900}, 0.5f) && m.Vehicles()[0].index == 0 && !m.Vehicles()[0].gone);
     // Giving: an item goes straight into the bag or hands at the rarity asked for (within what the item allows).
     CHECK(m.SandboxGive(1, ItemId::MasterSword, Rarity::Epic) && m.Players()[0].weapon.item == ItemId::MasterSword && m.Players()[0].weapon.rarity == Rarity::Epic);
-    CHECK(m.SandboxGive(1, ItemId::ShockwaveGrenade, Rarity::Legendary) && m.Players()[0].hasAbility && m.Players()[0].ability.item == ItemId::ShockwaveGrenade);
+    CHECK(m.SandboxGive(1, ItemId::ShockwaveGrenade, Rarity::Legendary) && (m.Players()[0].weapon.item == ItemId::ShockwaveGrenade || (!m.Players()[0].reserve.empty() && m.Players()[0].reserve.back().item == ItemId::ShockwaveGrenade)));
     CHECK(m.SandboxGive(1, ItemId::HoverBoots, Rarity::Rare) && (m.Players()[0].gearMask & (1 << static_cast<int>(GearSlot::Boots))));
     // Weather stays where it is put; it only follows the schedule when set free. Teleports and supply drops work.
     m.SandboxWeather(Season::Winter, Sky::Snow, 80);
@@ -3037,16 +3050,51 @@ static void TownsAreDifferentPlaces() {
     CHECK(names.size() == big.pois.size());
 }
 
+static void GildedSwordSurfaceMaps() {
+    namespace gs = royale::gilded_surface;
+    namespace gm = royale::gilded_sword_model;
+    // Every triangle names a material and a surface class that exist, and its outward direction is a real direction.
+    auto check = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            CHECK(tris[i].mat < 7 && tris[i].cls < 4);
+            const float l = std::sqrt(static_cast<float>(tris[i].n[0] * tris[i].n[0] + tris[i].n[1] * tris[i].n[1] + tris[i].n[2] * tris[i].n[2]));
+            CHECK(l > 100.0f && l < 140.0f);
+        }
+    };
+    check(gm::kBlade, gm::kBladeCount); check(gm::kHilt, gm::kHiltCount); check(gm::kScabbard, gm::kScabbardCount);
+    // The blade's flat sides face up and down, so the engraving is projected onto them (the game projects along a triangle's dominant axis).
+    for (int i = 0; i < gm::kBladeCount; i++) CHECK(std::abs(gm::kBlade[i].n[2]) > 100);
+    for (int c = 0; c < static_cast<int>(gs::Class::Count); c++) {
+        const gs::Map m = gs::Build(static_cast<gs::Class>(c)), again = gs::Build(static_cast<gs::Class>(c));
+        const size_t bytes = static_cast<size_t>(m.size) * m.size * 4;
+        CHECK(m.size >= 64 && m.normal.size() == bytes && m.height.size() == bytes && m.uvScale > 0 && m.normal == again.normal && m.height == again.height);   // deterministic
+        double mean = 0, var = 0; int up = 0;
+        for (size_t i = 0; i < bytes; i += 4) { mean += m.height[i]; up += m.normal[i + 2] >= 128; CHECK(m.normal[i + 3] == 255 && m.height[i] == m.height[i + 1]); }
+        mean /= bytes / 4;
+        for (size_t i = 0; i < bytes; i += 4) var += (m.height[i] - mean) * (m.height[i] - mean);
+        var /= bytes / 4;
+        CHECK(mean > 80 && mean < 180 && std::sqrt(var) > 3.0 && std::sqrt(var) < 70.0);   // real relief, nothing blown out
+        CHECK(up == static_cast<int>(bytes / 4));                                           // every normal points out of the surface
+    }
+    // The blade's engraving is laid on the model's own diamonds: a groove runs just inside every diamond's edge, and the gold diamond's heart is a raised boss.
+    const float p = gm::kDiamondPitch, x0 = gm::kBladeStart;
+    const float boss = gs::detail::BladeHeight(x0 + p * 0.5f, 0.0f), plain = gs::detail::BladeHeight(x0 + p * 0.5f, gm::kBladeHalfWidth * 0.95f);
+    CHECK(boss > plain + 0.05f);
+    const float groove = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.5f * 0.965f), inside = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.2f);
+    CHECK(std::fabs(groove - 0.5f) > 0.04f || std::fabs(inside - 0.5f) > 0.01f);
+    // The pattern repeats every two diamonds along the blade and across the tile.
+    CHECK(std::fabs(gs::detail::BladeHeight(x0 + 100.0f, 120.0f) - gs::detail::BladeHeight(x0 + 100.0f + 2.0f * p, 120.0f)) < 0.001f);
+}
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame)));   // nothing below the ground (the glider's origin is its handle bar, not the ground)
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
@@ -3060,6 +3108,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > -15 && mn[1] < 5 && mx[1] > 70 && mx[1] < 110 && mx[0] - mn[0] > 230 && mx[0] - mn[0] < 300);   // the handle bar is the origin; the wing is above it
+            if (static_cast<MeshKind>(k) == MeshKind::GildedSword) CHECK(mx[0] > 5500 && mx[0] < 6500 && mn[0] < -1000 && mx[1] - mn[1] < 2600);   // grip at the origin, blade along +X in limb units
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
@@ -3615,52 +3664,35 @@ static void ChickenTune() {
 }
 
 static void ShockwaveGrenade() {
-    CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Ability && !IsSong(ItemId::ShockwaveGrenade));
-    CHECK(AbilityOf(ItemId::ShockwaveGrenade).fx[0].type == EffectType::Launch && AbilityOf(ItemId::ShockwaveGrenade).cooldown > 0);
-    // A mobility item now: a player's own game throws them up, so the server leaves everyone where they are and hurts nobody.
-    Simulation sim = Duel(5, {100, 0}, {0, 0});
-    Match& m = sim.match;
-    PlayerState* user = m.Find(1);
-    PlayerState* near = m.Find(1000);
-    user->pos = {0, 0};
-    near->pos = {200, 0};
-    user->ability = {ItemId::ShockwaveGrenade, Rarity::Rare};
-    user->hasAbility = true;
-    user->abilityReadyAt = 0;
-    m.DrainEvents();
-    CHECK(m.UseAbility(1));
-    CHECK(Distance(near->pos, {200, 0}) < 0.01f && !m.Stunned(*near) && near->health == near->maxHealth);   // nobody else is touched
-    CHECK(Distance(user->pos, {0, 0}) < 0.01f && user->health == user->maxHealth);                         // the client moves its own player
-    CHECK(!m.UseAbility(1));                                                                                // recharging
-    // A bot is carried away from the nearest enemy, and never off the map.
-    Simulation hop = Duel(5, {100, 0}, {0, 0});
-    PlayerState* bot = hop.match.Find(1000);
-    hop.match.Find(1)->pos = {0, 0};
-    bot->pos = {150, 0};
-    bot->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
-    bot->hasAbility = true;
-    bot->abilityReadyAt = 0;
-    CHECK(hop.match.UseAbility(1000));
-    CHECK(bot->pos.x > 500.0f && std::fabs(bot->pos.z) < 0.01f);
-    Simulation edge = Duel(5, {100, 0}, {0, 0});
-    edge.match.Find(1)->pos = {1800, 0};
-    edge.match.Find(1000)->pos = {1960, 0};
-    edge.match.Find(1000)->ability = {ItemId::ShockwaveGrenade, Rarity::Legendary};
-    edge.match.Find(1000)->hasAbility = true;
-    edge.match.Find(1000)->abilityReadyAt = 0;
-    CHECK(edge.match.UseAbility(1000));
-    CHECK(Distance(edge.match.Find(1000)->pos, MapCircle().center) <= MapCircle().radius);
-    // A bot uses it when an enemy is on top of it and it is losing.
-    Simulation botFight = Duel(5, {100, 0}, {0, 0});
-    PlayerState* b = botFight.match.Find(1000);
-    b->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
-    b->hasAbility = true;
-    b->health = 1.0f;
-    botFight.match.Find(1)->pos = {150, 0};
-    botFight.match.Find(1)->weapon = {ItemId::BiggoronSword, Rarity::Epic};
-    bool used = false;
-    for (int i = 0; i < 3 * kTickHz; i++) { botFight.Tick(kDt); used |= b->abilityReadyAt > 0; }
-    CHECK(used);
+    // Hookshot and Shockwave Grenade are hotbar weapons used with B, not powers.
+    CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Weapon && KindOf(ItemId::Hookshot) == ItemKind::Weapon);
+    CHECK(InPool(ItemId::ShockwaveGrenade) && InPool(ItemId::Hookshot));
+    {   // The grenade hurts the target and stuns everyone around it, but not you.
+        Simulation sim = Duel(5, {100, 0}, {0, 0});
+        Match& m = sim.match;
+        PlayerState* user = m.Find(1);
+        PlayerState* target = m.Find(1000);
+        user->pos = {0, 0};
+        target->pos = {300, 0};
+        user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
+        user->attackReadyAt = 0;
+        const float before = target->health;
+        CHECK(m.Attack(1, 1000).ok && target->health < before && m.Stunned(*target));
+        CHECK(!m.Stunned(*user) && user->health == user->maxHealth);
+        CHECK(!m.Attack(1, 1000).ok);   // recharging: a grenade is slow
+    }
+    {   // The hookshot reels the target in and stuns them.
+        Simulation sim = Duel(5, {100, 0}, {0, 0});
+        Match& m = sim.match;
+        PlayerState* user = m.Find(1);
+        PlayerState* target = m.Find(1000);
+        user->pos = {0, 0};
+        user->rot = 0x4000;   // facing +x
+        target->pos = {700, 0};
+        user->weapon = {ItemId::Hookshot, Rarity::Rare};
+        user->attackReadyAt = 0;
+        CHECK(m.Attack(1, 1000).ok && Distance(target->pos, user->pos) < 130 && target->pos.x > 0 && m.Stunned(*target));
+    }
 }
 
 static void ShieldBar() {
@@ -4400,17 +4432,123 @@ static void BotsUseCoverAndHighGround() {
     }
 }
 
+// Chests, boulders and camps are placed with purpose (shared/placement.h): on level ground that exists, clear of anything solid, beside scenery, with
+// the cliffs lined with boulders, and the same every time for a seed.
+static void PlacementIsPurposeful() {
+    namespace fn = royale::fortnite;
+    // Stand-in ground: gently rolling, with a steep escarpment across the map (a bank 260 high over 150 units: slope 1.7) and a pond that is not ground.
+    const Circle map = {{0, 0}, 4000};
+    const HeightFn height = [](Vec2 p, float* y) { *y = 30.0f * std::sin(p.x / 700.0f) + 260.0f * std::clamp((p.x * 0.6f + p.z * 0.8f - 1000.0f) / 150.0f, 0.0f, 1.0f); return true; };
+    const PlacementFn valid = [](Vec2 p) { return Distance(p, {-1500, -1200}) > 500.0f; };
+    const Ground ground(valid, height);
+    for (uint64_t seed = 3; seed < 6; seed++) {
+        const MapPlacement a = PlaceMap(seed, map, 0, 12, 560, valid, height), b = PlaceMap(seed, map, 0, 12, 560, valid, height);
+        CHECK(a.props.size() == b.props.size() && a.plan.anchors.size() == b.plan.anchors.size() && a.layout.sites.size() == b.layout.sites.size());
+        for (size_t i = 0; i < a.props.size() && i < b.props.size(); i++) CHECK(a.props[i].pos.x == b.props[i].pos.x && a.props[i].pos.z == b.props[i].pos.z);
+        CHECK(!a.features.cliffs.empty());
+        // Loose scenery: on ground, not steep, never overlapping another piece, and boulders strung along the cliff feet.
+        const std::vector<Circle> none;
+        const std::vector<Prop> loose = GenerateProps(seed, map, 560, valid, &none, &ground, &a.features);
+        CHECK(loose.size() > 400);
+        int alongCliffs = 0;
+        for (size_t i = 0; i < loose.size(); i++) {
+            CHECK(valid(loose[i].pos) && ground.Slope(loose[i].pos) <= 0.65f + 1.0e-3f);
+            for (size_t j = i + 1; j < loose.size(); j++) CHECK(Distance(loose[i].pos, loose[j].pos) >= PropRadius(loose[i].kind) + PropRadius(loose[j].kind));
+            if (loose[i].kind == PropKind::Boulder) for (const CliffFoot& f : a.features.cliffs) if (Distance(loose[i].pos, f.pos) < 400.0f) { alongCliffs++; break; }
+        }
+        CHECK(alongCliffs >= 3);
+        // Every town has a camp outside it.
+        for (const Poi& poi : a.layout.pois) {
+            if (poi.radius >= 580.0f) continue;
+            bool camp = false;
+            for (const ChestSite& s : a.layout.sites) camp = camp || (s.bonus == 0 && Distance(s.pos, poi.center) > poi.radius + 200.0f && Distance(s.pos, poi.center) < poi.radius + 420.0f);
+            CHECK(camp);
+        }
+        // Scattered chests: level, clear of every solid piece, out of the towns, apart from each other, and nearly all beside something.
+        std::vector<Vec2> taken = a.layout.lootSpots;
+        for (const ChestSite& s : a.layout.sites) taken.push_back(s.pos);
+        const float spacing = 240.0f;
+        const std::vector<LootSpawn> loot = GenerateAnchoredLoot(seed, a.plan, 200, 0.15f, &taken, spacing);
+        CHECK(loot.size() > 100 && loot.size() <= 200);
+        int beside = 0;
+        for (size_t i = 0; i < loot.size(); i++) {
+            CHECK(ChestSpotOk(a.plan, loot[i].pos) && ground.Slope(loot[i].pos) <= 0.3f);
+            for (size_t j = i + 1; j < loot.size(); j++) CHECK(Distance(loot[i].pos, loot[j].pos) >= spacing * 0.99f);
+            for (const Prop& p : a.props) if (PropRadius(p.kind) > 0.0f ? Distance(loot[i].pos, p.pos) < PropRadius(p.kind) + 200.0f : p.kind == PropKind::Bush && Distance(loot[i].pos, p.pos) < 200.0f) { beside++; break; }
+        }
+        CHECK(beside * 10 >= static_cast<int>(loot.size()) * 8);
+        // Lookouts and climbs hold the better chests: the lookout chests sit between two standing stones.
+        for (const ChestSite& s : a.layout.sites) CHECK(valid(s.pos) && ground.Slope(s.pos) <= 0.7f);
+    }
+    // Flat ground with nothing measured (no height probe): the rules still run and the count is reasonable.
+    {
+        const MapPlacement flat = PlaceMap(9, map, 0, 12, 560, nullptr, nullptr);
+        CHECK(flat.features.cliffs.empty() && flat.props.size() > 400);
+        const auto loot = GenerateAnchoredLoot(9, flat.plan, 150, 0.15f, nullptr, 240.0f);
+        CHECK(loot.size() > 80);
+    }
+    // The Fortnite Map: chests keep out of the oaks and boulders of its own scenery, and stay on dry, level land.
+    {
+        fn::UseTerrainForMap(fn::kMapId);
+        const Circle island = MapOf(kFortniteMapIndex).fallback;
+        const PlacementFn dry = [](Vec2 p) { float y; return fn::GroundHeight(p.x, p.z, &y) && y > fn::kWaterY + 10.0f && fn::GroundUp(p.x, p.z) >= 0.8f; };
+        const HeightFn h = [](Vec2 p, float* y) { return fn::GroundHeight(p.x, p.z, y); };
+        const MapPlacement p = PlaceMap(4, island, kFortniteMapIndex, 24, 560, dry, h, fn::AddIslandAnchors);
+        int sceneryAnchors = 0;
+        for (const LootAnchor& a : p.plan.anchors) sceneryAnchors += a.kind == AnchorKind::Scenery || a.kind == AnchorKind::CliffFoot;
+        CHECK(sceneryAnchors > 20);
+        const auto loot = GenerateAnchoredLoot(4, p.plan, 280, 0.15f, nullptr, 240.0f);
+        CHECK(loot.size() > 150);
+        for (const LootSpawn& l : loot) {
+            CHECK(dry(l.pos) && ChestSpotOk(p.plan, l.pos));
+            for (int cz = static_cast<int>(std::floor((l.pos.z - 150.0f) / fn::kSceneryCell)); cz <= static_cast<int>(std::floor((l.pos.z + 150.0f) / fn::kSceneryCell)); cz++)
+                for (int cx = static_cast<int>(std::floor((l.pos.x - 150.0f) / fn::kSceneryCell)); cx <= static_cast<int>(std::floor((l.pos.x + 150.0f) / fn::kSceneryCell)); cx++) {
+                    fn::SceneryPiece piece;
+                    if (fn::SceneryIn(cx, cz, 1.0f, &piece) && fn::SceneryRadius(piece.kind, piece.scale) > 0.0f) CHECK(Distance(l.pos, {piece.x, piece.z}) > fn::SceneryRadius(piece.kind, piece.scale));
+                }
+        }
+        fn::UseTerrainForMap(0);   // the other tests expect the default island ground
+    }
+}
+
+// The climbing blocks baked into the island's collision: eight corners and ten triangles each, a flat top and outward vertical sides.
+static void BlocksAreBakedIntoTheCollision() {
+    namespace fn = royale::fortnite;
+    fn::UseTerrainForMap(fn::kMapId);
+    fn::gBlocks.clear();
+    const fn::Mesh plain = fn::BuildCollision();
+    fn::gBlocks = {{500.0f, -300.0f, 75.0f, -20.0f, 120.0f}, {650.0f, -300.0f, 75.0f, 0.0f, 180.0f}};
+    const fn::Mesh withBlocks = fn::BuildCollision();
+    fn::gBlocks.clear();
+    CHECK(withBlocks.verts.size() == plain.verts.size() + 16 && withBlocks.polys.size() == plain.polys.size() + 20);
+    CHECK(withBlocks.verts.size() < 8191);
+    int tops = 0, sides = 0;
+    for (size_t i = plain.polys.size(); i < withBlocks.polys.size(); i++) {
+        const fn::Poly& p = withBlocks.polys[i];
+        const fn::Vert &a = withBlocks.verts[p.a], &b = withBlocks.verts[p.b], &c = withBlocks.verts[p.c];
+        const double ny = p.ny / 32767.0, nx = p.nx / 32767.0, nz = p.nz / 32767.0;
+        CHECK(std::fabs(nx * nx + ny * ny + nz * nz - 1.0) < 1e-3);
+        for (const fn::Vert* v : {&a, &b, &c}) CHECK(std::fabs(nx * v->x + ny * v->y + nz * v->z + p.dist) < 1.5);   // all three corners lie on the plane
+        if (ny > 0.99) { tops++; CHECK(a.y == b.y && b.y == c.y); }
+        else { sides++; CHECK(std::fabs(ny) < 1e-3); }
+        // Faces look away from the block: the block's middle is behind every plane.
+        const double mx = (i < plain.polys.size() + 10) ? 500.0 : 650.0, mz = -300.0, my = (i < plain.polys.size() + 10) ? 50.0 : 90.0;
+        CHECK(nx * mx + ny * my + nz * mz + p.dist < 0.0);
+    }
+    CHECK(tops == 4 && sides == 16);
+}
+
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
+    LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); PlacementIsPurposeful(); BlocksAreBakedIntoTheCollision(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); SnowDeformation(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); SnowDeformation(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();

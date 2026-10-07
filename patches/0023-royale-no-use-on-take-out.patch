@@ -1,0 +1,20 @@
+diff --git a/soh/src/overlays/actors/ovl_player_actor/z_player.c b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+--- a/soh/src/overlays/actors/ovl_player_actor/z_player.c
++++ b/soh/src/overlays/actors/ovl_player_actor/z_player.c
+@@ -2828,11 +2828,15 @@
+     }
+ }
+ 
++// OOT Royale: set by the mod during a match. The game uses an item the moment it is taken out (the stick swings, the bombchu runs, the bow fires);
++// the mod takes the weapon in hand itself, so here taking it out is only taking it out: the use comes from pressing B.
++s32 gRoyaleNoUseOnTakeOut = 0;
++
+ s32 Player_UpperAction_ChangeHeldItem(Player* this, PlayState* play) {
+     if (LinkAnimation_Update(play, &this->upperSkelAnime) ||
+         ((Player_ItemToItemAction(this->heldItemId) == this->heldItemAction) &&
+          (sUseHeldItem =
+-              (sUseHeldItem || ((this->modelAnimType != PLAYER_ANIMTYPE_3) && (play->shootingGalleryStatus == 0)))))) {
++              (sUseHeldItem || ((this->modelAnimType != PLAYER_ANIMTYPE_3) && (play->shootingGalleryStatus == 0) && !gRoyaleNoUseOnTakeOut))))) {
+         Player_SetUpperActionFunc(this, sItemActionUpdateFuncs[this->heldItemAction]);
+         this->unk_834 = 0;
+         this->idleType = PLAYER_IDLE_DEFAULT;

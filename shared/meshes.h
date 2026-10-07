@@ -1,4 +1,5 @@
 #pragma once
+#include "gilded_sword_model.h"
 #include "glider_model.h"
 #include "boulder_texture.h"
 #include "scenery_model.h"
@@ -21,7 +22,7 @@ struct MeshVertex {
     uint8_t a = 255;   // opacity; only the see-through ground patches (soft rims) set it, everything else is solid
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, GildedSword, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -1283,6 +1284,22 @@ inline MeshData Grenade() {
     return m;
 }
 
+// The Gilded Sword (Blender model, see tools/gilded_sword): variant 0 is the sword (blade and hilt), variant 1 the hilt in its scabbard, for when it is
+// stowed on the back. Its points are in the game's limb units (a hundredth of a game unit) with the grip at the origin and the blade along +X, so the
+// game draws it in Link's hand matrix.
+inline MeshData GildedSwordMesh(uint32_t variant) {
+    MeshData m;
+    auto put = [&](const gilded_sword_model::Tri* tris, int count) {
+        for (int i = 0; i < count; i++)
+            for (int k = 0; k < 3; k++)
+                m.v.push_back({static_cast<float>(tris[i].p[k * 3]), static_cast<float>(tris[i].p[k * 3 + 1]), static_cast<float>(tris[i].p[k * 3 + 2]), tris[i].rgb[0], tris[i].rgb[1], tris[i].rgb[2]});
+    };
+    put(gilded_sword_model::kHilt, gilded_sword_model::kHiltCount);
+    if (variant % 2 == 0) put(gilded_sword_model::kBlade, gilded_sword_model::kBladeCount);
+    else put(gilded_sword_model::kScabbard, gilded_sword_model::kScabbardCount);
+    return m;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -1316,6 +1333,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
         case MeshKind::Grenade: return mesh_detail::Grenade();
+        case MeshKind::GildedSword: return mesh_detail::GildedSwordMesh(variant);
         default: return {};
     }
 }

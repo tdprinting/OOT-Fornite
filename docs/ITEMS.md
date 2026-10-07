@@ -10,6 +10,7 @@ Generated from the source. *Model* = the game's own 3D item model (as dropped lo
 | Kokiri Sword | Weapon | real | real | yes | Fast melee |
 | Master Sword | Weapon | real | real | yes | Strong melee |
 | Biggoron's Sword | Weapon | real | real | yes | Heavy melee, long reach |
+| Gilded Sword | Weapon | ours (Blender) | drawn | yes (our model) | The strongest sword: longer reach and a harder hit than the Master Sword |
 | Megaton Hammer | Weapon | real | real | yes | Slow, huge melee hit |
 | Slingshot | Weapon | real | real | yes | Weak, long-range |
 | Fairy Bow | Weapon | real | real | yes | Strong, long-range |
@@ -42,7 +43,7 @@ Generated from the source. *Model* = the game's own 3D item model (as dropped lo
 | Din's Fire | Ability | real | real | - | Fire burst around you |
 | Farore's Wind | Ability | real | real | - | Mark a spot, then jump back to it |
 | Nayru's Love | Ability | real | real | - | Invulnerable for 4 seconds |
-| Hookshot | Ability | real | real | yes | Pull the player in front of you to you |
+| Hookshot | Weapon (B) | real | real | yes | B shoots the chain: reels the player in front of you to you and stuns them |
 | Longshot | Ability | real | real | yes | Pull from much farther away |
 | Lens of Truth | Ability | real | real | - | See every player for 10 seconds |
 | Magic Beans | Ability | real | real | - | Heal over time for 10 seconds |
@@ -60,7 +61,7 @@ Generated from the source. *Model* = the game's own 3D item model (as dropped lo
 | Nocturne of Shadow | Ability | real | real | - | Vanish and reappear somewhere else |
 | Requiem of Spirit | Ability | real | real | - | Stuns and hurts everyone near you |
 | Prelude of Light | Ability | real | real | yes | Heals 1 heart and protects you briefly |
-| Shockwave Grenade | Ability | real | real | - | Launches you high into the air; no fall damage until you land |
+| Shockwave Grenade | Weapon (B) | real | real | - | B throws it: a shockwave that hurts and stuns everyone around the target |
 | Kokiri Tunic | Gear | real | real | - | Plain: slightly less damage taken |
 | Goron Tunic | Gear | real | real | - | Half damage from fire and explosions |
 | Zora Tunic | Gear | real | real | - | Less storm damage |

@@ -20,7 +20,7 @@ endif()
 target_include_directories(royale_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet/include)
 
 enable_testing()
-foreach(t tests net_tests enet_tests session_tests music_tests fish_tests maya_tests)
+foreach(t tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests)
     add_executable(royale_${t} tests/${t}.cpp)
     target_link_libraries(royale_${t} royale_net)
     if(MSVC)
@@ -34,6 +34,10 @@ endforeach()
 # Headless balance simulator (not a test): plays bot-only matches and prints how they went. Run: royale_balance 12 normal 0 32
 add_executable(royale_balance tools/balance_sim.cpp)
 target_link_libraries(royale_balance royale_net)
+
+# Placement preview: lays a map out as a match does and dumps it; tools/maps/placement_preview.py draws it. Run: royale_placement_preview 5 1 out.txt
+add_executable(royale_placement_preview tools/placement_preview.cpp)
+target_link_libraries(royale_placement_preview royale_net)
 
 add_executable(royale_graphics_tests tests/graphics_tests.cpp)
 target_link_libraries(royale_graphics_tests PRIVATE royale_core)
