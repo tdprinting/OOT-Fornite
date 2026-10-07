@@ -126,6 +126,7 @@ void Player_UseItem(PlayState* play, Player* player, s32 item);
 s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
+extern s32 gRoyaleNoUseOnTakeOut;   // 1 = taking an item out never uses it too (patches/0023); the use comes from pressing B
 extern s32 gRoyaleNoAimView;    // 1 = bow, slingshot, boomerang and hookshot ready and fire in place, never the first-person aiming view (patches/0019)
 extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
@@ -218,6 +219,8 @@ float gFogAmount = 1.0f;            // the local option: how thick the fog banks
 bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
 bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
 float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
+bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true, gHitReact = true;   // the local options: hit feedback (see "hit feedback")
+float gHitAmount = 1.0f;            // the local option: how many hit particles, 0 (none) to 2
 int gWaterDetail = 1;               // the local option: how fine the water surface is, 0 low, 1 normal, 2 high
 float gWaterWaves = 1.0f;           // the local option: how high the swell is, 0 (flat) to 2
 bool gWaterFxOn = true;             // the local option: the game's own splashes, ripples and bubbles
@@ -547,11 +550,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Avriella", "Avriella the baby pet (the pet picker)" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
     { "LobbyFish", "Lobby reef aquarium (clownfish and cleaner wrasse)" },
+    { "HitFx", "Hit feedback: flash and particles on whatever is hit" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish };
-static_assert(kDbgLobbyFish + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx };
+static_assert(kDbgHitFx + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -669,6 +673,7 @@ s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "sol
 // On the Fortnite map the scene's ground is the island's own triangles (shared/fortnite_map.h), so its height, slope and water are worked out
 // directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
 bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+bool BlocksAreBaked();   // the climbing blocks are in the island's collision (see "WantedBlocks")
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
@@ -904,6 +909,7 @@ Look LookFor(royale::ItemId weapon) {
         case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
         case ItemId::Hookshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_HOOKSHOT, ITEM_HOOKSHOT };
+        case ItemId::ShockwaveGrenade: return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_BOMB, ITEM_BOMB };   // thrown like a bomb
         case ItemId::Longshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_LONGSHOT, ITEM_LONGSHOT };
         case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
             return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };   // the elemental arrows are loosed from the real bow
@@ -1031,6 +1037,17 @@ void ApplyChickenDance(Player* p, float t) {
 }
 
 std::unordered_map<uint16_t, int> gSwingFrames; // player id -> frames of slash animation left (set when they are seen hurting someone)
+// A recoil laid over whatever a bot or mini boss is doing: it rocks away from the blow and settles back, without touching its animation.
+struct HitRecoil { float amp = 0, age = 10.0f, dx = 0, dz = 0; };   // amp in radians at the peak; (dx, dz) the direction it is pushed
+std::unordered_map<uint16_t, HitRecoil> gHitRecoil;
+// The pitch (+ forward) and roll the recoil `r` gives something facing `yaw` (radians) right now.
+void RecoilTilt(const HitRecoil& r, float yaw, float* pitch, float* roll) {
+    *pitch = *roll = 0.0f;
+    if (r.age > 0.5f || r.amp <= 0.0f) return;
+    const float k = r.amp * std::exp(-r.age * 9.0f) * std::cos(r.age * 20.0f);   // a quick rock away, a small swing back, then still
+    *pitch = k * (r.dx * std::sin(yaw) + r.dz * std::cos(yaw));
+    *roll = -k * (r.dx * std::cos(yaw) - r.dz * std::sin(yaw));
+}
 std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a flinch left (set when they are seen getting hurt)
 std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
 std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
@@ -1696,6 +1713,17 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     actor->world.pos.y = s.isBot ? BotY(play, s.x, s.z, s.y) : s.y;
     actor->shape.rot.y = s.rot;
     actor->world.rot.y = s.rot;
+    {   // the recoil of a blow, tilted about the feet on top of the animation (a rider's seat sets its own tilt later)
+        auto rc = gHitRecoil.find(idIt->second);
+        float pitch = 0, roll = 0;
+        if (rc != gHitRecoil.end()) {
+            rc->second.age += 1.0f / royale::kTickHz;
+            RecoilTilt(rc->second, s.rot * (3.14159265f / 32768.0f), &pitch, &roll);
+            if (rc->second.age > 0.5f) gHitRecoil.erase(rc);
+        }
+        actor->shape.rot.x = static_cast<s16>(pitch * (32768.0f / 3.14159265f));
+        actor->shape.rot.z = static_cast<s16>(roll * (32768.0f / 3.14159265f));
+    }
     actor->shape.shadowAlpha = 255;
     actor->focus.pos = actor->world.pos;
     actor->focus.pos.y += 50.0f;
@@ -6738,6 +6766,163 @@ bool KnownPosition(uint16_t id, float* x, float* z) {
     return false;
 }
 
+// ---- hit feedback ------------------------------------------------------------------------------------------------------------------
+// Every blow that lands makes the target flash and throw particles from the point of impact, the way the game's own enemies do (the red or
+// white flash of Actor_SetColorFilter, a hit mark, blood drops from CollisionCheck_SpawnRedBlood and friends), but scaled by how hard the hit was
+// and coloured for what was hit: red drops for living things, bone dust for skeletons, sparks for armour, ice for the frost, embers for fire.
+// It all runs through the game's own effect system (no display lists of ours), so the per-layer pool of "graphics layers" has nothing to carry.
+enum class HitKind { Flesh, Bone, Metal, Ice, Fire, Moss, Water, Shadow, Magic };
+
+HitKind HitKindOfBoss(const BossActor& b) {
+    switch (KindOf(b)) {
+        case BK::Stone: return HitKind::Bone;
+        case BK::Lava: case BK::DragonFire: return HitKind::Fire;
+        case BK::Frost: return HitKind::Ice;
+        case BK::Moss: return HitKind::Moss;
+        case BK::Tide: case BK::DragonWater: return HitKind::Water;
+        case BK::Shade: case BK::DragonShadow: return HitKind::Shadow;
+        case BK::Dune: return b.armourOff ? HitKind::Flesh : HitKind::Metal;
+        default: return HitKind::Magic;
+    }
+}
+
+// Where the blow lands on a target at `pos` (height `height` above its feet), nudged to the side the attacker is on.
+Vec3f HitPoint(const Vec3f& pos, float height, float fromX, float fromZ, bool haveFrom, float reach) {
+    Vec3f at = { pos.x, pos.y + height, pos.z };
+    if (haveFrom) {
+        const float dx = fromX - pos.x, dz = fromZ - pos.z, d = std::hypot(dx, dz);
+        if (d > 1.0f) { at.x += dx / d * reach; at.z += dz / d * reach; }
+    }
+    return at;
+}
+
+void HitParticles(PlayState* play, HitKind kind, const Vec3f& at, float size, int count, float fromX, float fromZ, bool haveFrom, bool kill) {
+    // Particles fly away from the attacker: the hit is a spray out of the far side as well as a puff at the near one.
+    float dirX = 0, dirZ = 0;
+    if (haveFrom) { const float dx = at.x - fromX, dz = at.z - fromZ, d = std::hypot(dx, dz); if (d > 1.0f) { dirX = dx / d; dirZ = dz / d; } }
+    auto spray = [&](Color_RGBA8 prim, Color_RGBA8 env, int n, float speed, s16 scale, s32 life) {
+        for (int i = 0; i < n; i++) {
+            Vec3f pos = { at.x + Rand_CenteredFloat(10.0f), at.y + Rand_CenteredFloat(10.0f), at.z + Rand_CenteredFloat(10.0f) };
+            const float sp = speed * (0.5f + Rand_ZeroOne());
+            Vec3f vel = { dirX * sp * 0.8f + Rand_CenteredFloat(speed), speed * (0.3f + Rand_ZeroOne() * 0.9f), dirZ * sp * 0.8f + Rand_CenteredFloat(speed) };
+            Vec3f accel = { 0.0f, -0.4f, 0.0f };
+            EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, life);
+        }
+    };
+    auto puff = [&](Color_RGBA8 prim, Color_RGBA8 env, s16 scale) {   // a soft puff of dust at the point of impact
+        Vec3f pos = { at.x, at.y, at.z }, vel = { dirX * 1.2f, 0.8f, dirZ * 1.2f }, accel = { 0.0f, 0.15f, 0.0f };
+        EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, scale, 6, 12, 0);
+    };
+    Vec3f mark = at;
+    const s16 markScale = static_cast<s16>(220.0f * size);
+    switch (kind) {
+        case HitKind::Flesh:
+            if (gHitBlood) {
+                EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_RED, markScale, &mark);
+                CollisionCheck_SpawnRedBlood(play, &mark);   // the game's red drops
+                spray({ 200, 20, 30, 255 }, { 110, 0, 20, 255 }, count, 3.0f * size, 40, 22);
+            } else {
+                EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+                spray({ 255, 255, 230, 255 }, { 255, 230, 120, 255 }, count, 3.0f * size, 40, 20);
+            }
+            break;
+        case HitKind::Bone:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_DUST, markScale, &mark);
+            puff({ 235, 225, 195, 255 }, { 150, 135, 100, 255 }, static_cast<s16>(260 * size));
+            spray({ 240, 230, 200, 255 }, { 170, 150, 110, 255 }, count, 2.6f * size, 34, 22);
+            break;
+        case HitKind::Metal:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_METAL, markScale, &mark);
+            CollisionCheck_SpawnShieldParticlesMetal(play, &mark);   // the shower of sparks off steel
+            spray({ 255, 240, 170, 255 }, { 255, 160, 40, 255 }, count, 3.6f * size, 30, 16);
+            break;
+        case HitKind::Ice:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            spray({ 225, 245, 255, 255 }, { 110, 180, 255, 255 }, count, 2.8f * size, 40, 24);
+            if (kill || size > 1.5f) EffectSsIcePiece_SpawnBurst(play, &mark, 0.6f * size);   // shards flying off
+            break;
+        case HitKind::Fire:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_RED, markScale, &mark);
+            spray({ 255, 190, 40, 255 }, { 255, 60, 0, 255 }, count, 3.0f * size, 44, 26);
+            puff({ 90, 60, 40, 200 }, { 30, 20, 10, 0 }, static_cast<s16>(200 * size));
+            break;
+        case HitKind::Moss:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_DUST, markScale, &mark);
+            spray({ 170, 240, 90, 255 }, { 40, 120, 20, 255 }, count, 2.8f * size, 38, 22);
+            break;
+        case HitKind::Water:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            CollisionCheck_SpawnWaterDroplets(play, &mark);   // the game's water droplets
+            spray({ 200, 235, 255, 255 }, { 60, 130, 230, 255 }, count, 2.8f * size, 36, 22);
+            break;
+        case HitKind::Shadow:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            puff({ 90, 40, 140, 220 }, { 20, 0, 40, 0 }, static_cast<s16>(280 * size));
+            spray({ 190, 120, 255, 255 }, { 70, 20, 130, 255 }, count, 2.8f * size, 40, 24);
+            break;
+        case HitKind::Magic:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            spray({ 255, 255, 190, 255 }, { 120, 200, 255, 255 }, count, 3.4f * size, 44, 24);
+            break;
+    }
+}
+
+// Flash and particles for a blow of `hearts` on `id` (a player, a bot or a boss). `attacker` may be kNoPlayer16 (the storm, a fall): no spray then.
+void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool self) {
+    if (!DebugOn(kDbgHitFx) || gPlayState == nullptr) return;
+    if (self && !gHitOnSelf) return;
+    const float size = gHitScaled ? std::clamp(0.75f + hearts * 0.3f, 0.8f, 2.0f) * (kill ? 1.3f : 1.0f) : 1.0f;
+    float fromX = 0, fromZ = 0;
+    const bool haveFrom = attacker != royale::net::kNoPlayer16 && KnownPosition(attacker, &fromX, &fromZ);
+    Vec3f pos = { 0, 0, 0 };
+    float height = 36.0f;
+    HitKind kind = HitKind::Flesh;
+    BossActor* boss = nullptr;
+    Actor* actor = nullptr;
+    if (self) {
+        Player* me = GET_PLAYER(gPlayState);
+        pos = me->actor.world.pos;
+    } else if (royale::IsBossId(id)) {
+        auto it = gBosses.find(id);
+        if (it == gBosses.end() || it->second.actor == nullptr || it->second.fade < 0.2f) return;   // out of sight: nothing to hit
+        boss = &it->second;
+        pos = boss->actor->world.pos;
+        kind = HitKindOfBoss(*boss);
+        height = royale::IsDragonKind(KindOf(*boss)) ? 70.0f : 50.0f * royale::kBossDefs[boss->kind].scale;
+    } else {
+        auto a = gActorOf.find(id);
+        if (a == gActorOf.end()) return;
+        actor = a->second;
+        pos = actor->world.pos;
+    }
+    if (!self && std::hypot(pos.x - GET_PLAYER(gPlayState)->actor.world.pos.x, pos.z - GET_PLAYER(gPlayState)->actor.world.pos.z) > 2400.0f) return;   // too far to see
+    const Vec3f at = HitPoint(pos, height, fromX, fromZ, haveFrom, boss != nullptr ? 22.0f * royale::kBossDefs[boss->kind].scale : 14.0f);
+    if (gHitReact && (boss == nullptr || !royale::IsDragonKind(KindOf(*boss)))) {   // rock away from the attacker, harder for a harder hit
+        float dx = 0, dz = 0;
+        if (haveFrom) { dx = pos.x - fromX; dz = pos.z - fromZ; const float d = std::hypot(dx, dz); if (d > 1.0f) { dx /= d; dz /= d; } else dx = dz = 0.0f; }
+        const float amp = std::clamp(0.10f + hearts * 0.05f, 0.12f, 0.3f) * (boss != nullptr ? 0.7f : 1.0f);
+        if (boss != nullptr) { boss->recoilAge = 0.0f; boss->recoilAmp = amp; boss->recoilDx = dx; boss->recoilDz = dz; }
+        else { HitRecoil& r = gHitRecoil[id]; r.amp = amp; r.age = 0.0f; r.dx = dx; r.dz = dz; }
+    }
+    if (gHitFlash && !self) {
+        const int frames = std::clamp(static_cast<int>(8 + 5 * size), 8, 20);
+        if (boss != nullptr) {
+            boss->flashAge = 0.0f; boss->flashLen = frames / royale::kTickHz;
+            const bool white = kind == HitKind::Bone || kind == HitKind::Metal || kind == HitKind::Magic;
+            const bool blue = kind == HitKind::Ice || kind == HitKind::Water;
+            boss->flashR = white ? 255 : blue ? 90 : 255;
+            boss->flashG = white ? 255 : blue ? 170 : kind == HitKind::Moss ? 160 : 40;
+            boss->flashB = white ? 255 : blue ? 255 : kind == HitKind::Shadow ? 200 : 20;
+        } else if (actor != nullptr) {
+            Actor_SetColorFilter(actor, 0x4000, 0xFF, 0, frames);   // the game's red enemy flash
+        }
+    }
+    if (gHitParticles && gHitAmount > 0.01f) {
+        const int count = std::clamp(static_cast<int>((self ? 3.0f : 5.0f) * size * gHitAmount + 0.5f), 0, 16);
+        HitParticles(gPlayState, kind, at, self ? std::min(size, 1.2f) : size, count, fromX, fromZ, haveFrom, kill);
+    }
+}
+
 void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
     if (gPlayState == nullptr || !InField()) { gFloatingNumbers.clear(); gIncomingHits.clear(); return; }
@@ -8786,6 +8971,7 @@ void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale:
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;
+    if (weapon == royale::ItemId::Hookshot) return royale::Anim::Shoot;   // the chain is fired like a bow (Grip::Hook picks the hookshot pose)
     const royale::AmmoKind a = royale::AmmoUsedBy(weapon);
     return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
 }
@@ -9237,7 +9423,7 @@ bool BuildSolidMesh(float x, float z, bool force) {
     std::vector<Cand> near;
     for (size_t i = 0; i < props.size(); i++) {
         const royale::Prop& p = props[i];
-        if (!IsSolidKind(p.kind) || gBrokenProps.count(i)) continue;
+        if (!IsSolidKind(p.kind) || gBrokenProps.count(i) || (royale::IsPlatform(p.kind) && BlocksAreBaked())) continue;   // baked blocks are ground already
         const float d = std::hypot(p.pos.x - x, p.pos.z - z);
         if (d > kSolidRadius) continue;
         auto pa = gProps.find(i);   // a rock someone has picked up and carried off is not where its footprint is any more
@@ -10321,6 +10507,33 @@ int FortniteActorId() {
     return id;
 }
 
+// The climbing blocks of this match as part of the island's own collision (shared/fortnite_map.h, Block): the same footprint, foot and top the moving
+// collision used to give them, but static ground. Standing on moving-object collision made Link hover and slide (it is rebuilt as the nearest scenery
+// changes), so on the island maps the blocks live in the scene's collision, which only changes when the scene loads. Convergence has its own authored props.
+std::vector<royale::fortnite::Block> WantedBlocks() {
+    namespace fn = royale::fortnite;
+    std::vector<fn::Block> out;
+    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || gMapId == royale::kConvergenceMapIndex) return out;
+    const float half = royale::kPlatformHalf;
+    for (const royale::Prop& p : gSession.Client()->Props()) {
+        if (!royale::IsPlatform(p.kind) || static_cast<int>(out.size()) >= fn::kMaxBlocks) continue;
+        float mid = 0, low = 0;
+        if (!fn::GroundHeight(p.pos.x, p.pos.z, &mid)) continue;
+        low = mid;
+        bool ok = true;
+        for (int k = 0; k < 4 && ok; k++) {   // the lowest ground under the footprint, so a block on a slope reaches down to the low side
+            float y = 0;
+            ok = fn::GroundHeight(p.pos.x + (k & 1 ? 1 : -1) * half, p.pos.z + (k & 2 ? 1 : -1) * half, &y);
+            low = std::min(low, y);
+        }
+        if (!ok) continue;
+        out.push_back({ p.pos.x, p.pos.z, half, low - 20.0f, mid + royale::PlatformHeight(p.kind) });
+    }
+    return out;
+}
+// True on an island map once its blocks are in the collision: the moving collision and the old step-up code leave them alone.
+bool BlocksAreBaked() { return gFortniteScene && !royale::fortnite::gBlocks.empty(); }
+
 // Called every frame: the island is drawn while we are in a scene loaded with its collision; the player is put on it once on arrival (the scene
 // puts Link at the field's door, which is somewhere inside or under the island); and a lobby that changes between the field and the island
 // reloads the scene, since the collision is chosen when the scene loads.
@@ -10339,6 +10552,13 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         return;
     }
     if (!onIsland) { gFortniteArrived = false; return; }
+    // The match's blocks are known only once the host has laid the map out; the collision is chosen as the scene loads, so load it again once (before the drop)
+    // if they are not in it yet. `tried` stops a second reload for the same set.
+    if (gPlayState->transitionTrigger == TRANS_TRIGGER_OFF && !gSkydiving && (hud.state == royale::MatchState::Lobby || hud.state == royale::MatchState::Countdown)) {
+        static std::vector<royale::fortnite::Block> tried;
+        const std::vector<royale::fortnite::Block> want = WantedBlocks();
+        if (!(want == royale::fortnite::gBlocks) && !(want == tried)) { tried = want; Trace("blocks: loading the map again with the climbing blocks in it"); GoToField(); return; }
+    }
     if (gFortniteArrived || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return;
     gFortniteArrived = true;
     // A little scatter, so a lobby's players don't all stand in one spot. Only in the lobby: once the match is on, the skydive places everyone.
@@ -10356,7 +10576,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
 }
 
 void ApplyPlatforms(Player* player) {
-    if (!InField() || SolidActive()) return;
+    if (!InField() || SolidActive() || BlocksAreBaked()) return;
     RefreshPlatforms();
     if (gPlatformIdx.empty()) return;
     const auto& props = gSession.Client()->Props();
@@ -10602,6 +10822,15 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
+    // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
+    if (hud.weapon == royale::ItemId::Hookshot || hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        float tx = 0, tz = 0;
+        if (hud.weapon == royale::ItemId::ShockwaveGrenade && bestDist < 1e8f && KnownPosition(best, &tx, &tz)) {
+            const Vec3f at = { tx, player->actor.world.pos.y, tz };
+            PowerFx(gPlayState, hud.weapon, at, false, &player->actor, hud.selfId);
+        }
+    }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
     if (hasAmmo && ammoKind != royale::AmmoKind::None) gSession.ReportAttack(royale::net::kNoPlayer16, false);
@@ -10999,11 +11228,28 @@ void OnPlayerUpdate() {
     Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     gRoyaleNoAimView = 0;
+    gRoyaleNoUseOnTakeOut = 0;
     if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
     ApplySwimPhysics(player);
+    {   // the rock of a blow on your own Link, tilted about the feet on top of whatever he is doing (not on the cart saddle: that sets its own tilt)
+        static bool tilted = false;
+        auto rc = gHitRecoil.find(hud.selfId);
+        if (rc != gHitRecoil.end() && player->actor.draw != LocalRide_Draw) {
+            rc->second.age += 1.0f / royale::kTickHz;
+            float pitch = 0, roll = 0;
+            RecoilTilt(rc->second, player->actor.shape.rot.y * (3.14159265f / 32768.0f), &pitch, &roll);
+            player->actor.shape.rot.x = static_cast<s16>(pitch * (32768.0f / 3.14159265f));
+            player->actor.shape.rot.z = static_cast<s16>(roll * (32768.0f / 3.14159265f));
+            tilted = true;
+            if (rc->second.age > 0.5f) gHitRecoil.erase(rc);
+        } else if (tilted) {
+            if (player->actor.draw != LocalRide_Draw) player->actor.shape.rot.x = player->actor.shape.rot.z = 0;
+            tilted = false;
+        }
+    }
 
     // The server moves everyone to spawn points when the match starts. It only knows x and z, so drop from above. This only
     // happens once the player has actually arrived in the field (they may still be loading in from the waiting room).
@@ -11052,6 +11298,7 @@ void OnPlayerUpdate() {
     // Shots are aimed by where Link faces, with a target or without: with nothing to Z-target the game would otherwise swing the camera into the
     // first-person aiming view (a mode this match never uses), so ready and fire in place as it does when locked on.
     gRoyaleNoAimView = gSession.Joined() && IsLive(hud) ? 1 : 0;
+    gRoyaleNoUseOnTakeOut = gRoyaleNoAimView;
     SyncLocalWeapon(player, hud);
     DriveFortnite(player, hud);
     EnsureSolidScenery();
@@ -11209,6 +11456,7 @@ void ReportEvents(const royale::HudState& hud) {
                     Player_PlaySfx(&me->actor, NA_SE_VO_LI_DAMAGE_S);
                     Audio_PlaySoundGeneral(NA_SE_PL_BODY_HIT, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     gHurtAt = now; gHurtAmount = e.amount;
+                    HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, true);
                     gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
                     if (e.other != royale::net::kNoPlayer16) {
                         gIncomingHits.push_back({ e.other, now });
@@ -11226,14 +11474,16 @@ void ReportEvents(const royale::HudState& hud) {
                         gHitMarkerAt = now;
                         gHitMarkerKill = e.health <= 0.001f;
                         if (known || target != gActorOf.end()) gFloatingNumbers.push_back({ tx, ty, tz, e.amount, now, false });
-                        if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
                         Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
                         swing(e.other);
+                        HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end()) {
-                            Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
+                            if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
                             if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
                         }
@@ -14601,6 +14851,9 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
         if (!OnIsland()) return;
         Actor* a = (Actor*)actorRef;
+        // The field's own rocks, bushes, chests and items start up while the scene loads (its first frames); ours are spawned later. Left alone they
+        // sat at the old field's spots, unseen but still solid and still smashable, so they are refused too.
+        if ((a->id == ACTOR_EN_ISHI || a->id == ACTOR_EN_KUSA || a->id == ACTOR_EN_BOX || a->id == ACTOR_EN_ITEM00) && gPlayState->gameplayFrames < 3 && gSpawningPuppet == 0 && !gSpawningLoot) { *should = false; return; }
         if (a->id >= ACTOR_ID_MAX || a->id == ACTOR_PLAYER || a->id == ACTOR_EN_OE2 || a->id == ACTOR_EN_ISHI || a->id == ACTOR_EN_KUSA ||
             a->id == ACTOR_EN_ITEM00 || a->id == ACTOR_EN_BOX || a->id == ACTOR_OBJECT_KANKYO) return;
         switch (a->category) {
@@ -14717,6 +14970,13 @@ UiState& Ui() {
         gGroundLeaves = CVarGetInteger(ROYALE_CVAR("GroundLeaves"), 1) != 0;
         gGroundMerge = CVarGetInteger(ROYALE_CVAR("GroundMerge"), 1) != 0;
         gGroundAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundAmount"), 100), 0, 200) / 100.0f;
+        gHitFlash = CVarGetInteger(ROYALE_CVAR("HitFlash"), 1) != 0;
+        gHitParticles = CVarGetInteger(ROYALE_CVAR("HitParticles"), 1) != 0;
+        gHitBlood = CVarGetInteger(ROYALE_CVAR("HitBlood"), 1) != 0;
+        gHitScaled = CVarGetInteger(ROYALE_CVAR("HitScaled"), 1) != 0;
+        gHitOnSelf = CVarGetInteger(ROYALE_CVAR("HitOnSelf"), 1) != 0;
+        gHitReact = CVarGetInteger(ROYALE_CVAR("HitReact"), 1) != 0;
+        gHitAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("HitAmount"), 100), 0, 200) / 100.0f;
         gWaterDetail = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterDetail"), 1), 0, 2);
         gWaterWaves = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterWaves"), 100), 0, 200) / 100.0f;
         gWaterFxOn = CVarGetInteger(ROYALE_CVAR("WaterFx"), 1) != 0;
@@ -15911,6 +16171,22 @@ void DrawGraphicsUi() {
         GfxSwitch("Projectiles", "Arrows, bombs and chest reveals");
         ImGui::PopID();
     }
+    if (GfxSection("Hit feedback", "HitFx")) {
+        ImGui::PushID("hitfx");
+        if (GfxSwitch("HitFx", "Flash and particles on whatever is hit")) {
+            static int amount = -1;
+            if (amount < 0) amount = static_cast<int>(gHitAmount * 100.0f + 0.5f);
+            GfxCheck("Flash the target on every hit", "HitFlash", &gHitFlash);
+            GfxCheck("Particles at the point of impact", "HitParticles", &gHitParticles);
+            GfxCheck("Red blood-style drops on living targets (off: pale sparks)", "HitBlood", &gHitBlood);
+            GfxCheck("Bigger hits throw bigger bursts", "HitScaled", &gHitScaled);
+            GfxCheck("Bots and mini bosses rock away from the blow (on top of their animation)", "HitReact", &gHitReact);
+            GfxCheck("Also show it when you are the one hit", "HitOnSelf", &gHitOnSelf);
+            if (GfxPercent("How many particles (%, 0 = none)", "HitAmount", &amount)) gHitAmount = amount / 100.0f;
+            ImGui::TextWrapped("Players and bots bleed red, skeletons shed bone dust, armour rings with sparks, and each mini boss and major boss has its own kind of burst.");
+        }
+        ImGui::PopID();
+    }
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
         GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
         ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, busy cleaner wrasse and hermit crabs sifting the sand.");
@@ -16072,6 +16348,10 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
         gFortniteSandbox = sandbox;
         gFortniteBuilt = false;
         gFortniteGpu.built = false;
+    }
+    {   // the match's climbing blocks go into the ground itself
+        const std::vector<royale::fortnite::Block> want = WantedBlocks();
+        if (!(want == royale::fortnite::gBlocks)) { royale::fortnite::gBlocks = want; gFortniteBuilt = false; }
     }
     return FortniteHeader();
 }

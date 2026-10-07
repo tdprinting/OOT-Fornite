@@ -2,6 +2,7 @@
 #include "../shared/loot.h"
 #include "../shared/props.h"
 #include "../shared/storm.h"
+#include "../shared/terrain.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -9,9 +10,6 @@
 #include <vector>
 
 namespace royale {
-
-// The floor height under a point, as the host's game measures it (the scene's own floor, without the mod's scenery). False where there is none.
-using HeightFn = std::function<bool(Vec2, float*)>;
 
 // A coarse walkability grid over the map circle, used by bots to path around walls, water and cliffs. The host's game builds it
 // by probing the floor (the same probe that keeps loot on solid ground); with no grid, bots fall back to straight lines.
