@@ -1,0 +1,74 @@
+--- a/src/graphic/Fast3D/gfx_pc.cpp
++++ b/src/graphic/Fast3D/gfx_pc.cpp
+@@ -1,6 +1,7 @@
+ #define NOMINMAX
+ 
+ #include <math.h>
++#include <cmath>
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -121,6 +122,9 @@
+ static size_t buf_vbo_len;
+ static size_t buf_vbo_num_tris;
+ static const GfxSurfaceMap* surface_map = nullptr;
++// Set by the OpenGL backend: how many floats one vertex of a shader program takes. Used to catch a triangle written with a different
++// layout than the program reads (that shows as huge triangles flung across the screen).
++size_t (*gfx_shader_floats_hook)(struct ShaderProgram* prg) = nullptr;
+ struct SurfaceTextureKey {
+     const uint8_t* data;
+     uint32_t width, height;
+@@ -1739,6 +1743,15 @@
+ 
+     struct GfxClipParameters clip_parameters = gfx_rapi->get_clip_parameters();
+ 
++    // A vertex that is not a number would be flung anywhere on the screen: leave the triangle out.
++    for (int i = 0; i < 3; i++) {
++        if (!std::isfinite(v_arr[i]->x) || !std::isfinite(v_arr[i]->y) || !std::isfinite(v_arr[i]->z) ||
++            !std::isfinite(v_arr[i]->w)) {
++            return;
++        }
++    }
++    const size_t tri_start = buf_vbo_len;
++
+     for (int i = 0; i < 3; i++) {
+         float z = v_arr[i]->z, w = v_arr[i]->w;
+         if (clip_parameters.z_is_from_0_to_1) {
+@@ -1915,6 +1928,21 @@
+         // buf_vbo[buf_vbo_len++] = color->a / 255.0f;
+     }
+ 
++    if (gfx_shader_floats_hook != nullptr) {
++        // Every vertex must fill exactly the stride the program reads. If not, drop the triangle rather than let the next ones read from
++        // the wrong place (and say so, once per program).
++        const size_t stride = gfx_shader_floats_hook(prg);
++        if (stride != 0 && buf_vbo_len - tri_start != stride * 3) {
++            static std::set<struct ShaderProgram*> reported;
++            if (reported.insert(prg).second) {
++                SPDLOG_ERROR("Fast3D: a triangle wrote {} floats but its shader reads {} (surface map {}); left out", buf_vbo_len - tri_start,
++                             stride * 3, use_surface ? "on" : "off");
++            }
++            buf_vbo_len = tri_start;
++            return;
++        }
++    }
++
+     if (++buf_vbo_num_tris == MAX_BUFFERED) {
+         // if (++buf_vbo_num_tris == 1) {
+         gfx_flush();
+--- a/src/graphic/Fast3D/gfx_opengl.cpp
++++ b/src/graphic/Fast3D/gfx_opengl.cpp
+@@ -722,7 +722,13 @@
+     glDrawArrays(GL_TRIANGLES, 0, 3 * buf_vbo_num_tris);
+ }
+ 
++extern size_t (*gfx_shader_floats_hook)(struct ShaderProgram* prg);
++static size_t gfx_opengl_shader_floats(struct ShaderProgram* prg) {
++    return prg != nullptr ? prg->num_floats : 0;
++}
++
+ static void gfx_opengl_init() {
++    gfx_shader_floats_hook = gfx_opengl_shader_floats;
+ #ifndef __linux__
+     glewInit();
+ #endif
