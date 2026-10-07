@@ -21,7 +21,9 @@ Seven of them hold a mini boss at their authored home, matched by place so the k
 
 ## Bots
 
-The bots' grid (`server/nav.h`) is built from the baked ground, building floors and walkways (`kWalkways`: decks, bridges and boardwalks), with doorways open and walls closed. The grid is one height per cell, so chests upstairs and on roofs (about half of the sites) are marked as out of reach for bots (`NavGrid::MarkUpper`, `BuildRegions`/`Connected`): they are for players. Bots reach every ground-level place connected by land, the viaduct and the great bridge. The lake stilts, the lab island and some cliff ledges need swimming, so bots skip those chests. A route graph with stairs and ramps as portals, so bots can use upper floors, is the next step.
+The bots' grid (`server/nav.h`) is built from the baked ground, building floors and walkways (`kWalkways`: decks, bridges and boardwalks), with doorways open and walls closed. The grid has one height per cell, so the floors, ramps, roofs and tower landings above the ground are a second layer of nodes (`kUpperNodes`), found by `tools/maps/kingdom/routes.py` from the baked collision itself: every up-facing triangle more than a doorstep over the ground, with headroom and no wall in the way. The game joins neighbouring nodes by slope and joins them to the ground where a ramp or a step meets it (`NavGrid::AddUpper`).
+
+A bot wanting a chest upstairs gets a route from `NavGrid::FindRoute` whose stops carry their heights. It walks to the ramp, climbs it at the pace it walks along it (`mem.upper`, `mem.levelY` in `server/bot.h`), crosses the floor, and comes back down the same way. While up there it can only step where there is floor, so it will not walk off a roof by accident. `BuildRegions`/`Connected` keep bots from choosing chests with no way up (for example the castle's gate towers, which are climbed by their ivy). About half of the 41 chests above the ground floor are reachable this way; the lake stilts and lab island still need swimming, which the grid does not do.
 
 ## Tests
 

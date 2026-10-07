@@ -170,10 +170,14 @@ class GameServer {
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid, height);
             AddSceneryToNav(*grid, props);
-            grid->BuildRegions();
-            if (kingdomMap)   // chests upstairs and on roofs: the bots have no way up, so they leave them for players
+            if (kingdomMap) {   // floors, ramps and roofs the bots can climb to, and where the chests up there are
+                std::vector<NavGrid::UpperNode> nodes;
+                for (const auto& n : kingdom::kUpperNodes) nodes.push_back({static_cast<float>(n.x), static_cast<float>(n.z), static_cast<float>(n.y)});
+                grid->AddUpper(nodes);
                 for (const auto& site : kingdom::kLootSites)
-                    if (site.y > KingdomGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z});
+                    if (site.y > KingdomGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
+            }
+            grid->BuildRegions();
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
             // The carts the server drives (for the bots, and the ones nobody drives) roll on the same grid: its heights blended smoothly, and

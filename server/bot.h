@@ -5,6 +5,7 @@
 #include "match.h"
 #include "nav.h"
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <unordered_map>
@@ -248,6 +249,10 @@ class BotController {
         bool hasWander = false;
         std::vector<Vec2> path;
         size_t pathIdx = 0;
+        std::vector<NavGrid::Stop> route;   // a route up to a floor or a roof (or down from one), with the height of each stop
+        size_t routeIdx = 0;
+        bool upper = false;                 // standing on an upper floor, a ramp or a roof (levelY is the height of its feet)
+        float levelY = 0;
         Vec2 pathGoal = {};
         float repathAt = 0;
         Vec2 progressPos = {};
@@ -511,7 +516,16 @@ class BotController {
     void FollowGround(Match& m, PlayerState& p, Memory& mem, float dt) {
         if (!nav) { p.y = 0; return; }
         const float floorY = nav->FloorAt(p.pos);
-        const float target = LiftAt(p.pos);
+        float target = LiftAt(p.pos);
+        if (mem.upper) {   // on a floor, a ramp or a roof: the nearest of them holds the bot up; with none under it, it falls
+            const int node = nav->UpperNear(p.pos, mem.levelY, 55.0f, 70.0f);
+            if (node < 0) mem.upper = false;
+            else {
+                const float want = nav->UpperY(node);
+                mem.levelY += (std::max)(-700.0f * dt, (std::min)(700.0f * dt, want - mem.levelY));
+                target = (std::max)(target, mem.levelY - floorY);
+            }
+        }
         if (mem.haveFloor) {
             const float dF = floorY - mem.lastFloor;
             if (dF < -NavGrid::kStepUp) mem.lift -= dF;                    // walked off a ledge: still up where it was, for now
@@ -589,6 +603,7 @@ class BotController {
             mem.lift = nav ? LiftAt(p.pos) : 0.0f;
             mem.vy = 0;
             mem.haveFloor = false;
+            mem.upper = false;
         }
         p.y = mem.lift;
     }
@@ -640,6 +655,8 @@ class BotController {
         const float len = std::hypot(dx, dz);
         if (len < 1e-4f) return false;
         dx /= len; dz /= len;
+        float upperLevel = std::numeric_limits<float>::quiet_NaN();
+        if (climber && nav && nav->HasUpper()) { auto it = memory.find(p.id); if (it != memory.end() && it->second.upper) upperLevel = it->second.levelY; }
         static const float kTurns[5] = {0.0f, 0.6f, -0.6f, 1.2f, -1.2f};
         for (float turn : kTurns) {
             const float c = std::cos(turn), s = std::sin(turn);
@@ -650,7 +667,9 @@ class BotController {
             if (off > map.radius - 20.0f) {
                 next = {map.center.x + (next.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (next.z - map.center.z) / off * (map.radius - 20.0f)};
             }
-            if (climber ? !CanStep(p.pos, next) : !Walkable(next)) continue;
+            if (upperLevel == upperLevel) {   // up on a floor or a roof: only where there is floor
+                if (nav->UpperNear(next, upperLevel, 55.0f, 70.0f) < 0) continue;
+            } else if (climber ? !CanStep(p.pos, next) : !Walkable(next)) continue;
             p.pos = next;
             return true;
         }
@@ -663,8 +682,32 @@ class BotController {
         const float sprint = speedScale >= 0.9f ? SprintScale(mem) : 1.0f;
         const float step = kRunSpeed * m.SpeedMultiplier(p) * speedScale * sprint * dt;
         Vec2 aim = goal;
+        bool routing = false, aimUp = false;
+        float aimY = 0;
         if (m.Clock() < mem.unstickUntil) {
             aim = {p.pos.x + mem.unstickDir.x * 200.0f, p.pos.z + mem.unstickDir.z * 200.0f};
+        } else if (nav && nav->HasUpper() && Distance(p.pos, goal) > NavGrid::kCell * 0.4f && (mem.upper || nav->UpperGoal(goal, nullptr))) {
+            // Up a ramp to a floor or a roof, along it, or back down: a route whose stops carry their heights.
+            float goalY = 0;
+            const bool toUp = nav->UpperGoal(goal, &goalY);
+            const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
+            if ((mem.routeIdx >= mem.route.size() || goalMoved || m.Clock() >= mem.repathAt) && repathBudget > 0) {
+                repathBudget--;
+                mem.pathGoal = goal;
+                mem.routeIdx = 0;
+                mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
+                const float startY = mem.upper ? mem.levelY : nav->FloorAt(p.pos);
+                if (!nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route)) mem.route.clear();
+            }
+            while (mem.routeIdx < mem.route.size() && Distance(p.pos, mem.route[mem.routeIdx].p) < NavGrid::kCell * 0.45f) mem.routeIdx++;
+            if (mem.routeIdx < mem.route.size()) {
+                const NavGrid::Stop& stop = mem.route[mem.routeIdx];
+                aim = stop.p;
+                aimUp = stop.upper;
+                aimY = stop.y;
+                routing = true;
+                if (stop.upper && !mem.upper && Distance(p.pos, stop.p) < NavGrid::kCell * 1.6f) { mem.upper = true; mem.levelY = nav->FloorAt(p.pos); }   // onto the ramp
+            }
         } else if (nav && Distance(p.pos, goal) > NavGrid::kCell * 1.2f) {
             const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
             const bool needPath = mem.pathIdx >= mem.path.size() || goalMoved;
@@ -680,7 +723,13 @@ class BotController {
         }
 
         const float dx = aim.x - p.pos.x, dz = aim.z - p.pos.z;
+        const Vec2 before = p.pos;
         const bool moved = Advance(m, p, dx, dz, (std::min)(step, std::hypot(dx, dz)));
+        if (mem.upper) {   // keep the feet on the route: up the ramp as fast as the bot walks along it
+            const float rate = Distance(before, p.pos) * 1.4f + 1.0f;
+            if (routing) mem.levelY += (std::max)(-rate, (std::min)(rate, aimY - mem.levelY));
+            if (!aimUp && mem.levelY - nav->FloorAt(p.pos) <= 8.0f) mem.upper = false;   // back on the ground
+        }
         p.rot = face ? FaceAngle(p.pos, *face) : FaceAngle(p.pos, aim);
         p.anim = static_cast<uint8_t>(moved ? (speedScale < 0.9f ? Anim::Walk : sprint > 1.0f ? Anim::Sprint : Anim::Run) : Anim::Idle);
         if (moved && speedScale >= 0.9f && m.Clock() >= mem.nextHopAt && rng.Unit() < 0.0015f + 0.002f * mem.aggression) Hop(m, mem);
@@ -898,7 +947,7 @@ class BotController {
             const LootSpawn& s = loot[i].spawn;
             const float d = Distance(p.pos, s.pos);
             if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) continue;
-            if (nav && !nav->Connected(p.pos, s.pos)) continue;   // a chest upstairs or on an island with no way up is not for the bots
+            if (nav && !nav->Connected(p.pos, s.pos, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN())) continue;   // a chest upstairs or on an island with no way up is not for the bots
             const float value = LootValue(p, s) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
             if (value <= 0) continue;
             const float score = value * (0.6f + mem.greed) / (d + 150.0f);
@@ -1570,7 +1619,7 @@ class BotController {
         if (!m.RidingIn(p.id, &index, &seat)) {
             if (mem.riding) {   // just got out (or was thrown out): back on its feet
                 mem.riding = false;
-                mem.lift = 0; mem.vy = 0; mem.haveFloor = false;
+                mem.lift = 0; mem.vy = 0; mem.haveFloor = false; mem.upper = false;
                 mem.path.clear(); mem.cartIdx = -1; mem.cartEvalAt = m.Clock() + 6.0f;   // and doesn't jump straight back in
             }
             return false;
@@ -1590,7 +1639,7 @@ class BotController {
         if (v.Driver() == p.id) v.controls = {};
         m.ExitVehicle(p.id);
         mem.riding = false;
-        mem.lift = 0; mem.vy = 0; mem.haveFloor = false;
+        mem.lift = 0; mem.vy = 0; mem.haveFloor = false; mem.upper = false;
         mem.path.clear(); mem.cartIdx = -1;
         mem.cartEvalAt = m.Clock() + 6.0f;
     }

@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <queue>
+#include <unordered_map>
 #include <vector>
 
 namespace royale {
@@ -93,22 +95,81 @@ class NavGrid {
     }
     float StandHeight(Vec2 p) const { int cx, cz; ToCellClamped(p, cx, cz); return floor[Index(cx, cz)] + lift[Index(cx, cz)]; }
 
-    // Which stretch of ground a cell belongs to: cells joined by steps no taller than a clamber (kClimbUp) in either direction are one stretch. An
-    // upper floor, a roof or an island the bots have no way onto is a stretch of its own. Call once the scenery is added, before bots use Connected.
+    // ---- upper floors ----------------------------------------------------------------------------------------------------------
+    // Somewhere to stand above the ground: an upper floor, a ramp, a roof or a landing. The grid itself has one height per cell, so these sit beside
+    // it as extra nodes. A node joins its neighbours that differ by a step, and joins a ground cell where a ramp or a doorstep meets it.
+    struct UpperNode { float x, z, y; };
+    // One stop of a route: where, and how high the feet are there.
+    struct Stop { Vec2 p; float y; bool upper; };
+    void AddUpper(const std::vector<UpperNode>& nodes) {
+        up = nodes;
+        upAt.clear();
+        for (size_t i = 0; i < up.size(); i++) {
+            int cx, cz;
+            if (ToCell({up[i].x, up[i].z}, cx, cz)) upAt[Index(cx, cz)].push_back(static_cast<int>(i));
+        }
+    }
+    bool HasUpper() const { return !up.empty(); }
+    // The node nearest p whose height is within maxDy of y (-1 when there is none within maxD).
+    int UpperNear(Vec2 p, float y, float maxD = 50.0f, float maxDy = 60.0f) const {
+        int cx, cz, best = -1;
+        float bestD = maxD;
+        ToCellClamped(p, cx, cz);
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                const int x = cx + dx, z = cz + dz;
+                if (x < 0 || z < 0 || x >= w || z >= h) continue;
+                auto it = upAt.find(Index(x, z));
+                if (it == upAt.end()) continue;
+                for (int i : it->second) {
+                    const float d = Distance(p, {up[static_cast<size_t>(i)].x, up[static_cast<size_t>(i)].z});
+                    if (d <= bestD && std::fabs(up[static_cast<size_t>(i)].y - y) <= maxDy) { bestD = d; best = i; }
+                }
+            }
+        }
+        return best;
+    }
+    // The stretch of ground (BuildRegions) an upper node or a point is on, for tests and tools.
+    int UpperRegion(int node) const { return region.empty() ? -1 : region[cells.size() + static_cast<size_t>(node)]; }
+    int RegionAt(Vec2 p) const { int cx, cz; return region.empty() || !ToCell(p, cx, cz) ? -1 : region[Index(cx, cz)]; }
+    size_t UpperCount() const { return up.size(); }
+    float UpperY(int node) const { return up[static_cast<size_t>(node)].y; }
+    // A chest on an upper floor or a roof: it stands over ground that is open, so the cell below it is walkable, but the chest is up at y.
+    void MarkUpper(Vec2 p, float y) {
+        int cx, cz;
+        if (ToCell(p, cx, cz)) upperGoal[Index(cx, cz)] = y;
+    }
+    bool UpperGoal(Vec2 p, float* y) const {
+        if (upperGoal.empty()) return false;
+        int cx, cz;
+        if (!ToCell(p, cx, cz)) return false;
+        auto it = upperGoal.find(Index(cx, cz));
+        if (it == upperGoal.end()) return false;
+        if (y) *y = it->second;
+        return true;
+    }
+
+    // Which stretch of ground a cell belongs to: cells joined by steps no taller than a clamber (kClimbUp) in either direction are one stretch,
+    // and so are upper nodes and the ground they are joined to. An island the bots have no way onto is a stretch of its own. Call once the
+    // scenery and the upper nodes are added, before bots use Connected.
     void BuildRegions() {
-        region.assign(cells.size(), -1);
+        const size_t total = cells.size() + up.size();
+        region.assign(total, -1);
         regionSize.clear();
         std::vector<int> stack;
-        for (size_t s = 0; s < cells.size(); s++) {
-            if (cells[s] == kBlocked || region[s] >= 0) continue;
+        for (size_t s = 0; s < total; s++) {
+            if (s < cells.size() && cells[s] == kBlocked) continue;
+            if (region[s] >= 0) continue;
             const int id = static_cast<int>(regionSize.size());
             int count = 0;
             region[s] = id;
             stack.push_back(static_cast<int>(s));
+            auto visit = [&](int b) { if (region[static_cast<size_t>(b)] < 0) { region[static_cast<size_t>(b)] = id; stack.push_back(b); } };
             while (!stack.empty()) {
                 const int a = stack.back();
                 stack.pop_back();
                 count++;
+                if (static_cast<size_t>(a) >= cells.size()) { UpperLinks(a - static_cast<int>(cells.size()), visit); continue; }
                 const int ax = a % w, az = a / w;
                 for (int dz = -1; dz <= 1; dz++) {
                     for (int dx = -1; dx <= 1; dx++) {
@@ -118,31 +179,116 @@ class NavGrid {
                         if (cells[b] == kBlocked || region[b] >= 0) continue;
                         if (dx && dz && (cells[Index(ax + dx, az)] == kBlocked || cells[Index(ax, az + dz)] == kBlocked)) continue;   // no squeezing between corners
                         if (std::fabs(Height(b) - Height(a)) > kClimbUp) continue;
-                        region[b] = id;
-                        stack.push_back(b);
+                        visit(b);
                     }
                 }
+                GroundToUpper(a, visit);
             }
             regionSize.push_back(count);
         }
     }
-    // A chest on an upper floor or a roof stands over ground that is open: the cell below it is walkable, but a bot there could not reach it.
-    void MarkUpper(Vec2 p) {
-        int cx, cz;
-        if (!ToCell(p, cx, cz)) return;
-        if (upper.empty()) upper.assign(cells.size(), 0);
-        upper[Index(cx, cz)] = 1;
-    }
     // Can a bot standing at a get to b? True when either is not on known ground, or when a is on a scrap of ground too small to say (a bot dropped
-    // onto a stray ledge should not stop wanting everything).
-    bool Connected(Vec2 a, Vec2 b) const {
+    // onto a stray ledge should not stop wanting everything). `aY` is a's height when it is up on a floor or a roof (otherwise NaN). A chest marked
+    // as upper is reachable only through the upper nodes.
+    bool Connected(Vec2 a, Vec2 b, float aY = std::numeric_limits<float>::quiet_NaN()) const {
         if (region.empty()) return true;
         int ax, az, bx, bz;
         if (!ToCell(a, ax, az) || !ToCell(b, bx, bz)) return true;
-        if (!upper.empty() && upper[Index(bx, bz)]) return false;
-        const int ra = region[Index(ax, az)], rb = region[Index(bx, bz)];
+        int ra = region[Index(ax, az)], rb = region[Index(bx, bz)];
+        if (!std::isnan(aY)) { const int n = UpperNear(a, aY, 70.0f, 80.0f); if (n >= 0) ra = region[cells.size() + static_cast<size_t>(n)]; }
+        float gy;
+        if (UpperGoal(b, &gy)) {
+            const int n = UpperNear(b, gy, 70.0f, 60.0f);
+            if (n < 0) return false;
+            rb = region[cells.size() + static_cast<size_t>(n)];
+        }
         if (ra < 0 || rb < 0 || ra == rb) return true;
         return regionSize[static_cast<size_t>(ra)] < 150;
+    }
+
+    // A route that may use the upper nodes: ramps and stairs up to a floor or a roof, and back down. `fromUp` says the bot is on an upper floor (at
+    // height fromY); `toUp` that the goal is (at toY). The stops carry their heights; the last stop is `to` itself.
+    bool FindRoute(Vec2 from, float fromY, bool fromUp, Vec2 to, float toY, bool toUp, std::vector<Stop>& out) const {
+        out.clear();
+        const int base = static_cast<int>(cells.size());
+        int start = -1, goal = -1;
+        if (fromUp) { const int n = UpperNear(from, fromY, 70.0f, 80.0f); if (n >= 0) start = base + n; }
+        if (toUp) { const int n = UpperNear(to, toY, 70.0f, 60.0f); if (n < 0) return false; goal = base + n; }
+        Vec2 a, b;
+        if (start < 0) { if (!Snap(from, &a, true)) return false; int cx, cz; ToCellClamped(a, cx, cz); start = Index(cx, cz); }
+        if (goal < 0) { if (!Snap(to, &b, true)) return false; int cx, cz; ToCellClamped(b, cx, cz); goal = Index(cx, cz); }
+        if (start == goal) { out.push_back({to, NodeY(goal), goal >= base}); return true; }
+        const Vec2 goalAt = NodeXZ(goal);
+
+        struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
+        const size_t total = cells.size() + up.size();
+        std::vector<float> g(total, 1e18f);
+        std::vector<int> parent(total, -1);
+        std::priority_queue<Node> open;
+        g[static_cast<size_t>(start)] = 0;
+        open.push({Distance(NodeXZ(start), goalAt) / kCell, start});
+        int expansions = 0;
+        const int cap = MaxExpansions() + static_cast<int>(up.size());
+        bool reached = false;
+        static const int dxs[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+        static const int dzs[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+        while (!open.empty() && expansions < cap) {
+            const Node n = open.top();
+            open.pop();
+            if (n.idx == goal) { reached = true; break; }
+            if (n.f - Distance(NodeXZ(n.idx), goalAt) / kCell > g[static_cast<size_t>(n.idx)] + 1e-3f) continue;
+            expansions++;
+            auto relax = [&](int to2, float step) {
+                const float ng = g[static_cast<size_t>(n.idx)] + step;
+                if (ng < g[static_cast<size_t>(to2)]) {
+                    g[static_cast<size_t>(to2)] = ng;
+                    parent[static_cast<size_t>(to2)] = n.idx;
+                    open.push({ng + Distance(NodeXZ(to2), goalAt) / kCell, to2});
+                }
+            };
+            if (n.idx >= base) {
+                const Vec2 at = NodeXZ(n.idx);
+                UpperLinks(n.idx - base, [&](int to2) { relax(to2, Distance(at, NodeXZ(to2)) / kCell + 0.05f); });
+                continue;
+            }
+            const int cx = n.idx % w, cz = n.idx / w;
+            for (int k = 0; k < 8; k++) {
+                const int x = cx + dxs[k], z = cz + dzs[k];
+                if (x < 0 || z < 0 || x >= w || z >= h || !Usable(Index(x, z), true)) continue;
+                if (k >= 4 && (!Usable(Index(cx + dxs[k], cz), true) || !Usable(Index(cx, cz + dzs[k]), true))) continue;
+                float step = k >= 4 ? 1.41421356f : 1.0f;
+                const float rise = Height(Index(x, z)) - Height(n.idx);
+                if (!StepOk(Height(n.idx), Height(Index(x, z)))) continue;
+                if (k >= 4 && (std::fabs(Height(Index(cx + dxs[k], cz)) - Height(n.idx)) > kStepUp ||
+                               std::fabs(Height(Index(cx, cz + dzs[k])) - Height(n.idx)) > kStepUp)) continue;
+                if (rise > kStepUp) step += 1.5f; else if (-rise > kStepUp) step += 0.4f;
+                relax(Index(x, z), step);
+            }
+            GroundToUpper(n.idx, [&](int to2) { relax(to2, Distance(NodeXZ(n.idx), NodeXZ(to2)) / kCell + 0.05f); });
+        }
+        if (!reached) return false;
+
+        std::vector<Stop> raw;
+        for (int i = goal; i != start && i >= 0; i = parent[static_cast<size_t>(i)]) raw.push_back({NodeXZ(i), NodeY(i), i >= base});
+        std::reverse(raw.begin(), raw.end());
+        if (raw.empty()) { out.push_back({to, NodeY(goal), goal >= base}); return true; }
+        raw.back().p = to;
+        // Thin it: a stop on a straight run at a steady slope is not needed.
+        Vec2 prev = NodeXZ(start);
+        float prevY = NodeY(start);
+        for (size_t i = 0; i < raw.size(); i++) {
+            if (i + 1 < raw.size()) {
+                const Vec2 d1 = {raw[i].p.x - prev.x, raw[i].p.z - prev.z}, d2 = {raw[i + 1].p.x - raw[i].p.x, raw[i + 1].p.z - raw[i].p.z};
+                const float l1 = std::hypot(d1.x, d1.z), l2 = std::hypot(d2.x, d2.z);
+                if (l1 > 1e-3f && l2 > 1e-3f && raw[i].upper == raw[i + 1].upper && (d1.x * d2.x + d1.z * d2.z) / (l1 * l2) > 0.995f &&
+                    std::fabs((raw[i].y - prevY) / l1 - (raw[i + 1].y - raw[i].y) / l2) < 0.04f)
+                    continue;
+            }
+            out.push_back(raw[i]);
+            prev = raw[i].p;
+            prevY = raw[i].y;
+        }
+        return true;
     }
 
     // A step from a to b for a bot: b can be stood on and the height between them can be walked, climbed or dropped.
@@ -286,6 +432,54 @@ class NavGrid {
     static constexpr uint8_t kBlocked = 0, kOpen = 1, kNearScenery = 2, kLifted = 3;
 
     int Index(int cx, int cz) const { return cz * w + cx; }
+    // Ids in a route: a ground cell is its index, an upper node is cells.size() + its number.
+    Vec2 NodeXZ(int id) const {
+        if (static_cast<size_t>(id) >= cells.size()) { const UpperNode& n = up[static_cast<size_t>(id) - cells.size()]; return {n.x, n.z}; }
+        return CellCentre(id % w, id / w);
+    }
+    float NodeY(int id) const { return static_cast<size_t>(id) >= cells.size() ? up[static_cast<size_t>(id) - cells.size()].y : Height(id); }
+    static constexpr float kLinkReach = 95.0f;
+    static constexpr float kNodeSlope = 0.85f;   // the steepest ramp the nodes join (the house ramps climb about 0.7)
+    // The upper nodes and the ground cells an upper node joins: neighbours a step apart, and ground a ramp or a doorstep meets.
+    template <typename F> void UpperLinks(int node, F f) const {
+        const UpperNode& n = up[static_cast<size_t>(node)];
+        int cx, cz;
+        ToCellClamped({n.x, n.z}, cx, cz);
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                const int x = cx + dx, z = cz + dz;
+                if (x < 0 || z < 0 || x >= w || z >= h) continue;
+                const int g = Index(x, z);
+                if (cells[g] != kBlocked && Distance(CellCentre(x, z), {n.x, n.z}) <= kLinkReach && std::fabs(Height(g) - n.y) <= kClimbUp) f(g);
+                auto it = upAt.find(g);
+                if (it == upAt.end()) continue;
+                for (int j : it->second) {
+                    if (j == node) continue;
+                    const UpperNode& m = up[static_cast<size_t>(j)];
+                    const float run = Distance({m.x, m.z}, {n.x, n.z});
+                    if (run <= kLinkReach && std::fabs(m.y - n.y) <= kNodeSlope * run + 8.0f) f(static_cast<int>(cells.size()) + j);
+                }
+            }
+        }
+    }
+    // The upper nodes a ground cell joins.
+    template <typename F> void GroundToUpper(int cell, F f) const {
+        if (up.empty()) return;
+        const int cx = cell % w, cz = cell / w;
+        const Vec2 at = CellCentre(cx, cz);
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                const int x = cx + dx, z = cz + dz;
+                if (x < 0 || z < 0 || x >= w || z >= h) continue;
+                auto it = upAt.find(Index(x, z));
+                if (it == upAt.end()) continue;
+                for (int j : it->second) {
+                    const UpperNode& m = up[static_cast<size_t>(j)];
+                    if (Distance({m.x, m.z}, at) <= kLinkReach && std::fabs(m.y - Height(cell)) <= kClimbUp) f(static_cast<int>(cells.size()) + j);
+                }
+            }
+        }
+    }
     bool Usable(int i, bool climber) const { return climber ? cells[i] != kBlocked : cells[i] == kOpen; }
     float Height(int i) const { return floor[i] + lift[i]; }
     // Every cell whose centre is within `radius` of `centre` (or inside the square of half-width `radius` around it).
@@ -324,7 +518,9 @@ class NavGrid {
     std::vector<float> floor, lift, cover;   // per cell: the scene's floor, what stands on it to be stood on, and how tall the tallest thing on it is
     std::vector<int> region;       // BuildRegions: the stretch of ground each cell is on (-1 for none)
     std::vector<int> regionSize;
-    std::vector<uint8_t> upper;    // MarkUpper: cells with something out of reach standing over them
+    std::vector<UpperNode> up;     // AddUpper
+    std::unordered_map<int, std::vector<int>> upAt;   // ground cell -> the upper nodes inside it
+    std::unordered_map<int, float> upperGoal;         // MarkUpper: cell -> the height of the chest up there
     bool heights = false;
 };
 

@@ -9,6 +9,7 @@
 #include <algorithm>
 using namespace royale;
 static int failures=0;
+static constexpr float kDt=1.0f/kTickHz;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %d: %s\n",__LINE__,#c);++failures; } } while(0)
 struct P3 { float x,y,z; };
 static P3 Sub(P3 a,P3 b) {return {a.x-b.x,a.y-b.y,a.z-b.z};}
@@ -89,16 +90,45 @@ int main() {
     {
         PlacementFn valid=[](Vec2 p) { float y; return KingdomLootHeightAt(p,&y) || (KingdomDryGround(p) && !KingdomObstacleAt(p,0.0f)); };
         HeightFn height=[](Vec2 p,float* y) { float s; *y=KingdomLootHeightAt(p,&s) ? s : KingdomGroundHeight(p); return true; };
-        NavGrid grid(MapOf(kKingdomMapIndex).fallback,valid,height);grid.BuildRegions();
+        NavGrid grid(MapOf(kKingdomMapIndex).fallback,valid,height);
+        std::vector<NavGrid::UpperNode> nodes;
+        for (const auto& n:kingdom::kUpperNodes) nodes.push_back({float(n.x),float(n.z),float(n.y)});
+        grid.AddUpper(nodes);CHECK(nodes.size()>2000);
         int upstairs=0;
-        for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) { grid.MarkUpper({site.x,site.z});++upstairs; }
+        for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) { grid.MarkUpper({site.x,site.z},site.y);++upstairs; }
+        grid.BuildRegions();
         CHECK(upstairs>20 && upstairs<70);
         Vec2 town{0,1150};CHECK(grid.Snap(town,&town,true));
         const Vec2 places[]={{0,-1500},{4050,-1350},{-5050,-1150},{1500,4550},{-1900,4700},{-5000,5150},{2250,-5350},{5250,-2250},{-5750,-2300},{-2950,2350},{1900,-2850}};
         for (Vec2 at:places) { std::vector<Vec2> path;CHECK(grid.FindPath(town,at,path,true) && grid.Connected(town,at)); }
-        Vec2 up{0,0};bool any=false;
-        for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) { up={site.x,site.z};any=true;break; }
-        CHECK(any && !grid.Connected(town,up));
+        // Chests upstairs that a ramp leads to are reachable, with a route that climbs; the others (the towers' ivy) are not.
+        int reachable=0;
+        for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) {
+            std::vector<NavGrid::Stop> route;
+            const bool found=grid.FindRoute(town,0,false,{site.x,site.z},site.y,true,route);
+            CHECK(found==grid.Connected(town,{site.x,site.z}));
+            if (found) { ++reachable;float top=0;for (const auto& stop:route) top=std::max(top,stop.y);CHECK(top>=site.y-60.0f && route.back().upper); }
+        }
+        CHECK(reachable>=15);
+    }
+    // Bots really go upstairs: in a match on the Kingdom some chests above the ground floor are opened, and bots are seen high above the floor.
+    {
+        net::LoopbackNetwork network; auto& host=network.Server();
+        GameServer server(host,5,MapOf(0).fallback,40);server.SetBossCount(3);
+        CHECK(server.SelectMap(kKingdomMapIndex));server.SetPlayerLimit(30);server.Sim().match.AddHuman(1);
+        CHECK(server.StartMatch());
+        float highest=0;float elapsed=0;
+        while (elapsed<420.0f && server.Sim().match.State()!=MatchState::Ending) {
+            server.Sim().Tick(kDt);elapsed+=kDt;
+            for (const auto& p:server.Sim().match.Players()) if (p.isBot && p.alive && elapsed>100.0f) highest=std::max(highest,p.y);
+        }
+        int upstairsTaken=0;
+        for (const auto& l:server.Sim().match.Loot()) {
+            if (!l.taken) continue;
+            for (const auto& site:kingdom::kLootSites) if (Distance(l.spawn.pos,{site.x,site.z})<2.0f && site.y>KingdomGroundHeight({site.x,site.z})+90.0f) ++upstairsTaken;
+        }
+        std::printf("  bots upstairs: highest %.0f above the floor, %d chests upstairs opened\n",highest,upstairsTaken);
+        CHECK(highest>200.0f && upstairsTaken>=1);
     }
     fortnite::UseTerrainForMap(kFortniteMapIndex);CHECK(!fortnite::gSandboxTerrain && fortnite::gHeightData==fortnite::kHeights);
     std::printf("Kingdom: %s (%d failures)\n",failures?"FAILED":"passed",failures);return failures?1:0;

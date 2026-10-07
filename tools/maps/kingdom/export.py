@@ -7,7 +7,7 @@ third (patches/0025), so every triangle is written with at most one corner in th
 import os, sys, math, argparse
 sys.path.insert(0, os.path.dirname(__file__))
 import numpy as np
-import terrain, textures, world, surface_maps
+import terrain, textures, world, surface_maps, routes
 from layout import *
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
@@ -188,6 +188,8 @@ def main():
     print('collision: %d vertices (%d high), %d triangles, %d surfaces' % (len(verts), nhigh, len(tris), len(surfaces)))
     props = [(round(p[0]), round(p[1]), round(p[2]), round(p[3]), round(p[4]), round(p[5]), quote(str(p[6]))) for p in w.props]
     obs = obstacles(w, h)
+    nodes = routes.upper_nodes(w, lambda x, z: walk_floor(w, h, x, z))
+    print('upper nodes: %d' % len(nodes))
     # ground colours and cover
     N = 385
     xs = -HALF_X + np.arange(N) * (2 * HALF_X / (N - 1)); zs = -HALF_Z + np.arange(N) * (2 * HALF_Z / (N - 1))
@@ -212,6 +214,7 @@ def main():
         arr(f, 'Building', 'kBuildings', [(round(b[0]), round(b[1]), round(b[2], 1), round(b[3], 1), round(b[4]), round(b[5], 4)) for b in w.buildings])
         f.write('struct Walkway { float x0,z0,x1,z1,halfWidth,y0,y1; };   // a deck, bridge or ramp: the floor along the strip from (x0, z0) to (x1, z1)\n')
         arr(f, 'Walkway', 'kWalkways', [(round(v[0]), round(v[1]), round(v[2]), round(v[3]), round(v[4], 1), round(v[5]), round(v[6])) for v in w.walkways])
+        f.write('struct UpperNode { int16_t x,z,y; };   // somewhere to stand above the ground: a floor, ramp, roof or landing (tools/maps/kingdom/routes.py)\n'); arr(f, 'UpperNode', 'kUpperNodes', nodes)
         f.write('struct LootSite { float x,y,z; };\n'); arr(f, 'LootSite', 'kLootSites', [(round(l[0]), round(l[1]), round(l[2])) for l in w.loot])
         f.write('struct Region { const char* name; float x,z; int boss; };\n')
         arr(f, 'Region', 'kRegions', [(quote(n), x, z, KINDS.get(b, -1)) for n, x, z, r, b, d in POIS])
