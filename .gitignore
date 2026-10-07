@@ -41,3 +41,6 @@ assets/maya/*-preview.png
 assets/maya/previews/
 # Local map validation builds
 /build-map-tests/
+/build-item-tests/
+/tools/__pycache__/
+/scripts/__pycache__/
