@@ -1,0 +1,24 @@
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -1341,6 +1341,9 @@
+     }
+ }
+ 
++// OOT Royale: the mod's sky pass (RoyaleMod.cpp, DrawBackdrop), drawn right after the game's own skybox and before the scene. NULL = none.
++void (*gRoyaleBackdropDraw)(PlayState* play) = NULL;
++
+ void Play_Draw(PlayState* play) {
+     GraphicsContext* gfxCtx = play->state.gfxCtx;
+     Lights* sp228;
+@@ -1514,6 +1517,10 @@
+             Environment_DrawSkyboxFilters(play);
+         }
+ 
++        if (gRoyaleBackdropDraw != NULL) {
++            gRoyaleBackdropDraw(play);
++        }
++
+         if ((HREG(80) != 10) || (HREG(90) & 4)) {
+             Environment_UpdateLightningStrike(play);
+             Environment_DrawLightning(play, 0);

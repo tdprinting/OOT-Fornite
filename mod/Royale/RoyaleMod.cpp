@@ -34,6 +34,7 @@
 #include "skins.h"
 #include "sky_model.h"
 #include "graphics_stability.h"
+#include "graphics_layers.h"
 #include "tune.h"
 #include "basic_pitch.h"
 #include "oot_arrange.h"
@@ -42,6 +43,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <set>
 #include <thread>
 #include <cfloat>
@@ -166,6 +168,16 @@ struct DrawIdentity {
     }
     DrawIdentity(const DrawIdentity&) = delete;
     DrawIdentity& operator=(const DrawIdentity&) = delete;
+};
+
+// A fixed place in the world near the camera that a world effect (fog banks, weather specks, wind streaks) is drawn from, with an interpolation
+// identity of its own (shared/graphics_layers.h, AnchorNear): the effect's matrix stays put while the camera moves, so the frames the game blends in
+// between do not drag its pieces along with the camera; crossing into the next cell starts a new identity, so that one frame is not blended.
+struct WorldAnchor {
+    royale::gfxlayers::Anchor at;
+    DrawIdentity identity;
+    WorldAnchor(const void* key, const Vec3f& eye) : at(royale::gfxlayers::AnchorNear(eye.x, eye.y, eye.z)), identity(key, at.cx * 1024 + at.cy, at.cz) {}
+    Vec3f Origin() const { return { at.x, at.y, at.z }; }
 };
 
 royale::RoyaleSession gSession;
@@ -300,17 +312,206 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
 
-// Per-frame vertices for our own effects. The game's "Zelda 0" display-list buffer holds both the frame's commands (growing up from the start) and
-// everything Graph_Alloc hands out (growing down from the end), and nothing checks that they stay apart. When the sky, fog, storm wall, water, weather,
-// pets and 32 players all asked for memory in the same frame, the two met: vertices overwrote commands, the graphics thread then ran garbage as a
-// display list, and a stray "modify vertex" command wrote far outside its table (the match-start crash in gfx_modify_vtx_handler). So our effects take
-// memory only while a generous reserve is left for the commands the game still has to write this frame; otherwise they skip drawing for that frame.
-inline void* FrameAlloc(PlayState* play, size_t bytes) {
-    constexpr size_t kReserve = 64 * 1024;   // about a third of the buffer, kept free for the game's own commands
+// ---- graphics layers ----------------------------------------------------------------------------------------------------------
+// The game's display-list buffers are small and fixed: "Zelda 0" (opaque) holds about 195 KB of commands growing up and Graph_Alloc's vertices and
+// matrices growing down, "Zelda 1" (translucent) only 4096 commands. They were sized for the original game. Our sky alone writes over 3000
+// translucent commands on a clear night; add clouds, fog banks, the storm wall, weather specks and water and the translucent buffer overflows. When
+// that happens the game throws the whole frame away, and when the opaque one runs low our old allocator refused memory and a layer skipped the frame:
+// both read as flicker in the sky, fog, grass, storm wall and weather. (Before that guard, the two ends met and the graphics thread ran garbage:
+// the match-start crash in gfx_modify_vtx_handler.)
+//
+// So every effect now draws as a layer (shared/graphics_layers.h has the rules):
+//   * its own command streams in a pool the mod owns: a translucent window and an opaque stream, with its vertices and matrices behind them. While a
+//     layer is open the game's two buffers point into the pool, so the drawing code is unchanged (POLY_OPA_DISP, POLY_XLU_DISP, MATRIX_NEWMTX and
+//     FrameAlloc all land there). The game's buffers get one "draw this list" command per stream.
+//   * a clean state at both ends: each stream starts and ends with the game's standard setup, so no layer's render mode, fog or culling leaks into
+//     the next layer or into the game's own drawing.
+//   * a fixed slot in the drawing order (Projectile_Draw), and the sky its own pass behind the world (DrawBackdrop, patches/0022).
+//   * one shared budget: the pool grows to what busy frames need (never past a cap) and each layer's window is sized from what it used before. A
+//     layer that still does not fit is left out of that one frame and the next frame is given more room; it never takes the game's frame with it.
+enum class GfxLayerId : int { Sky, Foliage, Scenery, Ground, Water, Storm, Fog, Fireflies, Tornado, Weather, Wind, Characters, Count };
+constexpr int kGfxLayerCount = static_cast<int>(GfxLayerId::Count);
+constexpr const char* kGfxLayerNames[kGfxLayerCount] = { "Sky", "Grass and trees", "Island scenery", "Ground patches", "Water", "Storm wall", "Fog banks",
+                                                          "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters" };
+// Each layer's translucent window to start with and never go below, in KB: enough for its busiest normal frame (the sky on an overcast night with the
+// Milky Way is about 5500 commands, 88 KB), so a layer is only ever cut short by something unusual. Solid drawing has no window: it takes what is free.
+constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 24, 40, 16, 16, 8, 12, 16, 8, 4 };
+
+struct GfxLayerStats {
+    size_t xlu = 0, opa = 0, data = 0;   // bytes used this frame
+    size_t window = 0;                   // the translucent window it is given (0: not drawn yet, start from kGfxLayerXluKB)
+    uint32_t drops = 0;                  // frames it did not fit, or was cut short (since the game started)
+};
+
+struct GfxPool {
+    std::unique_ptr<uint8_t[]> raw[2];
+    uint8_t* base[2] = { nullptr, nullptr };
+    size_t size[2] = { 0, 0 };
+    size_t want = royale::gfxlayers::kPoolMin;
+    int cur = 0;
+    uint32_t frame = 0;
+    bool started = false;
+    royale::gfxlayers::Span free;        // what is left in the current frame's half
+    size_t usedLast = 0, peak = 0;       // bytes the last frame used; the most any recent frame used
+    bool overflowLast = false, overflowNow = false;
+    uint32_t dataMisses = 0;             // allocations outside a layer that did not fit (they fall back to the game's buffer)
+    GfxLayerStats layers[kGfxLayerCount];
+    size_t gameOpaLeft = 0, gameXluLeft = 0;   // room left in the game's own buffers after our layers, last frame (shown on the Graphics page)
+};
+GfxPool gGfxPool;
+int gGfxLayerOpen = -1;   // the layer being drawn now, or -1
+bool gGfxLayerShort = false;   // the open layer ran out of room and left something out (GfxHasRoom said no)
+
+// The first call each game frame swaps to the other half of the pool (the half the previous frame drew from stays untouched) and resizes it if needed.
+void GfxPoolFrame(PlayState* play) {
+    namespace gl = royale::gfxlayers;
+    GfxPool& p = gGfxPool;
+    const uint32_t frame = play->state.frames;
+    if (p.started && frame == p.frame) return;
+    if (p.started) {
+        p.usedLast = p.size[p.cur] - p.free.Free();
+        p.peak = std::max(p.usedLast, p.peak - p.peak / 256);   // a slowly falling high-water mark
+        p.overflowLast = p.overflowNow;
+        p.want = gl::NextPoolSize(p.want, p.peak, p.overflowNow);
+    }
+    p.started = true;
+    p.frame = frame;
+    p.overflowNow = false;
+    p.cur ^= 1;
+    if (p.size[p.cur] < p.want) {
+        p.raw[p.cur].reset(new (std::nothrow) uint8_t[p.want + gl::kGuard + gl::kAlign]);
+        if (p.raw[p.cur] == nullptr) { p.base[p.cur] = nullptr; p.size[p.cur] = 0; p.want = p.size[p.cur ^ 1]; }
+        else {
+            p.base[p.cur] = reinterpret_cast<uint8_t*>(gl::AlignUp(reinterpret_cast<uintptr_t>(p.raw[p.cur].get())));
+            p.size[p.cur] = p.want;
+        }
+    }
+    p.free.head = p.base[p.cur];
+    p.free.tail = p.base[p.cur] == nullptr ? nullptr : p.base[p.cur] + p.size[p.cur];
+}
+
+// Bytes left in the opaque (or translucent) buffer being written now: the game's, or the open layer's.
+inline size_t GfxRoomOpa(PlayState* play) {
     const TwoHeadGfxArena& a = play->state.gfxCtx->polyOpa;
-    if (a.d < a.p) return nullptr;
-    const size_t room = static_cast<size_t>(a.d - a.p) * sizeof(Gfx);
-    if (bytes + kReserve > room) return nullptr;
+    return a.d > a.p ? static_cast<size_t>(a.d - a.p) * sizeof(Gfx) : 0;
+}
+inline size_t GfxRoomXlu(PlayState* play) {
+    const TwoHeadGfxArena& a = play->state.gfxCtx->polyXlu;
+    return a.d > a.p ? static_cast<size_t>(a.d - a.p) * sizeof(Gfx) : 0;
+}
+// Is there room for about `cmds` more commands (and `bytes` more data) in both streams? Big loops ask before each piece, so a layer that runs out
+// stops cleanly (missing a few far-off pieces for one frame) instead of writing past its room.
+inline bool GfxHasRoom(PlayState* play, size_t cmds, size_t bytes = 0) {
+    const size_t need = (cmds + 8) * sizeof(Gfx);
+    if (GfxRoomOpa(play) > need + bytes && GfxRoomXlu(play) > need) return true;
+    if (gGfxLayerOpen >= 0) gGfxLayerShort = true;
+    return false;
+}
+
+// Draws everything inside it as one layer (see above). Layers do not nest: one opened inside another just adds to the outer one.
+// `backdrop`: the layer is the sky pass, drawn before the world (both of its streams go to the front of the game's opaque buffer).
+class GfxLayer {
+public:
+    GfxLayer(PlayState* play, GfxLayerId id, bool backdrop = false) : play_(play), id_(static_cast<int>(id)), backdrop_(backdrop) {
+        namespace gl = royale::gfxlayers;
+        if (gGfxLayerOpen >= 0 || play == nullptr) return;
+        GfxPoolFrame(play);
+        GfxPool& p = gGfxPool;
+        if (p.layers[id_].window == 0) p.layers[id_].window = kGfxLayerXluKB[id_] * 1024;
+        plan_ = gl::PlanLayer(p.free, p.layers[id_].window);
+        if (!plan_.ok) { p.overflowNow = true; p.layers[id_].drops++; return; }
+        GraphicsContext* gfx = play->state.gfxCtx;
+        savedOpa_ = gfx->polyOpa;
+        savedXlu_ = gfx->polyXlu;
+        gfx->polyXlu.bufp = gfx->polyXlu.p = reinterpret_cast<Gfx*>(plan_.xlu);
+        gfx->polyXlu.d = reinterpret_cast<Gfx*>(plan_.xluEnd - gl::kEndSlack);
+        gfx->polyXlu.size = static_cast<u32>(plan_.xluEnd - plan_.xlu);
+        gfx->polyOpa.bufp = gfx->polyOpa.p = reinterpret_cast<Gfx*>(plan_.opa);
+        gfx->polyOpa.d = reinterpret_cast<Gfx*>(plan_.data);
+        gfx->polyOpa.size = static_cast<u32>(plan_.data - plan_.opa);
+        gGfxLayerOpen = id_;
+        gGfxLayerShort = false;
+        open_ = true;
+        // A known state to start from, whatever was drawn before.
+        OPEN_DISPS(gfx);
+        gDPPipeSync(POLY_OPA_DISP++);
+        gDPPipeSync(POLY_XLU_DISP++);
+        CLOSE_DISPS(gfx);
+        Gfx_SetupDL_25Opa(gfx);
+        Gfx_SetupDL_25Xlu(gfx);
+        opaFirst_ = gfx->polyOpa.p;
+        xluFirst_ = gfx->polyXlu.p;
+    }
+    ~GfxLayer() {
+        namespace gl = royale::gfxlayers;
+        if (!open_) return;
+        GraphicsContext* gfx = play_->state.gfxCtx;
+        GfxPool& p = gGfxPool;
+        GfxLayerStats& st = p.layers[id_];
+        const bool opaDrawn = gfx->polyOpa.p != opaFirst_, xluDrawn = gfx->polyXlu.p != xluFirst_;
+        const gl::Used used = gl::Measure(plan_, reinterpret_cast<uint8_t*>(gfx->polyXlu.p), reinterpret_cast<uint8_t*>(gfx->polyOpa.p),
+                                          reinterpret_cast<uint8_t*>(gfx->polyOpa.d));
+        Gfx* opaList = reinterpret_cast<Gfx*>(plan_.opa);
+        Gfx* xluList = reinterpret_cast<Gfx*>(plan_.xlu);
+        if (!used.overflowed) {
+            // Leave the state as the game's own drawing expects it, and end both lists (the closing slack is kept free for this).
+            Gfx_SetupDL_25Opa(gfx);
+            Gfx_SetupDL_25Xlu(gfx);
+            OPEN_DISPS(gfx);
+            gDPPipeSync(POLY_OPA_DISP++);
+            gSPEndDisplayList(POLY_OPA_DISP++);
+            gDPPipeSync(POLY_XLU_DISP++);
+            gSPEndDisplayList(POLY_XLU_DISP++);
+            CLOSE_DISPS(gfx);
+        }
+        gfx->polyOpa = savedOpa_;
+        gfx->polyXlu = savedXlu_;
+        gGfxLayerOpen = -1;
+        st.xlu = used.xlu; st.opa = used.opa; st.data = used.data;
+        st.window = gl::NextXluWindow(st.window, used.xlu, used.overflowed, kGfxLayerXluKB[id_] * 1024, gGfxLayerShort);
+        p.free = used.overflowed ? gl::After(plan_, used) : gl::After(plan_, used, opaDrawn, xluDrawn);
+        if (used.overflowed || gGfxLayerShort) { st.drops++; p.overflowNow = true; }   // it gets more room next frame
+        if (used.overflowed) return;                                                 // and is not drawn this one
+        OPEN_DISPS(gfx);
+        if (backdrop_) {
+            if (opaDrawn) gSPDisplayList(POLY_OPA_DISP++, opaList);
+            if (xluDrawn) gSPDisplayList(POLY_OPA_DISP++, xluList);
+        } else {
+            if (opaDrawn) gSPDisplayList(POLY_OPA_DISP++, opaList);
+            if (xluDrawn) gSPDisplayList(POLY_XLU_DISP++, xluList);
+        }
+        CLOSE_DISPS(gfx);
+    }
+    bool Open() const { return open_; }
+    GfxLayer(const GfxLayer&) = delete;
+    GfxLayer& operator=(const GfxLayer&) = delete;
+
+private:
+    PlayState* play_;
+    int id_;
+    bool backdrop_;
+    bool open_ = false;
+    royale::gfxlayers::Plan plan_;
+    TwoHeadGfxArena savedOpa_ = {}, savedXlu_ = {};
+    Gfx* opaFirst_ = nullptr;
+    Gfx* xluFirst_ = nullptr;
+};
+bool gGfxBackdropOpen = false;   // the sky pass is being drawn (no depth test: the world is drawn over it afterwards)
+
+// Per-frame memory (vertices, display lists, matrices) for our drawing. Inside a layer it comes from the layer's own room; outside one, from the back
+// of the pool. Only when the pool is full (it is bigger next frame) does it fall back to the game's buffer, and then only while a generous reserve is
+// left there for the game's own commands; nullptr means skip drawing this piece for one frame.
+inline void* FrameAlloc(PlayState* play, size_t bytes) {
+    if (gGfxLayerOpen >= 0) {
+        if (bytes + 4096 > GfxRoomOpa(play)) return nullptr;
+        return Graph_Alloc(play->state.gfxCtx, bytes);
+    }
+    GfxPoolFrame(play);
+    if (uint8_t* d = royale::gfxlayers::TakeData(gGfxPool.free, bytes, 32 * 1024)) return d;
+    gGfxPool.dataMisses++;
+    gGfxPool.overflowNow = true;
+    constexpr size_t kReserve = 64 * 1024;   // about a third of the game's buffer, kept free for its own commands
+    if (bytes + kReserve > GfxRoomOpa(play)) return nullptr;
     return Graph_Alloc(play->state.gfxCtx, bytes);
 }
 
@@ -2809,6 +3010,7 @@ void TownClutter(const royale::Poi& poi, std::vector<ClutterPiece>& out) {
 }
 
 void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z, float yaw, float tiltX, float tiltZ, float scale) {
+    if (!GfxHasRoom(play, 4, sizeof(Mtx))) return;   // this layer is full: leave the rest out for this frame
     DrawIdentity identity(m, static_cast<int>(std::lround(x * 4.0f)), static_cast<int>(std::lround(z * 4.0f)));
     OPEN_DISPS(play->state.gfxCtx);
     Matrix_Translate(x, y, z, MTXMODE_NEW);
@@ -3013,6 +3215,7 @@ void RefreshFloraWorld(PlayState* play) {
 // Something lying on (possibly gently sloping) ground: stretched `a` along its long axis and `b` across it, `rise` as tall as it is wide, turned by `yaw`.
 // `alpha` < 0 draws it solid, otherwise see-through with that alpha (0-255).
 void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float z, float sx, float sz, float yaw, float a, float rise, float b, int alpha, Gfx* dl = nullptr) {
+    if (!GfxHasRoom(play, 4, sizeof(Mtx))) return;   // this layer is full: leave the rest out for this frame
     DrawIdentity identity(m, static_cast<int>(std::lround(x * 4.0f)), static_cast<int>(std::lround(z * 4.0f)));
     OPEN_DISPS(play->state.gfxCtx);
     if (dl == nullptr) dl = const_cast<Gfx*>(m->dl.data());
@@ -3461,7 +3664,7 @@ void DrawStormWall(PlayState* play) {
 // you fly through them), carried by the wind. Embers glow and rise; sand streaks along the wind. "Weather density" sets how many (0: none).
 void DrawWeatherParticles(PlayState* play) {
     static const char drawKey = 0;
-    DrawIdentity identity(&drawKey, 0, 0);
+    const WorldAnchor anchor(&drawKey, play->view.eye);
     const royale::Sky sky = gWeatherShown.sky;
     if (sky != royale::Sky::Ash && sky != royale::Sky::Sandstorm) return;
     const float amount = WeatherAmount() * gWeatherDensity;
@@ -3484,7 +3687,10 @@ void DrawWeatherParticles(PlayState* play) {
     gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
     gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
-    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);   // the specks are placed around the camera
+    // The specks are placed round the camera, and drawn from the anchor near it (so they hold still in the world between frames).
+    const Vec3f origin = anchor.Origin();
+    const float ox = eye.x - origin.x, oy = eye.y - origin.y, oz = eye.z - origin.z;
+    Matrix_Translate(origin.x, origin.y, origin.z, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     for (int i = 0; i < n; i++) {
         const float h1 = Flora01(i, 7, 201), h2 = Flora01(i, 11, 202), h3 = Flora01(i, 13, 203), depth = 0.6f + 0.8f * Flora01(i, 17, 204);
@@ -3495,6 +3701,7 @@ void DrawWeatherParticles(PlayState* play) {
         float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
         float y = wrap(h3 * kTall - eye.y + rise, kTall) - kTall * 0.5f;
         if (ash) { x += std::sin(t * 0.8f + i) * 25.0f; z += std::cos(t * 0.7f + i * 1.7f) * 25.0f; }
+        x += ox; y += oy; z += oz;
         // Two crossed quads, so the speck looks the same from any side: a small square for ash, a thin streak along the wind for sand.
         float ax, ay, az, bx, by, bz, cx, cy, cz;
         if (ash) {
@@ -3589,8 +3796,12 @@ bool SkyBegin(PlayState* play, const Vec3f* origin = nullptr) {
     const Vec3f eye = origin != nullptr ? *origin : play->view.eye;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
-    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG | G_ZBUFFER);
+    if (gGfxBackdropOpen) gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_XLU_SURF2);   // the sky pass: behind everything, no depth test (see DrawBackdrop)
+    else {
+        gSPSetGeometryMode(POLY_XLU_DISP++, G_ZBUFFER);
+        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    }
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
     // This is a world/camera transform, independent of the dummy actor's transform.
@@ -3627,6 +3838,7 @@ struct DiscSet {
         OPEN_DISPS(play->state.gfxCtx);
         for (int first = 0; first < n; first += 3) {
             const int count = std::min(3, n - first);
+            if (!GfxHasRoom(play, 1 + 8 * count)) break;
             gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[first * 9]), count * 9, 0);
             for (int d = 0; d < count; d++) {
                 const int o = d * 9;
@@ -3699,6 +3911,7 @@ struct SkyBatch {
             int j = i, verts = 0;
             while (j < count && verts + items[j].m->verts <= 32) { verts += items[j].m->verts; j++; }
             if (j == i) { i++; continue; }
+            if (!GfxHasRoom(play, 160)) break;
             gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[items[i].first]), verts, 0);
             int base = 0;
             for (int q = i; q < j; q++) {
@@ -4015,7 +4228,7 @@ void DrawSky(PlayState* play) {
 // and pooled low over water. The game's own distance fog (DriveRealWeather) hazes the far view; these give the near ground its depth.
 void DrawFogBanks(PlayState* play) {
     static const char drawKey = 0;
-    DrawIdentity identity(&drawKey, 0, 0);
+    const WorldAnchor anchor(&drawKey, play->view.eye);
     if (!InField()) return;
     const SkyLight L = SkyLightNow();
     const float w = WeatherAmount();
@@ -4048,7 +4261,9 @@ void DrawFogBanks(PlayState* play) {
     constexpr int kLayers = 3;
     DiscSet fd;
     if (!fd.Init(play, banks * kLayers)) return;
-    if (!SkyBegin(play)) return;
+    const Vec3f origin = anchor.Origin();
+    if (!SkyBegin(play, &origin)) return;
+    const float ox = eye.x - origin.x, oy = eye.y - origin.y, oz = eye.z - origin.z;   // the camera, seen from the anchor
     constexpr float kBox = 5200.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
     for (int i = 0; i < banks; i++) {
@@ -4072,7 +4287,7 @@ void DrawFogBanks(PlayState* play) {
             const float up = static_cast<float>(k) / (kLayers - 1);
             float c[4] = { col[0] * light * (0.82f + 0.18f * up), col[1] * light * (0.82f + 0.18f * up), col[2] * light * (0.82f + 0.18f * up), (40.0f + 60.0f * local) * edge * (1.0f - 0.35f * up) };
             const float rim[3] = { c[0], c[1], c[2] };
-            fd.Add(x, gy - eye.y + 14.0f + k * 55.0f * (0.6f + 0.6f * local), z, width * (1.0f - 0.2f * up), c, rim, 0.0f, i * 4 + k);
+            fd.Add(x + ox, gy - eye.y + oy + 14.0f + k * 55.0f * (0.6f + 0.6f * local), z + oz, width * (1.0f - 0.2f * up), c, rim, 0.0f, i * 4 + k);
         }
     }
     fd.Draw(play);
@@ -4080,7 +4295,8 @@ void DrawFogBanks(PlayState* play) {
 
 // Light effects tied to the sky: shafts of sun (gold at sunrise and sunset) or moon (cool blue) fanning out from the sun or moon, strongest in broken cloud, mist and
 // at the low sun, gone in a storm or heavy overcast; and fireflies that glow and drift near the ground at dusk and through clear nights.
-void DrawSkyLight(PlayState* play) {
+// `shafts`: the shafts (part of the sky pass); `flies`: the fireflies (in the world, near the player).
+void DrawSkyLight(PlayState* play, bool shafts, bool flies) {
     static const char drawKey = 0;
     DrawIdentity identity(&drawKey, 0, 0);
     if (!InField() || !gSkyOot) return;
@@ -4096,7 +4312,7 @@ void DrawSkyLight(PlayState* play) {
     const float broken = std::clamp(0.35f + ov * 1.4f, 0.0f, 1.0f) * (1.0f - std::clamp((ov - 0.55f) * 2.2f, 0.0f, 1.0f));
     amt *= broken * (1.0f + 0.9f * L.twilight) * (gWeatherShown.sky == royale::Sky::Fog ? 1.4f : 1.0f) * (1.0f - 0.9f * std::min(1.0f, gStormWeather * 1.4f));
     amt = std::min(1.0f, amt) * gFogAmount;
-    if (amt > 0.03f) {
+    if (shafts && amt > 0.03f) {
         float dx = std::cos(0.6f) * c, dy = L.sunH, dz = std::sin(0.6f) * c;
         if (!sunUp) { dx = -dx; dy = -dy; dz = -dz; }
         const float h = std::max(0.001f, std::hypot(dx, dz));
@@ -4125,6 +4341,7 @@ void DrawSkyLight(PlayState* play) {
         CLOSE_DISPS(play->state.gfxCtx);
     }
     // Fireflies.
+    if (!flies) return;
     const float ff = std::max(L.twilight * 0.8f, L.night) * (1.0f - std::min(1.0f, ov * 1.5f)) * (1.0f - std::min(1.0f, gStormWeather * 2.0f)) * gFogAmount;
     if (ff < 0.05f) return;
     constexpr int kFlies = 36;
@@ -4152,7 +4369,7 @@ void DrawSkyLight(PlayState* play) {
 // (so a storm's squalls show), which is how you see which way it blows. Ash and sand have their own specks, so those skies skip this.
 void DrawWindParticles(PlayState* play) {
     static const char drawKey = 0;
-    DrawIdentity identity(&drawKey, 0, 0);
+    const WorldAnchor anchor(&drawKey, play->view.eye);
     if (!gWindStreaks || !gWindOn || !InField()) return;
     if (gWeatherShown.sky == royale::Sky::Ash || gWeatherShown.sky == royale::Sky::Sandstorm) return;
     float wx, wz, wind;
@@ -4165,14 +4382,16 @@ void DrawWindParticles(PlayState* play) {
     const float wl = std::max(1.0f, std::hypot(wx, wz)), dx = wx / wl, dz = wz / wl;
     constexpr float kBox = 1500.0f, kHalf = kBox * 0.5f, kTall = 650.0f;
     auto wrap = [](float x, float size) { x = std::fmod(x, size); return x < 0.0f ? x + size : x; };
+    const Vec3f origin = anchor.Origin();
+    const float ox = eye.x - origin.x, oy = eye.y - origin.y, oz = eye.z - origin.z;
     Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(n) * 4 * sizeof(Vtx)));
     if (v == nullptr) return;
     for (int i = 0; i < n; i++) {
         const float h1 = Flora01(i, 31, 301), h2 = Flora01(i, 37, 302), h3 = Flora01(i, 41, 303), depth = 0.6f + 0.8f * Flora01(i, 43, 304);
         const float drift = t * wl * 1.5f * depth;   // streaks outrun the wind a little so the direction reads at a glance
-        const float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf;
-        const float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf;
-        const float y = wrap(h3 * kTall + eye.y * 0.0f, kTall) - kTall * 0.35f + std::sin(t * 1.7f + i) * 14.0f;
+        const float x = wrap(h1 * kBox - eye.x + dx * drift, kBox) - kHalf + ox;   // (from the anchor, see below)
+        const float z = wrap(h2 * kBox - eye.z + dz * drift, kBox) - kHalf + oz;
+        const float y = wrap(h3 * kTall + eye.y * 0.0f, kTall) - kTall * 0.35f + std::sin(t * 1.7f + i) * 14.0f + oy;
         const float len = (30.0f + 120.0f * wind) * depth, th = 1.8f * depth;
         const float fade = std::clamp(std::min(wrap(drift * 0.001f + h1, 1.0f), 1.0f - wrap(drift * 0.001f + h1, 1.0f)) * 5.0f, 0.0f, 1.0f);
         const u8 a = static_cast<u8>(std::clamp((55.0f + 110.0f * wind) * fade * (0.6f + 0.4f * depth), 0.0f, 220.0f));
@@ -4192,7 +4411,7 @@ void DrawWindParticles(PlayState* play) {
     gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
     gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
-    Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
+    Matrix_Translate(origin.x, origin.y, origin.z, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     for (int first = 0; first < n; first += 8) {   // eight streaks (32 vertices) at a time
         const int count = std::min(8, n - first);
@@ -4628,28 +4847,53 @@ void DrawHeldFinds(PlayState* play) {
 }
 
 void DrawWater(PlayState* play);   // the water section, further down
+
+// The sky pass. patches/0022 calls this from the game's Play_Draw right after its own skybox and before the scene, so the sky is drawn behind
+// everything, like the game's skybox: without a depth test, and the world drawn over it afterwards. (Drawn with the world it had to be depth tested
+// at its 7000-unit radius, where the depth buffer is coarse: far hills and the dome fought over the same pixels and the horizon shimmered, and
+// anything further than the dome was painted over.) The same frame's Projectile_Draw then knows the sky is done.
+}   // namespace
+extern "C" void (*gRoyaleBackdropDraw)(PlayState* play);   // patches/0022 (z_play.c)
+namespace {
+uint32_t gBackdropFrame = UINT32_MAX;
+void DrawBackdrop(PlayState* play) {
+    if (play == nullptr || play != gPlayState || !InField() || !DebugOn(kDbgSky)) return;
+    Feat("draw: sky");
+    GfxLayer layer(play, GfxLayerId::Sky, true);
+    if (!layer.Open()) return;   // no room in the pool this frame: Projectile_Draw draws the sky with the world instead
+    gBackdropFrame = play->state.frames;
+    gGfxBackdropOpen = true;
+    DrawSky(play);
+    DrawSkyLight(play, true, false);
+    gGfxBackdropOpen = false;
+}
+
+// Every effect in the world, each as its own layer (see "graphics layers"), always in this order. Solid things first; then the see-through ones from
+// the ground up and from far to near, since see-through surfaces do not hide each other: whatever is drawn later lies on top.
 void Projectile_Draw(Actor*, PlayState* play) {
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
-    Feat("draw: sky");
-    if (DebugOn(kDbgSky)) DrawSky(play);
-    Feat("draw: fog banks");
-    if (DebugOn(kDbgFog)) DrawFogBanks(play);
-    if (DebugOn(kDbgSky)) DrawSkyLight(play);
-    Feat("draw: foliage");
-    if (DebugOn(kDbgFoliage)) DrawFlora(play);
-    Feat("draw: island scenery");
-    if (DebugOn(kDbgScenery)) DrawIslandScenery(play);
-    Feat("draw: ground patches");
-    if (DebugOn(kDbgGroundPatches)) DrawGroundPatches(play);
-    Feat("draw: storm wall");
-    if (DebugOn(kDbgStormWall)) DrawStormWall(play);
-    Feat("draw: weather particles");
-    if (DebugOn(kDbgWeather)) DrawWeatherParticles(play);
-    Feat("draw: wind streaks");
-    if (DebugOn(kDbgWind)) DrawWindParticles(play);
-    Feat("draw: tornado");
-    if (DebugOn(kDbgTornado)) DrawTornado(play);
-    DrawWater(play);
+    if (DebugOn(kDbgSky) && gBackdropFrame != play->state.frames) {   // no sky pass this frame (a game without patches/0022): drawn with the world
+        Feat("draw: sky");
+        GfxLayer layer(play, GfxLayerId::Sky);
+        DrawSky(play);
+        DrawSkyLight(play, true, false);
+    }
+    if (DebugOn(kDbgFoliage)) { Feat("draw: foliage"); GfxLayer layer(play, GfxLayerId::Foliage); DrawFlora(play); }
+    if (DebugOn(kDbgScenery)) { Feat("draw: island scenery"); GfxLayer layer(play, GfxLayerId::Scenery); DrawIslandScenery(play); }
+    if (DebugOn(kDbgGroundPatches)) { Feat("draw: ground patches"); GfxLayer layer(play, GfxLayerId::Ground); DrawGroundPatches(play); }
+    if (DebugOn(kDbgWater)) { GfxLayer layer(play, GfxLayerId::Water); DrawWater(play); }
+    else DrawWater(play);   // (switched off: it only forgets its state)
+    if (DebugOn(kDbgStormWall)) { Feat("draw: storm wall"); GfxLayer layer(play, GfxLayerId::Storm); DrawStormWall(play); }
+    if (DebugOn(kDbgFog)) { Feat("draw: fog banks"); GfxLayer layer(play, GfxLayerId::Fog); DrawFogBanks(play); }
+    if (DebugOn(kDbgSky)) { Feat("draw: fireflies"); GfxLayer layer(play, GfxLayerId::Fireflies); DrawSkyLight(play, false, true); }
+    if (DebugOn(kDbgTornado)) { Feat("draw: tornado"); GfxLayer layer(play, GfxLayerId::Tornado); DrawTornado(play); }
+    if (DebugOn(kDbgWeather)) { Feat("draw: weather particles"); GfxLayer layer(play, GfxLayerId::Weather); DrawWeatherParticles(play); }
+    if (DebugOn(kDbgWind)) { Feat("draw: wind streaks"); GfxLayer layer(play, GfxLayerId::Wind); DrawWindParticles(play); }
+    {   // how much room our layers left in the game's own buffers (the Graphics page shows it)
+        const GraphicsContext* gfx = play->state.gfxCtx;
+        gGfxPool.gameOpaLeft = gfx->polyOpa.d > gfx->polyOpa.p ? static_cast<size_t>(gfx->polyOpa.d - gfx->polyOpa.p) * sizeof(Gfx) : 0;
+        gGfxPool.gameXluLeft = gfx->polyXlu.d > gfx->polyXlu.p ? static_cast<size_t>(gfx->polyXlu.d - gfx->polyXlu.p) * sizeof(Gfx) : 0;
+    }
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
@@ -11324,6 +11568,7 @@ constexpr float kLiloPetScale = 0.4f;   // the model stands about 50 units tall 
 constexpr float kLiloMapScale = 0.5f;
 
 void DrawLiloModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::lilo::Pose& pose, int eyes) {
+    GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace L = royale::lilo;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
     Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * L::kVertCount));
@@ -11838,6 +12083,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
 constexpr float kBabyScale = 0.62f;   // the model stands about 64 units tall at 1.0 (sitting about 54 with her tuft, crawling about 50); Link is about 60, so standing she comes up to about two thirds of him
 
 void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::avriella::Pose& pose, int face) {
+    GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace A = royale::avriella;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
     Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
@@ -11892,6 +12138,7 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
 
 
 void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::maya::Pose& pose, int face) {
+    GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace A = royale::maya;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
     Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
@@ -12085,6 +12332,7 @@ ToyXf ToyTurn(float rx, float ry, float rz, float tx, float ty, float tz) {   //
 
 // Draws a toy standing at (x, y, z) turned `yaw`, at `scale` (the same scale as Avriella herself).
 void DrawToy(PlayState* play, const ToyModel& model, float x, float y, float z, float yaw, float scale, const ToyPose& pose) {
+    GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace T = royale::avriella_toys;
     if (model.partCount > kToyMaxParts || scale < 0.01f) return;
     constexpr float kSub = 8.0f;
@@ -13964,6 +14212,7 @@ void OnSceneInit(int16_t) {
 
 void RegisterRoyaleMod() {
     InstallCrashReporter();
+    gRoyaleBackdropDraw = DrawBackdrop;   // the sky pass, behind the world (see DrawBackdrop)
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
@@ -15319,6 +15568,32 @@ void DrawGraphicsUi() {
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
         GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
         ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, busy cleaner wrasse and hermit crabs sifting the sand.");
+    }
+    if (ImGui::CollapsingHeader("Graphics memory (layers)")) {
+        // What the graphics layers (see "graphics layers") use. Read-only: the pool sizes itself. "Left out" counts frames a layer did not fit
+        // (it got more room the next frame); it should stay at or near zero.
+        const GfxPool& p = gGfxPool;
+        ImGui::TextWrapped("Every effect draws as its own layer with its own memory, so one busy effect can no longer push the others (or the whole frame) out.");
+        ImGui::Text("Layer memory: %zu KB used last frame, %zu KB per frame reserved (grows when needed, up to %zu KB)", p.usedLast / 1024,
+                    p.size[p.cur] / 1024, royale::gfxlayers::kPoolMax / 1024);
+        ImGui::Text("Game's own buffers left after our layers: solid %zu KB, see-through %zu KB", p.gameOpaLeft / 1024, p.gameXluLeft / 1024);
+        if (p.dataMisses > 0) ImGui::TextColored(kGrey, "Pieces that had to use the game's buffer: %u", p.dataMisses);
+        if (ImGui::BeginTable("gfxlayers", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Layer");
+            ImGui::TableSetupColumn("Solid KB");
+            ImGui::TableSetupColumn("See-through KB");
+            ImGui::TableSetupColumn("Left out");
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < kGfxLayerCount; i++) {
+                const GfxLayerStats& st = p.layers[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(kGfxLayerNames[i]);
+                ImGui::TableNextColumn(); ImGui::Text("%.1f", (st.opa + st.data) / 1024.0f);
+                ImGui::TableNextColumn(); ImGui::Text("%.1f", st.xlu / 1024.0f);
+                ImGui::TableNextColumn(); ImGui::Text("%u", st.drops);
+            }
+            ImGui::EndTable();
+        }
     }
     ImGui::Spacing();
 }
