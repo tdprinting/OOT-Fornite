@@ -110,6 +110,15 @@ struct Mesh {
 
 inline int16_t Round16(float v) { return static_cast<int16_t>(std::lround(std::clamp(v, -32000.0f, 32000.0f))); }
 
+// Stone blocks built into the collision itself, so they are ground like the rest of the map (Link stands, walks and climbs on them, with nothing that
+// can be rebuilt under his feet). The climbing blocks of a match go here; the host's game fills it in before the scene loads its collision.
+struct Block {
+    float x, z, half, bottom, top;   // a square footprint, `half` out from the middle, from `bottom` up to the flat `top`
+    bool operator==(const Block& o) const { return x == o.x && z == o.z && half == o.half && bottom == o.bottom && top == o.top; }
+};
+inline std::vector<Block> gBlocks;
+constexpr int kMaxBlocks = 480;   // the game's 13-bit vertex numbers (8191) leave room for this many 8-corner boxes after the 4225 of the ground
+
 // The collision triangles. The game keeps vertex numbers in 13 bits (8191), and 65 x 65 vertices is 4225, so they all fit.
 inline Mesh BuildCollision() {
     Mesh m;
@@ -152,6 +161,37 @@ inline Mesh BuildCollision() {
             add(v00, v10, v11);
             add(v00, v11, v01);
         }
+    // The blocks: a flat top and four vertical sides each (no underside: the ground is there). Normals are given, not worked out from the winding.
+    auto addFace = [&](int a, int b, int c, double nx, double ny, double nz) {
+        const Vert& P = m.verts[a];
+        Poly p;
+        p.a = static_cast<uint16_t>(a); p.b = static_cast<uint16_t>(b); p.c = static_cast<uint16_t>(c);
+        p.nx = static_cast<int16_t>(std::lround(nx * 32767.0)); p.ny = static_cast<int16_t>(std::lround(ny * 32767.0)); p.nz = static_cast<int16_t>(std::lround(nz * 32767.0));
+        p.dist = static_cast<int16_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
+        m.polys.push_back(p);
+    };
+    int made = 0;
+    for (const Block& bl : gBlocks) {
+        if (made++ >= kMaxBlocks) break;
+        const int first = static_cast<int>(m.verts.size());
+        for (int k = 0; k < 8; k++) {   // bit 0: +x, bit 1: +z, bit 2: top
+            const Vert v = { Round16(bl.x + ((k & 1) ? bl.half : -bl.half)), Round16((k & 4) ? bl.top : bl.bottom), Round16(bl.z + ((k & 2) ? bl.half : -bl.half)) };
+            m.verts.push_back(v);
+            m.lo = { std::min(m.lo.x, v.x), std::min(m.lo.y, v.y), std::min(m.lo.z, v.z) };
+            m.hi = { std::max(m.hi.x, v.x), std::max(m.hi.y, v.y), std::max(m.hi.z, v.z) };
+        }
+        auto V = [&](int dx, int dz, int up) { return first + dx + 2 * dz + 4 * up; };
+        addFace(V(0, 0, 1), V(1, 0, 1), V(1, 1, 1), 0, 1, 0);          // top
+        addFace(V(0, 0, 1), V(1, 1, 1), V(0, 1, 1), 0, 1, 0);
+        addFace(V(1, 0, 0), V(1, 1, 0), V(1, 1, 1), 1, 0, 0);          // +x side
+        addFace(V(1, 0, 0), V(1, 1, 1), V(1, 0, 1), 1, 0, 0);
+        addFace(V(0, 1, 0), V(0, 0, 0), V(0, 0, 1), -1, 0, 0);         // -x side
+        addFace(V(0, 1, 0), V(0, 0, 1), V(0, 1, 1), -1, 0, 0);
+        addFace(V(1, 1, 0), V(0, 1, 0), V(0, 1, 1), 0, 0, 1);          // +z side
+        addFace(V(1, 1, 0), V(0, 1, 1), V(1, 1, 1), 0, 0, 1);
+        addFace(V(0, 0, 0), V(1, 0, 0), V(1, 0, 1), 0, 0, -1);         // -z side
+        addFace(V(0, 0, 0), V(1, 0, 1), V(0, 0, 1), 0, 0, -1);
+    }
     return m;
 }
 

@@ -671,6 +671,7 @@ s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "sol
 // On the Fortnite map the scene's ground is the island's own triangles (shared/fortnite_map.h), so its height, slope and water are worked out
 // directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
 bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
+bool BlocksAreBaked();   // the climbing blocks are in the island's collision (see "WantedBlocks")
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
@@ -9420,7 +9421,7 @@ bool BuildSolidMesh(float x, float z, bool force) {
     std::vector<Cand> near;
     for (size_t i = 0; i < props.size(); i++) {
         const royale::Prop& p = props[i];
-        if (!IsSolidKind(p.kind) || gBrokenProps.count(i)) continue;
+        if (!IsSolidKind(p.kind) || gBrokenProps.count(i) || (royale::IsPlatform(p.kind) && BlocksAreBaked())) continue;   // baked blocks are ground already
         const float d = std::hypot(p.pos.x - x, p.pos.z - z);
         if (d > kSolidRadius) continue;
         auto pa = gProps.find(i);   // a rock someone has picked up and carried off is not where its footprint is any more
@@ -10504,6 +10505,33 @@ int FortniteActorId() {
     return id;
 }
 
+// The climbing blocks of this match as part of the island's own collision (shared/fortnite_map.h, Block): the same footprint, foot and top the moving
+// collision used to give them, but static ground. Standing on moving-object collision made Link hover and slide (it is rebuilt as the nearest scenery
+// changes), so on the island maps the blocks live in the scene's collision, which only changes when the scene loads. Convergence has its own authored props.
+std::vector<royale::fortnite::Block> WantedBlocks() {
+    namespace fn = royale::fortnite;
+    std::vector<fn::Block> out;
+    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || gMapId == royale::kConvergenceMapIndex) return out;
+    const float half = royale::kPlatformHalf;
+    for (const royale::Prop& p : gSession.Client()->Props()) {
+        if (!royale::IsPlatform(p.kind) || static_cast<int>(out.size()) >= fn::kMaxBlocks) continue;
+        float mid = 0, low = 0;
+        if (!fn::GroundHeight(p.pos.x, p.pos.z, &mid)) continue;
+        low = mid;
+        bool ok = true;
+        for (int k = 0; k < 4 && ok; k++) {   // the lowest ground under the footprint, so a block on a slope reaches down to the low side
+            float y = 0;
+            ok = fn::GroundHeight(p.pos.x + (k & 1 ? 1 : -1) * half, p.pos.z + (k & 2 ? 1 : -1) * half, &y);
+            low = std::min(low, y);
+        }
+        if (!ok) continue;
+        out.push_back({ p.pos.x, p.pos.z, half, low - 20.0f, mid + royale::PlatformHeight(p.kind) });
+    }
+    return out;
+}
+// True on an island map once its blocks are in the collision: the moving collision and the old step-up code leave them alone.
+bool BlocksAreBaked() { return gFortniteScene && !royale::fortnite::gBlocks.empty(); }
+
 // Called every frame: the island is drawn while we are in a scene loaded with its collision; the player is put on it once on arrival (the scene
 // puts Link at the field's door, which is somewhere inside or under the island); and a lobby that changes between the field and the island
 // reloads the scene, since the collision is chosen when the scene loads.
@@ -10522,6 +10550,13 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         return;
     }
     if (!onIsland) { gFortniteArrived = false; return; }
+    // The match's blocks are known only once the host has laid the map out; the collision is chosen as the scene loads, so load it again once (before the drop)
+    // if they are not in it yet. `tried` stops a second reload for the same set.
+    if (gPlayState->transitionTrigger == TRANS_TRIGGER_OFF && !gSkydiving && (hud.state == royale::MatchState::Lobby || hud.state == royale::MatchState::Countdown)) {
+        static std::vector<royale::fortnite::Block> tried;
+        const std::vector<royale::fortnite::Block> want = WantedBlocks();
+        if (!(want == royale::fortnite::gBlocks) && !(want == tried)) { tried = want; Trace("blocks: loading the map again with the climbing blocks in it"); GoToField(); return; }
+    }
     if (gFortniteArrived || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF) return;
     gFortniteArrived = true;
     // A little scatter, so a lobby's players don't all stand in one spot. Only in the lobby: once the match is on, the skydive places everyone.
@@ -10539,7 +10574,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
 }
 
 void ApplyPlatforms(Player* player) {
-    if (!InField() || SolidActive()) return;
+    if (!InField() || SolidActive() || BlocksAreBaked()) return;
     RefreshPlatforms();
     if (gPlatformIdx.empty()) return;
     const auto& props = gSession.Client()->Props();
@@ -14756,6 +14791,9 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>([](void* actorRef, bool* should) {
         if (!OnIsland()) return;
         Actor* a = (Actor*)actorRef;
+        // The field's own rocks, bushes, chests and items start up while the scene loads (its first frames); ours are spawned later. Left alone they
+        // sat at the old field's spots, unseen but still solid and still smashable, so they are refused too.
+        if ((a->id == ACTOR_EN_ISHI || a->id == ACTOR_EN_KUSA || a->id == ACTOR_EN_BOX || a->id == ACTOR_EN_ITEM00) && gPlayState->gameplayFrames < 3 && gSpawningPuppet == 0 && !gSpawningLoot) { *should = false; return; }
         if (a->id >= ACTOR_ID_MAX || a->id == ACTOR_PLAYER || a->id == ACTOR_EN_OE2 || a->id == ACTOR_EN_ISHI || a->id == ACTOR_EN_KUSA ||
             a->id == ACTOR_EN_ITEM00 || a->id == ACTOR_EN_BOX || a->id == ACTOR_OBJECT_KANKYO) return;
         switch (a->category) {
@@ -16240,6 +16278,10 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
         gFortniteSandbox = sandbox;
         gFortniteBuilt = false;
         gFortniteGpu.built = false;
+    }
+    {   // the match's climbing blocks go into the ground itself
+        const std::vector<royale::fortnite::Block> want = WantedBlocks();
+        if (!(want == royale::fortnite::gBlocks)) { royale::fortnite::gBlocks = want; gFortniteBuilt = false; }
     }
     return FortniteHeader();
 }

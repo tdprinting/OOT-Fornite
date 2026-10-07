@@ -6,6 +6,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
+#include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
 #include "../shared/storm.h"
@@ -211,14 +212,23 @@ class Match {
     void SetPlacementValidator(PlacementFn fn) { placement = std::move(fn); }
     // Chests for the buildings and caves (see shared/poi.h), on top of the scattered ones.
     void SetLootSpots(std::vector<Vec2> spots) { lootSpots = std::move(spots); }
+    // How many of the chests RegenerateLoot made are scattered ones (the rest are the towns' and the climbs'); they come first in Loot().
+    size_t ScatteredLoot() const { return loot.size() - (std::min)(loot.size(), lootSpots.size() + chestSites.size()); }
     // Chests on climbs and in hideaways (see shared/poi.h): better loot, further apart.
     void SetChestSites(std::vector<ChestSite> sites) { chestSites = std::move(sites); }
+    // Where the scattered chests may go (shared/placement.h): at camps, boulders, thickets, cliffs and the map's own scenery, on level ground. Without a
+    // plan (the unit tests' bare matches) they fall back to random points on valid ground.
+    void SetLootPlan(LootPlan plan) { lootPlan = std::make_shared<LootPlan>(std::move(plan)); }
     void RegenerateLoot(int count, float chestFraction = 0.15f) {
         loot.clear();
         // The scattered chests keep their distance from every building, climb and hideaway chest and from each other.
         std::vector<Vec2> taken = lootSpots;
         for (const ChestSite& s : chestSites) taken.push_back(s.pos);
-        for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
+        if (lootPlan) {
+            for (const LootSpawn& l : GenerateAnchoredLoot(seed, *lootPlan, count * 7 / 10, chestFraction, &taken, (std::max)(450.0f, map.radius * 0.08f))) loot.push_back({l, false});
+        } else {
+            for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
+        }
         for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
         Rng siteRng(seed ^ 0x73697465ull); // "site"
         const size_t firstSite = loot.size();
@@ -2806,6 +2816,7 @@ class Match {
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;
+    std::shared_ptr<LootPlan> lootPlan;
     bool supplyDrops = true;
     WeatherOptions wopt;
     Weather weather;
