@@ -68,12 +68,14 @@ bool SocialPet_Update(Actor* actor, PlayState* play, int pet) {
         auto& c=gMayaCompanion;c.expressionClock+=dt;c.speed=moving ? speed : 0;
         int clip=moving ? royale::maya::kWalk : attentive ? royale::maya::kWave :
             phase==P::Activity::Chase ? royale::maya::kPoint : phase==P::Activity::Drawing ? royale::maya::kDraw :
-            phase==P::Activity::Celebrate ? royale::maya::kCheer : royale::maya::kFidget;
+            phase==P::Activity::Celebrate ? royale::maya::kCheer : phase==P::Activity::Rest ? royale::maya::kSit : royale::maya::kFidget;
         // A one-shot ends in a relaxed pose rather than freezing an outstretched arm.
         if(!royale::maya::InfoOf(clip).loops && c.anim.clip==clip && c.anim.time>=royale::maya::ClipSeconds(clip)) clip=royale::maya::kFidget;
         if(c.anim.clip==royale::maya::kFidget && c.anim.time<2.0f && clip!=royale::maya::kWalk) clip=royale::maya::kFidget;
         if(clip!=c.anim.clip && clip==royale::maya::kCheer) PlayMayaVoice(royale::maya_snd::kHappy);
-        c.anim.Play(clip,.35f);c.anim.Update(dt);
+        c.anim.Play(clip,clip==royale::maya::kSit || c.anim.clip==royale::maya::kSit ? .8f : .35f);
+        // Walk at the clip's own stride so her feet plant.
+        c.anim.Update(dt,clip==royale::maya::kWalk ? std::clamp(speed/royale::maya::kWalkStride*royale::maya::ClipSeconds(royale::maya::kWalk),.35f,2.0f) : 1.0f);
     }
     actor->shape.rot.y=static_cast<s16>(*yaw*(32768.0f/3.14159265f));
     actor->focus.pos=pos;actor->focus.pos.y+=pet==0 ? 16 : pet==1 ? 25 : royale::maya::kFocusHeight;

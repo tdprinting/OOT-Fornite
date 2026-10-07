@@ -170,6 +170,9 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
 }
 
 // Author-defined expression beats, plus independent half/closed/half blinks.
+// Ground covered per walk/run cycle (game units at kWorldScale), from the clips' leg swing; the game plays them at speed/stride so feet do not skate.
+constexpr float kWalkStride = 37.7f;
+constexpr float kRunStride = 54.7f;
 constexpr float kWorldScale = .41f; // about 56 units tall; young Link is about 60.
 constexpr float kFocusHeight = 49.2f;
 inline int Expression(int clip, float seconds, float clock) {

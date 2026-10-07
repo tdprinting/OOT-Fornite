@@ -47,7 +47,7 @@ def finish(o,bone,mat,region=None):
     for v in o.data.vertices: v.co=mw@v.co
     o.location=(0,0,0); o.rotation_euler=(0,0,0)
     o.data.materials.append(mat)
-    for poly in o.data.polygons: poly.use_smooth = ('hair' not in o.name and 'fringe' not in o.name and 'ponytail' not in o.name and 'pizza' not in o.name)
+    for poly in o.data.polygons: poly.use_smooth = ('hair' not in o.name and 'fringe' not in o.name and 'bangs' not in o.name and 'pizza' not in o.name)
     o.vertex_groups.new(name=bone).add(list(range(len(o.data.vertices))),1,'REPLACE')
     if region:
         for uv in o.data.uv_layers.active.data:
@@ -141,15 +141,39 @@ def build():
             for bn,weight in w.items():o.vertex_groups[bn].add([vi],weight,'REPLACE')
         parts.append(o)
     upper_body()
-    for i in range(3):cone('skirt ruffle',(0,0,.62+i*.053),.19-i*.012,.15-i*.006,.09,'pelvis',sm,blue)
+    def skirt():
+        # One smooth two-tier skirt. Hem verts follow the nearer leg so it swings and flares as she steps.
+        rings=[(.715,.118,.090),(.655,.140,.104),(.595,.158,.116),(.568,.170,.124),(.545,.185,.136),(.505,.196,.144),(.475,.198,.146)]
+        follow=[0,.04,.10,.16,.26,.38,.44];n=14;verts=[];faces=[];wts=[]
+        for (z,rx,ry),f in zip(rings,follow):
+            for j in range(n):
+                a=2*math.pi*j/n;x=rx*math.sin(a);verts.append((x,-ry*math.cos(a)+.004,z))
+                side=1 if x>=0 else -1;k=f*min(1,abs(x)/(rx*.9))
+                wts.append({'pelvis':1-k,'leg'+('L' if side==1 else 'R'):k} if k>.01 else {'pelvis':1})
+        for r in range(len(rings)-1):
+            for j in range(n):
+                a=r*n+j;b=r*n+(j+1)%n;faces.append((a,b,b+n,a+n))
+        faces.append(tuple(reversed(range(n))))
+        me=bpy.data.meshes.new('skirt');me.from_pydata(verts,[],faces);uv=me.uv_layers.new()
+        for poly in me.polygons:
+            for li in poly.loop_indices:
+                vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%n/n,vi//n/(len(rings)-1))
+        o=bpy.data.objects.new('skirt',me);bpy.context.collection.objects.link(o);finish(o,'pelvis',sm,blue)
+        o.vertex_groups.clear()
+        for bn in ('pelvis','legL','legR'):o.vertex_groups.new(name=bn)
+        for vi,w in enumerate(wts):
+            for bn,wt in w.items():o.vertex_groups[bn].add([vi],wt,'REPLACE')
+    skirt()
     body('neck',[(1.06,.035,.032,0,0),(1.145,.037,.035,0,0)],'torso',sm,s,8)
     profile=(-.97,-.78,-.50,-.14,.25,.60,.86,.97)
     body('head',[(1.235+.133*t,.107*math.sqrt(1-t*t)*(1+.065*math.exp(-((t+.35)/.3)**2)),.095*math.sqrt(1-t*t),0,-.012) for t in profile],'head',sm,s,12)
-    ball('hair cap',(0,.008,1.296),(.113,.098,.09),'head',sm,h)
-    ball('ponytail',(0,.12,1.275),(.052,.054,.13),'ponytail',sm,h)
+    ball('hair cap',(0,.014,1.292),(.116,.106,.098),'head',sm,h)
+    # Ponytail: a tapered hanging tuft in two weighted segments (ponytail, ponytail2) so it whips instead of swinging stiff.
+    body('ponytail',[(1.318,.032,.036,0,.108),(1.275,.048,.052,0,.128),(1.215,.055,.055,0,.150),(1.15,.046,.046,0,.162),(1.095,.030,.030,0,.162),(1.06,.010,.010,0,.160)],'ponytail',sm,h,8,
+         [{'ponytail':1},{'ponytail':1},{'ponytail':.6,'ponytail2':.4},{'ponytail2':1},{'ponytail2':1},{'ponytail2':1}])
     for side in (-1,1):
         ball('ear',(side*.106,0,1.235),(.016,.018,.028),'head',sm,s)
-        ball('side fringe',(side*.10,-.065,1.245),(.021,.021,.085),'head',sm,h)
+        ball('side fringe',(side*.107,-.032,1.262),(.012,.030,.050),'head',sm,h)
     verts=[];quads=[]
     for row in range(7):
         lat=-.80+row*.24
@@ -164,6 +188,21 @@ def build():
         for li in poly.loop_indices:
             vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%9/8,vi//9/6)
     o=bpy.data.objects.new('face',me);bpy.context.collection.objects.link(o);finish(o,'head',fm)
+    verts=[];quads=[]
+    for row in range(4):
+        lat=.60+row*.17
+        for col in range(9):
+            lon=-1.12+col*(2.24/8)
+            lift=.004+.011*abs(math.sin(col*1.7))*(1 if row==0 else 0)   # a soft, uneven fringe edge
+            verts.append(((.110+.010)*math.sin(lon)*math.cos(lat),-.012-(.097+.010)*math.cos(lon)*math.cos(lat)-lift,1.235+(.137+.010)*math.sin(lat)-(.014*abs(math.sin(col*1.3+1)) if row==0 else 0)))
+    for row in range(3):
+        for col in range(8):
+            i=row*9+col;quads.append((i,i+1,i+10,i+9))
+    me=bpy.data.meshes.new('bangs');me.from_pydata(verts,[],quads);uv=me.uv_layers.new()
+    for poly in me.polygons:
+        for li in poly.loop_indices:
+            vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%9/8,vi//9/3)
+    o=bpy.data.objects.new('bangs',me);bpy.context.collection.objects.link(o);finish(o,'head',sm,h)
     ball('nose',(0,-.106,1.22),(.013,.018,.019),'head',sm,s)
     for side,label in ((-1,'R'),(1,'L')):
         x=side*.078
@@ -201,7 +240,7 @@ def build():
     bpy.context.view_layer.objects.active=parts[0];bpy.ops.object.join(); mesh=bpy.context.object;mesh.name='Maya'
     ad=bpy.data.armatures.new('MayaRig');rig=bpy.data.objects.new('MayaRig',ad);bpy.context.collection.objects.link(rig)
     bpy.context.view_layer.objects.active=rig;mesh.select_set(False);rig.select_set(True);bpy.ops.object.mode_set(mode='EDIT')
-    anchors={'root':(0,0,0),'pelvis':(0,0,.66),'torso':(0,0,.77),'head':(0,0,1.12),'ponytail':(0,.085,1.29),'legL':(.078,0,.66),'legR':(-.078,0,.66),'shinL':(.078,0,.35),'shinR':(-.078,0,.35),'footL':(.078,0,.07),'footR':(-.078,0,.07),'armL':(.145,0,1.04),'armR':(-.145,0,1.04),'forearmL':(.201,0,.884),'forearmR':(-.201,0,.884),'handL':(.206,0,.723),'handR':(-.206,0,.723)}
+    anchors={'root':(0,0,0),'pelvis':(0,0,.66),'torso':(0,0,.77),'head':(0,0,1.12),'ponytail':(0,.085,1.29),'ponytail2':(0,.15,1.19),'legL':(.078,0,.66),'legR':(-.078,0,.66),'shinL':(.078,0,.35),'shinR':(-.078,0,.35),'footL':(.078,0,.07),'footR':(-.078,0,.07),'armL':(.145,0,1.04),'armR':(-.145,0,1.04),'forearmL':(.201,0,.884),'forearmR':(-.201,0,.884),'handL':(.206,0,.723),'handR':(-.206,0,.723)}
     anchors.update({'indexR':(-.188,-.006,.685),'curlR':(-.206,-.006,.685)})
     anchors.update({n:(0,0,0) for n in ('tablet','draw','pizza','scooter','learn','pencil','tablet_cursor')})
     anchors.update({'wheelF':(0,-.21,.06),'wheelR':(0,.21,.06)})
@@ -212,6 +251,7 @@ def build():
         elif n in ('torso','legL','legR'):parent='pelvis'
         elif n=='head' or n.startswith('arm'):parent='torso'
         elif n=='ponytail':parent='head'
+        elif n=='ponytail2':parent='ponytail'
         elif n.startswith('shin'):parent='leg'+n[-1]
         elif n.startswith('foot'):parent='shin'+n[-1]
         elif n.startswith('forearm'):parent='arm'+n[-1]

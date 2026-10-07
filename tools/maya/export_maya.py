@@ -172,7 +172,7 @@ def main():
     o.append("")
     o.append("inline constexpr int8_t kBoneParents[kBoneCount] = { %s };" % ", ".join(str(bone_index[b.parent.name]) if b.parent else "-1" for b in rig.data.bones))
     o.append("inline constexpr float kBoneHeads[kBoneCount][3] = { %s };" % ", ".join("{%.4ff, %.4ff, %.4ff}" % tuple(to_game(b.head_local)*SCALE) for b in rig.data.bones))
-    links={"forearmL","forearmR","handL","handR","shinL","shinR","footL","footR","ponytail","indexR","curlR"}
+    links={"forearmL","forearmR","handL","handR","shinL","shinR","footL","footR","ponytail","ponytail2","indexR","curlR"}
     o.append("inline constexpr bool kKeepJointLink[kBoneCount] = { %s };" % ", ".join("true" if n in links else "false" for n in bones))
     o.append("// A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).")
     o.append("struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };")

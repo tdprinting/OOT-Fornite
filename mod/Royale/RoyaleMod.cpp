@@ -12796,7 +12796,7 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.18f;
         const bool scooter = distance > 260.0f;
         const bool running = distance > 185.0f;
-        const float desired = scooter ? 240.0f : running ? 150.0f : 95.0f;
+        const float desired = scooter ? 240.0f : running ? 130.0f : 62.0f;
         c.speed += std::clamp(desired-c.speed,-260.0f*dt,180.0f*dt);
         const float step = std::min(distance - 90.0f, c.speed * dt);
         float nx = actor->world.pos.x + dx / distance * step;
@@ -12822,14 +12822,16 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         const int hobbyClip=hobbies[c.hobby];
         const float duration=M::InfoOf(hobbyClip).loops ? M::ClipSeconds(hobbyClip)+.4f : M::ClipSeconds(hobbyClip)+.3f;
         if (!talking && c.hobbyTime > duration) { c.hobby = (c.hobby + 1) % 8; c.hobbyTime = 0; }
-        clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+        // Hobbies first; after a long wait she sits down, and after a longer one she nods off hugging her knees.
+        clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 45 ? M::kSleep : c.still > 24 ? M::kSit : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
     if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
     if (!c.greeted && c.greeting>0) c.greeted=PlayMayaVoice(royale::maya_snd::kHappy);
     if (talking && !c.voiceReplyPlayed) c.voiceReplyPlayed=PlayMayaVoice(c.line>=10 ? royale::maya_snd::kHappy : royale::maya_snd::kPlayful,true);
     if (clip!=c.anim.clip && (clip==M::kCheer || clip==M::kHop || clip==M::kGiggle)) PlayMayaVoice(royale::maya_snd::kHappy);
-    c.anim.Play(clip,.35f);
-    const float rate=clip==M::kWalk ? std::clamp(c.speed/65.0f,.55f,1.8f) : clip==M::kRun ? std::clamp(c.speed/130.0f,.7f,1.5f) : 1.0f;
+    c.anim.Play(clip,(clip==M::kSit || clip==M::kSleep || c.anim.clip==M::kSit || c.anim.clip==M::kSleep) ? .8f : .35f);
+    // Cycles per second that match the ground speed to the stride, so her feet plant instead of skating.
+    const float rate=clip==M::kWalk ? std::clamp(c.speed/M::kWalkStride*M::ClipSeconds(M::kWalk),.35f,2.0f) : clip==M::kRun ? std::clamp(c.speed/M::kRunStride*M::ClipSeconds(M::kRun),.6f,2.1f) : 1.0f;
     c.anim.Update(dt,rate);
     c.yaw=std::atan2(std::sin(c.yaw),std::cos(c.yaw));
     actor->shape.rot.y = static_cast<s16>(static_cast<int32_t>(c.yaw * (32768.0f / 3.14159265f)));

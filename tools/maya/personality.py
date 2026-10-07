@@ -8,7 +8,7 @@ from mathutils import Euler, Vector, Quaternion, Matrix
 sys.path.insert(0,os.path.join(os.path.dirname(__file__),'../lilo'))
 import build_lilo as B
 FACES=('smile','half','shut','giggle','oh','talk','focus','wink')
-CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.2,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False)]]
+CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.0,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False),('sit',6.4,True),('sleep',6.0,True)]]
 TAU=2*math.pi
 mix=B.mix
 
@@ -85,6 +85,8 @@ def face_for(name,t,T):
     if name in ('draw','learn'):return 'focus' if t<T*.68 else 'smile'
     if name=='pizza':return 'talk' if 2.2<t<3.1 and int(t*8)%2 else 'smile'
     if name=='point':return 'oh' if .7<t<1.7 else 'smile'
+    if name=='sleep':return 'half' if 2.1<t<2.3 else 'shut'
+    if name=='sit':return 'half' if 4.4<t<4.65 else 'giggle' if 2.5<t<3.2 else 'smile'
     return 'smile'
 
 def animate(rig,name,t,T):
@@ -99,29 +101,84 @@ def animate(rig,name,t,T):
     # Breathing, wrist relaxation and a trailing ponytail persist through every activity.
     rot('torso',x=.012*math.sin(ph));rot('head',z=.055*math.sin(ph+.2))
     rot('handL',x=.07,y=-.06);rot('handR',x=.05,y=.08)
-    rot('ponytail',x=.10*math.sin(ph-.45),y=.04*math.sin(ph*2-.7))
+    rot('ponytail',x=.10*math.sin(ph-.45),y=.04*math.sin(ph*2-.7));rot('ponytail2',x=.12*math.sin(ph-1.1),y=.05*math.sin(ph*2-1.3))
     if name in ('walk','run'):
-        fast=name=='run';amp=.56 if fast else .34
-        move('root',(0,0,(.018 if fast else .008)*(1-math.cos(ph*2))))
-        rot('pelvis',y=.035*math.sin(ph),z=.055*math.sin(ph))
-        rot('torso',x=.10 if fast else .018,z=-.065*math.sin(ph+.2))
-        rot('head',x=-.05 if fast else -.018,z=.045*math.sin(ph+.45))
+        fast=name=='run';amp=.60 if fast else .40
+        def smoother(v):return smooth(max(0,min(1,v)))
+        legs={}
         for label,sign in (('L',1),('R',-1)):
-            swing=math.sin(ph+(0 if sign==1 else math.pi))
-            rot('leg'+label,x=amp*swing,y=sign*.025)
-            knee=.65*max(0,-math.sin(ph+(0 if sign==1 else math.pi)-.3)) if fast else .34*max(0,-swing)
-            rot('shin'+label,x=knee)
-            rot('foot'+label,x=-.13*max(0,swing)-knee*.3)
-            rot('arm'+label,x=-amp*.62*swing*(1 if sign==1 else .86),y=-sign*.06)
-            rot('forearm'+label,x=-.7 if fast else -.15-.09*max(0,swing))
-            rot('hand'+label,z=.09*math.sin(ph-.3)*sign)
-        rot('ponytail',x=.20*math.sin(ph*2-.65),y=.10*math.sin(ph-.6))
+            a=(ph+(0 if sign==1 else math.pi))%TAU          # leg angle sin(a): + is back, so a in (-pi/2, pi/2) is stance
+            th=amp*math.sin(a)
+            g=((a+math.pi/2)%TAU)/math.pi                     # 0..1 across stance, 1..2 across swing
+            swing_flex=(1.45 if fast else .62)*max(0,-math.cos(a))**1.25
+            load=(.30 if fast else .10)*max(0,math.sin(smoother(g/.5)*math.pi))*(1 if g<1 else 0)
+            flex=swing_flex+load
+            # Foot pitch (toes down +): heel strike, flat, heel-off roll, then toes lifted to clear the ground.
+            if g<1:P=-.22*(1-smoother(g/.22))+(.62 if fast else .55)*smoother((g-.58)/.42)
+            else:P=((.62 if fast else .55)+((.28 if fast else -.18)-(.62 if fast else .55))*smoother((g-1)/.5)) if g<1.5 else ((.28 if fast else -.18)+(-.05 if fast else -.06)*smoother((g-1.5)/.5))
+            legs[label]=(th,flex,P-th-flex,math.sin(a))
+        bob=(.030 if fast else .009)
+        sway_x=0 if fast else .006*math.sin(ph);move('root',(sway_x,0,0))
+        rot('pelvis',y=(.05 if fast else .045)*math.sin(ph),z=(.09 if fast else .07)*math.sin(ph))
+        rot('torso',x=.15 if fast else .02,y=-.03*math.sin(ph),z=-(.11 if fast else .08)*math.sin(ph+.1))
+        rot('head',x=-.10 if fast else -.03,y=.025*math.sin(ph),z=.07*math.sin(ph+.3)+.0*math.sin(ph*2))
+        for label,sign in (('L',1),('R',-1)):
+            th,flex,f,sn=legs[label]
+            rot('leg'+label,x=th,y=sign*(.03 if fast else .02));rot('shin'+label,x=flex);rot('foot'+label,x=f)
+            arm=math.sin(ph+(0 if sign==1 else math.pi)-.25)    # arm opposite to its leg, a touch behind it
+            rot('arm'+label,x=-(.85 if fast else .38)*arm,y=-sign*(.07 if fast else .05),z=sign*.02)
+            rot('forearm'+label,x=-((.90+.30*max(0,arm)) if fast else (.20+.28*max(0,arm))))
+            rot('hand'+label,z=.07*math.sin(ph-.3)*sign,x=.06)
+        lag=1.0 if fast else .6
+        rot('ponytail',x=(.22 if fast else .12)+(.20 if fast else .10)*math.sin(ph*2-.9),y=.10*lag*math.sin(ph-.5))
+        rot('ponytail2',x=(.34 if fast else .16)*math.sin(ph*2-1.7),y=.15*lag*math.sin(ph-1.1))
+        # Plant the lowest foot on the floor, so the body bob comes from the legs; runs add a short flight at full stride.
+        bpy.context.view_layer.update()
+        low=1e9
+        for label,sx in (('L',.078),('R',-.078)):
+            pb=rig.pose.bones['foot'+label];m=pb.matrix@rig.data.bones[pb.name].matrix_local.inverted()
+            for pt in ((sx,-.085,.017),(sx,.035,.025)):low=min(low,(m@Vector(pt)).z)
+        flight=.032*max(0,-math.cos(2*ph)) if fast else 0
+        move('root',(sway_x,0,.0-low+.017+flight))
+    elif name=='sit':
+        sway=math.sin(ph)
+        move('root',(0,0,-.505+.004*math.sin(ph*3)))
+        rot('pelvis',x=-.04)
+        rot('torso',x=.10-.03*math.sin(ph*3),z=.07*sway)
+        look=env(t,1.2,1.7,2.3,2.8)-env(t,3.6,4.1,4.9,5.4)
+        rot('head',x=-.04-.05*env(t,1.4,1.8,2.2,2.6),z=.34*look,y=.03*sway)
+        for label,sign in (('L',1),('R',-1)):
+            kick=(.10*math.sin(ph*3+(0 if sign==1 else math.pi)))*env(t,.5,.9,5.0,5.8)
+            rot('leg'+label,x=-1.50+kick*.6,y=-sign*.16)
+            rot('shin'+label,x=.10+max(0,kick)*1.0)
+            rot('foot'+label,x=.20-kick*.5)
+            rot('arm'+label,x=-.30,y=-sign*.28,z=sign*.06);rot('forearm'+label,x=-.40);rot('hand'+label,x=.05)
+        rot('ponytail',x=.18+.04*math.sin(ph*2),y=.05*math.sin(ph));rot('ponytail2',x=.08*math.sin(ph*2-1))
+    elif name=='sleep':
+        breathe=math.sin(ph*3)
+        move('root',(0,0,-.495+.006*breathe))
+        rot('pelvis',x=-.06)
+        rot('torso',x=.45+.025*breathe,z=.03*math.sin(ph))
+        rot('head',x=.70+.03*breathe,y=.10,z=.05*math.sin(ph))
+        for label,sign in (('L',1),('R',-1)):
+            rot('leg'+label,x=-1.95,y=-sign*.10)
+            rot('shin'+label,x=1.95-.02*breathe)
+            rot('foot'+label,x=.35)
+            rot('arm'+label,x=-.80,y=sign*.10,z=-sign*.14);rot('forearm'+label,x=-.45,y=sign*.25);rot('hand'+label,x=-.05)
+        rot('ponytail',x=.35+.03*breathe);rot('ponytail2',x=.12*breathe)
     elif name in ('idle','fidget'):
-        shift=.015*math.sin(ph)
-        move('pelvis',(shift,0,0));rot('pelvis',y=.035*math.sin(ph))
+        shift=math.sin(ph)                  # slow weight shift from one hip to the other
+        breathe=math.sin(ph*3)
+        move('root',(.012*shift,0,-.006*(1-math.cos(ph*2))))
+        rot('pelvis',y=.045*shift,z=.025*math.sin(ph-.5))
+        rot('legL',x=.02+.05*max(0,shift),y=.02);rot('legR',x=.02+.05*max(0,-shift),y=-.02)
+        rot('shinL',x=.05*max(0,shift));rot('shinR',x=.05*max(0,-shift))
+        rot('footL',x=-.02-.05*max(0,shift));rot('footR',x=-.02-.05*max(0,-shift))
         look=env(t,.5,1.1,2.4,3.0)
-        rot('head',x=.025*math.sin(ph*2),y=-.045*math.sin(ph),z=.28*look-.18*env(t,3.3,3.8,4.5,5.2))
-        rot('torso',y=-.018*math.sin(ph),z=.04*math.sin(ph-.2))
+        rot('torso',x=.015*breathe,y=-.035*shift,z=.035*math.sin(ph-.2))
+        rot('head',x=.03*breathe-.01,y=-.04*shift,z=.28*look-.18*env(t,3.3,3.8,4.5,5.2))
+        for label,sign in (('L',1),('R',-1)):
+            rot('arm'+label,x=.03+.04*math.sin(ph*3+sign),y=sign*.07+.02*shift,z=sign*.02);rot('forearm'+label,x=-.12-.03*breathe)
         if name=='fidget':
             toe=env(t,.7,1.0,2.2,2.7)*(.5+.5*math.sin(t*10))
             rot('footR',x=-.13*toe);rot('shinR',x=.12*toe)

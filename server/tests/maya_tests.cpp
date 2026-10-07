@@ -10,7 +10,7 @@
 #define assert(expr) do { if (!(expr)) { std::cerr << "Maya validation failed: " << #expr << " at " << __LINE__ << "\n"; std::exit(1); } } while (0)
 int main() {
     namespace M = royale::maya;
-    static_assert(M::kClipCount==15 && M::kFaceCount==8);
+    static_assert(M::kClipCount==17 && M::kFaceCount==8);
     assert(royale::kMayaCompanionLineCount==14);
     for (const auto& batch:M::kBatches) {
         assert(batch.vertCount>0 && batch.vertCount<=32);
@@ -54,6 +54,20 @@ int main() {
         int peak=0;for(int i=0;i<clip.count;i++)peak=std::max(peak,std::abs(static_cast<int>(clip.data[i])));
         assert(peak>20000 && peak<=24576);
     }
+    // Feet never sink into the floor while she walks or runs, and sitting lowers her.
+    for(int clip:{(int)M::kWalk,(int)M::kRun}) {
+        float lowest=1e9f;
+        for(int f=0;f<M::kClips[clip].frames;f++) {M::Pose p;M::SampleClip(clip,f/M::kClips[clip].fps,p);
+            for(const auto& v:M::kVerts) if(!M::kBoneIsProp[v.b0]) {float pos[3],n[3];M::SkinVertex(p,v,pos,n);lowest=std::min(lowest,pos[1]);}}
+        assert(lowest>-1.5f);
+    }
+    for(int clip:{(int)M::kSit,(int)M::kSleep}) {
+        M::Pose p;M::SampleClip(clip,1.0f,p);float lo=1e9f,hi=-1e9f;
+        for(const auto& v:M::kVerts) if(!M::kBoneIsProp[v.b0]) {float pos[3],n[3];M::SkinVertex(p,v,pos,n);lo=std::min(lo,pos[1]);hi=std::max(hi,pos[1]);}
+        assert(lo>-6.0f && hi*M::kWorldScale<45.0f);   // seated: above the floor, well under her standing height
+    }
+    // Stride constants match the clips: a cycle's planted foot travels about one stride.
+    assert(M::kWalkStride>20 && M::kRunStride>M::kWalkStride);
     // Every hobby reveals exactly its own prop; walking parks all five.
     const int clips[]={M::kTablet,M::kDraw,M::kPizza,M::kScooter,M::kLearn};
     const char* names[]={"tablet","draw","pizza","scooter","learn"};
@@ -106,5 +120,5 @@ int main() {
     }
     M::Animator a;a.Play(M::kTablet);a.Update(.1f);a.Play(M::kWalk);a.Update(.1f);M::Pose p;a.Evaluate(p);
     for(const auto& bone:p.bone)for(float q:bone.q)assert(std::isfinite(q));
-    std::cout<<"Maya: all batches, rig transforms, fifteen clips, child scale and expressions, prop visibility and transitions passed\n";
+    std::cout<<"Maya: all batches, rig transforms, all seventeen clips, child scale and expressions, prop visibility and transitions passed\n";
 }
