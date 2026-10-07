@@ -3581,7 +3581,9 @@ bool SkyBegin(PlayState* play, const Vec3f* origin = nullptr) {
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     Matrix_Translate(eye.x, eye.y, eye.z, MTXMODE_NEW);
     // This is a world/camera transform, independent of the dummy actor's transform.
-    gSPMatrix(POLY_XLU_DISP++, Matrix_MtxFToMtx(Matrix_GetCurrent(), matrix), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    MtxF worldMatrix;
+    Matrix_Get(&worldMatrix);
+    gSPMatrix(POLY_XLU_DISP++, Matrix_MtxFToMtx(&worldMatrix, matrix), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     CLOSE_DISPS(play->state.gfxCtx);
     return true;
 }
