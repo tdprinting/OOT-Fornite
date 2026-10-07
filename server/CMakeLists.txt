@@ -38,3 +38,7 @@ target_link_libraries(royale_balance royale_net)
 add_executable(royale_graphics_tests tests/graphics_tests.cpp)
 target_link_libraries(royale_graphics_tests PRIVATE royale_core)
 add_test(NAME royale_graphics_tests COMMAND royale_graphics_tests)
+
+add_executable(royale_graphics_layers_tests tests/graphics_layers_tests.cpp)
+target_link_libraries(royale_graphics_layers_tests PRIVATE royale_core)
+add_test(NAME royale_graphics_layers_tests COMMAND royale_graphics_layers_tests)
