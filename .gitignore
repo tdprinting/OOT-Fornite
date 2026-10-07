@@ -25,3 +25,13 @@ assets/fish/previews/
 
 # Local graphics validation build
 build-graphics-tests/
+# Maya authoring backups and local validation
+assets/maya/*.blend1
+assets/maya/*-preview.png
+/maya-tests.exe
+/maya-tests.obj
+/game-tests.exe
+/game-tests.obj
+/create_maya.py
+/tools/maya/test_maya.cmd
+/tools/maya/check_all.cmd

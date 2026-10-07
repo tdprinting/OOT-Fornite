@@ -15,13 +15,17 @@
 #include "avriella_toys.h"
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
+#include "maya_anim.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
+#include "convergence_layout.h"
+#include "convergence_model.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
 #include "lobby_fish_model.h"
+#include "lobby_reef_geometry.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -274,7 +278,7 @@ const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 // (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
 bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
-           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || (gMapId == royale::kSandboxMapIndex) == gFortniteSandbox)));
+           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || gMapId == royale::fortnite::gTerrainMapId)));
 }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
@@ -464,6 +468,11 @@ bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
+    if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
+        return true;
+    }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
     Vec3f pos = { x, 4000.0f, z };
     for (int tries = 0; tries < 6; tries++) {
@@ -583,6 +592,7 @@ bool HazardFloorAt(float x, float z) {
 }
 
 bool WalkableAt(royale::Vec2 p) {
+    if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -591,9 +601,9 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex) {   // the test map is a fixed arena: no measuring
+    if (gMapId == royale::kSandboxMapIndex || gMapId == royale::kConvergenceMapIndex) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
@@ -2612,6 +2622,9 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     Matrix_RotateY(yaw * (3.14159265f / 32768.0f), MTXMODE_APPLY);
     Matrix_RotateZ(roll + std::sin(t * 3.1f + scheme) * 0.04f, MTXMODE_APPLY);               // gentle sway in the wind
     Matrix_RotateX((diving ? 0.5f : 0.1f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.025f, MTXMODE_APPLY); // nose down for a dive
+    // Smaller than the model, and flatter so the wing sits just over his head with short struts: it hangs on his hands, not high above him.
+    // The scale is about the bar, so the grips stay in his hands (the live cloth wing is drawn in this same space, so it shrinks with the frame).
+    Matrix_Scale(0.7f * size, 0.58f * size, 0.7f * size, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
@@ -5254,8 +5267,8 @@ ImTextureID FortniteMinimapTexture() {
     static int texId = -1;
     static ImTextureID tex = nullptr;
     static int triedFor = -1;   // which ground the picture was made from (the island's or the Sandbox's)
-    if (triedFor != (royale::fortnite::gSandboxTerrain ? 1 : 0)) {
-        triedFor = royale::fortnite::gSandboxTerrain ? 1 : 0;
+    if (triedFor != royale::fortnite::gTerrainMapId) {
+        triedFor = royale::fortnite::gTerrainMapId;
         constexpr int n = royale::fortnite::kFine + 1;
         std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; i++) {
@@ -9671,6 +9684,55 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
 void FortniteTerrain_Update(Actor*, PlayState*) {}
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
+// Authored structures use the same geometry as the Blender source and scene collision.
+// Persistent buffers keep display-list pointers valid; spatial batches limit draw cost.
+void DrawConvergenceStructures(PlayState* play) {
+    if (royale::fortnite::gTerrainMapId != royale::kConvergenceMapIndex) return;
+    namespace cv = royale::convergence;
+    static std::vector<Vtx> vertices;
+    static std::vector<std::vector<Gfx>> lists;
+    if (vertices.empty()) {
+        vertices.resize(sizeof(cv::kDrawVertices)/sizeof(cv::kDrawVertices[0]));
+        for (size_t i=0;i<vertices.size();++i) {
+            const auto& v=cv::kDrawVertices[i];auto& dst=vertices[i].v;
+            dst.ob[0]=v.x;dst.ob[1]=v.y;dst.ob[2]=v.z;dst.flag=0;
+            dst.tc[0]=v.s;dst.tc[1]=v.t;
+            dst.cn[0]=v.r;dst.cn[1]=v.g;dst.cn[2]=v.b;dst.cn[3]=255;
+        }
+        lists.resize(sizeof(cv::kBatches)/sizeof(cv::kBatches[0]));
+        for (size_t i=0;i<lists.size();++i) {
+            const auto& batch=cv::kBatches[i];auto& dl=lists[i];
+            dl.resize(batch.count/3 + batch.count/30 + 3);Gfx* p=dl.data();
+            for (uint32_t first=0;first<batch.count;first+=30) {
+                const int n=static_cast<int>(std::min<uint32_t>(30,batch.count-first));
+                gSPVertex(p++,reinterpret_cast<uintptr_t>(&vertices[batch.first+first]),n,0);
+                for (int t=0;t<n;t+=3) gSP1Triangle(p++,t,t+1,t+2,0);
+            }
+            gSPEndDisplayList(p++);dl.resize(static_cast<size_t>(p-dl.data()));
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0,0,0,MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++,MATRIX_NEWMTX(play->state.gfxCtx),G_MTX_NOPUSH|G_MTX_LOAD|G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++,G_LIGHTING|G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++,0xFFFF,0xFFFF,0,G_TX_RENDERTILE,G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++,G_CC_MODULATEIDECALA,G_CC_PASS2);
+    int loaded=-1;
+    for (size_t i=0;i<lists.size();++i) {
+        const auto& batch=cv::kBatches[i];
+        if (std::hypot(play->view.eye.x-batch.x,play->view.eye.z-batch.z)>6500.0f) continue;
+        if (loaded!=batch.texture) {
+            gDPLoadTextureBlock(POLY_OPA_DISP++,cv::kTextures[batch.texture],G_IM_FMT_RGBA,G_IM_SIZ_16b,32,32,0,
+                G_TX_WRAP|G_TX_NOMIRROR,G_TX_WRAP|G_TX_NOMIRROR,5,5,G_TX_NOLOD,G_TX_NOLOD);
+            loaded=batch.texture;
+        }
+        gSPDisplayList(POLY_OPA_DISP++,lists[i].data());
+    }
+    gSPTexture(POLY_OPA_DISP++,0,0,0,G_TX_RENDERTILE,G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -9717,6 +9779,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
         }
     }
     CLOSE_DISPS(play->state.gfxCtx);
+    DrawConvergenceStructures(play);
 }
 
 int FortniteActorId() {
@@ -9751,7 +9814,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         gFortniteActor = nullptr;
     }
     if (!gSession.Joined()) return;
-    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && gFortniteSandbox != (gMapId == royale::kSandboxMapIndex)))) {
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && royale::fortnite::gTerrainMapId != gMapId))) {
         GoToField();   // the host changed the map: load the scene again with the right ground
         return;
     }
@@ -11094,6 +11157,7 @@ void DriveStormAlerts(const royale::HudState& hud) {
 constexpr u16 kTextLilo = 0x7F00;       // Lilo sitting on the map
 constexpr u16 kTextLiloPet = 0x7F01;    // Lilo the pet: 0x7F01 onwards, one per line in royale::kLiloPetLines
 constexpr u16 kTextMaya = 0x7F10;
+constexpr u16 kTextMayaCompanion = 0x7F60;
 constexpr u16 kTextSign = 0x7F20;
 constexpr u16 kTextAvriellaPet = 0x7F30;   // Avriella the baby pet: 0x7F30 onwards, one per line in royale::kAvriellaPetLines
 static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= 0x7FFF, "Avriella's lines run past the Royale text ids");
@@ -11109,6 +11173,8 @@ void RegisterRoyaleMessages() {
         cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextLiloPet + i), CustomMessage(royale::kLiloPetLines[i]));
     for (int i = 0; i < royale::kAvriellaPetLineCount; i++)
         cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextAvriellaPet + i), CustomMessage(royale::kAvriellaPetLines[i]));
+    for (int i=0; i<royale::kMayaCompanionLineCount; ++i)
+        cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextMayaCompanion+i), CustomMessage(royale::kMayaCompanionLines[i]));
     cm->CreateMessage("RoyaleMod", kTextMaya, CustomMessage(royale::kMayaGreeting));
     cm->CreateMessage("RoyaleMod", kTextSign, CustomMessage(royale::kMapSignText, TEXTBOX_TYPE_WOODEN));
     gRoyaleMessagesMade = true;
@@ -11734,7 +11800,7 @@ void Cat_Draw(Actor* actor, PlayState* play) {
 void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
 
 // Which pet follows you when the pet option is on: 0 Lilo the cat, 1 Avriella the baby (picked in the "Your pet" section of the menu).
-int PetKind() { return CVarGetInteger(CVAR_SETTING("Royale.PetKind"), 0) == 1 ? 1 : 0; }
+int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"), 0), 0, 2); }
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
@@ -11824,6 +11890,144 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::maya::Pose& pose, int face) {
+    namespace A = royale::maya;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
+    if (vtx == nullptr) return;
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for Lilo
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < A::kVertCount; i++) {
+        const A::Vert& v = A::kVerts[i];
+        float p[3], n[3];
+        A::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.55f + 0.55f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(245.0f * lit);
+        o.v.cn[3] = 255;
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours; she is seen from all sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // her texture times the vertex colour
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const int pic = std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1);
+    int loaded = -1;
+    for (int b = 0; b < A::kBatchCount; b++) {
+        const A::Batch& bt = A::kBatches[b];
+        // Hobby props parked below the floor are omitted, even beside cliffs.
+        const int bone = A::kVerts[bt.firstVert].b0;
+        if (A::kBoneIsProp[bone] && pose.bone[bone].t[1] < -100.0f) continue;
+        const int tex = bt.texture == A::kFace ? 2 + pic : static_cast<int>(bt.texture);   // 0 cloth, 1 skin, 2 and up the faces
+        if (tex != loaded) {
+            const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : A::kFaceTex[tex - 2];
+            const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : A::kFaceH;
+            gDPLoadTextureBlock(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0, A::kTris[t + 1][0], A::kTris[t + 1][1], A::kTris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+
+
+// Maya is a local cosmetic companion. Original mesh/rig: tools/maya/.
+struct MayaCompanionState {
+    Actor* actor = nullptr;
+    royale::maya::Animator anim;
+    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0;
+    int line = 0, hobby = 0;
+    bool talking = false;
+};
+MayaCompanionState gMayaCompanion;
+
+static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= kTextMayaCompanion, "Companion text overlap");
+static_assert(kTextMayaCompanion + royale::kMayaCompanionLineCount <= 0x7FFF, "Maya text overflow");
+void MayaCompanion_Update(Actor* actor, PlayState* play) {
+    namespace M = royale::maya;
+    auto& c = gMayaCompanion;
+    Player* player = GET_PLAYER(play);
+    const float dt = 1.0f / royale::kTickHz;
+    const auto& pp = player->actor.world.pos;
+    float dx = pp.x - actor->world.pos.x, dz = pp.z - actor->world.pos.z;
+    float distance = std::hypot(dx, dz);
+    bool talking = TalkingTo(actor);
+    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 5; c.hobbyTime = 0; }
+    c.talking = talking;
+    int clip = M::kIdle;
+    if (distance > 115.0f && !talking) {
+        c.still = 0; c.hobbyTime = 0;
+        const float yaw = std::atan2(dx, dz);
+        c.yaw = yaw;
+        const bool scooter = distance > 260.0f;
+        const bool running = distance > 185.0f;
+        const float step = std::min(distance - 90.0f, (scooter ? 250.0f : running ? 190.0f : 130.0f) * dt);
+        float nx = actor->world.pos.x + dx / distance * step;
+        float nz = actor->world.pos.z + dz / distance * step;
+        float floor = 0;
+        if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+            actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor; c.blockedTime = 0;
+        } else {
+            c.blockedTime += dt;
+            if (distance > 700.0f || c.blockedTime > 2.5f || std::fabs(pp.y-actor->world.pos.y)>170.0f) {
+            // Catch up on a valid nearby floor after a climb or teleport.
+            nx = pp.x - std::sin(yaw)*90; nz = pp.z - std::cos(yaw)*90;
+            if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
+            }
+        }
+        clip = scooter ? M::kScooter : running ? M::kRun : M::kWalk;
+    } else {
+        c.still += dt; c.hobbyTime += dt;
+        c.yaw = std::atan2(dx,dz);
+        static constexpr int hobbies[] = {M::kTablet,M::kDraw,M::kPizza,M::kLearn,M::kCheer};
+        if (c.hobbyTime > 8) { c.hobby = (c.hobby + 1) % 5; c.hobbyTime = 0; }
+        clip = talking ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+    }
+    if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
+    c.anim.Play(clip); c.anim.Update(dt);
+    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
+    actor->focus.pos = actor->world.pos; actor->focus.pos.y += 90;
+}
+void MayaCompanion_Draw(Actor* actor, PlayState* play) {
+    royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
+    const int face = std::fmod(gMayaCompanion.anim.time,3.7f)<.12f ? royale::maya::kFaceShut : royale::maya::kFaceSmile;
+    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,.72f,pose,face);
+}
+void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
+void ReconcileMayaCompanion(const royale::HudState& hud) {
+    const bool want = DebugOn(kDbgAllies) && MapOption("LiloPet",false) && PetKind()==2 && gSession.Joined() &&
+        (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
+    if (!want) { if (gMayaCompanion.actor) Actor_Kill(gMayaCompanion.actor); gMayaCompanion = MayaCompanionState{}; return; }
+    if (gMayaCompanion.actor) return;
+    Player* player=GET_PLAYER(gPlayState);
+    const auto& p=player->actor.world.pos;
+    float y; const float x=p.x+70, z=p.z+45;
+    if (!FloorAt(x,z,&y)) return;
+    Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
+    if (!a) return;
+    a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=18;
+    gMayaCompanion = MayaCompanionState{}; gMayaCompanion.actor=a;
+}
 
 // ---- Avriella's toys: a stuffed Bluey, a little television and a laptop ----------------------------------------------------------------
 // Made in Blender (tools/avriella/build_toys.py, assets/avriella/toys.blend; the plush is about 1300 triangles, the TV about 600, the laptop about 400, all with tiny
@@ -13409,7 +13613,13 @@ bool SignNear() {
 
 // A next to Lilo, Maya or the sign when the game did not already start the talk itself: open the same text box directly.
 void PressedATalk() {
-    if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
+    Player* player = GET_PLAYER(gPlayState);
+    Actor* companion = gMayaCompanion.actor;
+    if (companion && std::fabs(player->linearVelocity) < 3.0f &&
+        std::hypot(player->actor.world.pos.x-companion->world.pos.x, player->actor.world.pos.z-companion->world.pos.z) < 140.0f) {
+        if (StartTalk(companion, static_cast<u16>(kTextMayaCompanion+gMayaCompanion.line))) gMayaCompanion.talking=true;
+    }
+    else if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
     else if (LiloNear()) { if (StartTalk(gLiloActor, kTextLilo)) TalkToLilo(); }
     else if (SignNear()) StartTalk(gSignActor, kTextSign);
 }
@@ -13658,6 +13868,7 @@ void OnGameFrameUpdate() {
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
     Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    Feat("Maya companion"); ReconcileMayaCompanion(hud);
     Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
     Feat("lobby reef aquarium"); ReconcileLobbyReef();
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
@@ -13726,6 +13937,7 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
+    gMayaCompanion = MayaCompanionState{};
     gActorOf.clear();
     gPlaying.clear();
     gMotion.clear();
@@ -13864,7 +14076,6 @@ struct UiState {
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
-    bool showCustomize = false;
     bool loaded = false;
     bool showPosition = false;
     std::string error;
@@ -13893,7 +14104,8 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = std::min(royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0)), royale::kPlayableMapCount - 1);   // the Sandbox is never a lobby map
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), 0);
+        if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
         ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
@@ -13997,59 +14209,74 @@ const char* CleanName(const char* name) {
 // Truth or Saria's Song is active.
 // The pet: Lilo the cat or Avriella the baby follows you around. Only for looks: it changes nothing in the match, and only you see it.
 void DrawPetOptions() {
-    if (!ImGui::CollapsingHeader("Your pet: Lilo or Avriella")) return;
+    if (!ImGui::CollapsingHeader("Pets")) return;
     bool on = MapOption("LiloPet", false);
-    if (ImGui::Checkbox("A pet follows me around (only for looks: it changes nothing in the match, and only you see it)", &on)) {
+    if (ImGui::Checkbox("Show my companion pet", &on)) {
         CVarSetInteger(CVAR_SETTING("Royale.LiloPet"), on ? 1 : 0);
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
+    ImGui::TextWrapped("Your pet is cosmetic and visible only to you.");
     int kind = PetKind();
     bool changed = ImGui::RadioButton("Lilo the cat", &kind, 0);
     ImGui::SameLine();
     changed |= ImGui::RadioButton("Avriella the baby", &kind, 1);
+    ImGui::SameLine();
+    changed |= ImGui::RadioButton("Maya", &kind, 2);
     if (changed) {
         CVarSetInteger(CVAR_SETTING("Royale.PetKind"), kind);
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
-    if (kind == 1)
+    if (kind == 2)
+        ImGui::TextWrapped("Maya walks after you and rides her electric scooter to catch up. She plays on her tablet, draws, enjoys pizza and reads when you stop. Face her and press A to talk and see her next hobby.");
+    else if (kind == 1)
         ImGui::TextWrapped("Avriella rolls after you (she cannot crawl yet), sits when you stop, and smiles a lot, kicks her legs, chews on tiny rocks, waves, claps, babbles, giggles, "
                            "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
     else
         ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
+    if (!DebugOn(kDbgAllies) && kind == 2) ImGui::TextColored(kRed, "Maya is switched off with Allies in the Debug section.");
     if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");
 }
 
 void DrawMinimapOptions() {
-    struct Opt { const char* key; const char* label; bool fallback; };
+    struct Opt { const char* key; const char* label; bool fallback; int category; };
     static const Opt opts[] = {
-        { "MapPlayers", "Show other players on the minimap", true },
-        { "MapBots", "Show bots on the minimap", true },
-        { "MapEnemies", "Show mini bosses (enemies) on the minimap", true },
-        { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true },
-        { "HeldGlowSelf", "Glow on your own weapon too", false },
-        { "LobbyMusic", "Play songs from the music folder in the lobby", true },
-        { "OotConvert", "Play the music folder's songs with Ocarina of Time's own instruments (each song is converted once, in the background; off means your songs play as they are)", false },
-        { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true },
+        { "MapPlayers", "Show other players on the minimap", true, 0 },
+        { "MapBots", "Show bots on the minimap", true, 0 },
+        { "MapEnemies", "Show mini bosses (enemies) on the minimap", true, 0 },
+        { "HeldGlow", "Glow on other players' weapons, coloured by rarity", true, 1 },
+        { "HeldGlowSelf", "Glow on your own weapon too", false, 1 },
+        { "LobbyMusic", "Play songs from the music folder in the lobby", true, 2 },
+        { "OotConvert", "Use Ocarina of Time instruments", false, 2 },
+        { "LiloCat", "Lilo the cat (an Easter egg) sits somewhere on the map", true, 1 },
     };
-    if (!ImGui::CollapsingHeader("Minimap and game options")) return;
-    for (const Opt& o : opts) {
-        bool on = MapOption(o.key, o.fallback);
-        if (ImGui::Checkbox(o.label, &on)) {
-            char key[64];
-            std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), o.key);
-            CVarSetInteger(key, on ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    static const char* categories[] = { "Minimap", "Weapon effects and Easter eggs", "Music" };
+    for (int category = 0; category < 3; category++) {
+        if (!ImGui::CollapsingHeader(categories[category])) continue;
+        for (const Opt& o : opts) {
+            if (o.category != category) continue;
+            bool on = MapOption(o.key, o.fallback);
+            if (ImGui::Checkbox(o.label, &on)) {
+                char key[64];
+                std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), o.key);
+                CVarSetInteger(key, on ? 1 : 0);
+                Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+            }
         }
+        if (category == 0) ImGui::TextWrapped("Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
+        if (category != 2) continue;
+        ImGui::TextWrapped("Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
+        Trace("options: opened");
+        if (gLobbyMusic.status.empty()) ImGui::TextColored(kGrey, "Press Rescan to look for songs.");   // not scanned for you: opening this section stays light
+        else ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
+        if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
+        if (ImGui::Button("Rescan music folder")) gScanRequested = true;
     }
-    ImGui::TextColored(kGrey, "Only players near you are known; a Lens of Truth or Saria's Song shows everyone for a while.");
-    ImGui::TextColored(kGrey, "Lobby songs: put 16-bit PCM .wav files in this folder (made for you now), then press Rescan.");
-    Trace("options: opened");
-    if (gLobbyMusic.status.empty()) ImGui::TextColored(kGrey, "Press Rescan to look for songs.");   // not scanned for you: opening this section stays light
-    else ImGui::TextWrapped("%s", gLobbyMusic.status.c_str());
-    if (OotInstrumentsOn()) ImGui::TextWrapped("%s", OotStatus().c_str());
-    if (ImGui::Button("Rescan music folder")) gScanRequested = true;
+}
+
+void DrawCustomModelOptions() {
+    if (!ImGui::CollapsingHeader("Custom boss model")) return;
     ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
+    ImGui::TextWrapped("Custom dragon model (replaces Volvagia): put dragon.obj (+ dragon.mtl, dragon.cfg) in the 'models' folder next to the 'music' folder.");
     ImGui::TextWrapped("%s", gDragonModel.status.c_str());
     if (ImGui::Button(gDragonModel.tried ? "Reload custom dragon" : "Look for a custom dragon")) LoadCustomDragon();
     Trace("options: drawn");
@@ -14152,44 +14379,48 @@ void DrawDebugSwitches() {
     ImGui::Spacing();
 }
 
-void DrawMainMenu(UiState& ui, const royale::HudState& h) {
-    Heading("OOT ROYALE");
-    ImGui::TextWrapped("32 players, a shrinking storm, one winner. Empty spots are filled with bots, so you can play alone.");
-    ImGui::Spacing();
+// Full-width actions stay easy to reach on handheld screens and scale with UI text size.
+bool PrimaryMenuButton(const char* label, bool host) {
+    ImGui::PushStyleColor(ImGuiCol_Button, host ? ImVec4(0.16f, 0.38f, 0.20f, 1.0f) : ImVec4(0.17f, 0.30f, 0.46f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, host ? ImVec4(0.23f, 0.49f, 0.27f, 1.0f) : ImVec4(0.23f, 0.41f, 0.60f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, host ? ImVec4(0.12f, 0.30f, 0.16f, 1.0f) : ImVec4(0.12f, 0.23f, 0.37f, 1.0f));
+    const bool pressed = ImGui::Button(label, ImVec2(-1, ImGui::GetFrameHeight() * 1.8f));
+    ImGui::PopStyleColor(3);
+    return pressed;
+}
 
-    if (!InGame()) {
-        ImGui::TextColored(kRed, "Load a save file first (pick a save on the file select screen), then come back here.");
-        ImGui::Spacing();
-    }
+void DrawMainMenu(UiState& ui, const royale::HudState& h) {
+    Heading("PLAY BATTLE ROYALE");
+    ImGui::TextWrapped("Last player standing wins. Play with friends or fill your lobby with bots.");
+    if (!InGame()) ImGui::TextWrapped("Load a save file from the file select screen to host, join or practice.");
+    ImGui::PushTextWrapPos(0.0f);
     if (!h.status.empty() && h.status != "Not in a match") ImGui::TextColored(kRed, "%s", h.status.c_str());
     if (!ui.error.empty()) ImGui::TextColored(kRed, "%s", ui.error.c_str());
-
-    if (ImGui::Button(ui.showCustomize ? "Close character menu" : "Customize character", ImVec2(220, 0))) ui.showCustomize = !ui.showCustomize;
-    if (ui.showCustomize) DrawCustomize(ui);
-    DrawPetOptions();
-    DrawMinimapOptions();
-    DrawItemGuide();
+    ImGui::PopTextWrapPos();
     ImGui::Spacing();
-    ImGui::Text("Your name");
-    ImGui::InputText("##royale_name", ui.name, sizeof(ui.name));
-    ImGui::Checkbox("Wait in the Temple of Time while the lobby fills", &ui.waitingRoom);
-    {
-        bool custom = CustomSceneryOn();
-        if (ImGui::Checkbox("Custom rocks and buildings (experimental)", &custom)) {
-            CVarSetInteger(CVAR_SETTING("Royale.CustomScenery"), custom ? 1 : 0);
-            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
-        }
-        ImGui::TextColored(kGrey, "Our own low-poly stone posts, boulders and cottage roofs. Turn this off if the game ever crashes or glitches when a match starts.");
-    }
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##royale_name", "Your name", ui.name, sizeof(ui.name))) SaveUi(ui);
     ImGui::Spacing();
-    DrawDebugSwitches();
-
     ImGui::BeginDisabled(!InGame());
-
-    Heading("Host a lobby");
-    ImGui::Text("Port");
-    ImGui::InputInt("##royale_port", &ui.port);
-    if (ImGui::Button("Host a lobby", ImVec2(220, 0))) {
+    Heading("Host game");
+    ImGui::TextWrapped("Choose a map, then create a lobby. You can start with bots or invite friends.");
+    {
+        // Map for hosting and solo exploration.
+        ImGui::Text("Map");
+        const char* current = royale::MapOf(ui.mapId).name;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##solo_map", current)) {
+            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+                if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
+                    ui.mapId = i;
+                    gSession.SelectMap(i);
+                    SaveUi(ui);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    if (PrimaryMenuButton("Host game", true)) {
         ui.port = std::clamp(ui.port, 1024, 65535);
         ui.error.clear();
         SaveUi(ui);
@@ -14203,58 +14434,14 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
             Trace("host: addresses listed");
         }
     }
-    ImGui::Spacing();
 
-    {
-        // Which map the solo test (and the next lobby you host) is played on
-        const char* current = royale::MapOf(ui.mapId).name;
-        ImGui::SetNextItemWidth(300);
-        if (ImGui::BeginCombo("Map##solo_map", current)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
-                if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
-                    ui.mapId = i;
-                    gSession.SelectMap(i);
-                    SaveUi(ui);
-                }
-            }
-            ImGui::EndCombo();
-        }
-    }
-    const std::string soloLabel = std::string("Solo test: ") + royale::MapOf(ui.mapId).name;
-    if (ImGui::Button(soloLabel.c_str(), ImVec2(300, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true)) {
-            ui.error = "Could not host: " + ui.error;
-        } else {
-            gSoloStartWanted = true;
-            RefreshLocalAddresses(ui, true);
-        }
-    }
-    ImGui::TextColored(kGrey, "Just you on the map chosen above, no bots, and everything else as in a real match (storm, loot, chests, bosses, supply drops, helpers). The match keeps going until you are out. A test environment.");
     ImGui::Spacing();
-    if (ImGui::Button("Sandbox test map", ImVec2(300, 0))) {
-        ui.port = std::clamp(ui.port, 1024, 65535);
-        ui.error.clear();
-        SaveUi(ui);
-        gSession.ClearLastEnded();
-        if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true, true)) {
-            ui.error = "Could not host: " + ui.error;
-        } else {
-            gSoloStartWanted = true;
-            RefreshLocalAddresses(ui, true);
-        }
-    }
-    ImGui::TextColored(kGrey, "A flat test arena with ramps, a cliff, a pond, a loot plaza with every item, a cart lot and a boss pad. No countdown, nothing hurts you, the storm waits, and a panel in this menu has a button for every feature: carts, bots, bosses, items, storm, weather, time of day, wind and the glider.");
-    ImGui::Spacing();
-
-    Heading("Join a lobby");
-    ImGui::Text("Host address (the numbers your friend gives you, like 192.168.1.23)");
-    ImGui::InputText("##royale_address", ui.address, sizeof(ui.address));
+    Heading("Join friends");
+    ImGui::TextWrapped("Enter the host's address. Use the same game version as your friends.");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##royale_address", "Host address, e.g. 192.168.1.23", ui.address, sizeof(ui.address));
     ImGui::BeginDisabled(ui.address[0] == '\0');
-    if (ImGui::Button("Join lobby", ImVec2(220, 0))) {
+    if (PrimaryMenuButton("Join lobby", false)) {
         ui.port = std::clamp(ui.port, 1024, 65535);
         ui.error.clear();
         SaveUi(ui);
@@ -14264,10 +14451,51 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         }
     }
     ImGui::EndDisabled();
-    ImGui::EndDisabled(); // !InGame
 
+    ImGui::TextWrapped("Use the host's port (current: %d). Change it under Connection settings below.", ui.port);
+    if (ImGui::CollapsingHeader("Connection settings")) {
+        ImGui::Text("Port");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputInt("##royale_port", &ui.port, 0, 0)) {
+            ui.port = std::clamp(ui.port, 1024, 65535);
+            SaveUi(ui);
+        }
+        ImGui::TextWrapped("Port is shared by hosting, joining and practice. Default: %d. On the same Wi-Fi, use the host's local address. Internet play needs a VPN or UDP port forwarding.", royale::net::kDefaultPort);
+    }
     ImGui::Spacing();
-    ImGui::TextColored(kGrey, "Everyone must run the same build. Same Wi-Fi: use the host's local address. Over the internet: a VPN such as Tailscale, or forward UDP port %d.", royale::net::kDefaultPort);
+    if (ImGui::CollapsingHeader("Practice and sandbox")) {
+        const std::string soloLabel = std::string("Explore ") + royale::MapOf(ui.mapId).name;
+        if (ImGui::Button(soloLabel.c_str(), ImVec2(-1, ImGui::GetFrameHeight() * 1.3f))) {
+            ui.port = std::clamp(ui.port, 1024, 65535);
+            ui.error.clear();
+            SaveUi(ui);
+            gSession.ClearLastEnded();
+            if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true)) {
+                ui.error = "Could not host: " + ui.error;
+            } else {
+                gSoloStartWanted = true;
+                RefreshLocalAddresses(ui, true);
+            }
+        }
+        ImGui::TextWrapped("Explore the selected map alone, without bots. Storm, loot and bosses stay active.");
+        ImGui::Spacing();
+        if (ImGui::Button("Open sandbox", ImVec2(-1, ImGui::GetFrameHeight() * 1.3f))) {
+            ui.port = std::clamp(ui.port, 1024, 65535);
+            ui.error.clear();
+            SaveUi(ui);
+            gSession.ClearLastEnded();
+            if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, true, true)) {
+                ui.error = "Could not host: " + ui.error;
+            } else {
+                gSoloStartWanted = true;
+                RefreshLocalAddresses(ui, true);
+            }
+        }
+        ImGui::TextWrapped("Try weapons, vehicles and bosses in a safe arena. Damage is off and the storm waits.");
+        ImGui::Spacing();
+
+    }
+    ImGui::EndDisabled();
 }
 
 void DrawRoster(const royale::HudState& h) {
@@ -14324,6 +14552,18 @@ void DrawLocalEffects() {
     if (ImGui::Combo("Match music", &ui.musicMode, kMusic, 3)) { gMusicMode = ui.musicMode; SaveUi(ui); }
 }
 
+void DrawRagdollTools(const royale::HudState& h) {
+    if (!ImGui::CollapsingHeader("Ragdoll test")) return;
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!InGame() || !DebugOn(kDbgRagdoll));
+    if (ImGui::Button("Spawn a test ragdoll", ImVec2(220, 0))) SpawnTestRagdoll(h);
+    if (ImGui::Button("Fling the test ragdolls", ImVec2(220, 0))) FlingTestRagdolls();
+    if (ImGui::Button("Remove the test ragdolls", ImVec2(220, 0))) RemoveTestRagdolls();
+    ImGui::EndDisabled();
+    ImGui::TextColored(kGrey, "Walk into it to shove it, hit it with your sword, or hold L next to it to carry it around. (Needs the Ragdoll switch in Debug.)");
+
+}
+
 void DrawLobby(UiState& ui, const royale::HudState& h) {
     Heading("LOBBY");
     ImGui::Text("%d of %d players. The host's Start fills the other %d spots with bots.", h.humanCount, h.playerLimit, h.botSlots);
@@ -14350,10 +14590,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
     if (h.isHost) {
         UiState& ui = Ui();
-        if (h.mapId < royale::kPlayableMapCount) ui.mapId = h.mapId;
+        if (royale::IsPlayableMap(h.mapId)) ui.mapId = h.mapId;
         ImGui::SetNextItemWidth(260);
         if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (!royale::IsPlayableMap(i)) continue;
                 if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -14379,59 +14620,61 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (h.isHost) {
         if (others > 0) ImGui::Text("%d of %d players ready", readyOthers, others);
         else ImGui::TextColored(kGrey, "Nobody else has joined. You can start now and play against bots.");
-        {
-            UiState& ui = Ui();
-            int limit = h.playerLimit;
-            ImGui::SetNextItemWidth(280);
-            if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
-                ui.playerLimit = limit;
-                gSession.SetPlayerLimit(limit);
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
-            if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
-                gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
-                SaveUi(ui);
-            }
-        }
-        {
-            UiState& ui = Ui();
-            static const char* kLevels[] = { "Easy", "Normal", "Hard" };
-            ImGui::SetNextItemWidth(160);
-            if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
-                gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
-        }
-        {
-            UiState& ui = Ui();
-            bool changed = false;
-            static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
-            ImGui::SetNextItemWidth(160);
-            changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
-            ImGui::SetNextItemWidth(280);
-            changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
-            if (changed) {
-                gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
-                SaveUi(ui);
-            }
-            ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
-        }
         ImGui::BeginDisabled(!InGame() || gPendingStart);
-        if (ImGui::Button(gPendingStart ? "Preparing..." : "Start match", ImVec2(220, 0))) gPendingStart = true;
+        if (PrimaryMenuButton(gPendingStart ? "Preparing..." : "Start match", true)) gPendingStart = true;
         ImGui::EndDisabled();
         if (gPendingStart) ImGui::TextColored(kGrey, "Heading to %s and measuring the map before the countdown...", CurrentMap().name);
         else ImGui::TextColored(kGrey, "Starting takes you to %s first, so the real map can be measured.", CurrentMap().name);
         if (readyOthers < others) ImGui::TextColored(kGrey, "Not everyone is ready yet. Starting anyway is allowed.");
+        if (ImGui::CollapsingHeader("Match settings")) {
+            {
+                UiState& ui = Ui();
+                int limit = h.playerLimit;
+                ImGui::SetNextItemWidth(280);
+                if (ImGui::SliderInt("Players (bots fill the rest)", &limit, std::max(royale::kMinPlayers, h.humanCount), royale::kMaxPlayers)) {
+                    ui.playerLimit = limit;
+                    gSession.SetPlayerLimit(limit);
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Smaller matches get fewer towns and mini bosses.");
+                if (ImGui::Checkbox("Start automatically after 2 minutes", &ui.autoStart)) {
+                    gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
+                    SaveUi(ui);
+                }
+            }
+            {
+                UiState& ui = Ui();
+                static const char* kLevels[] = { "Easy", "Normal", "Hard" };
+                ImGui::SetNextItemWidth(160);
+                if (ImGui::Combo("Bot difficulty", &ui.botDifficulty, kLevels, 3)) {
+                    gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Hard bots aim better, react faster, see further and use their abilities well.");
+            }
+            {
+                UiState& ui = Ui();
+                bool changed = false;
+                static const char* kSeasons[] = { "Spring", "Summer", "Autumn", "Winter", "Random" };
+                ImGui::SetNextItemWidth(160);
+                changed |= ImGui::Combo("Season", &ui.weatherSeason, kSeasons, 5);
+                ImGui::SetNextItemWidth(280);
+                changed |= ImGui::SliderInt("Weather strength (0 = none)", &ui.weatherIntensity, 0, 100);
+                ImGui::SetNextItemWidth(280);
+                changed |= ImGui::SliderInt("How often it changes", &ui.weatherChange, 0, 100);
+                if (changed) {
+                    gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
+                    SaveUi(ui);
+                }
+                ImGui::TextColored(kGrey, "Each place has its own weather: fog and thunderstorms, snow in winter, ash in the crater, sandstorms in the desert. Fog and sand hide you from bots, rain puts out fire, lightning strikes in thunderstorms.");
+            }
+        }
     } else {
         if (ImGui::Button(h.selfReady ? "Not ready" : "I'm ready", ImVec2(220, 0))) gSession.SetReady(!h.selfReady);
         ImGui::TextColored(kGrey, "Waiting for the host to start the match...");
     }
 
-    DrawLocalEffects();
+    if (ImGui::CollapsingHeader("Local graphics and music")) DrawLocalEffects();
     if (h.lobbyLeft >= 0) ImGui::TextColored(kGold, "The match starts by itself in %s", ClockText(h.lobbyLeft).c_str());
     ImGui::Spacing();
     Heading("Where you are");
@@ -14442,15 +14685,6 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
     if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
     ImGui::EndDisabled();
-
-    ImGui::Spacing();
-    Heading("Ragdoll test");
-    ImGui::BeginDisabled(!InGame() || !DebugOn(kDbgRagdoll));
-    if (ImGui::Button("Spawn a test ragdoll", ImVec2(220, 0))) SpawnTestRagdoll(h);
-    if (ImGui::Button("Fling the test ragdolls", ImVec2(220, 0))) FlingTestRagdolls();
-    if (ImGui::Button("Remove the test ragdolls", ImVec2(220, 0))) RemoveTestRagdolls();
-    ImGui::EndDisabled();
-    ImGui::TextColored(kGrey, "Walk into it to shove it, hit it with your sword, or hold L next to it to carry it around. (Needs the Ragdoll switch in Debug.)");
 
     ImGui::Spacing();
     if (ImGui::Button("Leave lobby", ImVec2(220, 0))) gSession.Leave();
@@ -14885,7 +15119,7 @@ void DrawRoyaleUi() {
     {   // the logo at the top of the page
         ImVec2 sz;
         if (ImTextureID tex = LogoTexture(&sz)) {
-            const float width = std::min(ImGui::GetContentRegionAvail().x, 360.0f), height = width * sz.y / sz.x;
+            const float width = std::min(ImGui::GetContentRegionAvail().x, 220.0f), height = width * sz.y / sz.x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - width) * 0.5f);
             const ImVec2 at = ImGui::GetCursorScreenPos();
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(at.x - 8, at.y - 4), ImVec2(at.x + width + 8, at.y + height + 4), IM_COL32(246, 241, 229, 235), 12.0f);
@@ -14913,8 +15147,6 @@ void DrawRoyaleUi() {
         }
     }
     ImGui::Spacing();
-    DrawUpdater();
-    DrawDebug(ui);
 }
 
 // ---- the Graphics page ---------------------------------------------------------------------------------------------------------
@@ -15086,7 +15318,7 @@ void DrawGraphicsUi() {
     }
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
         GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
-        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, and busy cleaner wrasse. Only for looks.");
+        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, busy cleaner wrasse and hermit crabs sifting the sand.");
     }
     ImGui::Spacing();
 }
@@ -15099,6 +15331,47 @@ void RegisterRoyaleMenu() {
     WidgetPath path = { "Battle Royale", "Play", SECTION_COLUMN_1 };
     mSohMenu->AddSidebarEntry("Battle Royale", path.sidebarName, 1);
     mSohMenu->AddWidget(path, "OOT Royale##royale_ui", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawRoyaleUi(); });
+    WidgetPath character = { "Battle Royale", "Character", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", character.sidebarName, 1);
+    mSohMenu->AddWidget(character, "Character##royale_character", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
+        Heading("YOUR CHARACTER");
+        DrawCustomize(Ui());
+        DrawPetOptions();
+    });
+    WidgetPath settings = { "Battle Royale", "Settings", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", settings.sidebarName, 1);
+    mSohMenu->AddWidget(settings, "Settings##royale_settings", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
+        Heading("GAME SETTINGS");
+        UiState& ui = Ui();
+        if (ImGui::Checkbox("Wait in the Temple of Time before a match", &ui.waitingRoom)) SaveUi(ui);
+        DrawMinimapOptions();
+        DrawUpdater();
+    });
+    WidgetPath guide = { "Battle Royale", "How to play", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", guide.sidebarName, 1);
+    mSohMenu->AddWidget(guide, "Guide##royale_guide", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
+        Heading("HOW TO PLAY");
+        ImGui::TextWrapped("Find loot, stay inside the storm circle and be the last player standing.");
+        ImGui::TextWrapped("B: attack. D-pad Down: drink a potion. D-pad Up: use your power. Open an item category below for details.");
+        DrawItemGuide();
+    });
+    WidgetPath advanced = { "Battle Royale", "Advanced", SECTION_COLUMN_1 };
+    mSohMenu->AddSidebarEntry("Battle Royale", advanced.sidebarName, 1);
+    mSohMenu->AddWidget(advanced, "Advanced##royale_advanced", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
+        Heading("ADVANCED OPTIONS");
+        ImGui::TextWrapped("Troubleshooting switches and development tools.");
+        DrawDebugSwitches();
+        DrawCustomModelOptions();
+        if (ImGui::CollapsingHeader("Experimental scenery")) {
+            bool custom = CustomSceneryOn();
+            if (ImGui::Checkbox("Custom rocks and buildings", &custom)) {
+                CVarSetInteger(CVAR_SETTING("Royale.CustomScenery"), custom ? 1 : 0);
+                Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+            }
+        }
+        DrawDebug(Ui());
+        if (gSession.Joined()) DrawRagdollTools(gSession.Hud());
+    });
     WidgetPath gfx = { "Battle Royale", "Graphics", SECTION_COLUMN_1 };
     mSohMenu->AddSidebarEntry("Battle Royale", gfx.sidebarName, 1);
     mSohMenu->AddWidget(gfx, "Royale graphics##royale_gfx", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) { DrawGraphicsUi(); });
@@ -15173,8 +15446,8 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
     const bool sandbox = gMapId == royale::kSandboxMapIndex;
-    if (sandbox != gFortniteSandbox || sandbox != royale::fortnite::gSandboxTerrain) {   // the other ground: the collision and the drawn mesh are made again from it
-        royale::fortnite::UseTerrain(sandbox);
+    if (gMapId != royale::fortnite::gTerrainMapId) {   // rebuild both collision and drawing on every custom-map change
+        royale::fortnite::UseTerrainForMap(gMapId);
         gFortniteSandbox = sandbox;
         gFortniteBuilt = false;
         gFortniteGpu.built = false;

@@ -1,0 +1,9 @@
+{
+  "collision_vertices": 7983,
+  "collision_triangles": 14130,
+  "draw_triangles": 57598,
+  "draw_batches": 282,
+  "navigation_obstacles": 349,
+  "loading_zone_surfaces": 0,
+  "texture_count": 19
+}

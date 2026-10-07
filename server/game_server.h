@@ -4,6 +4,7 @@
 #include "../shared/transport.h"
 #include "sim.h"
 #include "../shared/sandbox_layout.h"
+#include "../shared/convergence_layout.h"
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -31,7 +32,7 @@ class GameServer {
     GameServer(net::Transport& transport, uint64_t seed, Circle map, int lootCount = 400)
         : link(transport), sim(seed, map, lootCount), mapCircle(map) { sim.match.SetMajorBoss(majorBoss); }
     // How many mini bosses a match has (0 to 8). Survives Reconfigure.
-    void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(n); }
+    void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(mapId == kConvergenceMapIndex && n > 0 ? 7 : n); }
     // The map's dragon arrives halfway through the storm timeline. Survives Reconfigure.
     void SetMajorBoss(bool on) { majorBoss = on; sim.match.SetMajorBoss(on); }
     // The host's player-count slider: how many players the match has, bots included. Lobby only, and never fewer than the people here.
@@ -40,7 +41,8 @@ class GameServer {
         if (!sim.match.SetPlayerLimit(n)) return false;
         playerLimit = n;
         poiCount = (std::max)(4, (std::min)(12, n / 2 + 2));
-        if (bossCount > 0) { bossCount = (std::max)(0, (std::min)(5, n / 6)); sim.match.SetBossCount(bossCount); }
+        if (bossCount > 0 && mapId != kConvergenceMapIndex) bossCount = (std::max)(0, (std::min)(5, n / 6));
+        sim.match.SetBossCount(mapId == kConvergenceMapIndex && bossCount > 0 ? 7 : bossCount);
         net::MatchStateMsg m;
         m.state = static_cast<uint8_t>(sim.match.State());
         m.alive = static_cast<uint8_t>(sim.match.Alive());
@@ -73,6 +75,12 @@ class GameServer {
         if ((sim.match.State() != MatchState::Lobby && sim.match.State() != MatchState::Ending) || map.radius <= 0) return false;
         lastValid = valid;
         lastHeight = height;
+        const bool convergenceMap = ClampMap(mapId) == kConvergenceMapIndex;
+        if (convergenceMap) {
+            auto original = valid;
+            valid = [original](Vec2 p) { return ConvergenceDryGround(p) && (!original || original(p)) && !ConvergenceObstacleAt(p); };
+            if (!height) height = [](Vec2 p, float* y) { *y = ConvergenceGroundHeight(p); return true; };
+        }
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
@@ -93,9 +101,9 @@ class GameServer {
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
         sim.match.SetMapId(mapId);
         const bool sandboxMap = ClampMap(mapId) == kSandboxMapIndex;   // the test map is laid out by hand (shared/sandbox_layout.h)
-        PoiLayout layout = sandboxMap ? GenerateSandboxLayout(seed) : GeneratePois(seed, map, poiCount, valid, mapId);
+        PoiLayout layout = sandboxMap ? GenerateSandboxLayout(seed) : convergenceMap ? GenerateConvergenceLayout(valid) : GeneratePois(seed, map, poiCount, valid, mapId);
         pois = layout.pois;
-        if (!sandboxMap) {
+        if (!sandboxMap && !convergenceMap) {
         const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
         const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
         // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
@@ -118,7 +126,7 @@ class GameServer {
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
         // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
-        const int bosses = sandboxMap ? 0 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        const int bosses = sandboxMap ? 0 : convergenceMap && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
