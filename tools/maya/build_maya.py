@@ -47,7 +47,7 @@ def finish(o,bone,mat,region=None):
     for v in o.data.vertices: v.co=mw@v.co
     o.location=(0,0,0); o.rotation_euler=(0,0,0)
     o.data.materials.append(mat)
-    for poly in o.data.polygons: poly.use_smooth = ('hair' not in o.name and 'fringe' not in o.name and 'ponytail' not in o.name and 'pizza' not in o.name)
+    for poly in o.data.polygons: poly.use_smooth = ('hair' not in o.name and 'fringe' not in o.name and 'bangs' not in o.name and 'pizza' not in o.name)
     o.vertex_groups.new(name=bone).add(list(range(len(o.data.vertices))),1,'REPLACE')
     if region:
         for uv in o.data.uv_layers.active.data:
@@ -68,8 +68,9 @@ def build():
     cloth=image('cloth',64,32,cloth_pixel)
     colors=[skin,hair,(.18,.27,.61),(.10,.11,.15),(.92,.65,.24),(.23,.60,.75),(.96,.94,.85),(.79,.20,.16)]
     atlas=image('skin',64,32,lambda x,y: BL.quant5(BL.jitter(colors[x//8],x,y,17,.012)))
+    screen_images=[image('screen_'+n,P.SCREEN_W,P.SCREEN_H,lambda x,y,n=n:P.paint_screen(x,y,n)) for n in P.SCREENS]
     face_images=[image('face_'+n,32,32,lambda x,y,n=n:face(x,y,n)) for n in FACES]
-    cm=material('Cloth',cloth);sm=material('Skin',atlas);fm=material('Face',face_images[0])
+    cm=material('Cloth',cloth);sm=material('Skin',atlas);fm=material('Face',face_images[0]);scm=material('Screen',screen_images[0])
     region=lambda n:(n/8+.005,.02,.115,.96)
     s=region(0);h=region(1);blue=region(2);dark=region(3);gold=region(4);cyan=region(5);paper=region(6);red=region(7)
     # Child proportions: approximately six head lengths, slender limbs and real joints.
@@ -98,11 +99,11 @@ def build():
     def upper_body():
         # Shared boundary vertices stitch the sleeves to the torso; no shoulder balls,
         # overlapping tubes or gaps. All joints use at most two skinning influences.
-        profiles=[(.755,.125,.090),(.83,.140,.095),(.95,.150,.100),(1.04,.150,.075),(1.09,.055,.047)]
+        profiles=[(.690,.127,.092),(.83,.140,.095),(.95,.150,.100),(1.04,.150,.075),(1.09,.055,.047)]
         n=12;verts=[];polys=[];weights=[];uvs=[];mats=[]
         for z,rx,ry in profiles:
             for k in range(n):
-                a=k*2*math.pi/n;verts.append(Vector((rx*math.sin(a),-ry*math.cos(a),z)));weights.append({'torso':1})
+                a=k*2*math.pi/n;verts.append(Vector((rx*math.sin(a),-ry*math.cos(a),z)));weights.append({'torso':.5,'pelvis':.5} if z<.7 else {'torso':1})
         def quad(idx,mat,uv):polys.append(idx);mats.append(mat);uvs.append(uv)
         for row in range(len(profiles)-1):
             for k in range(n):
@@ -141,15 +142,39 @@ def build():
             for bn,weight in w.items():o.vertex_groups[bn].add([vi],weight,'REPLACE')
         parts.append(o)
     upper_body()
-    for i in range(3):cone('skirt ruffle',(0,0,.62+i*.053),.19-i*.012,.15-i*.006,.09,'pelvis',sm,blue)
+    def skirt():
+        # One smooth two-tier skirt. Hem verts follow the nearer leg so it swings and flares as she steps.
+        rings=[(.715,.118,.090),(.655,.140,.104),(.595,.158,.116),(.568,.170,.124),(.545,.185,.136),(.505,.196,.144),(.475,.198,.146)]
+        follow=[0,.04,.10,.16,.26,.38,.44];n=14;verts=[];faces=[];wts=[]
+        for (z,rx,ry),f in zip(rings,follow):
+            for j in range(n):
+                a=2*math.pi*j/n;x=rx*math.sin(a);verts.append((x,-ry*math.cos(a)+.004,z))
+                side=1 if x>=0 else -1;k=f*min(1,abs(x)/(rx*.9))
+                wts.append({'pelvis':1-k,'leg'+('L' if side==1 else 'R'):k} if k>.01 else {'pelvis':1})
+        for r in range(len(rings)-1):
+            for j in range(n):
+                a=r*n+j;b=r*n+(j+1)%n;faces.append((a,b,b+n,a+n))
+        faces.append(tuple(reversed(range(n))))
+        me=bpy.data.meshes.new('skirt');me.from_pydata(verts,[],faces);uv=me.uv_layers.new()
+        for poly in me.polygons:
+            for li in poly.loop_indices:
+                vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%n/n,vi//n/(len(rings)-1))
+        o=bpy.data.objects.new('skirt',me);bpy.context.collection.objects.link(o);finish(o,'pelvis',sm,blue)
+        o.vertex_groups.clear()
+        for bn in ('pelvis','legL','legR'):o.vertex_groups.new(name=bn)
+        for vi,w in enumerate(wts):
+            for bn,wt in w.items():o.vertex_groups[bn].add([vi],wt,'REPLACE')
+    skirt()
     body('neck',[(1.06,.035,.032,0,0),(1.145,.037,.035,0,0)],'torso',sm,s,8)
     profile=(-.97,-.78,-.50,-.14,.25,.60,.86,.97)
     body('head',[(1.235+.133*t,.107*math.sqrt(1-t*t)*(1+.065*math.exp(-((t+.35)/.3)**2)),.095*math.sqrt(1-t*t),0,-.012) for t in profile],'head',sm,s,12)
-    ball('hair cap',(0,.008,1.296),(.113,.098,.09),'head',sm,h)
-    ball('ponytail',(0,.12,1.275),(.052,.054,.13),'ponytail',sm,h)
+    ball('hair cap',(0,.014,1.292),(.116,.106,.098),'head',sm,h)
+    # Ponytail: a tapered hanging tuft in two weighted segments (ponytail, ponytail2) so it whips instead of swinging stiff.
+    body('ponytail',[(1.318,.032,.036,0,.108),(1.275,.048,.052,0,.128),(1.215,.055,.055,0,.150),(1.15,.046,.046,0,.162),(1.095,.030,.030,0,.162),(1.06,.010,.010,0,.160)],'ponytail',sm,h,8,
+         [{'ponytail':1},{'ponytail':1},{'ponytail':.6,'ponytail2':.4},{'ponytail2':1},{'ponytail2':1},{'ponytail2':1}])
     for side in (-1,1):
         ball('ear',(side*.106,0,1.235),(.016,.018,.028),'head',sm,s)
-        ball('side fringe',(side*.10,-.065,1.245),(.021,.021,.085),'head',sm,h)
+        ball('side fringe',(side*.107,-.032,1.262),(.012,.030,.050),'head',sm,h)
     verts=[];quads=[]
     for row in range(7):
         lat=-.80+row*.24
@@ -164,20 +189,62 @@ def build():
         for li in poly.loop_indices:
             vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%9/8,vi//9/6)
     o=bpy.data.objects.new('face',me);bpy.context.collection.objects.link(o);finish(o,'head',fm)
+    verts=[];quads=[]
+    for row in range(4):
+        lat=.60+row*.17
+        for col in range(9):
+            lon=-1.12+col*(2.24/8)
+            lift=.004+.011*abs(math.sin(col*1.7))*(1 if row==0 else 0)   # a soft, uneven fringe edge
+            verts.append(((.110+.010)*math.sin(lon)*math.cos(lat),-.012-(.097+.010)*math.cos(lon)*math.cos(lat)-lift,1.235+(.137+.010)*math.sin(lat)-(.014*abs(math.sin(col*1.3+1)) if row==0 else 0)))
+    for row in range(3):
+        for col in range(8):
+            i=row*9+col;quads.append((i,i+1,i+10,i+9))
+    me=bpy.data.meshes.new('bangs');me.from_pydata(verts,[],quads);uv=me.uv_layers.new()
+    for poly in me.polygons:
+        for li in poly.loop_indices:
+            vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%9/8,vi//9/3)
+    o=bpy.data.objects.new('bangs',me);bpy.context.collection.objects.link(o);finish(o,'head',sm,h)
     ball('nose',(0,-.106,1.22),(.013,.018,.019),'head',sm,s)
+    def shoe(x,label):
+        # A real little shoe: rounded toe box, ankle collar, heel, a pale sole and a white sock cuff above it.
+        st=[(.052,.028,.030,.046),(.030,.034,.037,.050),(.000,.038,.034,.046),(-.030,.040,.028,.038),(-.060,.040,.024,.031),(-.085,.032,.019,.025),(-.100,.016,.012,.021)]
+        n=10;verts=[];faces=[]
+        for yy,rx,rz,cz in st:
+            for k in range(n):
+                a=2*math.pi*k/n;verts.append((x+rx*math.sin(a),yy,cz+rz*math.cos(a)*(1 if math.cos(a)>0 else .55)))
+        for r in range(len(st)-1):
+            for k in range(n):
+                a=r*n+k;b=r*n+(k+1)%n;faces.append((a,b,b+n,a+n))
+        faces.append(tuple(reversed(range(n))));faces.append(tuple((len(st)-1)*n+k for k in range(n)))
+        me=bpy.data.meshes.new('shoe');me.from_pydata(verts,[],faces);uv=me.uv_layers.new()
+        for poly in me.polygons:
+            for li in poly.loop_indices:uv.data[li].uv=(.5,.5)
+        o=bpy.data.objects.new('shoe',me);bpy.context.collection.objects.link(o);finish(o,'foot'+label,sm,blue)
+        box('sole',(x,-.020,.010),(.086,.168,.020),'foot'+label,sm,paper)
+        box('shoe toe cap',(x,-.082,.030),(.062,.040,.016),'foot'+label,sm,dark)
+        body('sock',[(.135,.036,.036,x,0),(.100,.037,.037,x,0),(.062,.034,.036,x,0)],'foot'+label,sm,paper,10,[{'shin'+label:1},{'shin'+label:.5,'foot'+label:.5},{'foot'+label:1}])
     for side,label in ((-1,'R'),(1,'L')):
         x=side*.078
         body('leg',[(.08,.024,.027,x,0),(.20,.034,.038,x,-.001),(.315,.030,.032,x,-.002),(.345,.033,.037,x,-.007),(.378,.035,.037,x,-.003),(.49,.046,.046,x,0),(.66,.051,.047,x,0)],'leg'+label,sm,s,10,[{'shin'+label:1},{'shin'+label:1},{'shin'+label:.85,'leg'+label:.15},{'shin'+label:.5,'leg'+label:.5},{'shin'+label:.15,'leg'+label:.85},{'leg'+label:1},{'leg'+label:1}])
-        ball('shoe',(x,-.024,.052),(.048,.080,.035),'foot'+label,sm,blue)
+        shoe(x,label)
         x=side*.206
-        ball('palm',(x,-.006,.697),(.029,.017,.032),'hand'+label,sm,s)
-        ball('thumb',(x-side*.026,-.009,.702),(.010,.012,.021),'hand'+label,sm,s)
+        ball('palm',(x,-.006,.700),(.029,.016,.028),'hand'+label,sm,s)
+        # Thumb: three tapering segments angled down, forward and inward from the palm's heel.
+        body('thumb',[(.704,.0115,.0105,x-side*.020,-.012),(.690,.0105,.0095,x-side*.027,-.019),(.675,.0090,.0085,x-side*.031,-.028),(.662,.0070,.0070,x-side*.033,-.035),(.655,.0030,.0030,x-side*.033,-.038)],'hand'+label,sm,s,6)
         for i in range(4):
             bone='indexR' if label=='R' and i==3 else 'curlR' if label=='R' else 'handL'
-            ball('fingers',(x+(i-1.5)*.012,-.006,.667),(.007,.010,.022-abs(i-1.5)*.003),bone,sm,s)
+            j=3-i if label=='R' else i                 # 0 = index finger beside the thumb, 3 = little finger
+            fx=x+(i-1.5)*.0125;L=(.050,.056,.050,.040)[j];r=(.0088,.0090,.0085,.0075)[j];c=(.012,.010,.012,.015)[j]
+            z0=.682;ky=-.006
+            rings=[(z0,r*1.05,r*.95,fx,ky),(z0-L*.38,r,r*.92,fx,ky-.004),(z0-L*.40,r*.93,r*.88,fx,ky-.005),(z0-L*.70,r*.85,r*.82,fx,ky-.012-c*.4),(z0-L*.72,r*.82,r*.80,fx,ky-.013-c*.5),(z0-L*.97,r*.62,r*.62,fx,ky-.022-c),(z0-L,r*.30,r*.30,fx,ky-.024-c)]
+            body('finger',rings,bone,sm,s,6)
     box('tablet',(0,-.235,.81),(.25,.018,.17),'tablet',sm,dark)
-    box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',sm,cyan)
-    for i in range(3):box('screen block',(-.06+i*.06,-.25,.79+i*.025),(.05,.003,.04),'tablet',sm,blue)
+    scr=box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',scm)
+    for poly in scr.data.polygons:   # the picture covers the whole front, the rest of the thin slab is plain
+        front=poly.normal.y<-.5
+        for li in poly.loop_indices:
+            vx=scr.data.vertices[scr.data.loops[li].vertex_index].co
+            scr.data.uv_layers.active.data[li].uv=((vx.x/.22+.5),(vx.z-.74)/.14) if front else (0,0)
     box('tablet touch highlight',(0,-.252,.85),(.014,.003,.014),'tablet_cursor',sm,paper)
     box('sketchbook',(0,-.23,.80),(.25,.025,.18),'draw',sm,paper)
     for i in range(3):box('drawing line',(-.06+i*.04,-.245,.80),(.013,.005,.10),'draw',sm,cyan)
@@ -201,7 +268,7 @@ def build():
     bpy.context.view_layer.objects.active=parts[0];bpy.ops.object.join(); mesh=bpy.context.object;mesh.name='Maya'
     ad=bpy.data.armatures.new('MayaRig');rig=bpy.data.objects.new('MayaRig',ad);bpy.context.collection.objects.link(rig)
     bpy.context.view_layer.objects.active=rig;mesh.select_set(False);rig.select_set(True);bpy.ops.object.mode_set(mode='EDIT')
-    anchors={'root':(0,0,0),'pelvis':(0,0,.66),'torso':(0,0,.77),'head':(0,0,1.12),'ponytail':(0,.085,1.29),'legL':(.078,0,.66),'legR':(-.078,0,.66),'shinL':(.078,0,.35),'shinR':(-.078,0,.35),'footL':(.078,0,.07),'footR':(-.078,0,.07),'armL':(.145,0,1.04),'armR':(-.145,0,1.04),'forearmL':(.201,0,.884),'forearmR':(-.201,0,.884),'handL':(.206,0,.723),'handR':(-.206,0,.723)}
+    anchors={'root':(0,0,0),'pelvis':(0,0,.66),'torso':(0,0,.77),'head':(0,0,1.12),'ponytail':(0,.085,1.29),'ponytail2':(0,.15,1.19),'legL':(.078,0,.66),'legR':(-.078,0,.66),'shinL':(.078,0,.35),'shinR':(-.078,0,.35),'footL':(.078,0,.07),'footR':(-.078,0,.07),'armL':(.145,0,1.04),'armR':(-.145,0,1.04),'forearmL':(.201,0,.884),'forearmR':(-.201,0,.884),'handL':(.206,0,.723),'handR':(-.206,0,.723)}
     anchors.update({'indexR':(-.188,-.006,.685),'curlR':(-.206,-.006,.685)})
     anchors.update({n:(0,0,0) for n in ('tablet','draw','pizza','scooter','learn','pencil','tablet_cursor')})
     anchors.update({'wheelF':(0,-.21,.06),'wheelR':(0,.21,.06)})
@@ -212,6 +279,7 @@ def build():
         elif n in ('torso','legL','legR'):parent='pelvis'
         elif n=='head' or n.startswith('arm'):parent='torso'
         elif n=='ponytail':parent='head'
+        elif n=='ponytail2':parent='ponytail'
         elif n.startswith('shin'):parent='leg'+n[-1]
         elif n.startswith('foot'):parent='shin'+n[-1]
         elif n.startswith('forearm'):parent='arm'+n[-1]
@@ -231,6 +299,7 @@ def build():
             for pb in rig.pose.bones:
                 pb.keyframe_insert('rotation_quaternion',frame=f);pb.keyframe_insert('location',frame=f)
         act['maya_faces']=expressions
+        act['maya_screens']=[P.SCREENS.index(P.screen_for(name,f/FPS)) for f in range(frames_of(seconds,loops))]
         act['maya_fps']=FPS
         track=rig.animation_data.nla_tracks.new();track.name=name;track.strips.new(name,0,act);track.mute=True
     rig.animation_data.action=bpy.data.actions['idle'];scene.frame_set(0)

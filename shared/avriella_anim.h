@@ -5,6 +5,7 @@
 // Each clip stores, per frame and per bone, the rotation and offset that carry a rest-pose vertex to its posed place. Sampling a clip mixes the
 // two nearest frames; an Animator cross-fades from one clip to the next so changes of mood never snap. A vertex follows one or two bones.
 #include "avriella_model.h"
+#include "tail_swing.h"
 #include <algorithm>
 #include <cmath>
 
@@ -152,6 +153,15 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
         SkinVertex(p, kVerts[i], pos, nrm);
         for (int k = 0; k < 3; k++) { mn[k] = std::min(mn[k], pos[k]); mx[k] = std::max(mx[k], pos[k]); }
     }
+}
+
+// Her curly tuft bent by the cloth springs (royale::TailTracker). The tuft points up, so a forward-trailing swing turns the other way round than
+// a hanging ponytail's. Its root is where tools/avriella/build_avriella.py puts the "tuft" bone, in game axes.
+inline void ApplyTuft(Pose& p, const HatSpring& sp, float strength) {
+    constexpr int kTuft = 5;
+    static const float head[3] = {1.2f, 60.7f, 3.5f};
+    if (!(strength > 0.01f)) return;
+    SwingBone(p.bone[kTuft], head, -(sp.baseFore * 1.1f + 0.9f * (sp.baseFore - sp.tipFore)) * strength, (sp.baseSide * 1.1f + 0.9f * (sp.baseSide - sp.tipSide)) * strength);
 }
 
 } // namespace avriella
