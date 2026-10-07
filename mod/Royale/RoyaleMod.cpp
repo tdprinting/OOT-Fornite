@@ -7206,6 +7206,8 @@ void StartDeath(const royale::HudState& h) {
     gDeath.card = true;
     gDeath.focus = 0;
     gSpectateTarget = kSpectateSelf;   // the camera stays on your body until you choose to spectate
+    UiSfx(NA_SE_IT_HAMMER_HIT);        // the blow lands: a heavy impact, then Link's cry from his body
+    UiSfx(NA_SE_PL_BODY_HIT);
 }
 
 // The match has ended: the big title, then the end screen.
@@ -7223,7 +7225,8 @@ bool EndScreenUp(const royale::HudState& h) { return h.state == royale::MatchSta
 // Runs before the game reads the controller (from OnEmoteWheelInput). While the death card or the end screen is up the controller is theirs (Start
 // still opens the menu). Returns true when it took this frame's buttons.
 bool MatchUiInput(Input& in, const royale::HudState& hud) {
-    const bool card = DeathCardUp(hud), end = EndScreenUp(hud);
+    // From the moment you go down until you choose Spectate the pad is the death screen's, so a press can't make the hidden Link swing or roll.
+    const bool card = gDeath.active && gDeath.card && IsLive(hud), end = EndScreenUp(hud);
     if (!card && !end) {
         gUiPad = {};
         if (hud.state == royale::MatchState::Ending && !gEnd.open && (in.press.button & BTN_DUP)) {   // bring the results back
@@ -7234,7 +7237,7 @@ bool MatchUiInput(Input& in, const royale::HudState& hud) {
         }
         return false;
     }
-    const u16 p = in.press.button;
+    const u16 p = (card && !DeathCardUp(hud)) ? 0 : in.press.button;   // presses during the fall itself do nothing
     gUiPad.a |= (p & BTN_A) != 0;
     gUiPad.b |= (p & BTN_B) != 0;
     gUiPad.left |= (p & BTN_DLEFT) != 0;
@@ -7320,8 +7323,14 @@ void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const
 
     if (gDeath.active && gDeath.card && IsLive(h)) {
         // 1. Going down: a red flash, the edges darken, the big word.
-        if (t < 0.5) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(150, 0, 0, static_cast<int>(110 * (1.0 - t / 0.5))));
+        if (t < 0.12) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(255, 255, 255, static_cast<int>(170 * (1.0 - t / 0.12))));   // the hit
+        else if (t < 0.6) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(150, 0, 0, static_cast<int>(120 * (1.0 - (t - 0.12) / 0.48))));
         UiVignette(dl, ds, static_cast<float>(std::min(1.0, t / 0.6)));
+        {   // cinema bars slide in while you watch yourself fall
+            const float bar = ds.y * 0.085f * static_cast<float>(std::min(1.0, t / 0.45));
+            dl->AddRectFilled(ImVec2(0, 0), ImVec2(ds.x, bar), IM_COL32(0, 0, 0, 235));
+            dl->AddRectFilled(ImVec2(0, ds.y - bar), ds, IM_COL32(0, 0, 0, 235));
+        }
         const float in = static_cast<float>(std::min(1.0, t / 0.35));
         const float titleSize = (58.0f + 18.0f * (1.0f - in)) * scale;
         UiTextCentred(dl, font, titleSize, cx, ds.y * 0.13f, UiAlpha(kUi.red, in), "ELIMINATED");
