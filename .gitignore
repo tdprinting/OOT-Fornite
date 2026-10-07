@@ -33,3 +33,7 @@ assets/maya/*-preview.png
 /create_maya.py
 /tools/maya/test_maya.cmd
 /tools/maya/check_all.cmd
+
+/tools/maya/refine_temp.py
+
+assets/maya/previews/

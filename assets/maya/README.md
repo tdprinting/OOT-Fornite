@@ -1,15 +1,19 @@
 # Maya companion
 
-Maya is the third selectable cosmetic follower, alongside Lilo and Avriella. Enable the follower under **Your pet**, select **Maya**, then stand still near her and press A to talk. Available in the lobby and on the field; she disappears during the drop, spectating, death, switching pets and leaving the scene.
+The third selectable pet, alongside Lilo and Avriella. Maya is a local cosmetic follower. Enable Your pet, select Maya, and stand still nearby to talk with A.
 
-Original N64-style model based on the supplied family photos: natural child proportions, articulated elbows and knees, rounded polygonal face, brown ponytail and side strands, white printed shirt, blue layered skirt and blue shoes. Family photographs are not embedded or committed. Assets use 32x32 and 64x32 pixel textures, RGBA5551 game exports and batches of at most 32 vertices.
+## Art direction
 
-## Animations and props
+Uses Lilo/Avriella's quantized hand-painted palette, filtered tiny textures and matte N64 materials. Maya has black hair, warm light-brown skin, a white cartoon-print T-shirt and layered blue skirt. Continuous shirt/shoulder/arm topology shares vertices; arm and knee joints blend across two bones. The authored proportions are those of a child, with an in-game scale of 0.41 (about 56 units tall compared to young Link's roughly 60). Talk focus height follows that scale. Family photos are not embedded or committed.
 
-The rig includes separate thigh/calf and upper arm/forearm joints. Ten clips: idle, walk, run, wave, tablet, draw, pizza, scooter, learn and cheer. Rigged tablet with a block-building screen, sketchbook/pencil, pizza slice, book, and electric scooter with animated wheels. Maya walks and runs after Link, uses the scooter at larger distances, and cycles hobbies when Link stops. Talking plays a wave; 14 rotating lines mention Roblox, Minecraft, drawing, pizza, learning and playful Mom fart jokes. Inactive props are excluded from game drawing. Everything is cosmetic and local to the player.
+## Motion and expressions
 
-## Rebuild
+Fifteen clips: idle, walk, run, wave, tablet, draw, pizza, scooter, learn, cheer, talk, giggle, hop, fidget and point. Authored anticipation, settling, relaxed wrists, counter-rotation, head tilts, toe fidgets and trailing ponytail motion replace uniform robot swings. Eight painted expressions include speech, concentration, winks and laughter, plus independent half/closed/half blinks.
 
-Run Blender 5.1 in background mode with `--python tools/maya/build_maya.py`, then `--python tools/maya/export_maya.py`. Both scripts also work from the repository root. Source `maya.blend`, interchange `maya.glb`, texture PNGs and generated `shared/maya_model.h` are included. The `.blend` retains the armature and all ten named animation actions. Previews are rendered on rebuild and ignored by Git.
+Props use baked two-bone arm IK: palms meet tablet/book edges and scooter grips, pizza travels with her hand, and the drawing pencil tip tracks the page. Pencil and book have separate joints. The game only samples baked clips; it does not run IK at runtime. Follow speed accelerates gradually, turning is smoothed, and clip changes cross-fade. Fourteen dialogue lines retain her hobbies and playful Mom fart jokes.
 
-`server/tests/maya_tests.cpp` validates triangle batches, bone assignments, quaternion normalization, all clips, prop visibility and animation transitions, including Release builds. Full game compilation and handheld playtesting are separate from model validation.
+## Rebuild and review
+
+From the repository root: `blender -b --python tools/maya/build_maya.py`, then `blender -b --python tools/maya/export_maya.py`. `personality.py` authors motion and painted textures. `preview_motion.py` renders review frames. Source Blender/GLB, texture PNGs and generated game data are included. Generated previews are ignored by Git.
+
+`server/tests/maya_tests.cpp` checks mesh batches, all joint transforms and clips, expression frames and blinks, child scale, blended skinning, prop visibility, cross-fades, hand contact throughout tablet/drawing/scooter clips, and pencil-tip contact with the page. Full game compilation and actual handheld playtesting remain separate checks.

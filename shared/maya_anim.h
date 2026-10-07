@@ -154,5 +154,19 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
     }
 }
 
+// Author-defined expression beats, plus independent half/closed/half blinks.
+constexpr float kWorldScale = .41f; // about 56 units tall; young Link is about 60.
+constexpr float kFocusHeight = 49.2f;
+inline int Expression(int clip, float seconds, float clock) {
+    const auto& info=InfoOf(clip);
+    float f=std::isfinite(seconds) ? seconds*info.fps : 0;
+    if (info.loops) { f=std::fmod(f,static_cast<float>(info.frames)); if (f<0) f+=info.frames; }
+    else f=std::clamp(f,0.0f,static_cast<float>(info.frames-1));
+    int face=kFrameFaces[info.firstFrame+std::clamp(static_cast<int>(f),0,static_cast<int>(info.frames)-1)];
+    float blink=std::isfinite(clock) ? std::fmod(std::max(0.0f,clock),4.37f) : 0.0f;
+    if (face!=kFaceGiggle && blink>3.10f && blink<3.29f) return blink<3.15f || blink>3.24f ? kFaceHalf : kFaceShut;
+    return face;
+}
+
 } // namespace maya
 } // namespace royale

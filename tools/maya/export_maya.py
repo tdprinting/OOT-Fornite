@@ -132,8 +132,10 @@ def main():
     rest_inv = {b.name: b.matrix_local.inverted() for b in rig.data.bones}
     clips = []
     pose_values = []
+    expression_values = []
     for name, seconds, loops, _ in build_maya.CLIPS:
         act = bpy.data.actions[name]
+        expression_values += list(act["maya_faces"])
         rig.animation_data.action = act
         frames = build_maya.frames_of(seconds, loops)
         first = len(pose_values) // 7 // len(bones)
@@ -166,7 +168,7 @@ def main():
     o.append("")
     o.append("constexpr int kBoneCount = %d;" % len(bones))
     o.append("inline constexpr const char* kBoneNames[kBoneCount] = { %s };" % ", ".join('"%s"' % b for b in bones))
-    o.append("inline constexpr bool kBoneIsProp[kBoneCount] = { %s };" % ", ".join("true" if b in ("tablet", "draw", "pizza", "scooter", "learn", "wheelF", "wheelR") else "false" for b in bones))
+    o.append("inline constexpr bool kBoneIsProp[kBoneCount] = { %s };" % ", ".join("true" if b in ("tablet", "draw", "pizza", "scooter", "learn", "pencil", "wheelF", "wheelR") else "false" for b in bones))
     o.append("")
     o.append("// A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).")
     o.append("struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };")
@@ -213,6 +215,9 @@ def main():
     o.append(fmt_rows(['{"%s", %d, %.1ff, %s, %d}' % (n, f, fps, "true" if lp else "false", first) for n, f, fps, lp, first in clips], 3))
     o.append("};")
     o.append("constexpr int kFrameCount = %d;" % (len(pose_values) // 7 // len(bones)))
+    o.append("inline constexpr uint8_t kFrameFaces[kFrameCount] = {")
+    o.append(fmt_rows([str(v) for v in expression_values],32))
+    o.append("};")
     o.append("constexpr float kPosFrac = %.1ff;   // bone offsets are in 1/%d units" % (POS_FRAC, POS_FRAC))
     o.append("// Per frame, per bone: rotation quaternion x, y, z, w (x32767) and offset x, y, z (x kPosFrac). A vertex v at rest goes to q*v + offset.")
     o.append("inline constexpr int16_t kPoses[kFrameCount * kBoneCount * 7] = {")

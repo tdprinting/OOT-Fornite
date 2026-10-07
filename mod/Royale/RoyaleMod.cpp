@@ -11905,7 +11905,7 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
 struct MayaCompanionState {
     Actor* actor = nullptr;
     royale::maya::Animator anim;
-    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0;
+    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0, speed = 0, expressionClock = 0, greeting = 2.8f;
     int line = 0, hobby = 0;
     bool talking = false;
 };
@@ -11921,17 +11921,20 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
     const auto& pp = player->actor.world.pos;
     float dx = pp.x - actor->world.pos.x, dz = pp.z - actor->world.pos.z;
     float distance = std::hypot(dx, dz);
+    c.expressionClock += dt; c.greeting = std::max(0.0f,c.greeting-dt);
     bool talking = TalkingTo(actor);
-    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 5; c.hobbyTime = 0; }
+    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 8; c.hobbyTime = 0; }
     c.talking = talking;
     int clip = M::kIdle;
     if (distance > 115.0f && !talking) {
         c.still = 0; c.hobbyTime = 0;
         const float yaw = std::atan2(dx, dz);
-        c.yaw = yaw;
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.18f;
         const bool scooter = distance > 260.0f;
         const bool running = distance > 185.0f;
-        const float step = std::min(distance - 90.0f, (scooter ? 250.0f : running ? 190.0f : 130.0f) * dt);
+        const float desired = scooter ? 240.0f : running ? 150.0f : 95.0f;
+        c.speed += std::clamp(desired-c.speed,-260.0f*dt,180.0f*dt);
+        const float step = std::min(distance - 90.0f, c.speed * dt);
         float nx = actor->world.pos.x + dx / distance * step;
         float nz = actor->world.pos.z + dz / distance * step;
         float floor = 0;
@@ -11948,20 +11951,27 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         clip = scooter ? M::kScooter : running ? M::kRun : M::kWalk;
     } else {
         c.still += dt; c.hobbyTime += dt;
-        c.yaw = std::atan2(dx,dz);
-        static constexpr int hobbies[] = {M::kTablet,M::kDraw,M::kPizza,M::kLearn,M::kCheer};
-        if (c.hobbyTime > 8) { c.hobby = (c.hobby + 1) % 5; c.hobbyTime = 0; }
-        clip = talking ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+        const float yaw=std::atan2(dx,dz);
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.08f;
+        c.speed=std::max(0.0f,c.speed-260.0f*dt);
+        static constexpr int hobbies[] = {M::kFidget,M::kTablet,M::kDraw,M::kHop,M::kPizza,M::kLearn,M::kCheer,M::kPoint};
+        const int hobbyClip=hobbies[c.hobby];
+        const float duration=M::InfoOf(hobbyClip).loops ? M::ClipSeconds(hobbyClip)+.4f : M::ClipSeconds(hobbyClip)+.3f;
+        if (!talking && c.hobbyTime > duration) { c.hobby = (c.hobby + 1) % 8; c.hobbyTime = 0; }
+        clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
     if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
-    c.anim.Play(clip); c.anim.Update(dt);
-    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
-    actor->focus.pos = actor->world.pos; actor->focus.pos.y += 90;
+    c.anim.Play(clip,.35f);
+    const float rate=clip==M::kWalk ? std::clamp(c.speed/65.0f,.55f,1.8f) : clip==M::kRun ? std::clamp(c.speed/130.0f,.7f,1.5f) : 1.0f;
+    c.anim.Update(dt,rate);
+    c.yaw=std::atan2(std::sin(c.yaw),std::cos(c.yaw));
+    actor->shape.rot.y = static_cast<s16>(static_cast<int32_t>(c.yaw * (32768.0f / 3.14159265f)));
+    actor->focus.pos = actor->world.pos; actor->focus.pos.y += royale::maya::kFocusHeight;
 }
 void MayaCompanion_Draw(Actor* actor, PlayState* play) {
     royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
-    const int face = std::fmod(gMayaCompanion.anim.time,3.7f)<.12f ? royale::maya::kFaceShut : royale::maya::kFaceSmile;
-    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,.72f,pose,face);
+    const int face = royale::maya::Expression(gMayaCompanion.anim.clip,gMayaCompanion.anim.time,gMayaCompanion.expressionClock);
+    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,royale::maya::kWorldScale,pose,face);
 }
 void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
@@ -11977,7 +11987,7 @@ void ReconcileMayaCompanion(const royale::HudState& hud) {
     if (!a) return;
     a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
-    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=18;
+    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=12;
     gMayaCompanion = MayaCompanionState{}; gMayaCompanion.actor=a;
 }
 
@@ -14179,7 +14189,7 @@ void DrawPetOptions() {
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
     if (kind == 2)
-        ImGui::TextWrapped("Maya walks after you and rides her electric scooter to catch up. She plays on her tablet, draws, enjoys pizza and reads when you stop. Face her and press A to talk and see her next hobby.");
+        ImGui::TextWrapped("Maya walks and runs after you, rides her scooter to catch up, and waves, hops and giggles. When you stop she draws, plays on her tablet, reads or enjoys pizza. Face her and press A to talk.");
     else if (kind == 1)
         ImGui::TextWrapped("Avriella rolls after you (she cannot crawl yet), sits when you stop, and smiles a lot, kicks her legs, chews on tiny rocks, waves, claps, babbles, giggles, "
                            "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
