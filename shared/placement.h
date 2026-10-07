@@ -244,6 +244,16 @@ inline MapPlacement PlaceMap(uint64_t seed, Circle map, int mapId, int poiCount,
     auto keep = [&](Vec2 p, float steepest) { return ground.Slope(p) <= steepest; };
     layout.lootSpots.erase(std::remove_if(layout.lootSpots.begin(), layout.lootSpots.end(), [&](Vec2 p) { return !keep(p, 0.7f); }), layout.lootSpots.end());
     layout.sites.erase(std::remove_if(layout.sites.begin(), layout.sites.end(), [&](const ChestSite& s) { return !keep(s.pos, 0.7f); }), layout.sites.end());
+    // The original scenes have a fixed floor the mod can't add ground to, and Link slides off the blocks there: no climbing blocks (towns, formations, outposts,
+    // climbs), and no chest left on top of one. The island maps bake theirs into the ground (fortnite_map.h), so they keep them.
+    if (!IsIslandMap(mapId)) {
+        std::vector<Vec2> gone;
+        for (const Prop& q : layout.props) if (IsPlatform(q.kind)) gone.push_back(q.pos);
+        layout.props.erase(std::remove_if(layout.props.begin(), layout.props.end(), [](const Prop& q) { return IsPlatform(q.kind); }), layout.props.end());
+        auto onBlock = [&](Vec2 p) { for (const Vec2& g : gone) if (std::fabs(p.x - g.x) <= kPlatformHalf + 30.0f && std::fabs(p.z - g.z) <= kPlatformHalf + 30.0f) return true; return false; };
+        layout.sites.erase(std::remove_if(layout.sites.begin(), layout.sites.end(), [&](const ChestSite& c) { return onBlock(c.pos); }), layout.sites.end());
+        layout.lootSpots.erase(std::remove_if(layout.lootSpots.begin(), layout.lootSpots.end(), onBlock), layout.lootSpots.end());
+    }
     // Loose scenery gives way to everything built after it, and keeps a chest's spot free.
     std::vector<Vec2> chestAt = layout.lootSpots;
     for (const ChestSite& s : layout.sites) chestAt.push_back(s.pos);
