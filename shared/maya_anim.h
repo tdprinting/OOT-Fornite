@@ -5,6 +5,8 @@
 // Each clip stores, per frame and per bone, the rotation and offset that carry a rest-pose vertex to its posed place. Sampling a clip mixes the
 // two nearest frames; an Animator cross-fades from one clip to the next so changes of mood never snap. A vertex follows one or two bones.
 #include "maya_model.h"
+#include "tail_swing.h"
+#include "tablet_physics.h"
 #include <algorithm>
 #include <cmath>
 
@@ -49,6 +51,8 @@ inline float ClipSeconds(int clip) {
     return static_cast<float>(c.loops ? c.frames : c.frames - 1) / c.fps;
 }
 
+inline void PreserveJointLinks(Pose& p);
+
 // The pose `seconds` into a clip: loops wrap round, one-shots hold their last frame.
 inline void SampleClip(int clip, float seconds, Pose& out) {
     const ClipInfo& c = InfoOf(clip);
@@ -67,6 +71,7 @@ inline void SampleClip(int clip, float seconds, Pose& out) {
     }
     const float k = std::clamp(f - static_cast<float>(a), 0.0f, 1.0f);
     for (int i = 0; i < kBoneCount; i++) out.bone[i] = Mix(FrameXform(c.firstFrame + a, i), FrameXform(c.firstFrame + b, i), k);
+    PreserveJointLinks(out);
 }
 
 inline void BlendPoses(const Pose& a, const Pose& b, float k, Pose& out) {
@@ -79,6 +84,17 @@ inline void Rotate(const float q[4], const float v[3], float out[3]) {
     out[0] = v[0] + q[3] * tx + (q[1] * tz - q[2] * ty);
     out[1] = v[1] + q[3] * ty + (q[2] * tx - q[0] * tz);
     out[2] = v[2] + q[3] * tz + (q[0] * ty - q[1] * tx);
+}
+
+// Keep connected joints attached during frame interpolation and cross-fades.
+// Global skinning transforms otherwise lerp joint offsets through the body,
+// shortening the long arms and making a lowering elbow bend unnaturally.
+inline void PreserveJointLinks(Pose& p) {
+    for (int b=0;b<kBoneCount;b++) if(kKeepJointLink[b] && kBoneParents[b]>=0) {
+        const auto& parent=p.bone[kBoneParents[b]];float target[3],rotated[3];
+        Rotate(parent.q,kBoneHeads[b],target);Rotate(p.bone[b].q,kBoneHeads[b],rotated);
+        for(int k=0;k<3;k++)p.bone[b].t[k]=target[k]+parent.t[k]-rotated[k];
+    }
 }
 
 // Where a vertex ends up in a pose, and which way its normal (unit length) then points.
@@ -140,6 +156,7 @@ struct Animator {
             float k = std::clamp(fade / fadeLen, 0.0f, 1.0f);
             k = k * k * (3.0f - 2.0f * k);
             BlendPoses(old, out, k, out);
+            PreserveJointLinks(out);
         }
     }
 };
@@ -152,6 +169,55 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
         SkinVertex(p, kVerts[i], pos, nrm);
         for (int k = 0; k < 3; k++) { mn[k] = std::min(mn[k], pos[k]); mx[k] = std::max(mx[k], pos[k]); }
     }
+}
+
+// Author-defined expression beats, plus independent half/closed/half blinks.
+// Ground covered per walk/run cycle (game units at kWorldScale), from the clips' leg swing; the game plays them at speed/stride so feet do not skate.
+constexpr float kWalkStride = 37.7f;
+constexpr float kRunStride = 54.7f;
+// The video-chat scene (clip kVideochat): the call's mom lets one go at kVideoChatFartTime, the tablet leaves her hands at kVideoChatDropTime (the game
+// takes over as a physics object from there) and she bolts at kVideoChatFleeTime. The tablet's middle in model units (rest pose, game axes).
+constexpr float kVideoChatFartTime = 2.6f, kVideoChatDropTime = 3.25f, kVideoChatFleeTime = 3.7f;
+constexpr float kTabletCenter[3] = {0.0f, 85.0f, 23.5f};
+constexpr float kWorldScale = .41f; // about 56 units tall; young Link is about 60.
+constexpr float kFocusHeight = 49.2f;
+inline int Expression(int clip, float seconds, float clock) {
+    const auto& info=InfoOf(clip);
+    float f=std::isfinite(seconds) ? seconds*info.fps : 0;
+    if (info.loops) { f=std::fmod(f,static_cast<float>(info.frames)); if (f<0) f+=info.frames; }
+    else f=std::clamp(f,0.0f,static_cast<float>(info.frames-1));
+    int face=kFrameFaces[info.firstFrame+std::clamp(static_cast<int>(f),0,static_cast<int>(info.frames)-1)];
+    float blink=std::isfinite(clock) ? std::fmod(std::max(0.0f,clock),4.37f) : 0.0f;
+    if (face!=kFaceGiggle && blink>3.10f && blink<3.29f) return blink<3.15f || blink>3.24f ? kFaceHalf : kFaceShut;
+    return face;
+}
+
+// Which picture the tablet shows `seconds` into a clip.
+inline int ScreenFor(int clip, float seconds) {
+    const auto& info = InfoOf(clip);
+    float f = std::isfinite(seconds) ? seconds * info.fps : 0;
+    if (info.loops) { f = std::fmod(f, static_cast<float>(info.frames)); if (f < 0) f += info.frames; }
+    else f = std::clamp(f, 0.0f, static_cast<float>(info.frames - 1));
+    return kFrameScreens[info.firstFrame + std::clamp(static_cast<int>(f), 0, static_cast<int>(info.frames) - 1)];
+}
+
+// The ponytail's two joints bent by the cloth springs (royale::TailTracker). `strength` is the player's cloth setting (0 = off). Positive fore trails
+// the tail back, positive side trails it out to her left, as for Link's cap.
+inline int BoneByName(const char* name) {
+    for (int i = 0; i < kBoneCount; i++) { const char* a = kBoneNames[i]; const char* b = name; while (*a && *a == *b) { a++; b++; } if (*a == *b) return i; }
+    return -1;
+}
+inline void ApplyPonytail(Pose& p, const HatSpring& sp, float strength) {
+    static const int b1 = BoneByName("ponytail"), b2 = BoneByName("ponytail2");
+    if (b1 < 0 || b2 < 0 || !(strength > 0.01f)) return;
+    const float fore1 = sp.baseFore * 0.8f * strength, side1 = -sp.baseSide * 0.8f * strength;
+    const float fore2 = (0.9f * (sp.baseFore - sp.midFore) + 0.9f * (sp.midFore - sp.tipFore) + 0.35f * sp.baseFore) * strength;
+    const float side2 = -(0.9f * (sp.baseSide - sp.midSide) + 0.9f * (sp.midSide - sp.tipSide) + 0.35f * sp.baseSide) * strength;
+    float top[3];
+    PosedPoint(p.bone[b1], kBoneHeads[b1], top);
+    SwingBone(p.bone[b1], kBoneHeads[b1], fore1, side1);
+    SwingBoneAt(p.bone[b2], top, fore1, side1);              // the lower joint rides on the upper one...
+    SwingBone(p.bone[b2], kBoneHeads[b2], fore2, side2);     // ...and bends further on its own
 }
 
 } // namespace maya

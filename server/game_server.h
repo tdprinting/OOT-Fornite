@@ -5,6 +5,7 @@
 #include "sim.h"
 #include "../shared/sandbox_layout.h"
 #include "../shared/convergence_layout.h"
+#include "../shared/kingdom_layout.h"
 #include "../shared/island_anchors.h"
 #include "../shared/placement.h"
 #include <algorithm>
@@ -34,7 +35,7 @@ class GameServer {
     GameServer(net::Transport& transport, uint64_t seed, Circle map, int lootCount = 400)
         : link(transport), sim(seed, map, lootCount), mapCircle(map) { sim.match.SetMajorBoss(majorBoss); }
     // How many mini bosses a match has (0 to 8). Survives Reconfigure.
-    void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(mapId == kConvergenceMapIndex && n > 0 ? 7 : n); }
+    void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(IsAuthoredMap(mapId) && n > 0 ? 7 : n); }
     // The map's dragon arrives halfway through the storm timeline. Survives Reconfigure.
     void SetMajorBoss(bool on) { majorBoss = on; sim.match.SetMajorBoss(on); }
     // The host's player-count slider: how many players the match has, bots included. Lobby only, and never fewer than the people here.
@@ -43,8 +44,8 @@ class GameServer {
         if (!sim.match.SetPlayerLimit(n)) return false;
         playerLimit = n;
         poiCount = (std::max)(4, (std::min)(12, n / 2 + 2));
-        if (bossCount > 0 && mapId != kConvergenceMapIndex) bossCount = (std::max)(0, (std::min)(5, n / 6));
-        sim.match.SetBossCount(mapId == kConvergenceMapIndex && bossCount > 0 ? 7 : bossCount);
+        if (bossCount > 0 && !IsAuthoredMap(mapId)) bossCount = (std::max)(0, (std::min)(5, n / 6));
+        sim.match.SetBossCount(IsAuthoredMap(mapId) && bossCount > 0 ? 7 : bossCount);
         net::MatchStateMsg m;
         m.state = static_cast<uint8_t>(sim.match.State());
         m.alive = static_cast<uint8_t>(sim.match.Alive());
@@ -78,10 +79,16 @@ class GameServer {
         lastValid = valid;
         lastHeight = height;
         const bool convergenceMap = ClampMap(mapId) == kConvergenceMapIndex;
+        const bool kingdomMap = ClampMap(mapId) == kKingdomMapIndex;
         if (convergenceMap) {
             auto original = valid;
             valid = [original](Vec2 p) { return ConvergenceDryGround(p) && (!original || original(p)) && !ConvergenceObstacleAt(p); };
             if (!height) height = [](Vec2 p, float* y) { *y = ConvergenceGroundHeight(p); return true; };
+        }
+        if (kingdomMap) {   // a chest site on an upper floor or a roof may stand inside a building's walls, so the site list is not filtered by obstacles
+            auto original = valid;
+            valid = [original](Vec2 p) { float y; return (KingdomLootHeightAt(p, &y) || (KingdomDryGround(p) && !KingdomObstacleAt(p, 0.0f))) && (!original || original(p)); };
+            if (!height) height = [](Vec2 p, float* y) { float s; *y = KingdomLootHeightAt(p, &s) ? s : KingdomGroundHeight(p); return true; };
         }
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
@@ -122,6 +129,18 @@ class GameServer {
                 for (const auto& o : convergence::kObstacles) add((o.x0 + o.x1) * 0.5f, (o.z0 + o.z1) * 0.5f, 0.5f * (std::max)(o.x1 - o.x0, o.z1 - o.z0));
             };
             plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
+        } else if (kingdomMap) {
+            layout = GenerateKingdomLayout(valid);   // the chest sites are hand-placed in the map (tools/maps/kingdom); no scenery is generated
+            props = layout.props;
+            const Ground ground(valid, height);
+            // The rest of the chests go beside the map's buildings (on their far side from the middle) and at the foot of its cliffs.
+            const AnchorExtraFn authored = [](const Circle& m, std::vector<LootAnchor>& anchors, std::vector<Circle>&) {
+                for (const auto& b : kingdom::kBuildings) {
+                    const float dx = b.x - m.center.x, dz = b.z - m.center.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+                    anchors.push_back({{b.x, b.z}, AnchorKind::Scenery, {dx / d, dz / d}, (std::max)(b.halfWidth, b.halfDepth) + 70.0f});
+                }
+            };
+            plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
         } else {
             // Camps, scenery in clusters, formations, outposts, climbs, lookouts: each tied to the ground and to each other (shared/placement.h).
             AnchorExtraFn island;
@@ -140,7 +159,7 @@ class GameServer {
         sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
         // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
-        const int bosses = sandboxMap ? 0 : convergenceMap && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
@@ -151,6 +170,20 @@ class GameServer {
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid, height);
             AddSceneryToNav(*grid, props);
+            if (kingdomMap) {   // the water bots swim, floors, ramps and roofs they climb to, ivy and cliffs they scale, and where the chests up there are
+                grid->AddWater(-227.0f, 30.0f, [](Vec2 p) { return std::fabs(p.x) < 7412.0f && std::fabs(p.z) < 7705.0f && KingdomTerrainHeight(p) < -212.0f; });
+                grid->SetClimbing(true);
+                std::vector<NavGrid::UpperNode> nodes;
+                for (const auto& n : kingdom::kUpperNodes) nodes.push_back({static_cast<float>(n.x), static_cast<float>(n.z), static_cast<float>(n.y)});
+                grid->AddUpper(nodes);
+                for (const auto& cw : kingdom::kClimbWalls) {
+                    const float nx = cw.nx / 100.0f, nz = cw.nz / 100.0f;
+                    grid->AddClimb({cw.x + nx * 50.0f, cw.z + nz * 50.0f}, static_cast<float>(cw.y0), {cw.x - nx * 45.0f, cw.z - nz * 45.0f}, static_cast<float>(cw.y1));
+                }
+                for (const auto& site : kingdom::kLootSites)
+                    if (site.y > KingdomGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
+            }
+            grid->BuildRegions();
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
             // The carts the server drives (for the bots, and the ones nobody drives) roll on the same grid: its heights blended smoothly, and

@@ -52,7 +52,7 @@ void WarHide() {
 }
 void WarOpen() {
     const auto h = gSession.Hud();
-    WarShow(!gSession.Joined() ? WarPage::Play : h.state == royale::MatchState::Lobby ? WarPage::Lobby : WarPage::Pause);
+    WarShow(!gSession.Joined() ? WarPage::Play : h.state == royale::MatchState::Lobby ? WarPage::Lobby : h.state == royale::MatchState::Ending ? WarPage::Results : WarPage::Pause);
 }
 void WarSave() {
     UiState& ui = Ui();
@@ -283,7 +283,8 @@ void WarBuild() {
         WarRow(81,4,"QUIT TO MAIN MENU",h.isHost?"You are hosting. Leaving closes this match for everyone.":"Leave this match and return to the main screen",[](int){WarQuit();});
         break;
     case WarPage::Results:
-        WarRow(90,4,"PLAY AGAIN","Return home to choose your next match",[](int){WarQuit();});
+        WarRow(92,3,"FULL MATCH RECAP","Standings, score breakdown, replay and spectating",[](int){gEnd.open=true;gEnd.at=ImGui::GetTime()-kEndPanelDelay;WarHide();});
+        WarRow(90,4,"NEW MATCH","Host starts another match with the same lobby",[](int){gSession.RequestPlayAgain();WarHide();},h.isHost);
         WarRow(91,5,"MAIN MENU","Return to the War Table",[](int){WarQuit();});
         break;
     case WarPage::Tools: {
@@ -459,6 +460,7 @@ const unsigned char* WarMapPixels(int map) {
     const unsigned char* colours=nullptr;
     if(map==royale::kFortniteMapIndex)colours=royale::fortnite_data::kColours;
     if(map==royale::kConvergenceMapIndex)colours=royale::convergence::kColours;
+    if(map==royale::kKingdomMapIndex)colours=royale::kingdom::kColours;
     if(map==royale::kSandboxMapIndex)colours=royale::sandbox::Terrain().colours.data();
     std::shared_ptr<Fast::Texture> original;
     if(!colours) {
@@ -646,7 +648,8 @@ void WarGameUpdate() {
     gWar.lastJoined=joined;
     if(joined&&(h.state==royale::MatchState::Countdown||h.state==royale::MatchState::Drop)&&gWar.page==WarPage::Lobby)WarHide();
     if(joined&&h.state==royale::MatchState::InMatch&&gWar.page==WarPage::Lobby)WarHide();
-    if(joined&&h.state==royale::MatchState::Ending&&gWar.page!=WarPage::Results&&gWar.page!=WarPage::Quit)WarShow(WarPage::Results);
+    // The gameplay recap owns the initial end-of-match presentation. Start opens native results.
+    if(joined&&h.state==royale::MatchState::Lobby&&gWar.page==WarPage::Results)WarShow(WarPage::Lobby);
     if(gWar.pendingZone>=0&&gSession.Sandbox()&&h.haveSelf&&InField()&&h.state==royale::MatchState::InMatch) {
         SandboxDo(SandboxCmd::Go,gWar.pendingZone);gWar.pendingZone=-1;WarHide();
     }

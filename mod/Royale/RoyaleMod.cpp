@@ -18,14 +18,22 @@
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
 #include "maya_anim.h"
+#include "maya_sounds.h"
+#include "maya_phone.h"
 #include "cart_model.h"
+#include "gilded_sword_icon.h"
+#include "gilded_sword_surface.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "convergence_layout.h"
 #include "convergence_model.h"
+#include "kingdom_layout.h"
+#include "kingdom_model.h"
+#include "kingdom_surface_maps.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
+#include "lobby_pets.h"
 #include "lobby_fish_model.h"
 #include "lobby_reef_geometry.h"
 #include "fortnite_scenery.h"
@@ -37,10 +45,15 @@
 #include "sky_model.h"
 #include "graphics_stability.h"
 #include "graphics_layers.h"
+#include "water_sim.h"
+#include "water_look.h"
+#include "item_surface_maps.h"
+#include <libultraship/surface_map.h>
 #include "tune.h"
 #include "basic_pitch.h"
 #include "oot_arrange.h"
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <memory>
@@ -148,6 +161,10 @@ void FrameInterpolation_RecordCloseChild(void);
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
+static_assert(SCENE_KOKIRI_FOREST==royale::lobby::kAreas[1].scene && ENTR_KOKIRI_FOREST_0_1==royale::lobby::kAreas[1].entrance,"Kokiri waiting route");
+static_assert(SCENE_LON_LON_RANCH==royale::lobby::kAreas[2].scene && ENTR_LON_LON_RANCH_0_1==royale::lobby::kAreas[2].entrance,"Ranch waiting route");
+static_assert(SCENE_KAKARIKO_VILLAGE==royale::lobby::kAreas[3].scene && ENTR_KAKARIKO_VILLAGE_0_1==royale::lobby::kAreas[3].entrance,"Kakariko waiting route");
+static_assert(SCENE_LAKE_HYLIA==royale::lobby::kAreas[4].scene && ENTR_LAKE_HYLIA_0_1==royale::lobby::kAreas[4].entrance,"Lake waiting route");
 static_assert(SCENE_TEMPLE_OF_TIME == royale::kWaitingRoomScene, "update kWaitingRoomScene in shared/map.h");
 static_assert(SCENE_HYRULE_FIELD == royale::kHyruleFieldScene, "update kHyruleFieldScene in shared/map.h");
 static_assert(SCENE_HYRULE_FIELD == royale::kMaps[0].scene && SCENE_LAKE_HYLIA == royale::kMaps[1].scene && SCENE_KAKARIKO_VILLAGE == royale::kMaps[2].scene &&
@@ -237,6 +254,8 @@ float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (non
 float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
 bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
 bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
+bool gGroundTrails = true;          // the local option: snow keeps footprints and landing craters
+float gGroundDeform = 1.0f;         // the local option: how far snow and puddles shape the ground, 0 (flat) to 2 (deep prints, high banks)
 float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
 bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true, gHitReact = true;   // the local options: hit feedback (see "hit feedback")
 float gHitAmount = 1.0f;            // the local option: how many hit particles, 0 (none) to 2
@@ -250,6 +269,16 @@ bool gWaterSkyOn = true;            // the local option: the sky, the sun and th
 bool gWaterBodiesRefl = true;       // the local option: reflections of whoever is at the water
 bool gWaterUnder = true;            // the local option: the underwater look
 bool gWaterCurrent = true;          // the local option: a current carries a swimming player
+float gWaterChop = 0.6f;            // the local option: the waves' shape, 0 round to 1 sharp, choppy crests
+float gWaterClarity = 1.0f;         // the local option: how far you see into the water, 0 (murky) to 2 (glass clear)
+bool gWaterGlints = true;           // the local option: the sparkling ripple texture on the surface
+float gWaterGlintAmt = 1.0f;        // and how strong it is, 0 to 2
+bool gWaterCaustics = true;         // the local option: caustics, the dancing light on the floor under shallow water
+float gWaterCausticAmt = 1.0f;      // and how bright, 0 to 2
+bool gWaterFoamTex = true;          // the local option: textured foam on shores, wakes and whitecaps
+float gWaterFoamAmt = 1.0f;         // and how much, 0 to 2
+bool gWaterRipples = true;          // the local option: the ripple simulation round the player (rings that spread, cross and interfere)
+float gWaterUnderAmt = 1.0f;        // the local option: how strong the underwater look is, 0 to 2
 bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
@@ -317,9 +346,12 @@ bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
            (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || gMapId == royale::fortnite::gTerrainMapId)));
 }
-bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
+int WaitingAreaIndex() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.WaitingArea"),0),0,royale::lobby::kAreaCount-1); }
+bool InWaitingRoom() { return InGame() && royale::lobby::IsWaitingScene(gPlayState->sceneNum); }
+bool InSelectedWaitingRoom() { return InGame() && gPlayState->sceneNum==royale::lobby::WaitingArea(WaitingAreaIndex()).scene; }
 
 const char* SceneName(int scene) {
+    for (const auto& area:royale::lobby::kAreas) if(area.scene==scene)return area.name;
     static char other[24];
     for (int i = 0; i < royale::kMapCount; i++) if (scene == royale::kMaps[i].scene) return royale::kMaps[i].name;
     if (scene == SCENE_TEMPLE_OF_TIME) return "Temple of Time (waiting room)";
@@ -360,7 +392,7 @@ constexpr const char* kGfxLayerNames[kGfxLayerCount] = { "Sky", "Grass and trees
                                                           "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters" };
 // Each layer's translucent window to start with and never go below, in KB: enough for its busiest normal frame (the sky on an overcast night with the
 // Milky Way is about 5500 commands, 88 KB), so a layer is only ever cut short by something unusual. Solid drawing has no window: it takes what is free.
-constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 24, 72, 16, 16, 8, 12, 16, 8, 4 };
+constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 32, 128, 16, 16, 8, 12, 16, 8, 4 };
 
 struct GfxLayerStats {
     size_t xlu = 0, opa = 0, data = 0;   // bytes used this frame
@@ -599,7 +631,7 @@ bool TravelTo(int entrance) {
     gTravelCooldown = 5 * royale::kTickHz;
     return true;
 }
-bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
+bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(royale::lobby::WaitingArea(WaitingAreaIndex()).entrance); }
 int EntranceFor(int mapId) {
     switch (royale::ClampMap(mapId)) {
         case 1: return ENTR_LAKE_HYLIA_0_1;
@@ -693,13 +725,22 @@ s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "sol
 // directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
 bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
 bool BlocksAreBaked();   // the climbing blocks are in the island's collision (see "WantedBlocks")
+// The maps built by hand in Blender (shared/convergence_data.h, shared/kingdom_data.h): everything on them is baked, nothing is scattered.
+bool OnAuthoredTerrain() { return OnIsland() && royale::IsAuthoredMap(royale::fortnite::gTerrainMapId); }
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
+bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
     if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kKingdomMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::KingdomLootHeightAt({x,z},&lootY) ? lootY : royale::KingdomGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -822,6 +863,7 @@ bool HazardFloorAt(float x, float z) {
 
 bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
+    if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -830,9 +872,9 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex || gMapId == royale::kConvergenceMapIndex) {   // authored maps retain their intended storm footprint
+    if (gMapId == royale::kSandboxMapIndex || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
@@ -919,7 +961,8 @@ Look LookFor(royale::ItemId weapon) {
     switch (weapon) {
         case ItemId::BasicSword:
         case ItemId::KokiriSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_KOKIRI, ITEM_SWORD_KOKIRI };
-        case ItemId::MasterSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };
+        case ItemId::MasterSword:
+        case ItemId::GildedSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };   // (the Gilded Sword is the Master Sword's moves with a model of its own: see OnPlayerCustomSword)
         case ItemId::BiggoronSword: return { PLAYER_MODELGROUP_BGS, PLAYER_IA_SWORD_BIGGORON, ITEM_SWORD_BGS };
         case ItemId::GiantsHammer:
         case ItemId::MegatonHammer: return { PLAYER_MODELGROUP_HAMMER, PLAYER_IA_HAMMER, ITEM_HAMMER };
@@ -1219,6 +1262,9 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::ItemGet: return AnimSeq(RA(demo_get_itemB), false);
         case Anim::OpenChest: return AnimSeq(player != nullptr && player->ageProperties != nullptr ? player->ageProperties->unk_98 : RA(demo_Tbox_open), false);
         case Anim::Jump: return AnimSeq(RA(normal_run_jump), false).Add(RA(normal_landing));
+        case Anim::Swim: return AnimSeq(RA(swimer_swim), true);          // a bot swimming (the strokes the game gives a swimmer)
+        case Anim::Tread: return AnimSeq(RA(swimer_swim_wait), true);    // and treading water
+        case Anim::Climb: return AnimSeq(RA(normal_Fclimb_upL), true);   // hand over hand up a cliff or an ivy wall
         case Anim::Hurt: return AnimSeq(RA(normal_front_shit), false);
         case Anim::Dead: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));
         case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
@@ -1303,7 +1349,7 @@ void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo
     switch (static_cast<Anim>(anim)) {
         case Anim::Attack:
             if (grip == Grip::Hammer) PuppetSfx(&player->actor, NA_SE_IT_HAMMER_SWING);
-            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
+            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword || weapon == ItemId::GildedSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
             PuppetVoice(player, combo % 4 == 2 || grip == Grip::Hammer || grip == Grip::TwoHand ? NA_SE_VO_LI_SWORD_L : NA_SE_VO_LI_SWORD_N);
             break;
         case Anim::JumpSlash:
@@ -1966,6 +2012,9 @@ void ApplyLocalTunic(bool on) {
 
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain = false, const Player* hanger = nullptr); // with the other custom models, below
 
+// The player being drawn right now if what they hold is the Gilded Sword (the game's sword limbs ask the mod to draw it: OnPlayerCustomSword).
+const Player* gGildedPlayer = nullptr;
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
@@ -1973,7 +2022,9 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     u8 original = gSaveContext.equips.buttonItems[0];
     gSaveContext.equips.buttonItems[0] = st ? PuppetLook(*st).buttonItem : ITEM_NONE;
     if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
+    gGildedPlayer = st != nullptr && st->weapon == royale::ItemId::GildedSword ? reinterpret_cast<const Player*>(actor) : nullptr;
     Player_Draw(actor, play);
+    gGildedPlayer = nullptr;
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
@@ -2066,6 +2117,8 @@ struct Corpse {
     float hitCooldown = 0;
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
+    bool forward = false;        // thrown the way it faced: it goes down on its front instead of its back
+    int frames = 0;              // updates so far (the death cry waits for the second, when the game knows where on screen the body is)
 };
 std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
@@ -2113,6 +2166,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     const float dt = 1.0f / royale::kTickHz;
     if (!c.test) c.age += dt;
     if (c.age > kCorpseSeconds) { c.dying = true; Actor_Kill(actor); return; }
+    if (++c.frames == 2 && !c.test) PuppetVoice(player, NA_SE_VO_LI_DOWN);   // Link's cry as he goes down
 
     // Walking into a body shoves it (and sets it rolling). Not while invisible: a spectator stands on their own body.
     {
@@ -2170,6 +2224,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
             actor->world.pos.y = ground + lift;
             onGround = true;
             if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the tumble changes, and the limbs fling
+                if (c.bounces < 2) PuppetSfx(actor, NA_SE_PL_BODY_HIT);   // the thud of hitting the ground
                 c.vy = -c.vy * 0.34f;
                 c.bounces++;
                 c.vel.x *= 0.72f; c.vel.z *= 0.72f;
@@ -2253,7 +2308,8 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     }
 
     if (!c.animStarted) {
-        LinkAnimation_PlayOnce(play, &player->skelAnime, (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA); // knocked flat on the back
+        // knocked flat: on the back, or on the front when the blow came from behind
+        LinkAnimation_PlayOnce(play, &player->skelAnime, c.forward ? RA(normal_front_downA) : (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA);
         c.animStarted = true;
     }
     LinkAnimation_Update(play, &player->skelAnime);
@@ -2305,11 +2361,12 @@ Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
 }
 
 // The body of player `s`, thrown along (pushX, pushZ). Once per elimination: the elimination event and the puppet list can both report it.
-void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
-    if (gPlayState == nullptr) return;
+// Returns the body's id (0 if none was made).
+uint16_t SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
+    if (gPlayState == nullptr) return 0;
     const double now = ImGui::GetTime();
     auto fell = gFellAt.find(s.id);
-    if (fell != gFellAt.end() && now - fell->second < 10.0) return;
+    if (fell != gFellAt.end() && now - fell->second < 10.0) return 0;
     gFellAt[s.id] = now;
     {   // room for one more: the oldest body goes
         size_t bodies = 0;
@@ -2326,7 +2383,7 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     gSpawningPuppet = id;
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
-    if (actor == nullptr) return;
+    if (actor == nullptr) return 0;
     actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);   // a body can't be Z-targeted like a player
     Corpse c;
     c.actor = actor;
@@ -2338,10 +2395,12 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     c.pitchVel = -7.0f - (id % 3);                            // flips over backwards
     c.spin = (id & 1 ? 1.0f : -1.0f) * 2.0f;
     c.rollVel = -sideways / kBodyRadius * 0.5f;
+    c.forward = pushX * std::sin(yaw) + pushZ * std::cos(yaw) > 0.0f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
     gCorpses[id] = c;
     gCorpseOf[actor] = id;
+    return id;
 }
 
 // ---- the lobby test ragdoll ---------------------------------------------------------------------------------------------------
@@ -2641,25 +2700,27 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
 struct GpuMesh {
     std::vector<Vtx> vtx;
     std::vector<Gfx> dl;
+    int sub = 1;   // corner positions are stored in 1/sub units (the ground patches use quarter units, so a puddle's 0.3-unit height and a snow lump survive)
 };
 GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots];
 bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots] = {};
 
 // Turns a triangle list into vertices and a display list. The vectors must not move afterwards: the display list points into them.
-bool BuildGpuMesh(const royale::MeshData& data, GpuMesh& m) {
+bool BuildGpuMesh(const royale::MeshData& data, GpuMesh& m, int sub = 1) {
     if (data.v.empty()) return false;
+    m.sub = sub;
     m.vtx.resize(data.v.size());
     for (size_t i = 0; i < data.v.size(); i++) {
         Vtx& v = m.vtx[i];
-        v.v.ob[0] = static_cast<s16>(std::lround(data.v[i].x));
-        v.v.ob[1] = static_cast<s16>(std::lround(data.v[i].y));
-        v.v.ob[2] = static_cast<s16>(std::lround(data.v[i].z));
+        v.v.ob[0] = static_cast<s16>(std::lround(data.v[i].x * static_cast<float>(sub)));
+        v.v.ob[1] = static_cast<s16>(std::lround(data.v[i].y * static_cast<float>(sub)));
+        v.v.ob[2] = static_cast<s16>(std::lround(data.v[i].z * static_cast<float>(sub)));
         v.v.flag = 0;
         v.v.tc[0] = v.v.tc[1] = 0;
         v.v.cn[0] = data.v[i].r;
         v.v.cn[1] = data.v[i].g;
         v.v.cn[2] = data.v[i].b;
-        v.v.cn[3] = 255;
+        v.v.cn[3] = data.v[i].a;
     }
     // The graphics chip takes up to 32 vertices at a time; each triangle has its own three, so ten triangles per batch.
     const size_t batches = (data.v.size() / 3 + 9) / 10;
@@ -2680,7 +2741,7 @@ const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
     variant %= royale::kMeshVariantSlots;
     GpuMesh& m = gGpuMeshes[k][variant];
     if (gGpuBuilt[k][variant]) return &m;
-    if (!BuildGpuMesh(royale::BuildMesh(kind, variant), m)) return nullptr;
+    if (!BuildGpuMesh(royale::BuildMesh(kind, variant), m, kind == royale::MeshKind::Ground ? 4 : 1)) return nullptr;
     gGpuBuilt[k][variant] = true;
     return &m;
 }
@@ -2853,18 +2914,19 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     // The glider's origin is its handle bar, and the bar is put exactly where Link's two hands are (the game works out where each hand is as it
     // draws him), so he always holds the grips, whatever his size or pose. Banking, pitching and swaying all turn about the bar, so it stays in his hands.
-    // Link's size (1 at normal, bigger under Adult Power) scales where his raised hands are. The old fixed fallback of 125 sat well above his hands, so
-    // whenever the check below rejected them the bar floated over his head; remember where the hands were last seen (as an offset from his feet) instead.
+    // Link's size (1 at normal, bigger under Adult Power) scales the windows below. In the ledge-hang pose he hangs from his hands, so the hands are
+    // at (or even a little below) the point the game calls his position, with his body below them: the old check that the hands were well *above*
+    // that point threw the real hands away every frame, and the bar floated at the fixed fallback height above them instead. Trust any hand
+    // position that is finite and anywhere near him; the pose may not have taken yet only on the very first frame, when the position is (0, 0, 0).
     const float size = hanger != nullptr ? std::max(0.3f, hanger->actor.scale.y / 0.01f) : 1.0f;
-    static std::unordered_map<uint32_t, Vec3f> lastGrip;   // per glider: hands' offset from the feet
-    Vec3f grip = { x, y + 80.0f * size, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
+    static std::unordered_map<uint32_t, Vec3f> lastGrip;   // per glider: hands' offset from his position
+    Vec3f grip = { x, y + 20.0f * size, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
     if (auto it = lastGrip.find(scheme); it != lastGrip.end()) grip = { x + it->second.x, y + it->second.y, z + it->second.z };
     if (hanger != nullptr) {
         const Vec3f& l = hanger->bodyPartsPos[PLAYER_BODYPART_L_HAND];
         const Vec3f& r = hanger->bodyPartsPos[PLAYER_BODYPART_R_HAND];
         const float mx = (l.x + r.x) * 0.5f, my = (l.y + r.y) * 0.5f, mz = (l.z + r.z) * 0.5f;
-        // Trust the hands only if they are somewhere believable (near him, and not down at his feet or far over his head): the pose may not have taken yet.
-        if (std::isfinite(mx + my + mz) && std::fabs(mx - x) < 80.0f * size && std::fabs(mz - z) < 80.0f * size && my > y + 25.0f * size && my < y + 220.0f * size) {
+        if (std::isfinite(mx + my + mz) && std::fabs(mx - x) < 150.0f * size && std::fabs(mz - z) < 150.0f * size && std::fabs(my - y) < 260.0f * size) {
             grip = { mx, my, mz };
             if (lastGrip.size() > 48) lastGrip.clear();
             lastGrip[scheme] = { mx - x, my - y, mz - z };
@@ -3274,7 +3336,8 @@ void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float 
     Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
     Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
     Matrix_RotateY(yaw, MTXMODE_APPLY);
-    Matrix_Scale(a / royale::ground::kMeshRadius, rise, b / royale::ground::kMeshRadius, MTXMODE_APPLY);
+    const float inv = 1.0f / static_cast<float>(m->sub);
+    Matrix_Scale(a / royale::ground::kMeshRadius * inv, rise * inv, b / royale::ground::kMeshRadius * inv, MTXMODE_APPLY);
     if (alpha < 0) {
         gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
         gSPDisplayList(POLY_OPA_DISP++, dl);
@@ -3287,49 +3350,92 @@ void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float 
 }
 
 // ---- walking through the patches ----------------------------------------------------------------------------------------------------------
-// Whoever walks through snow presses it down (the pile's mesh is dented under their feet and keeps a trail that fills in again, quickly while it
-// snows), and whoever walks through a puddle splashes it and sends rings out across it. The walkers are the local player, everyone else's actors and
-// the carts, the same set the water uses.
-struct Walker { const void* key; float x, y, z, size, speed; };
-struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0; };
-struct SnowDent { float x, z, birth; };
+// Whoever walks through snow leaves footprints (a left and a right foot, turned the way they were going, each a soft dent with a low rim of pushed
+// snow) that fill in again, quickly while it snows; whoever lands in it from a jump, a fall or the skydive leaves a crater as big as the fall was
+// hard. The snow mesh is cut into smaller triangles where a print lies so the print is a smooth shape, not a stamped square (DentedSnow), and every
+// point's height change comes from shared/ground_patches.h (DentsChange). Whoever walks through a puddle splashes it and sends rings out across it.
+// The walkers are the local player, everyone else's actors and the carts, the same set the water uses.
+struct Walker { const void* key; float x, y, z, size, speed, hx, hz, step, vy; };   // (hx, hz: the way they are going, a unit vector; step: the distance moved this frame; vy: up is positive)
+struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0, fall = 0; int side = 1; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0, dentFrame = 0; };
+struct SnowDent { royale::ground::Dent d; float birth, life; };   // d.depth is how deep it was made (before it fills in)
 struct PuddleRing { float x, y, z, birth, size; };
+// The water's sparkle on puddles: each puddle drawn this frame asks for it here, and the water section draws them all at the end (DrawPuddleSheens).
+struct PuddleSheen { float x, y, z, sx, sz, yaw, a, b, fade; };
+std::vector<PuddleSheen> gPuddleSheens;
+void DrawPuddleSheens(PlayState* play);   // the water section
 std::unordered_map<const void*, WalkTrack> gWalkTrack;
 std::vector<SnowDent> gSnowDents;
 std::vector<PuddleRing> gPuddleRings;
 uint32_t gWalkFrame = 0;
+int gDentTriBudget = 0;   // triangles the pressed-in snow may use this frame (each print splits the triangles round it into four)
 void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add);   // (the carts are known further down)
-constexpr float kDentReach = 34.0f, kDentDepth = 9.0f;   // how wide and how deep a foot goes into snow
+constexpr float kDentRimGrow = 30.0f;   // a walker this close outside a snow patch's edge still presses the rim
+constexpr float kFootLen = 11.0f, kFootWid = 6.5f, kFootDepth = 8.0f;   // a footprint (half-extents and depth in units) for someone of size 16
 
-// A copy of a snow patch's mesh with the snow pushed down where the dents are (`dents`: x, z, depth 0-1 in the world). nullptr when there is no memory this frame.
-Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<SnowDent>& dents, const std::vector<float>& depth) {
-    const size_t n = m->vtx.size();
-    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, n * sizeof(Vtx)));
+// A copy of a snow patch's mesh with the snow pressed down where the dents are. The triangles a dent reaches are each split into four (so a print
+// is round and smooth: the base mesh has a corner about every 10 units, a print is 20 long), then every corner is moved by the dents' combined height
+// change and tinted (pressed snow goes bluer in the pit, a shade whiter on the rim). Triangles no dent reaches are copied as they are, so the pile
+// looks exactly as it did until it is walked on, and neighbouring triangles always agree on their shared corners (no cracks). nullptr when there is
+// no memory or triangle budget left this frame (the pile is then drawn whole).
+Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<royale::ground::Dent>& dents) {
+    namespace gp = royale::ground;
+    struct PV { float lx, h, lz, r, g, bl; };
+    const size_t n = m->vtx.size(), tris = n / 3;
+    const float inv = 1.0f / static_cast<float>(m->sub);
+    const float sa = a / gp::kMeshRadius, sb = b / gp::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
+    auto corner = [&](size_t i) { const Vtx& v = m->vtx[i]; return PV{ v.v.ob[0] * inv * sa, v.v.ob[1] * inv * rise, v.v.ob[2] * inv * sb, static_cast<float>(v.v.cn[0]), static_cast<float>(v.v.cn[1]), static_cast<float>(v.v.cn[2]) }; };
+    auto worldX = [&](const PV& p) { return x + p.lx * c + p.lz * sn; };
+    auto worldZ = [&](const PV& p) { return z - p.lx * sn + p.lz * c; };
+    std::vector<uint8_t> touched(tris, 0);
+    size_t touchedCount = 0;
+    for (size_t t = 0; t < tris; t++) {
+        const PV p0 = corner(t * 3), p1 = corner(t * 3 + 1), p2 = corner(t * 3 + 2);
+        const float cx = (worldX(p0) + worldX(p1) + worldX(p2)) / 3.0f, cz = (worldZ(p0) + worldZ(p1) + worldZ(p2)) / 3.0f;
+        const float rad = std::max({ std::hypot(worldX(p0) - cx, worldZ(p0) - cz), std::hypot(worldX(p1) - cx, worldZ(p1) - cz), std::hypot(worldX(p2) - cx, worldZ(p2) - cz) });
+        for (const gp::Dent& d : dents)
+            if (std::hypot(cx - d.x, cz - d.z) < gp::DentReach(d) + rad) { touched[t] = 1; touchedCount++; break; }
+    }
+    if (touchedCount == 0) return nullptr;
+    const size_t outTris = tris + 3 * touchedCount;
+    if (static_cast<int>(outTris) > gDentTriBudget) return nullptr;
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, outTris * 3 * sizeof(Vtx)));
     if (v == nullptr) return nullptr;
-    const size_t batches = (n / 3 + 9) / 10;
-    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (n / 3 + batches + 1) * sizeof(Gfx)));
+    const size_t batches = (outTris + 9) / 10;
+    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (outTris + batches + 1) * sizeof(Gfx)));
     if (dl == nullptr) return nullptr;
-    const float sa = a / royale::ground::kMeshRadius, sb = b / royale::ground::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
-    for (size_t i = 0; i < n; i++) {
-        v[i] = m->vtx[i];
-        const float lx = m->vtx[i].v.ob[0] * sa, lz = m->vtx[i].v.ob[2] * sb;
-        const float wx = x + lx * c + lz * sn, wz = z - lx * sn + lz * c, h = m->vtx[i].v.ob[1] * rise;
-        float sink = 0.0f;
-        for (size_t k = 0; k < dents.size(); k++) {
-            const float d = std::hypot(wx - dents[k].x, wz - dents[k].z);
-            if (d < kDentReach) { const float f = 1.0f - d / kDentReach; sink = std::max(sink, kDentDepth * depth[k] * f * f * (3.0f - 2.0f * f)); }
+    gDentTriBudget -= static_cast<int>(outTris);
+    const float cutoff = 0.4f;   // the snow never goes below this: the ground
+    size_t w = 0;
+    auto put = [&](const PV& p) {
+        Vtx& o = v[w++];
+        o = m->vtx[0];   // (flag, texture coordinates and alpha as the mesh has them)
+        const float wx = worldX(p), wz = worldZ(p);
+        const float dy = gp::DentsChange(dents.data(), static_cast<int>(dents.size()), wx, wz);
+        float h = p.h, r = p.r, g = p.g, bl = p.bl;
+        if (dy != 0.0f) {
+            h = std::max(cutoff, p.h + dy);
+            const float pit = std::clamp(-dy / kFootDepth, 0.0f, 1.0f) * 0.7f, rim = std::clamp(dy / 3.0f, 0.0f, 1.0f) * 0.35f;
+            r = r * (1.0f - pit) + 168.0f * pit; g = g * (1.0f - pit) + 188.0f * pit; bl = bl * (1.0f - pit) + 224.0f * pit;
+            r = r * (1.0f - rim) + 255.0f * rim; g = g * (1.0f - rim) + 255.0f * rim; bl = bl * (1.0f - rim) + 255.0f * rim;
         }
-        if (sink <= 0.0f) continue;
-        const float ny = std::max(0.4f, h - sink);
-        v[i].v.ob[1] = static_cast<s16>(std::lround(ny / std::max(0.05f, rise)));
-        const float k = std::min(1.0f, (h - ny) / kDentDepth) * 0.7f;   // the pressed snow goes a shade bluer
-        v[i].v.cn[0] = static_cast<u8>(v[i].v.cn[0] * (1.0f - k) + 168.0f * k);
-        v[i].v.cn[1] = static_cast<u8>(v[i].v.cn[1] * (1.0f - k) + 188.0f * k);
-        v[i].v.cn[2] = static_cast<u8>(v[i].v.cn[2] * (1.0f - k) + 224.0f * k);
+        o.v.ob[0] = static_cast<s16>(std::lround(p.lx / std::max(0.05f, sa) * static_cast<float>(m->sub)));
+        o.v.ob[1] = static_cast<s16>(std::lround(h / std::max(0.05f, rise) * static_cast<float>(m->sub)));
+        o.v.ob[2] = static_cast<s16>(std::lround(p.lz / std::max(0.05f, sb) * static_cast<float>(m->sub)));
+        o.v.cn[0] = static_cast<u8>(std::clamp(r, 0.0f, 255.0f)); o.v.cn[1] = static_cast<u8>(std::clamp(g, 0.0f, 255.0f)); o.v.cn[2] = static_cast<u8>(std::clamp(bl, 0.0f, 255.0f));
+    };
+    auto mid = [](const PV& p, const PV& q) { return PV{ (p.lx + q.lx) * 0.5f, (p.h + q.h) * 0.5f, (p.lz + q.lz) * 0.5f, (p.r + q.r) * 0.5f, (p.g + q.g) * 0.5f, (p.bl + q.bl) * 0.5f }; };
+    for (size_t t = 0; t < tris; t++) {
+        const PV p0 = corner(t * 3), p1 = corner(t * 3 + 1), p2 = corner(t * 3 + 2);
+        if (!touched[t]) { put(p0); put(p1); put(p2); continue; }
+        const PV m01 = mid(p0, p1), m12 = mid(p1, p2), m20 = mid(p2, p0);
+        put(p0); put(m01); put(m20);
+        put(m01); put(p1); put(m12);
+        put(m20); put(m12); put(p2);
+        put(m01); put(m12); put(m20);
     }
     Gfx* g = dl;
-    for (size_t first = 0; first < n; first += 30) {
-        const size_t count = std::min<size_t>(30, n - first);
+    for (size_t first = 0; first < w; first += 30) {
+        const size_t count = std::min<size_t>(30, w - first);
         gSPVertex(g++, reinterpret_cast<uintptr_t>(&v[first]), static_cast<int>(count), 0);
         for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
     }
@@ -3338,6 +3444,7 @@ Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, 
 }
 
 void DrawGroundPatches(PlayState* play) {
+    gPuddleSheens.clear();
     namespace gp = royale::ground;
     if (!InField() || gPlayState == nullptr) return;
     RefreshFloraWorld(play);
@@ -3386,7 +3493,8 @@ void DrawGroundPatches(PlayState* play) {
             WalkTrack& tr = gWalkTrack[key];
             const float mx = x - tr.x, mz = z - tr.z;
             const bool jumped = tr.seen == 0 || std::hypot(mx, mz) > 500.0f || dt <= 0.0001f || paused;
-            walkers.push_back({ key, x, y, z, size, jumped ? 0.0f : std::hypot(mx, mz) / dt });
+            const float step = jumped ? 0.0f : std::hypot(mx, mz);
+            walkers.push_back({ key, x, y, z, size, step / std::max(dt, 0.0001f), step > 0.01f ? mx / step : 1.0f, step > 0.01f ? mz / step : 0.0f, step, jumped ? 0.0f : (y - tr.y) / std::max(dt, 0.0001f) });
         };
         add(pl, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 16.0f);
         for (const auto& [id, actor] : gActorOf)
@@ -3394,8 +3502,10 @@ void DrawGroundPatches(PlayState* play) {
         CollectCartWalkers(add);
     }
     const float nowT = t;
-    const float dentLife = snowing ? 8.0f : 30.0f;
-    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > dentLife) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > gSnowDents[i].life) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    gDentTriBudget = 2600;
+    const float deform = gGroundDeform;
+    const float dentLife = snowing ? 10.0f : 40.0f;   // how long a print lasts (it fills in faster while it snows)
     int fxBudget = paused ? 0 : 3;   // the game's own splashes and ripples this frame (its effect table is shared)
     // The ground says whether a seed may lie where it is: on level ground for water, off the water and the steep for the rest, and the island's
     // meadows and woods for what grows or falls there. Water that stands all the time (the wet places of the Fortnite Map) has an onset below zero.
@@ -3422,9 +3532,9 @@ void DrawGroundPatches(PlayState* play) {
         gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
         gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
         Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
-        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
-        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies on
+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_FOG);   // (the vertex alpha is the soft rim, not the fog)
+        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);   // vertex colour, vertex alpha x our fade
+        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies on
         CLOSE_DISPS(play->state.gfxCtx);
     }
     const Vec3f eye = play->view.eye;
@@ -3463,25 +3573,55 @@ void DrawGroundPatches(PlayState* play) {
                     return lx * lx / (ra * ra) + lz * lz / (rb * rb) < 1.0f && w.y < y + 40.0f;
                 };
                 if (!seeThrough) {
+                    const float lift = layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * std::min(deform, 1.5f) : 1.0f;   // deeper deformation also builds the snow up higher
                     Gfx* dented = nullptr;
-                    if (layer.kind == gp::Kind::Snow && !paused && (!gSnowDents.empty() || !walkers.empty())) {
-                        const float reachD = std::max(sh.a, sh.b) * shrink + kDentReach;
-                        std::vector<SnowDent> dents;
-                        std::vector<float> depth;
-                        for (const SnowDent& dn : gSnowDents)
-                            if (std::hypot(dn.x - x, dn.z - z) < reachD) { dents.push_back(dn); depth.push_back(std::clamp(1.0f - (nowT - dn.birth) / dentLife, 0.0f, 1.0f)); }
+                    if (layer.kind == gp::Kind::Snow && gGroundTrails && deform > 0.02f && !paused) {
+                        // Anyone standing or walking in this patch presses it down and leaves prints; someone who just landed leaves a crater.
                         for (const Walker& w : walkers) {
-                            if (!inside(w, kDentReach * 0.6f)) continue;
-                            dents.push_back({ w.x, w.z, nowT }); depth.push_back(1.0f);   // under their feet right now
+                            if (!inside(w, kDentRimGrow)) continue;
                             WalkTrack& tr = gWalkTrack[w.key];
-                            if (w.y < y + 14.0f && w.speed > 10.0f && std::hypot(w.x - tr.x, w.z - tr.z) + tr.sinceDent >= 26.0f && gSnowDents.size() < 160) {
-                                gSnowDents.push_back({ w.x, w.z, nowT });
-                                tr.sinceDent = 0.0f;
-                            } else tr.sinceDent += std::hypot(w.x - tr.x, w.z - tr.z);
+                            if (tr.dentFrame == gWalkFrame) continue;   // (once a frame, even inside two patches)
+                            tr.dentFrame = gWalkFrame;
+                            const float sz = std::clamp(w.size / 16.0f, 0.5f, 3.0f);
+                            const bool onGround = w.y < y + 14.0f && w.vy > -80.0f;
+                            if (!onGround) continue;
+                            if (tr.fall > 0.0f) {
+                                const gp::Crater cr = gp::CraterFor(tr.fall, sz);
+                                if (cr.radius > 0.0f) {
+                                    if (gSnowDents.size() >= 160) gSnowDents.erase(gSnowDents.begin());
+                                    gSnowDents.push_back({ { w.x, w.z, 0.0f, cr.radius, cr.radius, cr.depth }, nowT, dentLife * 2.0f });
+                                }
+                                tr.fall = 0.0f;
+                            }
+                            if (w.speed > 10.0f) {
+                                tr.sinceDent += w.step;
+                                const float stride = (20.0f + std::min(w.speed, 400.0f) / 25.0f) * sz;   // runners take longer strides
+                                if (tr.sinceDent >= stride) {
+                                    tr.sinceDent = 0.0f;
+                                    tr.side = -tr.side;
+                                    float fx, fz;
+                                    gp::FootprintAt(w.x, w.z, w.hx, w.hz, tr.side, 5.0f * sz, &fx, &fz);
+                                    if (gSnowDents.size() >= 160) gSnowDents.erase(gSnowDents.begin());
+                                    const float press = 0.7f + 0.3f * std::min(1.0f, w.speed / 200.0f);
+                                    gSnowDents.push_back({ { fx, fz, std::atan2(w.hz, w.hx), kFootLen * sz, kFootWid * sz, kFootDepth * press * sz }, nowT, dentLife });
+                                }
+                            }
                         }
-                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, dents, depth);
+                        // The dents that reach this patch (what is left of each one, and the weight on the snow under everyone's feet right now).
+                        const float reachD = std::max(sh.a, sh.b) * shrink + 60.0f;
+                        std::vector<gp::Dent> dents;
+                        for (const SnowDent& dn : gSnowDents)
+                            if (std::hypot(dn.d.x - x, dn.d.z - z) < reachD) {
+                                gp::Dent e = dn.d;
+                                e.depth *= gp::DentLeft(nowT - dn.birth, dn.life) * deform;
+                                if (e.depth > 0.05f) dents.push_back(e);
+                            }
+                        for (const Walker& w : walkers)
+                            if (inside(w, kDentRimGrow) && w.y < y + 14.0f) { const float sz = std::clamp(w.size / 16.0f, 0.5f, 3.0f); dents.push_back({ w.x, w.z, 0.0f, 12.0f * sz, 12.0f * sz, 5.0f * sz * deform }); }
+                        if (dents.size() > 40) dents.erase(dents.begin(), dents.end() - 40);   // the newest 40
+                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, dents);
                     }
-                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, -1, dented);
+                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, -1, dented);
                     continue;
                 }
                 if (layer.kind == gp::Kind::Puddle && !frozen) {   // wading through: a splash on the way in, rings while moving
@@ -3505,7 +3645,15 @@ void DrawGroundPatches(PlayState* play) {
                     }
                 }
                 const int alpha = static_cast<int>((layer.kind == gp::Kind::Puddle ? 225.0f : 190.0f) * fade);
+                if (layer.kind == gp::Kind::Puddle && deform > 0.02f && d < 700.0f) {   // the lip of mud round the water, so the water sits in a slight dip
+                    const GpuMesh* bank = GpuMeshFor(royale::MeshKind::Ground, gp::BankVariant(patch));
+                    if (bank != nullptr && !bank->dl.empty()) {
+                        const float growth = std::clamp(std::sqrt(sh.a * sh.b) / 70.0f, 0.35f, 1.0f);   // a puddle that is only just forming has hardly any bank
+                        DrawGroundPatch(play, bank, x, y + 0.5f, z, spot->sx, spot->sz, sh.yaw, sh.a, std::min(deform, 1.6f) * growth * fade, sh.b, -1);
+                    }
+                }
                 DrawGroundPatch(play, m, x, y + 1.0f, z, spot->sx, spot->sz, sh.yaw, sh.a, 1.0f, sh.b, alpha);
+                if (layer.kind == gp::Kind::Puddle && !frozen && d < 900.0f && gPuddleSheens.size() < 48) gPuddleSheens.push_back({ x, y + 1.3f, z, spot->sx, spot->sz, sh.yaw, sh.a, sh.b, fade });
                 if (layer.kind != gp::Kind::Puddle || !raining || frozen || ripple == nullptr || ripple->dl.empty() || d > 650.0f) continue;
                 // Every drop that lands on a puddle rings out across it: each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle.
                 const int rings = std::clamp(static_cast<int>((1.0f + rainNow * 3.0f) * std::sqrt(sh.a * sh.b) / 90.0f), 1, 6);
@@ -3534,11 +3682,18 @@ void DrawGroundPatches(PlayState* play) {
     for (auto it = gWalkTrack.begin(); it != gWalkTrack.end();) {
         WalkTrack& tr = it->second;
         bool live = false;
-        for (const Walker& w : walkers) if (w.key == it->first) { tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true; break; }
+        for (const Walker& w : walkers)
+            if (w.key == it->first) {
+                tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true;
+                if (w.vy < -200.0f) tr.fall = std::max(tr.fall, -w.vy);   // falling hard: remember how hard until they land
+                else if (w.vy > -80.0f) tr.fall = 0.0f;                    // (a landing in snow has used it by now)
+                break;
+            }
         tr.wasPuddle = tr.inPuddle;
         tr.inPuddle = false;
         it = live ? std::next(it) : gWalkTrack.erase(it);
     }
+    DrawPuddleSheens(play);
 }
 
 // The Fortnite Map's Hyrule Field scenery (shared/fortnite_scenery.h, meshes.h Scenery): oaks on the hilltops, hedges along the woods and the towns,
@@ -4853,11 +5008,29 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr int kGidGilded = 1001;    // the Gilded Sword's own model (shared/gilded_sword_model.h), see DrawItemModel
 constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
 
 // An item's model with the current matrix: the game's own (GetItem_Draw), or one of ours. Ours are built standing on y 0, so they are
 // lifted to be centred like the game's.
 void DrawItemModel(PlayState* play, int gid) {
+    if (gid == kGidGilded) {   // the sword on the ground: blade up and to the right, turning slowly, as the game's own swords lie
+        const GpuMesh* sword = GpuMeshFor(royale::MeshKind::GildedSword, 0);
+        if (sword == nullptr || sword->dl.empty()) return;
+        Matrix_Push();
+        Matrix_RotateZ(0.9f, MTXMODE_APPLY);
+        Matrix_Scale(0.0052f, 0.0052f, 0.0052f, MTXMODE_APPLY);   // limb units (a hundredth of a game unit) down to the size of the game's own loose swords
+        Matrix_Translate(-2200.0f, 0.0f, 0.0f, MTXMODE_APPLY);    // about the middle of the sword
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Opa(play->state.gfxCtx);
+        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(sword->dl.data()));
+        CLOSE_DISPS(play->state.gfxCtx);
+        Matrix_Pop();
+        return;
+    }
     if (gid != kGidGrenade) { GetItem_Draw(play, static_cast<s16>(gid)); return; }
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Grenade, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
@@ -5121,6 +5294,7 @@ int GidFor(royale::ItemId id) {
         case ItemId::Boomerang: return GID_BOOMERANG;
         case ItemId::Bombs: case ItemId::BombAmmo: return GID_BOMB;
         case ItemId::ShockwaveGrenade: return kGidGrenade;
+        case ItemId::GildedSword: return kGidGilded;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
         case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
@@ -5433,7 +5607,7 @@ struct SupplyMark { float x, z; double until; };
 std::vector<SupplyMark> gSupplyMarks;   // announced crates, shown on the minimap until they have landed and been taken
 
 
-// Spectating after you are eliminated: you can watch yourself (where you fell) or any other player who is still alive, and nobody else.
+// Spectating after you are eliminated: you can watch your own body (where it fell) or any other player who is still alive, and nobody else.
 // D-pad Left/Right (or the < > buttons) switch between them; if the one you watch is eliminated the view moves on to the next living player.
 constexpr uint16_t kSpectateSelf = 0xFFFF;
 uint16_t gSpectateTarget = kSpectateSelf;
@@ -5460,7 +5634,7 @@ const royale::PuppetState* SpectateTarget() {
 
 std::string SpectateName() {
     if (const royale::PuppetState* t = SpectateTarget()) return t->name.empty() ? "Link" : t->name;
-    return "yourself";
+    return "Your body";
 }
 
 // Is something covering the game right now (its own pause screen or the port's menu)? Then the storm and weather tints stay off the screen.
@@ -5850,8 +6024,27 @@ void* RealIcon(royale::ItemId id) {
 // ---- item icons ------------------------------------------------------------------------------------------------------------
 // The game's own item icons live in its resource archive and aren't reachable from here, so every item gets a small hand-drawn
 // icon built from lines and shapes, tinted by what the item is. `tier` is the rarity colour, used as the accent.
+// The Gilded Sword's icon is the reference picture of the sword (mod/Royale/gilded_sword_icon.h, made by scripts/make_gilded_sword_icon.py).
+ImTextureID GildedIconTexture() {
+    static ImTextureID tex = nullptr;
+    static int id = -1;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        tex = UploadRgba(royale::kGildedIconRgba, royale::kGildedIconSize, royale::kGildedIconSize, &id);
+    }
+    return tex;
+}
+
 void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 tier) {
     using royale::ItemId;
+    if (id == ItemId::GildedSword) {
+        if (ImTextureID tex = GildedIconTexture()) {
+            const float h = s * 0.5f;
+            dl->AddImage(tex, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h));
+            return;
+        }
+    }
     if (void* real = RealIcon(id)) {
         const float h = s * 0.5f;
         dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), ImVec2(0, 0), ImVec2(1, 1), RealIconTint(id));
@@ -5937,6 +6130,17 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
         case ItemId::KokiriSword: sword(steel, green, 0.8f, 1.5f); break;
         case ItemId::MasterSword: sword(cyan, blue, 1.0f, 1.8f); dl->AddCircleFilled(P(-0.35f, 0.35f), u * 0.12f, gold, 8); break;
         case ItemId::BiggoronSword: sword(white, red, 1.0f, 2.8f); break;
+        case ItemId::GildedSword: {   // silver blade with gold diamonds down it, a red grip and a curled guard
+            sword(IM_COL32(214, 222, 238, 255), IM_COL32(210, 216, 232, 255), 1.0f, 2.6f);
+            for (float t : { 0.30f, 0.55f, 0.80f }) {
+                const float cx = -0.62f + 1.24f * t, cy = 0.62f - 1.24f * t;
+                dl->AddQuadFilled(P(cx - 0.17f, cy + 0.17f), P(cx + 0.07f, cy + 0.07f), P(cx + 0.17f, cy - 0.17f), P(cx - 0.07f, cy - 0.07f), gold);
+            }
+            dl->AddCircle(P(-0.52f, 0.02f), u * 0.13f, IM_COL32(210, 216, 232, 255), 10, th * 0.6f);   // the curls of the guard
+            dl->AddCircle(P(-0.02f, 0.52f), u * 0.13f, IM_COL32(210, 216, 232, 255), 10, th * 0.6f);
+            dl->AddLine(P(-0.5f, 0.5f), P(-0.7f, 0.7f), red, th * 1.5f);
+            break;
+        }
         case ItemId::MegatonHammer:
             dl->AddLine(P(-0.6f, 0.7f), P(0.35f, -0.35f), wood, th * 1.8f);
             dl->AddRectFilled(P(0.0f, -0.8f), P(0.78f, -0.15f), IM_COL32(120, 125, 140, 255), 3.0f);
@@ -6349,20 +6553,16 @@ void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     }
 }
 
-// The end-of-match standings.
-// The replay of the match that just ended, as a top-down map at high speed beside the results: the storm closing in, everybody's dots, trails for you,
-// red flashes where somebody was eliminated. It loops.
-void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+// The replay of the match that just ended, as a top-down map at high speed (on the end screen, see DrawEndScreen): the storm closing in, everybody's
+// dots, trails for you and the winner, red rings where somebody was eliminated. It loops. `a` is the top left of the square map, `side` its size;
+// the title goes just above it and the clock just below.
+void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 a, float side, float scale, const royale::HudState& h) {
     royale::GameClient* client = gSession.Client();
-    if (client == nullptr || !client->ReplayComplete() || h.map.radius <= 0) return;
+    if (client == nullptr || !client->ReplayComplete() || h.map.radius <= 0 || side < 60.0f * scale) return;
     const royale::Replay& rp = client->GetReplay();
-    const float pw = std::min(ds.x * 0.9f, 640.0f * scale);
-    const float room = (ds.x - pw) * 0.5f - 24.0f * scale;
-    const float side = std::min(room, ds.y * 0.5f);
-    if (side < 150.0f * scale) return;                                  // no room beside the results on a small screen
-    const ImVec2 a(24.0f * scale, ds.y * 0.28f), b(a.x + side, a.y + side);
-    dl->AddRectFilled(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), OotPanel(225), 10.0f * scale);
-    dl->AddRect(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 2.0f * scale);
+    if (rp.frames.empty()) return;
+    const ImVec2 b(a.x + side, a.y + side);
+    dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 90), 6.0f * scale);
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float k = side * 0.5f / h.map.radius * 0.97f;
     auto toPanel = [&](float x, float z) { return ImVec2(c.x + (x - h.map.center.x) * k, c.y - (z - h.map.center.z) * k); };
@@ -6417,44 +6617,6 @@ void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const int secs = static_cast<int>(f0 * royale::kReplayStepSec);
     std::snprintf(caption, sizeof(caption), "%d:%02d    %d alive", secs / 60, secs % 60, alive);
     dl->AddText(font, 17.0f * scale, ImVec2(a.x, b.y + 5 * scale), IM_COL32(235, 235, 240, 255), caption);
-}
-
-void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    if (h.results.empty()) return;
-    const float pw = std::min(ds.x * 0.9f, 640.0f * scale), rowH = 26.0f * scale;
-    const int shown = std::min<int>(8, static_cast<int>(h.results.size()));
-    const float ph = (shown + 4) * rowH + 70.0f * scale;
-    const ImVec2 a((ds.x - pw) * 0.5f, ds.y * 0.28f), b(a.x + pw, a.y + ph);
-    dl->AddRectFilled(a, b, OotPanel(225), 10.0f * scale);
-    dl->AddRect(a, b, IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 3.0f * scale);
-    auto put = [&](float x, float y, ImU32 col, float size, const std::string& t) { dl->AddText(font, size, ImVec2(x, y), col, t.c_str()); };
-    float y = a.y + 10.0f * scale;
-    put(a.x + 18 * scale, y, IM_COL32(255, 210, 70, 255), 24 * scale, "RESULTS");
-    y += rowH * 1.3f;
-    const float cName = a.x + 60 * scale, cKills = a.x + pw - 270 * scale, cDmg = a.x + pw - 190 * scale, cPts = a.x + pw - 90 * scale;
-    const ImU32 head = IM_COL32(170, 170, 180, 255);
-    put(a.x + 18 * scale, y, head, 15 * scale, "#"); put(cName, y, head, 15 * scale, "Player"); put(cKills, y, head, 15 * scale, "Kills");
-    put(cDmg, y, head, 15 * scale, "Damage"); put(cPts, y, head, 15 * scale, "Points");
-    y += rowH * 0.9f;
-    bool selfShown = false;
-    auto row = [&](int rank, const royale::ResultsRow& r) {
-        const ImU32 col = r.self ? IM_COL32(120, 255, 140, 255) : IM_COL32(235, 235, 240, 255);
-        put(a.x + 18 * scale, y, col, 17 * scale, std::to_string(rank));
-        put(cName, y, col, 17 * scale, r.name + (r.placement == 1 ? "  (winner)" : ""));
-        put(cKills, y, col, 17 * scale, std::to_string(r.kills));
-        char dmg[16]; std::snprintf(dmg, sizeof(dmg), "%.1f", r.damage);
-        put(cDmg, y, col, 17 * scale, dmg);
-        put(cPts, y, col, 17 * scale, std::to_string(r.score));
-        y += rowH;
-    };
-    for (int i = 0; i < shown; i++) { row(i + 1, h.results[i]); selfShown |= h.results[i].self; }
-    if (!selfShown) {
-        for (size_t i = 0; i < h.results.size(); i++) if (h.results[i].self) { put(a.x + 18 * scale, y, head, 15 * scale, "..."); y += rowH * 0.8f; row(static_cast<int>(i) + 1, h.results[i]); }
-    }
-    y += 6.0f * scale;
-    const std::string footer = h.isHost ? "Press A to play again with everyone who is here" : "Waiting for the host to play again...";
-    ImVec2 sz = font->CalcTextSizeA(18 * scale, FLT_MAX, 0.0f, footer.c_str());
-    put(a.x + (pw - sz.x) * 0.5f, b.y - 32 * scale, IM_COL32(255, 236, 140, 255), 18 * scale, footer);
 }
 
 // The splash shown at the start of every match's countdown, in the look of OoT's title and file-select screens: deep blue-green
@@ -7005,6 +7167,658 @@ void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     gFloatingNumbers.erase(std::remove_if(gFloatingNumbers.begin(), gFloatingNumbers.end(), [&](const FloatingNumber& f) { return now - f.at > 1.0; }), gFloatingNumbers.end());
 }
 
+// ---- dying, spectating and the end of the match -----------------------------------------------------------------------------------
+// One flow, start to finish:
+//   1. You are eliminated. Your Link is hidden and his body falls as a ragdoll (SpawnCorpse) with his cry and a thud at each bounce. The camera
+//      stays on the body (OnPlayerUpdate), the edges of the screen go dark red and "ELIMINATED" says who got you and where you placed.
+//   2. A moment later the death card comes up under it: your kills, damage and points so far, and two buttons, Spectate and Leave.
+//   3. Spectating: a slim bar at the top says whom you watch; < and > (or D-pad Left/Right) go through your body and everyone still standing.
+//   4. The match ends: "VICTORY ROYALE!" or your place, then the end screen: your numbers, how your points add up, every player and bot with their
+//      place, kills, damage and score, the replay, and Keep spectating / New match / Leave. Keep spectating hides it; D-pad Up (or the Results
+//      chip) brings it back.
+// It is all drawn on ImGui's foreground list with the colours in kUi, so a new menu look only has to change kUi and the Draw* functions here.
+// Controller, while the card or the end screen is up: D-pad Left/Right picks a button, A presses it, B is Keep spectating, D-pad Up/Down scroll
+// the table. Touch: tap the buttons, drag the table.
+// The look follows Fortnite's end of match: deep violet-blue over the game, a slanted orange banner, light blue labels, white numbers.
+struct UiStyle {
+    ImU32 bgTop, bgBottom, panel, edge, gold, white, grey, label, accent, red, green, selfRow, rowAlt, button, buttonHot, buttonOff, tile,
+          banner, bannerLight, bannerLoss, bannerLossLight, bronze, silver, medalGold;
+};
+const UiStyle kUi = {
+    IM_COL32(44, 18, 112, 215),    // bgTop: the tint over the game behind the end screen, top...
+    IM_COL32(16, 40, 140, 215),    // bgBottom: ...and bottom
+    IM_COL32(14, 16, 48, 232),     // panel (the death card, the spectating bar)
+    IM_COL32(110, 200, 255, 255),  // edge
+    IM_COL32(255, 206, 64, 255),   // gold
+    IM_COL32(248, 248, 255, 255),  // white
+    IM_COL32(160, 168, 200, 255),  // grey
+    IM_COL32(150, 205, 255, 255),  // label: the light blue of names and headings
+    IM_COL32(90, 225, 255, 255),   // accent: the ring, ticks, the chosen tab
+    IM_COL32(255, 92, 84, 255),    // red
+    IM_COL32(120, 255, 140, 255),  // green: you
+    IM_COL32(60, 150, 255, 90),    // selfRow
+    IM_COL32(255, 255, 255, 12),   // rowAlt
+    IM_COL32(18, 22, 70, 230),     // button
+    IM_COL32(40, 110, 230, 245),   // buttonHot
+    IM_COL32(30, 30, 50, 190),     // buttonOff
+    IM_COL32(255, 255, 255, 18),   // tile
+    IM_COL32(240, 120, 30, 255),   // banner: a win
+    IM_COL32(255, 160, 60, 255),   // bannerLight
+    IM_COL32(70, 70, 170, 255),    // bannerLoss: any other place
+    IM_COL32(100, 100, 210, 255),  // bannerLossLight
+    IM_COL32(205, 127, 70, 255),   // bronze medal
+    IM_COL32(200, 210, 225, 255),  // silver medal
+    IM_COL32(255, 200, 50, 255),   // gold medal
+};
+constexpr double kDeathCardDelay = 1.8;   // seconds of watching your body fall before the card comes up
+constexpr double kEndPanelDelay = 2.4;    // seconds of the big title alone before the end screen
+
+bool IsLive(const royale::HudState& h);   // with the match's health, below
+
+// What you did this match, counted from the server's events (the exact numbers arrive with the results when the match ends).
+struct MyMatchStats {
+    int kills = 0, chests = 0, hits = 0;
+    float damage = 0, taken = 0, distance = 0;   // hearts dealt, hearts taken, units walked, swum and ridden
+    bool firstStrike = false, anyElim = false;   // you got the match's first elimination / somebody has been eliminated
+    int streak = 0, bestStreak = 0;              // eliminations close together (each within kStreakSec of the last)
+    double lastKillAt = -100, startAt = 0;       // startAt: the drop
+    float lastX = 0, lastZ = 0;
+    bool havePos = false;
+};
+constexpr double kStreakSec = 10.0;
+MyMatchStats gMyStats;
+
+struct DeathUi {
+    bool active = false;        // you are out of this match
+    double at = 0;              // when (ImGui time)
+    uint16_t killer = royale::net::kNoPlayer16;
+    std::string by;             // "by Saria", "by the storm" (empty until the elimination event says)
+    int aliveAtDeath = 0, place = 0;
+    bool placeSettled = false;
+    bool card = true;           // the death card is up (until Spectate)
+    int focus = 0;              // the card's button with the controller's focus: 0 Spectate, 1 Leave
+    uint16_t body = 0;          // your body (a corpse id), 0 for none
+    bool spectated = false;     // Spectate was chosen once (the card can come back with B, and then keeps whom you watch)
+};
+DeathUi gDeath;
+
+struct EndUi {
+    bool open = false;          // the end screen is up (Keep spectating hides it)
+    double at = 0;              // when the match ended
+    int focus = 1;              // 0 Keep spectating, 1 New match, 2 Leave
+    float scroll = 0;           // the table, in pixels
+    bool byScore = false;       // the table's order: by place, or by score
+    bool dragging = false;
+    int page = 0;               // 0 the summary (stats, points, medals), 1 the standings (everyone, the replay)
+};
+EndUi gEnd;
+
+// The controller's presses for the card and the end screen, taken off the game in MatchUiInput and used up when they are drawn.
+struct UiPad { bool a = false, b = false, left = false, right = false, up = false, down = false, page = false; };
+UiPad gUiPad;
+
+void UiSfx(u16 sfx) { Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
+
+void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; }
+
+// You are out. Called by the elimination event and by OnPlayerUpdate, whichever sees it first.
+void StartDeath(const royale::HudState& h) {
+    if (gDeath.active) return;
+    gDeath.active = true;
+    gDeath.at = ImGui::GetTime();
+    gDeath.aliveAtDeath = h.alive;
+    gDeath.place = std::max(1, h.alive);
+    gDeath.card = true;
+    gDeath.focus = 0;
+    gSpectateTarget = kSpectateSelf;   // the camera stays on your body until you choose to spectate
+    UiSfx(NA_SE_IT_HAMMER_HIT);        // the blow lands: a heavy impact, then Link's cry from his body
+    UiSfx(NA_SE_PL_BODY_HIT);
+}
+
+// The match has ended: the big title, then the end screen.
+void StartEndScreen(const royale::HudState& h) {
+    gEnd = {};
+    gEnd.open = true;
+    gEnd.at = ImGui::GetTime();
+    gEnd.focus = h.isHost ? 1 : 0;
+    if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) Audio_PlayFanfare(NA_BGM_ITEM_GET);
+}
+
+bool DeathCardUp(const royale::HudState& h) { return gDeath.active && gDeath.card && IsLive(h) && ImGui::GetTime() - gDeath.at > kDeathCardDelay; }
+bool EndScreenUp(const royale::HudState& h) { return h.state == royale::MatchState::Ending && gEnd.open && ImGui::GetTime() - gEnd.at > kEndPanelDelay; }
+
+// Runs before the game reads the controller (from OnEmoteWheelInput). While the death card or the end screen is up the controller is theirs (Start
+// still opens the menu). Returns true when it took this frame's buttons.
+bool MatchUiInput(Input& in, const royale::HudState& hud) {
+    // From the moment you go down until you choose Spectate the pad is the death screen's, so a press can't make the hidden Link swing or roll.
+    const bool card = gDeath.active && gDeath.card && IsLive(hud), end = EndScreenUp(hud);
+    if (!card && !end) {
+        gUiPad = {};
+        if (gDeath.active && IsLive(hud) && (in.press.button & BTN_B)) {   // spectating: B brings the death card (and its Leave) back
+            gDeath.card = true;
+            gDeath.focus = 0;
+            in.press.button &= ~BTN_B; in.cur.button &= ~BTN_B;
+            UiSfx(NA_SE_SY_DECIDE);
+            return true;
+        }
+        if (hud.state == royale::MatchState::Ending && !gEnd.open && (in.press.button & BTN_DUP)) {   // bring the results back
+            gEnd.open = true;
+            gEnd.at = ImGui::GetTime() - kEndPanelDelay;
+            in.press.button &= ~BTN_DUP; in.cur.button &= ~BTN_DUP;
+            UiSfx(NA_SE_SY_DECIDE);
+        }
+        return false;
+    }
+    const u16 p = (card && !DeathCardUp(hud)) ? 0 : in.press.button;   // presses during the fall itself do nothing
+    gUiPad.a |= (p & BTN_A) != 0;
+    gUiPad.b |= (p & BTN_B) != 0;
+    gUiPad.left |= (p & BTN_DLEFT) != 0;
+    gUiPad.right |= (p & BTN_DRIGHT) != 0;
+    gUiPad.up |= (p & BTN_DUP) != 0;
+    gUiPad.down |= (p & BTN_DDOWN) != 0;
+    gUiPad.page |= (p & (BTN_R | BTN_Z)) != 0;
+    in.cur.button &= BTN_START; in.press.button &= BTN_START; in.rel.button &= BTN_START;
+    in.cur.stick_x = in.cur.stick_y = in.rel.stick_x = in.rel.stick_y = in.press.stick_x = in.press.stick_y = 0;
+    return true;
+}
+
+bool UiTapIn(ImVec2 a, ImVec2 b) {
+    ImGuiIO& io = ImGui::GetIO();
+    return ImGui::IsMouseClicked(0) && !io.WantCaptureMouse && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y;
+}
+
+void UiText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 col, const std::string& t, bool shadow = true) {
+    if (shadow) dl->AddText(font, size, ImVec2(at.x + size * 0.06f, at.y + size * 0.06f), IM_COL32(0, 0, 0, (col >> 24) * 220 / 255), t.c_str());
+    dl->AddText(font, size, at, col, t.c_str());
+}
+float UiTextW(ImFont* font, float size, const std::string& t) { return font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str()).x; }
+// Text centred on x, shrunk to fit `maxW` if it has to.
+void UiTextCentred(ImDrawList* dl, ImFont* font, float size, float cx, float y, ImU32 col, const std::string& t, float maxW = 1e9f) {
+    const float w = UiTextW(font, size, t);
+    if (w > maxW && w > 0) size *= maxW / w;
+    UiText(dl, font, size, ImVec2(cx - UiTextW(font, size, t) * 0.5f, y), col, t);
+}
+
+ImU32 UiAlpha(ImU32 col, float a) { return (col & 0x00FFFFFF) | (static_cast<ImU32>(((col >> 24) & 0xFF) * std::clamp(a, 0.0f, 1.0f)) << 24); }
+
+// A button. Returns true when it is tapped, or pressed with A while it has the controller's focus.
+bool UiButton(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& label, bool focused, bool enabled, float alpha = 1.0f) {
+    ImGuiIO& io = ImGui::GetIO();
+    const bool hover = io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y && !io.WantCaptureMouse;
+    const float r = 8.0f * scale;
+    dl->AddRectFilled(a, b, UiAlpha(!enabled ? kUi.buttonOff : (focused || hover) ? kUi.buttonHot : kUi.button, alpha), r);
+    dl->AddRect(a, b, UiAlpha(enabled ? kUi.edge : kUi.grey, alpha * (enabled ? 1.0f : 0.5f)), r, 0, (focused && enabled ? 3.0f : 1.5f) * scale);
+    UiTextCentred(dl, font, 21.0f * scale, (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - 11.0f * scale, UiAlpha(enabled ? kUi.white : kUi.grey, alpha), label, b.x - a.x - 12.0f * scale);
+    if (!enabled || alpha < 0.9f) return false;
+    if (UiTapIn(a, b)) { UiSfx(NA_SE_SY_DECIDE); return true; }
+    if (focused && gUiPad.a) { gUiPad.a = false; UiSfx(NA_SE_SY_DECIDE); return true; }
+    return false;
+}
+
+// A number with a label under it, on a faint tile.
+void UiTile(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& value, const std::string& label, ImU32 col, float alpha = 1.0f) {
+    dl->AddRectFilled(a, b, UiAlpha(kUi.tile, alpha), 8.0f * scale);
+    const float cx = (a.x + b.x) * 0.5f, h = b.y - a.y;
+    UiTextCentred(dl, font, h * 0.46f, cx, a.y + h * 0.1f, UiAlpha(col, alpha), value, b.x - a.x - 8.0f * scale);
+    UiTextCentred(dl, font, h * 0.24f, cx, a.y + h * 0.62f, UiAlpha(kUi.grey, alpha), label, b.x - a.x - 8.0f * scale);
+}
+
+// Dark red closing in from the edges of the screen.
+void UiVignette(ImDrawList* dl, ImVec2 ds, float strength) {
+    if (strength <= 0.0f) return;
+    const ImU32 edge = IM_COL32(40, 0, 0, static_cast<int>(200 * std::min(1.0f, strength))), clear = IM_COL32(40, 0, 0, 0);
+    const float bandY = ds.y * 0.3f, bandX = ds.x * 0.22f;
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(ds.x, bandY), edge, edge, clear, clear);
+    dl->AddRectFilledMultiColor(ImVec2(0, ds.y - bandY), ds, clear, clear, edge, edge);
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(bandX, ds.y), edge, clear, clear, edge);
+    dl->AddRectFilledMultiColor(ImVec2(ds.x - bandX, 0), ds, clear, edge, edge, clear);
+}
+
+std::string UiThousands(int n) {
+    std::string s = std::to_string(std::abs(n));
+    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(static_cast<size_t>(i), ",");
+    return n < 0 ? "-" + s : s;
+}
+
+// Steps 1 to 3: the moment you go down, the death card, and the spectating bar.
+void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    Feat("death screen");
+    const bool spectatingEnd = h.state == royale::MatchState::Ending && !gEnd.open && h.haveSelf && !h.selfAlive;
+    if (!(gDeath.active && IsLive(h)) && !spectatingEnd) return;
+    const double now = ImGui::GetTime(), t = now - gDeath.at;
+    // Your place: the player count may or may not have taken you off yet when the elimination arrives, so look again a moment later.
+    if (gDeath.active && !gDeath.placeSettled && t > 0.8) {
+        gDeath.place = h.alive >= gDeath.aliveAtDeath ? gDeath.aliveAtDeath + 1 : gDeath.aliveAtDeath;
+        if (IsLive(h)) gDeath.place = std::max(2, gDeath.place);
+        gDeath.placeSettled = true;
+    }
+    const float cx = ds.x * 0.5f;
+
+    if (gDeath.active && gDeath.card && IsLive(h)) {
+        // 1. Going down: a red flash, the edges darken, the big word.
+        if (t < 0.12) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(255, 255, 255, static_cast<int>(170 * (1.0 - t / 0.12))));   // the hit
+        else if (t < 0.6) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(150, 0, 0, static_cast<int>(120 * (1.0 - (t - 0.12) / 0.48))));
+        UiVignette(dl, ds, static_cast<float>(std::min(1.0, t / 0.6)));
+        {   // cinema bars slide in while you watch yourself fall
+            const float bar = ds.y * 0.085f * static_cast<float>(std::min(1.0, t / 0.45));
+            dl->AddRectFilled(ImVec2(0, 0), ImVec2(ds.x, bar), IM_COL32(0, 0, 0, 235));
+            dl->AddRectFilled(ImVec2(0, ds.y - bar), ds, IM_COL32(0, 0, 0, 235));
+        }
+        const float in = static_cast<float>(std::min(1.0, t / 0.35));
+        const float titleSize = (58.0f + 18.0f * (1.0f - in)) * scale;
+        UiTextCentred(dl, font, titleSize, cx, ds.y * 0.13f, UiAlpha(kUi.red, in), "ELIMINATED");
+        const float sub = static_cast<float>(std::clamp((t - 0.35) / 0.4, 0.0, 1.0));
+        UiTextCentred(dl, font, 24.0f * scale, cx, ds.y * 0.13f + 70.0f * scale, UiAlpha(kUi.white, sub), gDeath.by, ds.x * 0.9f);
+        UiTextCentred(dl, font, 30.0f * scale, cx, ds.y * 0.13f + 104.0f * scale, UiAlpha(kUi.gold, sub),
+                      "#" + std::to_string(gDeath.place) + "  of " + std::to_string(std::max(gDeath.place, h.playerLimit)));
+
+        // 2. The death card.
+        if (t < kDeathCardDelay) return;
+        const float a = static_cast<float>(std::min(1.0, (t - kDeathCardDelay) / 0.3));
+        const float pw = std::min(ds.x - 32.0f * scale, 600.0f * scale), ph = 196.0f * scale;
+        const ImVec2 pa(cx - pw * 0.5f, ds.y - ph - 28.0f * scale + (1.0f - a) * 30.0f * scale), pb(pa.x + pw, pa.y + ph);
+        dl->AddRectFilled(pa, pb, UiAlpha(kUi.panel, a), 12.0f * scale);
+        dl->AddRect(pa, pb, UiAlpha(kUi.edge, a), 12.0f * scale, 0, 2.5f * scale);
+        const float pad = 16.0f * scale, gap = 10.0f * scale, tileH = 70.0f * scale;
+        const float tw = (pw - pad * 2 - gap * 2) / 3.0f;
+        const int points = royale::ScorePoints(gMyStats.damage, gMyStats.kills, gMyStats.chests, gDeath.place);
+        char dmg[16];
+        std::snprintf(dmg, sizeof(dmg), "%.1f", gMyStats.damage);
+        const std::string values[3] = { std::to_string(gMyStats.kills), dmg, UiThousands(points) };
+        const char* labels[3] = { "KILLS", "DAMAGE", "POINTS" };
+        for (int i = 0; i < 3; i++) {
+            const ImVec2 ta(pa.x + pad + i * (tw + gap), pa.y + pad);
+            UiTile(dl, font, scale, ta, ImVec2(ta.x + tw, ta.y + tileH), values[i], labels[i], i == 2 ? kUi.gold : kUi.white, a);
+        }
+        if (gUiPad.left || gUiPad.right) { gDeath.focus = 1 - gDeath.focus; UiSfx(NA_SE_SY_CURSOR); }
+        gUiPad.left = gUiPad.right = gUiPad.up = gUiPad.down = gUiPad.b = gUiPad.page = false;
+        const float by = pa.y + pad + tileH + 14.0f * scale, bh = 50.0f * scale, bw = (pw - pad * 2 - gap) * 0.5f;
+        if (UiButton(dl, font, scale, ImVec2(pa.x + pad, by), ImVec2(pa.x + pad + bw, by + bh), "Spectate", gDeath.focus == 0, true, a)) {
+            gDeath.card = false;
+            if (!gDeath.spectated) {   // the first time: whoever got you
+                gDeath.spectated = true;
+                for (const auto& st : gSession.Puppets()) if (st.alive && st.id == gDeath.killer) gSpectateTarget = st.id;
+                if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
+            }
+        }
+        if (UiButton(dl, font, scale, ImVec2(pb.x - pad - bw, by), ImVec2(pb.x - pad, by + bh), "Leave match", gDeath.focus == 1, true, a)) {
+            gSession.Leave();
+            return;
+        }
+        UiTextCentred(dl, font, 14.0f * scale, cx, pb.y - 22.0f * scale, UiAlpha(kUi.grey, a), "D-pad Left / Right to choose, A to select");
+        gUiPad.a = false;
+        return;
+    }
+
+    // 3. Spectating: whom you watch, and the arrows to switch.
+    UiVignette(dl, ds, 0.35f);
+    const float bw = std::min(ds.x - 32.0f * scale, 460.0f * scale), bh = 58.0f * scale;
+    const ImVec2 a(cx - bw * 0.5f, 14.0f * scale), b(a.x + bw, a.y + bh);
+    dl->AddRectFilled(a, b, kUi.panel, 10.0f * scale);
+    dl->AddRect(a, b, kUi.edge, 10.0f * scale, 0, 2.0f * scale);
+    UiTextCentred(dl, font, 14.0f * scale, cx, a.y + 6.0f * scale, kUi.grey, "SPECTATING");
+    UiTextCentred(dl, font, 24.0f * scale, cx, a.y + 24.0f * scale, kUi.white, SpectateName(), bw - 140.0f * scale);
+    for (int side = 0; side < 2; side++) {
+        const ImVec2 ba(side == 0 ? a.x + 8.0f * scale : b.x - 58.0f * scale, a.y + 8.0f * scale), bb(ba.x + 50.0f * scale, b.y - 8.0f * scale);
+        if (UiButton(dl, font, scale, ba, bb, side == 0 ? "<" : ">", false, true)) CycleSpectate(side == 0 ? -1 : 1);
+    }
+    std::string under = IsLive(h) ? std::to_string(h.alive) + " still standing   |   you placed #" + std::to_string(gDeath.place) : "The match is over";
+    UiTextCentred(dl, font, 15.0f * scale, cx, b.y + 6.0f * scale, kUi.grey, under + "   |   D-pad Left / Right to switch", ds.x - 32.0f * scale);
+    if (IsLive(h)) {   // the card again: your numbers, and Leave
+        const std::string label = "Options (B)";
+        const float w = UiTextW(font, 18.0f * scale, label) + 28.0f * scale;
+        const ImVec2 oa(cx - w * 0.5f, b.y + 30.0f * scale), ob(oa.x + w, oa.y + 38.0f * scale);
+        if (UiButton(dl, font, scale, oa, ob, label, false, true)) { gDeath.card = true; gDeath.focus = 0; }
+    }
+}
+
+// Step 4: the end screen, after Fortnite's. A slanted banner with your place (and a crown for a win), then two pages: the summary (your match
+// stats on the left, how your points add up round a ring in the middle, the medals you earned on the right) and the standings (every player and
+// bot, and the replay). R or Z (or the tabs) switch pages.
+
+// Text with a dark outline, for the banner and the big numbers.
+void UiTextOutlined(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 col, const std::string& t) {
+    const float o = std::max(1.5f, size * 0.05f);
+    const ImU32 dark = IM_COL32(20, 10, 40, (col >> 24) & 0xFF);
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) if (dx || dy) dl->AddText(font, size, ImVec2(at.x + dx * o, at.y + dy * o), dark, t.c_str());
+    dl->AddText(font, size, ImVec2(at.x + o * 1.4f, at.y + o * 2.2f), dark, t.c_str());
+    dl->AddText(font, size, at, col, t.c_str());
+}
+
+void UiCrown(ImDrawList* dl, float cx, float base, float s, ImU32 col) {   // s: the width of one of its three points
+    dl->AddRectFilled(ImVec2(cx - s * 1.5f, base - s * 0.55f), ImVec2(cx + s * 1.5f, base), col, s * 0.12f);
+    for (int k = 0; k < 3; k++) {
+        const float x = cx - s * 1.5f + k * s;
+        dl->AddTriangleFilled(ImVec2(x, base - s * 0.5f), ImVec2(x + s, base - s * 0.5f), ImVec2(x + s * 0.5f, base - s * (k == 1 ? 1.9f : 1.5f)), col);
+        dl->AddCircleFilled(ImVec2(x + s * 0.5f, base - s * (k == 1 ? 1.95f : 1.55f)), s * 0.16f, col, 10);
+    }
+}
+
+// The banner: "#N" on the left, the words on a slanted, tilted ribbon. `cx, y` is its centre; `k` grows it (1 is normal).
+void DrawEndBanner(ImDrawList* dl, ImFont* font, float scale, float cx, float y, int place, bool won, float alpha, float k) {
+    const std::string words = won ? "VICTORY ROYALE!" : place > 0 ? "WELL PLAYED" : "MATCH OVER";
+    const float ts = 40.0f * scale * k, bs = 72.0f * scale * k;
+    const std::string badge = place > 0 ? "#" + std::to_string(place) : "";
+    const float tw = UiTextW(font, ts, words), bw = badge.empty() ? 0.0f : UiTextW(font, bs, badge);
+    const float h = 66.0f * scale * k, skew = 16.0f * scale * k, tilt = 7.0f * scale * k;
+    const float w = tw + 70.0f * scale * k, x0 = cx - (w - bw * 0.45f) * 0.5f, x1 = x0 + w, top = y - h * 0.5f;
+    // the ribbon, a little higher on the right, with a lighter top half
+    const ImU32 dark = UiAlpha(won ? kUi.banner : kUi.bannerLoss, alpha), light = UiAlpha(won ? kUi.bannerLight : kUi.bannerLossLight, alpha);
+    const ImVec2 a(x0 + skew, top + tilt), b(x1 + skew, top - tilt), c(x1 - skew, top + h - tilt), d(x0 - skew, top + h + tilt);
+    dl->AddQuadFilled(ImVec2(a.x + 6 * scale, a.y + 8 * scale), ImVec2(b.x + 6 * scale, b.y + 8 * scale), ImVec2(c.x + 6 * scale, c.y + 8 * scale), ImVec2(d.x + 6 * scale, d.y + 8 * scale), IM_COL32(10, 0, 40, static_cast<int>(120 * alpha)));
+    dl->AddQuadFilled(a, b, c, d, dark);
+    dl->AddQuadFilled(a, b, ImVec2((b.x + c.x) * 0.5f, (b.y + c.y) * 0.5f), ImVec2((a.x + d.x) * 0.5f, (a.y + d.y) * 0.5f), light);
+    dl->AddQuad(a, b, c, d, UiAlpha(IM_COL32(255, 255, 255, 120), alpha), 2.0f * scale);
+    UiTextOutlined(dl, font, ts, ImVec2(cx - tw * 0.5f + bw * 0.22f, y - ts * 0.55f), UiAlpha(kUi.white, alpha), words);
+    if (!badge.empty()) UiTextOutlined(dl, font, bs, ImVec2(x0 - bw * 0.62f, y - bs * 0.62f), UiAlpha(kUi.gold, alpha), badge);
+    if (won) UiCrown(dl, cx + bw * 0.22f, top - 6.0f * scale * k, 18.0f * scale * k, UiAlpha(kUi.gold, alpha));
+}
+
+// A medal: what it is for, and its tier (0 bronze, 1 silver, 2 gold).
+struct Medal { std::string name, what; int tier; };
+std::vector<Medal> EarnedMedals(int place, int players, int kills, float damage, int chests) {
+    std::vector<Medal> m;
+    char buf[64];
+    if (place == 1) m.push_back({ "VICTORY ROYALE", "The last one standing", 2 });
+    if (gMyStats.firstStrike) m.push_back({ "FIRST STRIKE", "First elimination of the match", 2 });
+    if (kills >= 10) m.push_back({ "DOUBLE DIGITS", std::to_string(kills) + " eliminations in a match", 2 });
+    else if (kills > 0) m.push_back({ "BATTLE MEDAL", std::to_string(kills) + (kills == 1 ? " elimination" : " eliminations"), kills >= 5 ? 2 : kills >= 3 ? 1 : 0 });
+    if (gMyStats.bestStreak >= 3) m.push_back({ "TRIPLE ELIM", "Three elims in quick succession", 2 });
+    else if (gMyStats.bestStreak == 2) m.push_back({ "DOUBLE ELIM", "Two elims in quick succession", 1 });
+    if (place > 1 && place <= 5) m.push_back({ "SURVIVOR", "Made the top 5", 2 });
+    else if (place > 1 && place <= 10) m.push_back({ "SURVIVOR", "Made the top 10", 1 });
+    else if (place > 1 && place <= std::max(2, players / 2)) m.push_back({ "SURVIVOR", "Outlasted half the players", 0 });
+    if (damage >= 5.0f) { std::snprintf(buf, sizeof(buf), "%.1f hearts of damage dealt", damage); m.push_back({ "HEAVY HITTER", buf, damage >= 20.0f ? 2 : damage >= 10.0f ? 1 : 0 }); }
+    if (chests > 0) m.push_back({ "SCAVENGER", "Searched " + std::to_string(chests) + (chests == 1 ? " chest" : " chests"), chests >= 8 ? 2 : chests >= 4 ? 1 : 0 });
+    if (place == 1 && gMyStats.taken < 5.0f) { std::snprintf(buf, sizeof(buf), "Won taking only %.1f hearts", gMyStats.taken); m.push_back({ "UNTOUCHABLE", buf, 2 }); }
+    if (gMyStats.hits >= 25) m.push_back({ "RELENTLESS", std::to_string(gMyStats.hits) + " hits landed", gMyStats.hits >= 60 ? 2 : 1 });
+    if (gMyStats.distance >= 40000.0f) { std::snprintf(buf, sizeof(buf), "Travelled %.1f km", gMyStats.distance / 40000.0f); m.push_back({ "EXPLORER", buf, 1 }); }
+    if (m.empty()) m.push_back({ "INTO THE FRAY", "Dropped in and fought", 0 });
+    std::stable_sort(m.begin(), m.end(), [](const Medal& p, const Medal& q) { return p.tier > q.tier; });
+    return m;
+}
+
+void DrawMedalIcon(ImDrawList* dl, ImVec2 c, float r, int tier, float alpha) {
+    const ImU32 col = UiAlpha(tier == 2 ? kUi.medalGold : tier == 1 ? kUi.silver : kUi.bronze, alpha);
+    dl->AddTriangleFilled(ImVec2(c.x - r * 0.75f, c.y - r * 0.2f), ImVec2(c.x - r * 0.1f, c.y), ImVec2(c.x - r * 0.55f, c.y + r * 1.25f), UiAlpha(IM_COL32(60, 120, 230, 255), alpha));   // the ribbon
+    dl->AddTriangleFilled(ImVec2(c.x + r * 0.75f, c.y - r * 0.2f), ImVec2(c.x + r * 0.1f, c.y), ImVec2(c.x + r * 0.55f, c.y + r * 1.25f), UiAlpha(IM_COL32(60, 120, 230, 255), alpha));
+    dl->AddCircleFilled(c, r, col, 24);
+    dl->AddCircle(c, r * 0.78f, UiAlpha(IM_COL32(255, 255, 255, 140), alpha), 24, 1.5f);
+    ImVec2 star[10];   // a five-pointed star in the middle
+    for (int i = 0; i < 10; i++) {
+        const float ang = -1.5707963f + i * 0.6283185f, rr = (i % 2 ? 0.25f : 0.58f) * r;
+        star[i] = ImVec2(c.x + std::cos(ang) * rr, c.y + std::sin(ang) * rr);
+    }
+    for (int i = 0; i < 10; i += 2) dl->AddTriangleFilled(c, star[i], star[(i + 1) % 10], UiAlpha(IM_COL32(255, 255, 255, 230), alpha)),
+                                    dl->AddTriangleFilled(c, star[(i + 9) % 10], star[i], UiAlpha(IM_COL32(255, 255, 255, 230), alpha));
+}
+
+void UiTick(ImDrawList* dl, ImVec2 at, float s, ImU32 col) {
+    dl->AddLine(ImVec2(at.x, at.y + s * 0.5f), ImVec2(at.x + s * 0.38f, at.y + s * 0.9f), col, s * 0.22f);
+    dl->AddLine(ImVec2(at.x + s * 0.38f, at.y + s * 0.9f), ImVec2(at.x + s, at.y), col, s * 0.22f);
+}
+
+std::string UiClock(double secs) {
+    const int s = std::max(0, static_cast<int>(secs));
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d:%02d", s / 60, s % 60);
+    return buf;
+}
+
+// The summary page inside (a, b).
+void DrawEndSummary(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const royale::HudState& h, const royale::ResultsRow* me, int place,
+                    float alpha, double t) {
+    const float w = b.x - a.x, colW = w / 3.0f, pad = 14.0f * scale;
+    const int kills = me ? me->kills : gMyStats.kills, chests = me ? me->chests : gMyStats.chests;
+    const float damage = me ? me->damage : gMyStats.damage;
+    const int score = me ? me->score : royale::ScorePoints(damage, kills, chests, place);
+    const int players = std::max<int>(static_cast<int>(h.results.size()), h.playerLimit);
+    char buf[32];
+
+    // Left: match stats.
+    {
+        const float x0 = a.x + pad, x1 = a.x + colW - pad;
+        UiText(dl, font, 18.0f * scale, ImVec2(x0, a.y), UiAlpha(kUi.label, alpha), "MATCH STATS");
+        const double alive = (gDeath.active ? gDeath.at : gEnd.at) - gMyStats.startAt;
+        std::vector<std::pair<std::string, std::string>> rows;
+        rows.push_back({ "Place", place > 0 ? "#" + std::to_string(place) + " of " + std::to_string(players) : "-" });
+        rows.push_back({ "Eliminations", std::to_string(kills) });
+        std::snprintf(buf, sizeof(buf), "%.1f", damage); rows.push_back({ "Damage to players", buf });
+        rows.push_back({ "Hits", std::to_string(gMyStats.hits) });
+        std::snprintf(buf, sizeof(buf), "%.1f", gMyStats.taken); rows.push_back({ "Damage taken", buf });
+        rows.push_back({ "Chests searched", std::to_string(chests) });
+        if (gMyStats.startAt > 0 && alive > 0) rows.push_back({ "Time survived", UiClock(alive) });
+        if (gMyStats.distance >= 40000.0f) std::snprintf(buf, sizeof(buf), "%.1f km", gMyStats.distance / 40000.0f);
+        else std::snprintf(buf, sizeof(buf), "%d m", static_cast<int>(gMyStats.distance / 40.0f));
+        rows.push_back({ "Distance travelled", buf });
+        float y = a.y + 34.0f * scale;
+        const float rowH = std::min(34.0f * scale, (b.y - y) / static_cast<float>(rows.size()));
+        for (size_t i = 0; i < rows.size(); i++) {
+            const float k = static_cast<float>(std::clamp((t - 0.08 * i) / 0.25, 0.0, 1.0));   // one after another
+            const float size = std::min(21.0f * scale, rowH * 0.7f);
+            UiText(dl, font, size, ImVec2(x0 + (1.0f - k) * 20.0f * scale, y), UiAlpha(kUi.label, alpha * k), rows[i].first);
+            const float vw = UiTextW(font, size, rows[i].second);
+            UiText(dl, font, size, ImVec2(x1 - vw, y), UiAlpha(kUi.white, alpha * k), rows[i].second);
+            y += rowH;
+        }
+    }
+
+    // Middle: the points, round a ring that fills, and what they came from, ticked off one by one.
+    {
+        const float cx = a.x + colW * 1.5f;
+        const float r = std::min(colW * 0.32f, (b.y - a.y) * 0.24f);
+        const ImVec2 c(cx, a.y + r + 14.0f * scale);
+        const float fill = static_cast<float>(std::min(1.0, t / 1.1));
+        const float ease = 1.0f - (1.0f - fill) * (1.0f - fill);
+        dl->AddCircleFilled(c, r, UiAlpha(IM_COL32(10, 20, 70, 200), alpha), 64);
+        dl->AddCircle(c, r, UiAlpha(IM_COL32(90, 225, 255, 60), alpha), 64, 10.0f * scale);
+        dl->PathArcTo(c, r, -1.5707963f, -1.5707963f + 6.2831853f * ease, 64);
+        dl->PathStroke(UiAlpha(kUi.accent, alpha), 0, 10.0f * scale);
+        const std::string total = UiThousands(static_cast<int>(score * ease + 0.5f));
+        UiTextCentred(dl, font, r * 0.62f, cx, c.y - r * 0.42f, UiAlpha(kUi.white, alpha), total, r * 1.7f);
+        UiTextCentred(dl, font, r * 0.22f, cx, c.y + r * 0.28f, UiAlpha(kUi.label, alpha), "POINTS");
+
+        const int pDamage = static_cast<int>(damage * royale::kPointsPerHeartOfDamage + 0.5f), pKills = kills * royale::kPointsPerKill;
+        const int pChests = chests * royale::kPointsPerChest;
+        const int pLasted = place > 0 ? (royale::kMaxPlayers - place) * royale::kPointsPerPlacementStep : 0, pWin = place == 1 ? royale::kPointsForWinning : 0;
+        const int pOther = score - (pDamage + pKills + pChests + pLasted + pWin);
+        std::vector<std::pair<int, std::string>> parts = { { pDamage + pKills, "Combat" }, { pChests, "Scavenging" }, { pLasted + pWin, "Survival" } };
+        if (pOther > 0) parts.push_back({ pOther, "Mini bosses" });
+        float y = c.y + r + 22.0f * scale;
+        const float rowH = std::min(30.0f * scale, (b.y - y) / static_cast<float>(parts.size()));
+        for (size_t i = 0; i < parts.size(); i++) {
+            const float k = static_cast<float>(std::clamp((t - 0.6 - 0.25 * i) / 0.25, 0.0, 1.0));
+            if (k <= 0.0f) break;
+            const float size = std::min(22.0f * scale, rowH * 0.75f);
+            const std::string n = UiThousands(parts[i].first);
+            const float nw = UiTextW(font, size, n);
+            UiTick(dl, ImVec2(cx - nw - 34.0f * scale, y + size * 0.15f), size * 0.7f, UiAlpha(kUi.accent, alpha * k));
+            UiText(dl, font, size, ImVec2(cx - nw - 6.0f * scale, y), UiAlpha(kUi.white, alpha * k), n);
+            UiText(dl, font, size * 0.8f, ImVec2(cx + 6.0f * scale, y + size * 0.15f), UiAlpha(kUi.label, alpha * k), parts[i].second);
+            y += rowH;
+        }
+    }
+
+    // Right: medals and accolades.
+    {
+        const float x0 = a.x + colW * 2.0f + pad, x1 = b.x - pad;
+        UiText(dl, font, 18.0f * scale, ImVec2(x0, a.y), UiAlpha(kUi.label, alpha), "MEDALS & ACCOLADES");
+        const std::vector<Medal> medals = EarnedMedals(place, players, kills, damage, chests);
+        const float rowH = 54.0f * scale, r = 17.0f * scale;
+        float y = a.y + 36.0f * scale;
+        dl->PushClipRect(ImVec2(x0 - 4.0f * scale, y), ImVec2(x1 + 4.0f * scale, b.y), true);
+        for (size_t i = 0; i < medals.size() && y < b.y; i++) {
+            const float k = static_cast<float>(std::clamp((t - 0.3 - 0.15 * i) / 0.3, 0.0, 1.0));
+            const float pop = 1.0f + 0.35f * (1.0f - k);
+            DrawMedalIcon(dl, ImVec2(x0 + r, y + r + 2.0f * scale), r * pop, medals[i].tier, alpha * k);
+            const float tx = x0 + r * 2.0f + 12.0f * scale, room = x1 - tx;
+            UiTextCentred(dl, font, 17.0f * scale, tx + std::min(room, UiTextW(font, 17.0f * scale, medals[i].name)) * 0.5f, y, UiAlpha(kUi.white, alpha * k), medals[i].name, room);
+            UiTextCentred(dl, font, 14.0f * scale, tx + std::min(room, UiTextW(font, 14.0f * scale, medals[i].what)) * 0.5f, y + 21.0f * scale, UiAlpha(kUi.label, alpha * k), medals[i].what, room);
+            y += rowH;
+        }
+        dl->PopClipRect();
+    }
+}
+
+// The standings page inside (a, b): everyone, and the replay beside them when there is room.
+void DrawEndStandings(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const royale::HudState& h, float alpha) {
+    float tableRight = b.x;
+    royale::GameClient* client = gSession.Client();
+    if (client != nullptr && client->ReplayComplete() && b.x - a.x > 760.0f * scale) {
+        const float side = std::min(b.y - a.y - 56.0f * scale, (b.x - a.x) * 0.3f);
+        if (side > 120.0f * scale) {
+            tableRight = b.x - side - 20.0f * scale;
+            if (alpha > 0.99f) DrawReplay(dl, font, ImVec2(b.x - side, a.y + 28.0f * scale), side, scale, h);
+        }
+    }
+    const float x0 = a.x, x1 = tableRight, rowH = 32.0f * scale, headH = 28.0f * scale, bodyTop = a.y, bodyBottom = b.y;
+    const float cRank = x0 + 10.0f * scale, cName = x0 + 58.0f * scale, cKills = x1 - 250.0f * scale, cDmg = x1 - 165.0f * scale, cScore = x1 - 80.0f * scale;
+    const ImU32 head = UiAlpha(kUi.label, alpha);
+    UiText(dl, font, 15.0f * scale, ImVec2(cRank, bodyTop), head, gEnd.byScore ? "#" : "# v", false);
+    UiText(dl, font, 15.0f * scale, ImVec2(cName, bodyTop), head, "Player", false);
+    UiText(dl, font, 15.0f * scale, ImVec2(cKills, bodyTop), head, "Kills", false);
+    UiText(dl, font, 15.0f * scale, ImVec2(cDmg, bodyTop), head, "Damage", false);
+    UiText(dl, font, 15.0f * scale, ImVec2(cScore, bodyTop), head, gEnd.byScore ? "Score v" : "Score", false);
+    if (UiTapIn(ImVec2(x0, bodyTop - 4.0f * scale), ImVec2(x1, bodyTop + headH)) && alpha > 0.99f) { gEnd.byScore = !gEnd.byScore; gEnd.scroll = 0; UiSfx(NA_SE_SY_CURSOR); }
+    dl->AddLine(ImVec2(x0, bodyTop + headH - 4.0f * scale), ImVec2(x1, bodyTop + headH - 4.0f * scale), UiAlpha(kUi.edge, alpha * 0.5f), 1.0f * scale);
+
+    const ImVec2 la(x0, bodyTop + headH), lb(x1, bodyBottom);
+    const float viewH = lb.y - la.y;
+    std::vector<const royale::ResultsRow*> rows;
+    for (const auto& r : h.results) rows.push_back(&r);
+    if (!gEnd.byScore) std::stable_sort(rows.begin(), rows.end(), [](const royale::ResultsRow* p, const royale::ResultsRow* q) {
+        return (p->placement > 0 ? p->placement : 999) < (q->placement > 0 ? q->placement : 999);
+    });
+    const float maxScroll = std::max(0.0f, static_cast<float>(rows.size()) * rowH - viewH);
+    // scrolling: D-pad Up/Down, the mouse wheel, or dragging the list
+    ImGuiIO& io = ImGui::GetIO();
+    if (gUiPad.up) gEnd.scroll -= rowH * 3.0f;
+    if (gUiPad.down) gEnd.scroll += rowH * 3.0f;
+    const bool overList = io.MousePos.x >= la.x && io.MousePos.x <= lb.x && io.MousePos.y >= la.y && io.MousePos.y <= lb.y && !io.WantCaptureMouse;
+    if (overList) gEnd.scroll -= io.MouseWheel * rowH * 2.0f;
+    if (ImGui::IsMouseClicked(0) && overList) gEnd.dragging = true;
+    if (!ImGui::IsMouseDown(0)) gEnd.dragging = false;
+    if (gEnd.dragging) gEnd.scroll -= io.MouseDelta.y;
+    gEnd.scroll = std::clamp(gEnd.scroll, 0.0f, maxScroll);
+
+    dl->PushClipRect(la, lb, true);
+    float ry = la.y - gEnd.scroll;
+    int index = 0;
+    for (const royale::ResultsRow* r : rows) {
+        if (ry + rowH >= la.y && ry <= lb.y) {
+            const ImVec2 ra(x0, ry), rb(x1, ry + rowH - 2.0f * scale);
+            if (r->self) dl->AddRectFilled(ra, rb, UiAlpha(kUi.selfRow, alpha), 6.0f * scale);
+            else if (index % 2) dl->AddRectFilled(ra, rb, UiAlpha(kUi.rowAlt, alpha), 6.0f * scale);
+            const bool winner = r->placement == 1;
+            const ImU32 col = UiAlpha(r->self ? kUi.green : winner ? kUi.gold : kUi.white, alpha);
+            const float ty = ry + (rowH - 20.0f * scale) * 0.5f - 1.0f * scale;
+            const int shownRank = gEnd.byScore ? index + 1 : r->placement;
+            UiText(dl, font, 20.0f * scale, ImVec2(cRank, ty), col, shownRank > 0 ? std::to_string(shownRank) : "-", false);
+            std::string name = r->name.empty() ? "Link" : r->name;
+            if (r->self) name += " (you)";
+            const float nameMax = cKills - cName - 70.0f * scale;
+            float nameSize = 20.0f * scale;
+            const float nw = UiTextW(font, nameSize, name);
+            if (nw > nameMax && nw > 0) nameSize *= std::max(0.6f, nameMax / nw);
+            UiText(dl, font, nameSize, ImVec2(cName, ty), col, name, false);
+            float tagX = cName + UiTextW(font, nameSize, name) + 10.0f * scale;
+            if (winner) { UiCrown(dl, tagX + 10.0f * scale, ry + rowH * 0.5f + 6.0f * scale, 7.0f * scale, UiAlpha(kUi.gold, alpha)); tagX += 30.0f * scale; }
+            if (r->isBot) UiText(dl, font, 13.0f * scale, ImVec2(tagX, ty + 4.0f * scale), UiAlpha(kUi.grey, alpha), "BOT", false);
+            UiText(dl, font, 20.0f * scale, ImVec2(cKills, ty), col, std::to_string(r->kills), false);
+            char dmg[16];
+            std::snprintf(dmg, sizeof(dmg), "%.1f", r->damage);
+            UiText(dl, font, 20.0f * scale, ImVec2(cDmg, ty), col, dmg, false);
+            UiText(dl, font, 20.0f * scale, ImVec2(cScore, ty), col, UiThousands(r->score), false);
+        }
+        ry += rowH;
+        index++;
+    }
+    if (rows.empty()) UiTextCentred(dl, font, 18.0f * scale, (x0 + x1) * 0.5f, la.y + 20.0f * scale, UiAlpha(kUi.grey, alpha), "Waiting for the results...");
+    dl->PopClipRect();
+    if (maxScroll > 0) {   // a thin scroll bar
+        const float barH = std::max(24.0f * scale, viewH * viewH / (viewH + maxScroll));
+        const float barY = la.y + (viewH - barH) * (gEnd.scroll / maxScroll);
+        dl->AddRectFilled(ImVec2(x1 + 4.0f * scale, barY), ImVec2(x1 + 8.0f * scale, barY + barH), UiAlpha(kUi.edge, alpha * 0.6f), 2.0f * scale);
+    }
+}
+
+void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    Feat("end screen");
+    if (h.state != royale::MatchState::Ending) return;
+    const double now = ImGui::GetTime(), t = now - gEnd.at;
+    const float cx = ds.x * 0.5f;
+    const bool won = h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16;
+    const royale::ResultsRow* me = nullptr;
+    for (const auto& r : h.results) if (r.self) me = &r;
+    const int place = me != nullptr && me->placement > 0 ? me->placement : won ? 1 : gDeath.place;
+    const std::string winnerLine = won ? "You are the last one standing" : !h.winnerName.empty() ? "Winner: " + h.winnerName : "Nobody survived";
+
+    if (!gEnd.open) {   // kept spectating: a chip to bring the results back
+        const std::string label = "Results (D-pad Up)";
+        const float w = UiTextW(font, 18.0f * scale, label) + 28.0f * scale;
+        const ImVec2 a(ds.x - w - 16.0f * scale, 16.0f * scale), b(ds.x - 16.0f * scale, 16.0f * scale + 40.0f * scale);
+        if (UiButton(dl, font, scale, a, b, label, false, true)) { gEnd.open = true; gEnd.at = now - kEndPanelDelay; }
+        return;
+    }
+
+    // The violet tint over the game, and the banner: big in the middle first, then up to the top.
+    const float tint = static_cast<float>(std::min(1.0, t / 0.6));
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, UiAlpha(kUi.bgTop, tint), UiAlpha(kUi.bgTop, tint), UiAlpha(kUi.bgBottom, tint), UiAlpha(kUi.bgBottom, tint));
+    const float pop = static_cast<float>(std::min(1.0, t / 0.3));
+    const float rise = static_cast<float>(std::clamp((t - kEndPanelDelay + 0.4) / 0.4, 0.0, 1.0));
+    const float bannerY = ds.y * 0.4f + (60.0f * scale - ds.y * 0.4f) * (1.0f - (1.0f - rise) * (1.0f - rise));
+    const float bannerK = (1.45f - 0.45f * rise) * (0.7f + 0.3f * pop);
+    DrawEndBanner(dl, font, scale, cx, bannerY, place, won, pop, bannerK);
+    if (t < kEndPanelDelay) {
+        UiTextCentred(dl, font, 26.0f * scale, cx, bannerY + 70.0f * scale, UiAlpha(won ? kUi.white : kUi.gold, pop), winnerLine, ds.x * 0.9f);
+        gUiPad = {};
+        return;
+    }
+    const float a = static_cast<float>(std::min(1.0, (t - kEndPanelDelay) / 0.3));
+    const double pt = t - kEndPanelDelay;   // the page's own clock, for its count-ups
+
+    const float cw = std::min(ds.x - 40.0f * scale, 1120.0f * scale);
+    const ImVec2 ca(cx - cw * 0.5f, 114.0f * scale);
+    // Under the banner: who won and where, and the two tabs.
+    UiTextCentred(dl, font, 17.0f * scale, cx, ca.y, UiAlpha(kUi.gold, a), winnerLine + "   |   " + CurrentMap().name, cw);
+    if (gUiPad.page) { gEnd.page = 1 - gEnd.page; gEnd.scroll = 0; UiSfx(NA_SE_SY_CURSOR); }
+    const char* tabs[2] = { "SUMMARY", "STANDINGS" };
+    const float tabW = 150.0f * scale, tabY = ca.y + 28.0f * scale;
+    for (int i = 0; i < 2; i++) {
+        const ImVec2 ta(cx - tabW + i * tabW, tabY), tb(ta.x + tabW, tabY + 30.0f * scale);
+        const bool on = gEnd.page == i;
+        UiTextCentred(dl, font, 18.0f * scale, (ta.x + tb.x) * 0.5f, ta.y + 4.0f * scale, UiAlpha(on ? kUi.white : kUi.grey, a), tabs[i]);
+        if (on) dl->AddRectFilled(ImVec2(ta.x + 20.0f * scale, tb.y - 3.0f * scale), ImVec2(tb.x - 20.0f * scale, tb.y), UiAlpha(kUi.accent, a), 2.0f * scale);
+        if (!on && a > 0.99f && UiTapIn(ta, tb)) { gEnd.page = i; gEnd.scroll = 0; UiSfx(NA_SE_SY_CURSOR); }
+    }
+
+    // The buttons and the hint at the bottom; the page between.
+    const float bh = 50.0f * scale, hintH = 22.0f * scale, by = ds.y - 16.0f * scale - hintH - bh;
+    const ImVec2 pageA(ca.x, tabY + 46.0f * scale), pageB(ca.x + cw, by - 16.0f * scale);
+    if (gEnd.page == 0) DrawEndSummary(dl, font, scale, pageA, pageB, h, me, place, a, pt);
+    else DrawEndStandings(dl, font, scale, pageA, pageB, h, a);
+
+    // Keep spectating / New match / Leave.
+    const bool canNew = h.isHost;
+    if (gUiPad.left || gUiPad.right) {
+        const int dir = gUiPad.left ? -1 : 1;
+        do { gEnd.focus = (gEnd.focus + 3 + dir) % 3; } while (gEnd.focus == 1 && !canNew);
+        UiSfx(NA_SE_SY_CURSOR);
+    }
+    if (gUiPad.b) { gEnd.open = false; UiSfx(NA_SE_SY_FSEL_CLOSE); }
+    gUiPad.left = gUiPad.right = gUiPad.up = gUiPad.down = gUiPad.b = gUiPad.page = false;
+    if (!canNew && gEnd.focus == 1) gEnd.focus = 0;
+    const float bw = std::min(260.0f * scale, (cw - 24.0f * scale) / 3.0f), gap = 12.0f * scale, bx = cx - bw * 1.5f - gap;
+    if (UiButton(dl, font, scale, ImVec2(bx, by), ImVec2(bx + bw, by + bh), "Keep spectating", gEnd.focus == 0, true, a)) gEnd.open = false;
+    if (UiButton(dl, font, scale, ImVec2(bx + bw + gap, by), ImVec2(bx + bw * 2 + gap, by + bh), "New match", gEnd.focus == 1, canNew, a))
+        gSession.RequestPlayAgain();
+    if (UiButton(dl, font, scale, ImVec2(bx + (bw + gap) * 2, by), ImVec2(bx + bw * 3 + gap * 2, by + bh), "Leave", gEnd.focus == 2, true, a)) { gSession.Leave(); return; }
+    gUiPad.a = false;
+    const std::string hint = std::string(canNew ? "D-pad Left / Right and A to choose" : "Only the host can start a new match") +
+                             "   |   R: " + (gEnd.page == 0 ? "standings" : "summary") + "   |   B: keep spectating" + (gEnd.page == 1 ? "   |   D-pad Up / Down: scroll" : "");
+    UiTextCentred(dl, font, 14.0f * scale, cx, ds.y - 16.0f * scale - hintH + 4.0f * scale, UiAlpha(kUi.grey, a), hint, cw);
+}
+
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawOverlay() {
     if (WarMenuOpen()) return;
@@ -7018,7 +7832,7 @@ void DrawOverlay() {
     DrawUnderwaterOverlay(dl, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
     const ImU32 white = IM_COL32(255, 255, 255, 255), gold = IM_COL32(255, 210, 70, 255), red = IM_COL32(255, 90, 90, 255),
-                green = IM_COL32(110, 230, 130, 255), grey = IM_COL32(190, 190, 190, 255);
+                green = IM_COL32(110, 230, 130, 255);
     auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {
         dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
         dl->AddText(font, size, ImVec2(x, y), col, t.c_str());
@@ -7037,35 +7851,16 @@ void DrawOverlay() {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
         if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to " + std::string(CurrentMap().name) + "...");
     }
-    if (h.state == royale::MatchState::Ending) {
-        centered(ds.y * 0.16f, gold, 46 * scale, h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16 ? "VICTORY ROYALE!" : "MATCH OVER");
-        if (!h.winnerName.empty() && h.winnerId != h.selfId) centered(ds.y * 0.16f + 56 * scale, white, 26 * scale, "Winner: " + h.winnerName);
-        centered(ds.y * 0.16f + 92 * scale, grey, 20 * scale, "Open the menu and choose Leave to go back");
-    }
-    if (live && h.haveSelf && !h.selfAlive) {
-        centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED");
-        centered(ds.y * 0.12f + 42 * scale, white, 22 * scale, "Watching " + SpectateName());
-        ImGuiIO& io = ImGui::GetIO();
-        const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
-        for (int side = 0; side < 2; side++) {
-            const float bw = 54.0f * scale, bh = 40.0f * scale;
-            const ImVec2 a(side == 0 ? ds.x * 0.5f - 190.0f * scale : ds.x * 0.5f + 136.0f * scale, ds.y * 0.12f + 36.0f * scale), b(a.x + bw, a.y + bh);
-            dl->AddRectFilled(a, b, OotPanel(205), 6.0f * scale);
-            dl->AddRect(a, b, IM_COL32(255, 236, 120, 255), 6.0f * scale, 0, 2.0f * scale);
-            dl->AddText(font, 24.0f * scale, ImVec2(a.x + 19 * scale, a.y + 7 * scale), IM_COL32(255, 255, 255, 255), side == 0 ? "<" : ">");
-            if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
-        }
-    }
     if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
     if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
-
-    if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
     DrawPickupFx(dl, ds, scale);
     DrawFeed(dl, font, ds, scale);
     DrawGains(dl, font, ds, scale);
     DrawHitEffects(dl, font, ds, scale);
     DrawBanners(dl, font, ds, scale);
+    DrawDeathScreen(dl, font, ds, scale, h);   // going down, the death card, spectating
+    DrawEndScreen(dl, font, ds, scale, h);     // the match is over
 
     if (!live || !h.haveSelf) return;
 
@@ -7341,6 +8136,7 @@ void OnEmoteWheelInput() {
     if (gPlayState == nullptr || !gSession.Joined() || !InGame()) { if (gWheel.open) CloseEmoteWheel(); return; }
     Input& in = gPlayState->state.input[0];
     const royale::HudState hud = gSession.Hud();
+    if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
     // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
@@ -7381,7 +8177,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -9293,7 +10089,7 @@ struct SolidBuilder {
                           static_cast<s16>(std::lround(std::clamp(z, -32000.0f, 32000.0f))) };
         return nv++;
     }
-    void Box(const royale::convergence::PropCollider& c) {
+    template <class C> void Box(const C& c) {
         const int first=nv;
         for(int y=0;y<2;++y) for(int z=0;z<2;++z) for(int x=0;x<2;++x)
             V(x?c.x1:c.x0,y?c.y1:c.y0,z?c.z1:c.z0);
@@ -9416,10 +10212,11 @@ float PlatformFoot(size_t i) {
 
 // Fill the mesh with the scenery nearest (x, z). Returns false if the same pieces are already in it.
 bool BuildSolidMesh(float x, float z, bool force) {
-    if (OnConvergenceTerrain()) {
+    if (OnAuthoredTerrain()) {
         const Player* player=GET_PLAYER(gPlayState);
         const size_t limit=static_cast<size_t>(std::max(0,std::min((SolidPolyBudget()-1)/12,(kSolidMaxVtx-3)/8)));
-        const auto chosen=royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
+        const bool kingdomMap=OnKingdomTerrain();
+        const auto chosen=kingdomMap?royale::KingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
         std::vector<uint64_t> keys;
         for(size_t i:chosen) keys.push_back((1ull<<62)|i);
         std::sort(keys.begin(),keys.end());
@@ -9429,7 +10226,7 @@ bool BuildSolidMesh(float x, float z, bool force) {
         // Keep a valid header even where there are no nearby objects.
         b.V(-10,-10000,-10);b.V(10,-10000,-10);b.V(0,-10000,10);
         b.T(0,1,2,{0,-10010,0},0,0);
-        for(size_t i:chosen) b.Box(royale::convergence::kPropColliders[i]);
+        for(size_t i:chosen) { if(kingdomMap) b.Box(royale::kingdom::kPropColliders[i]); else b.Box(royale::convergence::kPropColliders[i]); }
         gSolidHeader={};gSolidHeader.numVertices=static_cast<u16>(b.nv);gSolidHeader.vtxList=gSolidVtx;
         gSolidHeader.numPolygons=static_cast<u16>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
         Vec3s lo=gSolidVtx[0],hi=lo;
@@ -9564,11 +10361,11 @@ void Solid_Destroy(Actor* actor, PlayState* play) {
 
 // The mesh only changes here, in the actor's own update: the game takes it in right after every actor has updated, in the same frame.
 void Solid_Update(Actor* actor, PlayState* play) {
-    if (!OnConvergenceTerrain() && (!gSession.Client() || !InField())) return;
+    if (!OnAuthoredTerrain() && (!gSession.Client() || !InField())) return;
     const Player* player = GET_PLAYER(play);
     if (player == nullptr) return;
     const float x = player->actor.world.pos.x, z = player->actor.world.pos.z;
-    if (!OnConvergenceTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
+    if (!OnAuthoredTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
     gSolidAge = 0;
     gSolidCentre = { x, z };
     if (BuildSolidMesh(x, z, false)) play->colCtx.dyna.bitFlag |= DYNAPOLY_INVALIDATE_LOOKUP;
@@ -9596,7 +10393,7 @@ int SolidActorId() {
 void EnsureSolidScenery() {
     // Authored props must be solid in the map lobby too, before the host requests
     // a match measurement and even if the custom scene outlives the connection.
-    const bool want = OnConvergenceTerrain() || (gInFieldFrames > 20 &&
+    const bool want = OnAuthoredTerrain() || (gInFieldFrames > 20 &&
         gSession.Client() != nullptr && InField() && !gSession.Client()->Props().empty());
     if (want && gSolidActor == nullptr && !gSolidFailed) {
         gSolidCentre = { 1e9f, 1e9f };
@@ -9635,11 +10432,6 @@ bool WaterSurfaceAt(float x, float z, float* y) {
     return true;
 }
 
-// The swell: three crossing waves, about 4 units high in calm air.
-float WaveHeight(float x, float z, float t, float amp) {
-    return amp * (2.0f * std::sin(x * 0.0042f + z * 0.0023f + t * 1.3f) + 1.4f * std::sin(-x * 0.0031f + z * 0.0057f + t * 1.7f + 1.3f) +
-                  0.7f * std::sin(x * 0.011f + z * 0.009f - t * 2.6f));
-}
 
 float WaveAmp() {
     float wx, wz, wind;
@@ -9676,9 +10468,16 @@ struct WaterTrack { float x = 0, y = 0, z = 0, ring = 0, spawn = 0, dist = 0; bo
 std::unordered_map<const void*, WaterTrack> gWaterTrack;
 int gWaterFrame = 0, gWaterBudget = 0;
 float gCamUnder = 0.0f;   // 0 above the surface .. 1 below it (eased), for the underwater overlay
+float gCamDepth = 0.0f;   // how far under the surface the camera is (units)
 float gWaterNow = 0.0f;   // the clock the displacement runs on (seconds)
+// The ripple simulation round the player (shared/water_sim.h): 64 x 64 cells of 14 units. Rings spread, cross, mix and fade at its rim.
+royale::water::RippleField gRipples(14.0f, 120.0f, 0.55f);
 
 void AddWaterDisturb(float x, float z, float strength, float size) {
+    if (gWaterRipples && gRipples.Contains(x, z, gRipples.Cell() * 8.0f)) {   // near the player the simulation makes the ring
+        gRipples.Impulse(x, z, strength * size * 0.45f, size * 0.9f);
+        return;
+    }
     if (gWaterDist.size() >= kMaxWaterDist) gWaterDist.erase(gWaterDist.begin());
     gWaterDist.push_back({ x, z, gWaterNow, strength, size });
 }
@@ -9712,8 +10511,35 @@ float WaterDisplaceAt(float x, float z, float* foam) {
             f += 0.45f * run * std::exp(-(tx * tx + tz * tz) / (s2 * 2.5f));   // and foam in its wake
         }
     }
+    if (gWaterRipples) {
+        h += gRipples.Sample(x, z);
+        float sx, sz;
+        gRipples.Slope(x, z, &sx, &sz);
+        f += std::clamp((std::hypot(sx, sz) - 0.12f) * 1.5f, 0.0f, 0.5f);   // steep ripples break into a little foam
+    }
     *foam = std::min(1.0f, f);
     return h;
+}
+
+// ---- for creatures, boats and water physics to come: the water at a point, as it is drawn ------------------------------------------------
+// `height` is where the surface is now (the level, plus the swell and the ripples); `depth` how deep the water is there; (nx, ny, nz) the
+// surface's normal; (flowX, flowZ) the current in units a second. Push the water with AddWaterDisturb (a ring) or gRipples.Impulse.
+struct WaterInfo { bool water = false; float surface = 0, height = 0, depth = 0, nx = 0, ny = 1, nz = 0, flowX = 0, flowZ = 0; };
+[[maybe_unused]] WaterInfo WaterInfoAt(float x, float z) {
+    WaterInfo w;
+    if (gPlayState == nullptr || !WaterSurfaceAt(x, z, &w.surface)) return w;
+    w.water = true;
+    float floorY = 0;
+    w.depth = RawFloorAt(x, z, &floorY) ? w.surface - floorY : 1000.0f;
+    const float shore = std::min(1.0f, std::max(0.0f, w.depth) / 90.0f);
+    const royale::water::SwellPoint sp = royale::water::Swell(x, z, gWaterNow, WaveAmp() * (OnIsland() ? 1.0f : 0.35f), gWaterChop);
+    float foam = 0;
+    w.height = w.surface + (sp.h + WaterDisplaceAt(x, z, &foam)) * shore;
+    w.nx = sp.nx * shore; w.ny = sp.ny; w.nz = sp.nz * shore;
+    const float l = std::sqrt(w.nx * w.nx + w.ny * w.ny + w.nz * w.nz);
+    w.nx /= l; w.ny /= l; w.nz /= l;
+    WaterCurrentAt(x, z, gWaterNow, &w.flowX, &w.flowZ);
+    return w;
 }
 
 // ---- the game's own effects (the sprites Link makes), kept to a few a frame so the effect table is never swamped
@@ -9957,23 +10783,183 @@ WaterSky WaterSkyNow() {
     return s;
 }
 
+// ---- the water's textures (shared/water_sim.h): made once, on a thread of their own, the first time water is drawn. Until they are ready the
+// water is drawn without them. Each is 64 x 64 8-bit intensity (the game's I8 format: the intensity is also the alpha). Caustics and glints are
+// 32-frame flipbooks that loop; every frame lives at its own address, so the renderer keeps one texture per frame and never has to reload.
+constexpr int kWaterTex = 64, kWaterTexFrames = 32;
+alignas(16) uint8_t gWaterCausticTex[kWaterTexFrames][kWaterTex * kWaterTex];
+alignas(16) uint8_t gWaterGlintTex[kWaterTexFrames][kWaterTex * kWaterTex];
+alignas(16) uint8_t gWaterFoamImage[kWaterTex * kWaterTex];
+std::atomic<int> gWaterTexState{ 0 };   // 0 not made, 1 being made, 2 ready
+
+bool WaterTexturesReady() {
+    int expect = 0;
+    if (gWaterTexState.compare_exchange_strong(expect, 1)) {
+        std::thread([] {
+            royale::water::MakeCaustics(&gWaterCausticTex[0][0], kWaterTex, kWaterTexFrames);
+            royale::water::MakeGlints(&gWaterGlintTex[0][0], kWaterTex, kWaterTexFrames);
+            royale::water::MakeFoam(gWaterFoamImage, kWaterTex);
+            gWaterTexState.store(2, std::memory_order_release);
+        }).detach();
+    }
+    return gWaterTexState.load(std::memory_order_acquire) == 2;
+}
+
+// World units per texel of each texture. Texture coordinates are counted from an origin that moves a whole tile at a time, so they stay small
+// (the renderer holds them in 16 bits) and the pattern never jumps when the grid follows the camera.
+constexpr float kGlintUnits = 3.0f, kFoamUnits = 2.6f, kCausticUnits = 3.4f;
+float TexOrigin(float c, float units) { const float tile = kWaterTex * units; return std::floor(c / tile) * tile; }
+
+void PushVtxT(Vtx& o, float x, float y, float z, float s, float t, float r, float g, float b, float a) {
+    PushVtx4(o, x, y, z, r, g, b, a);
+    o.v.tc[0] = static_cast<s16>(std::lround(std::clamp(s * 32.0f, -32000.0f, 32000.0f)));
+    o.v.tc[1] = static_cast<s16>(std::lround(std::clamp(t * 32.0f, -32000.0f, 32000.0f)));
+}
+
+// Switches the water's translucent drawing to a texture: the colour is the vertex colour, the alpha the texture times the vertex alpha. So each
+// vertex says how much of the pattern shows there (and in which colour), and the pattern itself is the texture.
+void WaterTexturePass(PlayState* play, const uint8_t* tex) {
+    OPEN_DISPS(play->state.gfxCtx);
+    gDPPipeSync(POLY_XLU_DISP++);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    gDPLoadTextureBlock(POLY_XLU_DISP++, tex, G_IM_FMT_I, G_IM_SIZ_8b, kWaterTex, kWaterTex, 0, G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 6, 6,
+                        G_TX_NOLOD, G_TX_NOLOD);
+    gSPTexture(POLY_XLU_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+void WaterPlainPass(PlayState* play) {
+    OPEN_DISPS(play->state.gfxCtx);
+    gDPPipeSync(POLY_XLU_DISP++);
+    gSPTexture(POLY_XLU_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+// Draws a grid of vertices (`cols` wide) as squares, a row at a time in runs of up to 15 (two rows of 16 points fill the 32 the RSP holds),
+// leaving out the squares `use` turns down.
+template <typename Use>
+void DrawWaterGrid(PlayState* play, const Vtx* v, int cols, int rows, Use use) {
+    OPEN_DISPS(play->state.gfxCtx);
+    const int V = cols + 1;
+    for (int j = 0; j < rows; j++) {
+        int i = 0;
+        while (i < cols) {
+            if (!use(i, j)) { i++; continue; }
+            const int c0 = i;
+            while (i < cols && i - c0 < 15 && use(i, j)) i++;
+            const int m = i - c0;
+            if (!GfxHasRoom(play, 4 + m)) { j = rows; break; }
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[j * V + c0]), m + 1, 0);
+            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[(j + 1) * V + c0]), m + 1, m + 1);
+            for (int k = 0; k < m; k++) gSP2Triangles(POLY_XLU_DISP++, k, k + 1, m + 1 + k + 1, 0, k, m + 1 + k + 1, m + 1 + k, 0);
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // What lies under the grid points: whether there is water, its surface and its depth. The points sit on the world's own grid, so what is found
 // once stays right while the camera moves (only the new row and column are looked up); it is forgotten now and then, and when the map changes.
 struct WaterCell { float surface, depth; bool have; };
 std::unordered_map<uint64_t, WaterCell> gWaterCells;
 int gWaterCellsCell = 0, gWaterCellsAge = 0;
 bool gWaterCellsIsland = false;
+uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); }
 
-// The rolling, tinted, reflecting surface: a grid of squares that follows the camera, snapped to the world's own grid so the waves do not slide.
+// ---- caustics: the light the waves focus onto the floor under shallow water, as a sheet that lies on the floor (its own fine grid round the
+// camera, 40 units a square) under the surface. Brightest in the shallows in full sun; it fades with depth, at night and under cloud.
+std::unordered_map<uint64_t, WaterCell> gCausticCells;
+bool gCausticCellsIsland = false;
+
+void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, float sunWarm) {
+    if (!gWaterCaustics || gWaterCausticAmt <= 0.0f || !WaterTexturesReady()) return;
+    constexpr int NC = 32, VC = NC + 1;
+    constexpr float cc = 40.0f;
+    const Vec3f eye = play->view.eye;
+    const bool island = OnIsland();
+    if (island != gCausticCellsIsland || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsIsland = island; }
+    const int gi0 = static_cast<int>(std::lround(eye.x / cc)), gj0 = static_cast<int>(std::lround(eye.z / cc));
+    const float cx = gi0 * cc, cz = gj0 * cc;
+    static std::vector<WaterCell> cells;
+    cells.assign(static_cast<size_t>(VC) * VC, WaterCell{ 0, 0, false });
+    float baseY = 0;
+    bool any = false;
+    for (int j = 0; j < VC; j++)
+        for (int i = 0; i < VC; i++) {
+            const int gi = gi0 + i - NC / 2, gj = gj0 + j - NC / 2;
+            auto it = gCausticCells.find(WaterCellKey(gi, gj));
+            if (it == gCausticCells.end()) {
+                WaterCell c{ 0, 0, false };
+                float fy = 0;
+                if (WaterSurfaceAt(gi * cc, gj * cc, &c.surface) && RawFloorAt(gi * cc, gj * cc, &fy)) {
+                    c.depth = c.surface - fy;
+                    if (island && !OnKingdomTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
+                    c.have = c.depth > 1.0f;
+                }
+                it = gCausticCells.emplace(WaterCellKey(gi, gj), c).first;
+            }
+            cells[j * VC + i] = it->second;
+            if (it->second.have && !any) { any = true; baseY = it->second.surface; }
+        }
+    if (!any || eye.y - baseY > 2600.0f) return;
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(VC) * VC * sizeof(Vtx)));
+    if (v == nullptr) return;
+    const float amt = std::min(2.0f, gWaterCausticAmt) * (0.25f + 0.75f * std::clamp(sunAmt, 0.0f, 1.0f)) * light * light * (1.0f + 0.35f * gCamUnder);
+    const float os = TexOrigin(cx, kCausticUnits), ot = TexOrigin(cz, kCausticUnits);
+    float flowX, flowZ;
+    WaterCurrentAt(eye.x, eye.z, t, &flowX, &flowZ);
+    const float drift = std::fmod(t * 1.1f, static_cast<float>(kWaterTex));
+    const float cr = 200.0f + 55.0f * sunWarm, cg = 255.0f - 30.0f * sunWarm, cb = 238.0f - 80.0f * sunWarm;   // pale aqua light, golden at dusk
+    static std::vector<uint8_t> lit;
+    lit.assign(static_cast<size_t>(VC) * VC, 0);
+    for (int j = 0; j < VC; j++)
+        for (int i = 0; i < VC; i++) {
+            const WaterCell& c = cells[j * VC + i];
+            const float lx = (i - NC / 2) * cc, lz = (j - NC / 2) * cc, wx = cx + lx, wz = cz + lz;
+            float a = 0.0f;
+            const float floorY = c.surface - c.depth;
+            if (c.have) {
+                const float depthK = std::clamp((c.depth - 3.0f) / 30.0f, 0.0f, 1.0f) * (1.0f - std::clamp((c.depth - 220.0f) / 420.0f, 0.0f, 1.0f));
+                const float d = std::hypot(lx, lz), edge = std::clamp((NC / 2 * cc - d) / (cc * 4.0f), 0.0f, 1.0f);
+                a = 215.0f * amt * depthK * edge;
+                if (a > 1.0f) lit[j * VC + i] = 1;
+            }
+            // the pattern sways with the swell above it and drifts with the current
+            const float sway = 2.2f * std::sin(t * 0.9f + wx * 0.011f) + 1.6f * std::cos(t * 0.7f + wz * 0.013f);
+            PushVtxT(v[j * VC + i], lx, (c.have ? floorY : baseY - 40.0f) + 2.5f - baseY, lz, (wx - os) / kCausticUnits + drift + sway + flowX * 0.02f * t,
+                     (wz - ot) / kCausticUnits + drift * 0.6f - sway * 0.5f + flowZ * 0.02f * t, cr, cg, cb, a);
+        }
+    const int frame = static_cast<int>(t * 11.0f) % kWaterTexFrames;
+    SetupWaterXlu(play);
+    WaterTexturePass(play, gWaterCausticTex[frame]);
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(cx, baseY, cz, MTXMODE_NEW);
+    Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
+    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    CLOSE_DISPS(play->state.gfxCtx);
+    DrawWaterGrid(play, v, NC, NC, [&](int i, int j) {
+        return lit[j * VC + i] || lit[j * VC + i + 1] || lit[(j + 1) * VC + i] || lit[(j + 1) * VC + i + 1];
+    });
+    WaterPlainPass(play);
+}
+
+// ---- the surface: a grid of squares that follows the camera, snapped to the world's own grid so the waves do not slide.
 // The grid is coarse (a square is 140 to 360 units wide: far too wide for a ring spreading from a swimmer, which is a few dozen units across), so
 // the squares that matter are drawn again as a fine grid (kFineSub x kFineSub, about 20 to 45 units): every square a swimmer, bot or cart is
-// pushing, every square a ring is crossing, and the squares round the player. Only those fine squares carry the displacement, the shading of
-// the swell and the foam; where a fine square borders a coarse one the displacement fades to nothing, so the two meet without a crack.
+// pushing, every square a ring is crossing, and the squares round the player. Only those fine squares carry the displacement and the ripple
+// simulation; where a fine square borders a coarse one it runs into the coarse square's shape, so the two meet without a crack.
+// The surface is drawn in up to three passes over the same points:
+//   1. the water itself: its colour (turquoise shallows to deep blue, by depth), the sky mirrored in it (Fresnel), the sun's glitter path, the
+//      green glow of light through the crests, foam;
+//   2. the sparkling ripples: a texture of the light caught on small ripples, in the sky's and the sun's colours, stronger at a low angle;
+//   3. textured foam: lacy foam on the shores, in wakes and on the crests of breaking waves.
 constexpr int kFineSub = 8;      // fine squares per side of a refined coarse square
 constexpr int kMaxFine = 16;     // refined squares per frame (about 1300 vertices)
 constexpr float kWaterPush = 1.7f;   // how much stronger than the raw height field the displacement is drawn (it has to read from a camera behind the swimmer)
 
+using WaterLook = royale::water::Look;
+
 void DrawWaterSheet(PlayState* play, float t, float light) {
+    namespace rw = royale::water;
     const int detail = std::clamp(gWaterDetail, 0, 2);
     const int N = detail == 0 ? 14 : detail == 1 ? 22 : 30, V = N + 1;
     const bool island = OnIsland();
@@ -9984,7 +10970,11 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         gWaterCells.clear(); gWaterCellsCell = icell; gWaterCellsIsland = island; gWaterCellsAge = 0;
     }
     const int gi0 = static_cast<int>(std::lround(eye.x / cell)), gj0 = static_cast<int>(std::lround(eye.z / cell));
-    const float cx = gi0 * cell, cz = gj0 * cell, amp = WaveAmp();
+    const float cx = gi0 * cell, cz = gj0 * cell;
+    // On lakes and rivers the game draws its own water just under ours, so the swell there is kept small.
+    const float amp = WaveAmp() * (island ? 1.0f : 0.35f), chop = gWaterChop;
+    float ampTotal = 0.0f;
+    for (const rw::GerstnerWave& w : rw::kSwell) ampTotal += w.amp * amp;
 
     // 1. what is under each point (looked up once, then remembered)
     static std::vector<WaterCell> cells;
@@ -9993,8 +10983,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     for (int j = 0; j < V; j++) {
         for (int i = 0; i < V; i++) {
             const int gi = gi0 + i - N / 2, gj = gj0 + j - N / 2;
-            const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000);
-            auto it = gWaterCells.find(key);
+            auto it = gWaterCells.find(WaterCellKey(gi, gj));
             if (it == gWaterCells.end()) {
                 WaterCell c{ 0, 0, false };
                 const float wx = gi * cell, wz = gj * cell;
@@ -10003,7 +10992,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     c.have = true;
                     c.depth = RawFloorAt(wx, wz, &fy) ? c.surface - fy : 1000.0f;
                 }
-                it = gWaterCells.emplace(key, c).first;
+                it = gWaterCells.emplace(WaterCellKey(gi, gj), c).first;
             }
             cells[j * V + i] = it->second;
             if (it->second.have && !any) { any = true; baseY = it->second.surface; }
@@ -10011,85 +11000,85 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     }
     if (!any) return;
 
-    // 2. the surface's look at a point: `y` is its height, (sx, sz) the slope of the swell and the displacement there, `foamWake` the foam the swimmers left.
-    //    Returns colour and alpha. Close water is a tinted sea-green over the shallows to deep blue, a mirror of the sky the lower you look (Fresnel),
-    //    with the glitter path of the sun and the moon, foaming where it is shallow and in wakes.
     const WaterSky sky = WaterSkyNow();
+    // caustics first: they lie on the floor, under the surface
+    DrawWaterCaustics(play, t, light, std::max(sky.sunA, 0.3f * sky.moonA), sky.sunWarm);
+
+    // 2. the surface's look at a point: `y` its height, n its normal, `foamWake` the foam the swimmers left, `fold` how near the crest is to
+    //    breaking, `crest` its height above calm water.
     float wx0, wz0, windNow;
     WindNow(&wx0, &wz0, &windNow);
-    auto shade = [&](float wx, float wz, float y, float depth, float sx, float sz, float foamWake, float swell, int hi, int hj, float fade, float out[4]) {
-        const float k = std::clamp(depth / 420.0f, 0.0f, 1.0f), ease = k * k * (3.0f - 2.0f * k);
-        float r = (96.0f + (14.0f - 96.0f) * ease) * light, g = (196.0f + (62.0f - 196.0f) * ease) * light, b = (200.0f + (122.0f - 200.0f) * ease) * light;
-        float a = 70.0f + 120.0f * ease;   // over the sea bed: the shallows let it show through, the deep hides it
-        float nx = -sx * 3.0f, ny = 1.0f, nz = -sz * 3.0f;
-        const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
-        float vx = eye.x - wx, vy = eye.y - y, vz = eye.z - wz;
-        const float vl = std::max(1.0f, std::sqrt(vx * vx + vy * vy + vz * vz)); vx /= vl; vy /= vl; vz /= vl;
-        const float cosv = std::clamp(nx * vx + ny * vy + nz * vz, 0.0f, 1.0f);
-        if (gWaterSkyOn && vy > 0.0f) {
-            // Fresnel: the lower you look across the water, the more it is a mirror of the sky
-            const float fres = 0.06f + 0.94f * std::pow(1.0f - cosv, 3.0f), kz = std::pow(cosv, 0.6f), m = std::min(0.9f, fres);
-            for (int q = 0; q < 3; q++) { const float skyc = sky.hor[q] + (sky.zen[q] - sky.hor[q]) * kz; float& ch = q == 0 ? r : q == 1 ? g : b; ch = ch * (1.0f - m) + skyc * m; }
-            a += 150.0f * fres;
-            // the glitter path of the sun and the moon, twinkling
-            const float tw = 0.65f + 0.35f * std::sin(t * 5.0f + Flora01(hi, hj, 611) * 40.0f);
-            for (int body = 0; body < 2; body++) {
-                const float* l = body == 0 ? sky.sun : sky.moon;
-                const float amt = body == 0 ? sky.sunA : sky.moonA;
-                if (amt < 0.02f || l[1] < 0.02f) continue;
-                float hxv = l[0] + vx, hyv = l[1] + vy, hzv = l[2] + vz;
-                const float hl = std::max(0.001f, std::sqrt(hxv * hxv + hyv * hyv + hzv * hzv));
-                const float nh = std::max(0.0f, (nx * hxv + ny * hyv + nz * hzv) / hl);
-                const float spec = (std::pow(nh, 160.0f) * tw + 0.12f * std::pow(nh, 14.0f)) * amt * (body == 0 ? 1.0f : 0.55f);
-                const float cr = body == 0 ? 255.0f : 215.0f, cg = body == 0 ? 236.0f - 90.0f * sky.sunWarm : 225.0f, cb = body == 0 ? 205.0f - 120.0f * sky.sunWarm : 245.0f;
-                r += (cr - r) * std::min(1.0f, spec * 2.0f); g += (cg - g) * std::min(1.0f, spec * 2.0f); b += (cb - b) * std::min(1.0f, spec * 2.0f);
-                a += 220.0f * spec;
-            }
-        }
-        // light and dark on the slopes of the swell and the rings: the side facing away from the light is darker, the side toward it lighter
-        const float shadeK = std::clamp(1.0f + (sx * 0.6f + sz * 0.35f) * 5.0f, 0.7f, 1.35f);
-        r *= shadeK; g *= shadeK; b *= shadeK;
-        // foam where it is shallow (its edge washing in and out), in the wake of whoever swims, and on the crests when it blows
-        float foam = foamWake * 0.8f;
-        if (depth < 56.0f) foam = std::max(foam, std::clamp(1.0f - depth / (38.0f + 16.0f * std::sin(t * 1.6f + wx * 0.03f + wz * 0.025f)), 0.0f, 1.0f));
-        if (windNow > 0.45f) foam = std::max(foam, std::clamp((swell - amp * 2.6f) * 0.22f, 0.0f, 0.6f) * (windNow - 0.35f));
-        foam = std::clamp(foam, 0.0f, 1.0f);
-        r += (238.0f * (0.6f + 0.4f * light) - r) * foam; g += (246.0f * (0.6f + 0.4f * light) - g) * foam; b += (250.0f * (0.6f + 0.4f * light) - b) * foam;
-        a += (210.0f - a) * foam;
-        a *= fade;
-        out[0] = r; out[1] = g; out[2] = b; out[3] = a;
+    const bool texOk = WaterTexturesReady();
+    const float glintAmt = gWaterGlints && texOk ? std::min(2.0f, gWaterGlintAmt) : 0.0f;
+    const float foamAmt = gWaterFoamTex && texOk ? std::min(2.0f, gWaterFoamAmt) : 0.0f;
+    const float reach = 60.0f + 320.0f * gWaterClarity;   // how deep the water must be to hide the floor
+    royale::water::LookParams look;
+    look.eye[0] = eye.x; look.eye[1] = eye.y; look.eye[2] = eye.z;
+    look.t = t; look.light = light; look.reach = reach; look.ampTotal = ampTotal; look.wind = windNow;
+    look.glintAmt = glintAmt; look.foamAmt = foamAmt; look.skyOn = gWaterSkyOn;
+    royale::water::LookSky lsky;
+    for (int q = 0; q < 3; q++) { lsky.hor[q] = sky.hor[q]; lsky.zen[q] = sky.zen[q]; lsky.sun[q] = sky.sun[q]; lsky.moon[q] = sky.moon[q]; }
+    lsky.sunA = sky.sunA; lsky.moonA = sky.moonA; lsky.sunWarm = sky.sunWarm;
+    auto shade = [&](float wx, float wz, float y, float depth, float nx, float ny, float nz, float foamWake, float fold, float crest, int hi, int hj, float fade,
+                     WaterLook& o) {
+        royale::water::ShadeWater(look, lsky, wx, wz, y, depth, nx, ny, nz, foamWake, fold, crest, Flora01(hi, hj, 611), fade, o);
     };
     // where the surface sits: over the game's own water on lakes and rivers, on the island's (lowered) sea bed there is room to dip
     const float baseLift = island ? 0.0f : 5.0f, lowest = island ? -34.0f : 1.0f;
+    const float og = TexOrigin(cx, kGlintUnits), ogz = TexOrigin(cz, kGlintUnits), of = TexOrigin(cx, kFoamUnits), ofz = TexOrigin(cz, kFoamUnits);
+    float flowX, flowZ;
+    WaterCurrentAt(eye.x, eye.z, t, &flowX, &flowZ);
+    const float gS = std::fmod(t * 1.7f, static_cast<float>(kWaterTex)), gT = std::fmod(t * 1.1f, static_cast<float>(kWaterTex));
+    const float fS = std::fmod(flowX * t / kFoamUnits, static_cast<float>(kWaterTex)), fT = std::fmod(flowZ * t / kFoamUnits, static_cast<float>(kWaterTex));
+    // Writes a point of each pass: (px, py, pz) relative to the grid's origin, (wx, wz) where on the water it is, n its normal (bends the sparkle)
+    auto emit = [&](Vtx* base, Vtx* gl, Vtx* fo, size_t at, float px, float py, float pz, float wx, float wz, float nx, float nz, const WaterLook& o) {
+        PushVtx4(base[at], px, py, pz, o.col[0], o.col[1], o.col[2], o.col[3]);
+        if (gl != nullptr)
+            PushVtxT(gl[at], px, py + 0.5f, pz, (wx - og) / kGlintUnits + gS + nx * 9.0f, (wz - ogz) / kGlintUnits + gT + nz * 9.0f, o.glint[0], o.glint[1], o.glint[2], o.glint[3]);
+        if (fo != nullptr) {
+            const float fl = 0.6f + 0.4f * light;
+            PushVtxT(fo[at], px, py + 0.7f, pz, (wx - of) / kFoamUnits + fS + nx * 4.0f, (wz - ofz) / kFoamUnits + fT + nz * 4.0f, 240.0f * fl, 248.0f * fl, 252.0f * fl, o.foam);
+        }
+    };
 
-    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(V) * V * sizeof(Vtx)));
+    const size_t nv = static_cast<size_t>(V) * V;
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx)));
     if (v == nullptr) return;
+    Vtx* vg = glintAmt > 0.0f ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
+    Vtx* vf = foamAmt > 0.0f ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
     static std::vector<uint8_t> clear;   // a point where there is nothing to show
-    clear.assign(static_cast<size_t>(V) * V, 1);
+    static std::vector<float> cSW, cOX, cOZ;   // each coarse point's swell (height and sideways shift), for the fine squares to run into
+    static std::vector<uint8_t> hasGlint, hasFoam;
+    clear.assign(nv, 1); cSW.assign(nv, 0.0f); cOX.assign(nv, 0.0f); cOZ.assign(nv, 0.0f); hasGlint.assign(nv, 0); hasFoam.assign(nv, 0);
     float lastSurface = baseY;
     for (int j = 0; j < V; j++) {
         for (int i = 0; i < V; i++) {
-            const WaterCell& c = cells[j * V + i];
+            const size_t id = static_cast<size_t>(j) * V + i;
+            const WaterCell& c = cells[id];
             const float lx = (i - N / 2) * cell, lz = (j - N / 2) * cell, wx = cx + lx, wz = cz + lz;
-            float col[4] = { 0, 0, 0, 0 }, y = lastSurface;
+            WaterLook o{};
+            float y = lastSurface, px = lx, pz = lz, nx = 0.0f, nz = 0.0f;
             if (c.have) {
                 lastSurface = c.surface;
                 y = c.surface;
                 if (c.depth > 2.0f) {
                     const float d = std::hypot(wx - eye.x, wz - eye.z), fade = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
                     if (fade > 0.0f) {
-                        clear[j * V + i] = 0;
-                        const float swell = WaveHeight(wx, wz, t, amp);
+                        clear[id] = 0;
                         const float shore = std::min(1.0f, c.depth / 90.0f);
-                        y += royale::graphics::WaterSurfaceOffset(swell, 0.0f, shore, baseLift, lowest);
-                        const float e = 30.0f;
-                        const float hx = (WaveHeight(wx + e, wz, t, amp) - WaveHeight(wx - e, wz, t, amp)) / (2.0f * e),
-                                    hz = (WaveHeight(wx, wz + e, t, amp) - WaveHeight(wx, wz - e, t, amp)) / (2.0f * e);
-                        shade(wx, wz, y, c.depth, hx, hz, 0.0f, swell, i + gi0, j + gj0, fade, col);
+                        const rw::SwellPoint sp = rw::Swell(wx, wz, t, amp, chop);
+                        cSW[id] = sp.h * shore; cOX[id] = sp.ox * shore; cOZ[id] = sp.oz * shore;
+                        y += royale::graphics::WaterSurfaceOffset(cSW[id], 0.0f, 1.0f, baseLift, lowest);
+                        px += cOX[id]; pz += cOZ[id];
+                        float ny = sp.ny;
+                        nx = sp.nx * shore; nz = sp.nz * shore;
+                        const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
+                        shade(wx, wz, y, c.depth, nx, ny, nz, 0.0f, sp.fold * shore, cSW[id], i + gi0, j + gj0, fade, o);
+                        hasGlint[id] = o.glint[3] > 1.0f; hasFoam[id] = o.foam > 1.0f;
                     }
                 }
             }
-            PushVtx4(v[j * V + i], lx, y - baseY, lz, col[0], col[1], col[2], col[3]);
+            emit(v, vg, vf, id, px, y - baseY, pz, wx, wz, nx, nz, o);
         }
     }
 
@@ -10132,28 +11121,31 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         for (size_t k = 0; k < cand.size() && fine.size() < static_cast<size_t>(kMaxFine); k++) { fine.push_back({ cand[k].i, cand[k].j }); refined[cand[k].j * N + cand[k].i] = 1; }
     }
     constexpr int S = kFineSub, FV = S + 1;
-    Vtx* fv = fine.empty() ? nullptr : static_cast<Vtx*>(FrameAlloc(play, fine.size() * FV * FV * sizeof(Vtx)));
-    if (fv == nullptr) { fine.clear(); std::fill(refined.begin(), refined.end(), 0); }
+    const size_t nf = fine.size() * FV * FV;
+    Vtx* fv = fine.empty() ? nullptr : static_cast<Vtx*>(FrameAlloc(play, nf * sizeof(Vtx)));
+    Vtx* fg = fv != nullptr && vg != nullptr ? static_cast<Vtx*>(FrameAlloc(play, nf * sizeof(Vtx))) : nullptr;
+    Vtx* ff = fv != nullptr && vf != nullptr ? static_cast<Vtx*>(FrameAlloc(play, nf * sizeof(Vtx))) : nullptr;
+    if (fv == nullptr || (vg != nullptr && fg == nullptr) || (vf != nullptr && ff == nullptr)) { fine.clear(); std::fill(refined.begin(), refined.end(), 0); }
     auto isRef = [&](int i, int j) { return i >= 0 && j >= 0 && i < N && j < N && refined[j * N + i] != 0; };
     auto ss01 = [](float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); };
     for (size_t q = 0; q < fine.size(); q++) {
         const int qi = fine[q].i, qj = fine[q].j;
-        const WaterCell& c00 = cells[qj * V + qi], &c10 = cells[qj * V + qi + 1], &c01 = cells[(qj + 1) * V + qi], &c11 = cells[(qj + 1) * V + qi + 1];
-        // the neighbours that are not fine: the displacement dies away toward them
+        const int k00 = qj * V + qi, k10 = k00 + 1, k01 = k00 + V, k11 = k01 + 1;
+        const WaterCell& c00 = cells[k00], &c10 = cells[k10], &c01 = cells[k01], &c11 = cells[k11];
+        // the neighbours that are not fine: the fine shape runs into the coarse one toward them
         const bool eL = !isRef(qi - 1, qj), eR = !isRef(qi + 1, qj), eT = !isRef(qi, qj - 1), eB = !isRef(qi, qj + 1);
         const bool cTL = !isRef(qi - 1, qj - 1), cTR = !isRef(qi + 1, qj - 1), cBL = !isRef(qi - 1, qj + 1), cBR = !isRef(qi + 1, qj + 1);
         const float step = cell / S;
-        float H[FV * FV], FW[FV * FV], DP[FV * FV], SF[FV * FV], SW[FV * FV], WX[FV * FV], WZ[FV * FV];
+        float H[FV * FV], P[FV * FV], FW[FV * FV], DP[FV * FV], SF[FV * FV], WX[FV * FV], WZ[FV * FV], PX[FV * FV], PZ[FV * FV], NX[FV * FV], NY[FV * FV], NZ[FV * FV], FO[FV * FV], CR[FV * FV];
+        auto bil = [](float a, float b, float c, float d, float u, float w) { return (a * (1 - u) + b * u) * (1 - w) + (c * (1 - u) + d * u) * w; };
         for (int b = 0; b <= S; b++)
             for (int a = 0; a <= S; a++) {
                 const int id = b * FV + a;
                 const float u = static_cast<float>(a) / S, w = static_cast<float>(b) / S;
                 const float lx = (qi - N / 2 + u) * cell, lz = (qj - N / 2 + w) * cell, wx = cx + lx, wz = cz + lz;
                 WX[id] = wx; WZ[id] = wz;
-                SF[id] = (c00.surface * (1 - u) + c10.surface * u) * (1 - w) + (c01.surface * (1 - u) + c11.surface * u) * w;
-                DP[id] = (c00.depth * (1 - u) + c10.depth * u) * (1 - w) + (c01.depth * (1 - u) + c11.depth * u) * w;
-                float foam = 0.0f;
-                float push = gWaterWakes ? WaterDisplaceAt(wx, wz, &foam) : 0.0f;
+                SF[id] = bil(c00.surface, c10.surface, c01.surface, c11.surface, u, w);
+                DP[id] = bil(c00.depth, c10.depth, c01.depth, c11.depth, u, w);
                 float wgt = 1.0f;
                 if (eL) wgt *= ss01(u * S * 0.5f);
                 if (eR) wgt *= ss01((1 - u) * S * 0.5f);
@@ -10163,22 +11155,37 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 if (cTR) wgt *= ss01(std::hypot(1 - u, w) * S * 0.5f);
                 if (cBL) wgt *= ss01(std::hypot(u, 1 - w) * S * 0.5f);
                 if (cBR) wgt *= ss01(std::hypot(1 - u, 1 - w) * S * 0.5f);
+                const float shore = std::min(1.0f, DP[id] / 90.0f);
+                const rw::SwellPoint sp = rw::Swell(wx, wz, t, amp, chop);
+                // the exact swell, run into the coarse square's own (straight-line) shape toward coarse neighbours
+                const float iSW = bil(cSW[k00], cSW[k10], cSW[k01], cSW[k11], u, w), iOX = bil(cOX[k00], cOX[k10], cOX[k01], cOX[k11], u, w),
+                            iOZ = bil(cOZ[k00], cOZ[k10], cOZ[k01], cOZ[k11], u, w);
+                const float sw = iSW + (sp.h * shore - iSW) * wgt;
+                PX[id] = lx + iOX + (sp.ox * shore - iOX) * wgt;
+                PZ[id] = lz + iOZ + (sp.oz * shore - iOZ) * wgt;
+                float foam = 0.0f;
+                float push = gWaterWakes || gWaterRipples ? WaterDisplaceAt(wx, wz, &foam) : 0.0f;
                 push *= kWaterPush * wgt;
                 FW[id] = foam * wgt;
-                SW[id] = WaveHeight(wx, wz, t, amp);
-                const float shore = std::min(1.0f, DP[id] / 90.0f);
-                H[id] = royale::graphics::WaterSurfaceOffset(SW[id], push, shore, baseLift, lowest);
+                P[id] = push;
+                H[id] = royale::graphics::WaterSurfaceOffset(sw, push, shore, baseLift, lowest);
+                NX[id] = sp.nx * shore; NY[id] = sp.ny; NZ[id] = sp.nz * shore;
+                FO[id] = sp.fold * shore;
+                CR[id] = sw;
             }
         for (int b = 0; b <= S; b++)
             for (int a = 0; a <= S; a++) {
                 const int id = b * FV + a;
                 const int a0 = std::max(0, a - 1), a1 = std::min(S, a + 1), b0 = std::max(0, b - 1), b1 = std::min(S, b + 1);
-                const float sx = (H[b * FV + a1] - H[b * FV + a0]) / ((a1 - a0) * step), sz = (H[b1 * FV + a] - H[b0 * FV + a]) / ((b1 - b0) * step);
+                // the swell's own normal, tipped by the slope of the displacement and the ripples
+                const float sx = (P[b * FV + a1] - P[b * FV + a0]) / ((a1 - a0) * step), sz = (P[b1 * FV + a] - P[b0 * FV + a]) / ((b1 - b0) * step);
+                float nx = NX[id] - sx * NY[id], ny = NY[id], nz = NZ[id] - sz * NY[id];
+                const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
                 const float d = std::hypot(WX[id] - eye.x, WZ[id] - eye.z), fade = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
-                float col[4] = { 0, 0, 0, 0 };
+                WaterLook o{};
                 const float y = SF[id] + H[id];
-                shade(WX[id], WZ[id], y, DP[id], sx, sz, FW[id], SW[id], static_cast<int>(WX[id] / step), static_cast<int>(WZ[id] / step), fade, col);
-                PushVtx4(fv[q * FV * FV + id], WX[id] - cx, y - baseY, WZ[id] - cz, col[0], col[1], col[2], col[3]);
+                shade(WX[id], WZ[id], y, DP[id], nx, ny, nz, FW[id], FO[id], CR[id], static_cast<int>(WX[id] / step), static_cast<int>(WZ[id] / step), fade, o);
+                emit(fv, fg, ff, q * FV * FV + id, PX[id] - 0.0f, y - baseY, PZ[id], WX[id], WZ[id], nx, nz, o);
             }
     }
 
@@ -10186,39 +11193,53 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     // old origin with these new vertices would move the entire sheet between cells.
     DrawIdentity identity(&gWaterCells, gi0, gj0);
     SetupWaterXlu(play);
-    OPEN_DISPS(play->state.gfxCtx);
-    Matrix_Translate(cx, baseY, cz, MTXMODE_NEW);
-    Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
-    gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    // the coarse squares: a row at a time, in runs of 15 (two rows of 16 points fill the 32 the RSP holds), leaving out the empty ones and the fine ones
-    auto drawQ = [&](int i, int j) { return !refined[j * N + i] && !(clear[j * V + i] && clear[j * V + i + 1] && clear[(j + 1) * V + i] && clear[(j + 1) * V + i + 1]); };
-    for (int j = 0; j < N; j++) {
-        int i = 0;
-        while (i < N) {
-            if (!drawQ(i, j)) { i++; continue; }
-            const int c0 = i;
-            while (i < N && i - c0 < 15 && drawQ(i, j)) i++;
-            const int m = i - c0;
-            if (!GfxHasRoom(play, 4 + m)) break;
-            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[j * V + c0]), m + 1, 0);
-            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[(j + 1) * V + c0]), m + 1, m + 1);
-            for (int k = 0; k < m; k++) gSP2Triangles(POLY_XLU_DISP++, k, k + 1, m + 1 + k + 1, 0, k, m + 1 + k + 1, m + 1 + k, 0);
-        }
+    {
+        OPEN_DISPS(play->state.gfxCtx);
+        Matrix_Translate(cx, baseY, cz, MTXMODE_NEW);
+        Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
+        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        CLOSE_DISPS(play->state.gfxCtx);
     }
     // the fine squares: three rows of points (27 of the 32 the RSP holds) cover two rows of squares
-    for (size_t q = 0; q < fine.size(); q++) {
-        const Vtx* base = &fv[q * FV * FV];
-        for (int r = 0; r < S; r += 2) {
-            const int rows = std::min(3, S - r + 1);
-            if (!GfxHasRoom(play, 4 + 2 * S)) break;
-            gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&base[r * FV]), rows * FV, 0);
-            for (int rr = 0; rr + 1 < rows; rr++)
-                for (int a = 0; a < S; a++) {
-                    const int i0 = rr * FV + a, i1 = i0 + 1, i2 = i0 + FV + 1, i3 = i0 + FV;
-                    gSP2Triangles(POLY_XLU_DISP++, i0, i1, i2, 0, i0, i2, i3, 0);
-                }
+    auto drawFine = [&](const Vtx* arr) {
+        OPEN_DISPS(play->state.gfxCtx);
+        for (size_t q = 0; q < fine.size(); q++) {
+            const Vtx* base = &arr[q * FV * FV];
+            for (int r = 0; r < S; r += 2) {
+                const int rows = std::min(3, S - r + 1);
+                if (!GfxHasRoom(play, 4 + 2 * S)) break;
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&base[r * FV]), rows * FV, 0);
+                for (int rr = 0; rr + 1 < rows; rr++)
+                    for (int a = 0; a < S; a++) {
+                        const int i0 = rr * FV + a, i1 = i0 + 1, i2 = i0 + FV + 1, i3 = i0 + FV;
+                        gSP2Triangles(POLY_XLU_DISP++, i0, i1, i2, 0, i0, i2, i3, 0);
+                    }
+            }
         }
+        CLOSE_DISPS(play->state.gfxCtx);
+    };
+    auto any4 = [&](const std::vector<uint8_t>& f, int i, int j) { return f[j * V + i] || f[j * V + i + 1] || f[(j + 1) * V + i] || f[(j + 1) * V + i + 1]; };
+    // pass 1: the water (leaving out the empty squares and the fine ones)
+    DrawWaterGrid(play, v, N, N, [&](int i, int j) {
+        return !refined[j * N + i] && !(clear[j * V + i] && clear[j * V + i + 1] && clear[(j + 1) * V + i] && clear[(j + 1) * V + i + 1]);
+    });
+    drawFine(v);
+    // pass 2: the sparkling ripples (the texture is only drawn fairly near: far off it would shimmer)
+    const float texReach = half * 0.62f;
+    auto nearQ = [&](int i, int j) { return std::hypot((i + 0.5f - N / 2) * cell + cx - eye.x, (j + 0.5f - N / 2) * cell + cz - eye.z) < texReach; };
+    if (vg != nullptr) {
+        WaterTexturePass(play, gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
+        DrawWaterGrid(play, vg, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasGlint, i, j) && nearQ(i, j); });
+        if (fg != nullptr) drawFine(fg);
     }
+    // pass 3: the foam
+    if (vf != nullptr) {
+        WaterTexturePass(play, gWaterFoamImage);
+        DrawWaterGrid(play, vf, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasFoam, i, j) && nearQ(i, j); });
+        if (ff != nullptr) drawFine(ff);
+    }
+    if (vg != nullptr || vf != nullptr) WaterPlainPass(play);
+    OPEN_DISPS(play->state.gfxCtx);
     // the reflections of whoever stands or swims here: a strip from the feet toward the camera, in their colours, wobbling with the swell
     if (!gWaterRefl.empty() && gWaterSkyOn && gWaterBodiesRefl) {
         constexpr int S = 4;   // slices
@@ -10253,6 +11274,54 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// Puddles get the water's look too: the sky mirrored in them and the sparkling ripples (the same texture as the open water), as a soft oval over
+// each puddle that fades out toward its rim. Drawn after all the ground patches, as a decal on them.
+void DrawPuddleSheens(PlayState* play) {
+    if (gPuddleSheens.empty() || !DebugOn(kDbgWater) || !gWaterGlints || gWaterGlintAmt <= 0.0f || !WaterTexturesReady()) return;
+    constexpr int R = 12;   // rim points
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, gPuddleSheens.size() * (R + 1) * sizeof(Vtx)));
+    if (v == nullptr) return;
+    const float t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
+    const WaterSky sky = WaterSkyNow();
+    const float amt = std::min(2.0f, gWaterGlintAmt);
+    float col[3];
+    for (int q = 0; q < 3; q++) col[q] = std::min(255.0f, (sky.hor[q] + sky.zen[q]) * 0.6f + 80.0f) * (0.55f + 0.45f * light);
+    const float gS = std::fmod(t * 1.2f, static_cast<float>(kWaterTex)), gT = std::fmod(t * 0.8f, static_cast<float>(kWaterTex));
+    SetupWaterXlu(play);
+    WaterTexturePass(play, gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
+    OPEN_DISPS(play->state.gfxCtx);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_AA_ZB_XLU_DECAL2);   // nudged toward the camera, like the puddle under it
+    for (size_t k = 0; k < gPuddleSheens.size(); k++) {
+        const PuddleSheen& p = gPuddleSheens[k];
+        if (!GfxHasRoom(play, 12)) break;
+        Vtx* o = &v[k * (R + 1)];
+        const float ys = std::sin(p.yaw), yc = std::cos(p.yaw), os = TexOrigin(p.x, kGlintUnits), ot = TexOrigin(p.z, kGlintUnits);
+        const float centreA = amt * p.fade * (90.0f + 70.0f * light);
+        for (int r = 0; r <= R; r++) {
+            float lx = 0.0f, lz = 0.0f, al = centreA;
+            if (r > 0) {
+                const float ang = (r - 1) * 6.2831853f / R;
+                lx = std::cos(ang) * p.a * 0.92f; lz = std::sin(ang) * p.b * 0.92f;
+                al = 0.0f;
+            }
+            const float ox = lx * yc + lz * ys, oz = -lx * ys + lz * yc;
+            const float wx = p.x + ox, wz = p.z + oz;
+            PushVtxT(o[r], ox, p.sx * ox + p.sz * oz, oz, (wx - os) / kGlintUnits + gS, (wz - ot) / kGlintUnits + gT, col[0], col[1], col[2], al);
+        }
+        Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+        Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
+        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(o), R + 1, 0);
+        for (int r = 1; r <= R; r += 2) {
+            const int a1 = r, a2 = r % R + 1, a3 = a2 % R + 1;
+            gSP2Triangles(POLY_XLU_DISP++, 0, a1, a2, 0, 0, a2, a3, 0);
+        }
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+    WaterPlainPass(play);
+    gPuddleSheens.clear();
+}
+
 // Drawn every frame with the other world effects (Projectile_Draw).
 void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add) {
     for (const auto& [index, c] : gCarts)
@@ -10260,7 +11329,7 @@ void CollectCartWalkers(const std::function<void(const void*, float, float, floa
 }
 
 void DrawWater(PlayState* play) {
-    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCamUnder = 0.0f; return; }
+    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCausticCells.clear(); gRipples.Clear(); gCamUnder = 0.0f; return; }
     Feat("draw: water");
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
     gWaterFrame++;
@@ -10285,6 +11354,27 @@ void DrawWater(PlayState* play) {
         WaterBody(&c, c.body.x, c.body.y, c.body.z, 46.0f, pdt, false);
     }
     for (auto it = gWaterTrack.begin(); it != gWaterTrack.end();) it = it->second.seen != gWaterFrame ? gWaterTrack.erase(it) : std::next(it);
+    // The ripple simulation follows the player. Whoever moves through it keeps pushing it (a wake fans out behind, rings cross and mix);
+    // someone treading water bobs and sends out slow rings; rain pocks it.
+    if (gWaterRipples) {
+        gRipples.Recenter(player->actor.world.pos.x, player->actor.world.pos.z);
+        const float k = pdt * 60.0f;
+        for (const WaterBodyNow& b : gWaterBodies) {
+            if (!gRipples.Contains(b.x, b.z, gRipples.Cell() * 4.0f)) continue;
+            const float run = std::min(1.5f, b.speed / 120.0f);
+            if (run > 0.05f) gRipples.Impulse(b.x, b.z, b.size * 0.05f * run * k, b.size * 0.85f);
+            else gRipples.Impulse(b.x, b.z, b.size * 0.03f * std::sin(t * 3.1f + b.x * 0.01f) * k, b.size * 0.8f);
+        }
+        if ((gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder) && gWaterRain && pdt > 0.0f) {
+            const int drops = static_cast<int>(WeatherAmount() * 6.0f * k + Flora01(gWaterFrame, 41, 690));
+            for (int d = 0; d < drops; d++)
+                gRipples.Impulse(gRipples.MinX() + gRipples.Size() * Flora01(gWaterFrame, d, 691), gRipples.MinZ() + gRipples.Size() * Flora01(gWaterFrame, d, 692),
+                                 1.2f + 1.5f * Flora01(gWaterFrame, d, 693), 10.0f);
+        }
+        gRipples.Step(pdt);
+    } else {
+        gRipples.Clear();
+    }
     WaterRain(play, pdt);
     WaterLife(play, pdt, paused);
     // Is the camera under the surface?
@@ -10292,21 +11382,59 @@ void DrawWater(PlayState* play) {
     const Vec3f eye = play->view.eye;
     const bool under = gWaterUnder && WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!RawFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
     gCamUnder += ((under ? 1.0f : 0.0f) - gCamUnder) * std::min(1.0f, dt * 8.0f);
+    if (under) gCamDepth = surface - eye.y;
     DrawWaterSheet(play, t, light);
 }
 
-// The look from below the surface: the screen goes blue-green, darker with depth, with slow light shafts drifting down from above.
+// The look from below the surface (the Zora's-Domain-under-water look): the screen goes teal, bright toward the surface and deep blue below,
+// darker the deeper you are; soft shafts of light lean down from above and sway; the surface shimmers overhead when you are near it; motes
+// drift in the water and bubbles wobble up (white rings with a glint, as the game draws its own).
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds) {
-    if (!DebugOn(kDbgWater) || gCamUnder < 0.02f) return;
-    const float k = gCamUnder, t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
+    if (!DebugOn(kDbgWater) || gCamUnder < 0.02f || gWaterUnderAmt <= 0.0f) return;
+    const float k = gCamUnder * std::min(2.0f, gWaterUnderAmt), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
+    const float deep = std::clamp(gCamDepth / 650.0f, 0.0f, 1.0f), px = ds.y / 720.0f;
     const auto a = [&](float v) { return static_cast<int>(std::clamp(v * k, 0.0f, 255.0f)); };
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(static_cast<int>(60 * light), static_cast<int>(170 * light), static_cast<int>(190 * light), a(105)),
-                                IM_COL32(static_cast<int>(60 * light), static_cast<int>(170 * light), static_cast<int>(190 * light), a(105)),
-                                IM_COL32(4, static_cast<int>(40 * light), static_cast<int>(95 * light), a(165)), IM_COL32(4, static_cast<int>(40 * light), static_cast<int>(95 * light), a(165)));
-    for (int i = 0; i < 6; i++) {   // light shafts
-        const float x = ds.x * (0.08f + 0.17f * i + 0.05f * std::sin(t * 0.35f + i * 1.9f)), w = ds.x * (0.025f + 0.02f * std::sin(t * 0.5f + i));
-        const float lean = ds.y * 0.28f;
-        dl->AddQuadFilled(ImVec2(x, 0), ImVec2(x + w, 0), ImVec2(x + w + lean, ds.y), ImVec2(x + lean * 0.9f, ds.y), IM_COL32(190, 255, 245, a(18.0f * light)));
+    const auto col = [&](float r, float g, float b, float al) { return IM_COL32(static_cast<int>(std::clamp(r, 0.0f, 255.0f)), static_cast<int>(std::clamp(g, 0.0f, 255.0f)), static_cast<int>(std::clamp(b, 0.0f, 255.0f)), a(al)); };
+    const float lt = light * (1.0f - 0.45f * deep);
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, col(70 * lt, 200 * lt, 212 * lt, 70 + 50 * deep), col(70 * lt, 200 * lt, 212 * lt, 70 + 50 * deep),
+                                col(6, 58 * lt, 104 * lt, 140 + 60 * deep), col(6, 58 * lt, 104 * lt, 140 + 60 * deep));
+    // light shafts: each a wide faint quad with a narrower, brighter core
+    const float shaftA = 20.0f * light * (1.0f - 0.75f * deep);
+    for (int i = 0; i < 8; i++) {
+        const float x = ds.x * (0.04f + 0.125f * i + 0.04f * std::sin(t * 0.3f + i * 1.9f)), lean = ds.y * (0.22f + 0.06f * std::sin(t * 0.21f + i));
+        const float len = ds.y * (0.75f + 0.25f * std::sin(i * 2.3f)), pulse = 0.6f + 0.4f * std::sin(t * 0.8f + i * 2.7f);
+        for (int layer = 0; layer < 2; layer++) {
+            const float w = ds.x * (layer == 0 ? 0.06f : 0.022f) * (0.7f + 0.3f * std::sin(t * 0.5f + i));
+            const float al = shaftA * pulse * (layer == 0 ? 0.7f : 1.3f);
+            dl->AddQuadFilled(ImVec2(x - w * 0.5f, 0), ImVec2(x + w * 0.5f, 0), ImVec2(x + w * 0.9f + lean, len), ImVec2(x - w * 0.1f + lean * 0.9f, len),
+                              col(200, 255, 245, al));
+        }
+    }
+    // the surface overhead, rippling, when it is close
+    const float nearTop = std::clamp(1.0f - gCamDepth / 260.0f, 0.0f, 1.0f);
+    if (nearTop > 0.02f)
+        for (int line = 0; line < 4; line++) {
+            const float y0 = ds.y * (0.015f + 0.03f * line);
+            ImVec2 prev(0, y0);
+            for (int sgm = 1; sgm <= 24; sgm++) {
+                const float x = ds.x * sgm / 24.0f, y = y0 + std::sin(x * 0.012f / px + t * (1.3f + 0.4f * line) + line * 2.0f) * 5.0f * px;
+                dl->AddLine(prev, ImVec2(x, y), col(220, 255, 250, 60.0f * nearTop * light * (1.0f - line * 0.2f)), 2.0f * px);
+                prev = ImVec2(x, y);
+            }
+        }
+    // motes drifting in the water
+    for (int i = 0; i < 40; i++) {
+        const float sx = royale::water::Hash01(i, 1, 77), sy = royale::water::Hash01(i, 2, 77), sp = 0.01f + 0.02f * royale::water::Hash01(i, 3, 77);
+        const float x = ds.x * std::fmod(sx + 0.02f * std::sin(t * 0.4f + i), 1.0f), y = ds.y * (1.0f - std::fmod(sy + t * sp, 1.0f));
+        dl->AddCircleFilled(ImVec2(x, y), (1.0f + 1.5f * royale::water::Hash01(i, 4, 77)) * px, col(210, 255, 240, 70.0f * light), 6);
+    }
+    // bubbles wobbling up
+    for (int i = 0; i < 9; i++) {
+        const float life = std::fmod(t * (0.12f + 0.05f * royale::water::Hash01(i, 5, 78)) + royale::water::Hash01(i, 6, 78), 1.0f);
+        const float x = ds.x * (0.08f + 0.84f * royale::water::Hash01(i, 7, 78)) + std::sin(t * 3.0f + i) * 6.0f * px, y = ds.y * (1.05f - 1.1f * life);
+        const float r = (4.0f + 7.0f * royale::water::Hash01(i, 8, 78)) * px;
+        dl->AddCircle(ImVec2(x, y), r, col(235, 255, 255, 120), 12, 1.6f * px);
+        dl->AddCircleFilled(ImVec2(x - r * 0.35f, y - r * 0.35f), r * 0.25f, col(255, 255, 255, 150), 6);
     }
 }
 
@@ -10408,7 +11536,7 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
     actor->world.pos = actor->home.pos = { 0, 0, 0 };
 }
 void FortniteTerrain_Update(Actor*, PlayState*) {
-    if (OnConvergenceTerrain()) EnsureSolidScenery();
+    if (OnAuthoredTerrain()) EnsureSolidScenery();
 }
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
@@ -10461,6 +11589,117 @@ void DrawConvergenceStructures(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// Hyrule Kingdom's buildings, towers, bridges and trees (shared/kingdom_model.h): the same idea as Convergence's, with 128 x 128 textures and a
+// reach per batch (landmarks are drawn from far away, foliage only near). The texture is a 128-wide tile: gDPLoadTextureBlock is limited to 4095 texels
+// (64 x 64 at 16 bits), the tile load is not, and its coordinates are S10.5 so one repeat is 4096.
+//
+// The outsides of stone, wood, roofs, thatch, cobbles, plaster and bark are also drawn lit, with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
+// each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
+// shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
+// batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
+void DrawKingdomStructures(PlayState* play) {
+    if (!OnKingdomTerrain()) return;
+    namespace km = royale::kingdom;
+    static std::vector<Vtx> vertices, litVertices;
+    static std::vector<std::vector<Gfx>> lists, litLists;
+    constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
+    if (vertices.empty()) {
+        const size_t count = sizeof(km::kDrawVertices) / sizeof(km::kDrawVertices[0]);
+        vertices.resize(count); litVertices.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            const auto& v = km::kDrawVertices[i];
+            auto& dst = vertices[i].v;
+            dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
+            dst.tc[0] = v.s; dst.tc[1] = v.t;
+            dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255;
+            auto& lit = litVertices[i].n;
+            lit.ob[0] = v.x; lit.ob[1] = v.y; lit.ob[2] = v.z; lit.flag = 0;
+            lit.tc[0] = v.s; lit.tc[1] = v.t;
+            lit.n[0] = v.nx; lit.n[1] = v.ny; lit.n[2] = v.nz; lit.a = 255;
+        }
+        lists.resize(kBatchCount); litLists.resize(kBatchCount);
+        for (size_t i = 0; i < kBatchCount; ++i) {
+            const auto& batch = km::kBatches[i];
+            for (int pass = 0; pass < (batch.surface ? 2 : 1); ++pass) {
+                auto& dl = pass ? litLists[i] : lists[i];
+                const std::vector<Vtx>& source = pass ? litVertices : vertices;
+                dl.resize(batch.count / 3 + batch.count / 30 + 3);
+                Gfx* p = dl.data();
+                for (uint32_t first = 0; first < batch.count; first += 30) {
+                    const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
+                    gSPVertex(p++, reinterpret_cast<uintptr_t>(&source[batch.first + first]), n, 0);
+                    for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
+                }
+                gSPEndDisplayList(p++);
+                dl.resize(static_cast<size_t>(p - dl.data()));
+            }
+        }
+    }
+    const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
+    Rig* rig = (normalPercent > 0 || bumpPercent > 0) ? static_cast<Rig*>(FrameAlloc(play, sizeof(Rig))) : nullptr;
+    const bool relief = rig != nullptr;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0, 0, 0, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
+    int loaded = -1;
+    auto loadTexture = [&](int texture) {
+        if (loaded == texture) return;
+        gDPLoadTextureTile(POLY_OPA_DISP++, km::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, km::kTextureSize, km::kTextureSize, 0, 0, km::kTextureSize - 1, km::kTextureSize - 1, 0,
+            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
+        loaded = texture;
+    };
+    // a chunk is 1853 x 1926 units across: test its far corner, not its middle
+    auto inReach = [&](const km::Batch& batch) { return std::hypot(play->view.eye.x - batch.x, play->view.eye.z - batch.z) <= batch.reach + 1400.0f; };
+    for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
+        const auto& batch = km::kBatches[i];
+        if ((batch.surface && relief) || !inReach(batch)) continue;
+        loadTexture(batch.texture);
+        gSPDisplayList(POLY_OPA_DISP++, lists[i].data());
+    }
+    if (relief) {   // the lit, relief-mapped faces, one surface class at a time
+        {
+            // The baked light, as a game light: a sky ambient and a sun from the south east late in the morning (tools/maps/kingdom/geom.py SUN).
+            const Lights1 base = gdSPDefLights1(148, 148, 148, 107, 104, 98, -57, 99, -55);
+            rig->lights = base;
+            for (int c = 0; c < km::kSurfaceClasses; ++c) {
+                GfxSurfaceMap& m = rig->maps[c];
+                m = {};
+                m.normal = km::kSurfaceNormal[c];
+                m.height = km::kSurfaceBump[c];
+                m.width = m.heightPixels = km::kSurfaceSize;
+                m.normalStrength = normalPercent / 100.0f;
+                m.bumpStrength = bumpPercent / 100.0f;
+                m.uvScale = 1.0f / km::kSurfaceUnits[c];
+                m.sunDirection[0] = -57.0f / 127.0f; m.sunDirection[1] = 99.0f / 127.0f; m.sunDirection[2] = -55.0f / 127.0f;
+                m.sunColor[0] = 107.0f / 255.0f; m.sunColor[1] = 104.0f / 255.0f; m.sunColor[2] = 98.0f / 255.0f;
+                m.ambientColor[0] = m.ambientColor[1] = m.ambientColor[2] = 148.0f / 255.0f;
+            }
+            gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+            gSPSetLights1(POLY_OPA_DISP++, rig->lights);
+            for (int c = 1; c <= km::kSurfaceClasses; ++c) {
+                bool started = false;
+                for (size_t i = 0; i < kBatchCount; ++i) {
+                    const auto& batch = km::kBatches[i];
+                    if (batch.surface != c || !inReach(batch)) continue;
+                    if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
+                    loadTexture(batch.texture);
+                    gSPDisplayList(POLY_OPA_DISP++, litLists[i].data());
+                }
+                if (started) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+            }
+            gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+        }
+    }
+    gSPTexture(POLY_OPA_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -10508,6 +11747,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     }
     CLOSE_DISPS(play->state.gfxCtx);
     DrawConvergenceStructures(play);
+    DrawKingdomStructures(play);
 }
 
 int FortniteActorId() {
@@ -10535,7 +11775,7 @@ int FortniteActorId() {
 std::vector<royale::fortnite::Block> WantedBlocks() {
     namespace fn = royale::fortnite;
     std::vector<fn::Block> out;
-    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || gMapId == royale::kConvergenceMapIndex) return out;
+    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || royale::IsAuthoredMap(gMapId)) return out;
     const float half = royale::kPlatformHalf;
     for (const royale::Prop& p : gSession.Client()->Props()) {
         if (!royale::IsPlatform(p.kind) || static_cast<int>(out.size()) >= fn::kMaxBlocks) continue;
@@ -10671,6 +11911,20 @@ void ApplyRocks(Player* player) {
 static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
     uint16_t best = 0;
     float bestDist = 1e9f;
+    // Z-targeting something (a player, a mini boss, a major boss) is choosing it: the blow goes to that one while it is in reach, whichever way the
+    // sticks point (the game turns Link to face it, so the usual cone is not needed).
+    if (const Actor* locked = player->focusActor) {
+        uint16_t id = 0; float tx = 0, tz = 0, edge = 0;
+        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive) { tx = st->second.x; tz = st->second.z; } else id = 0; }
+        else if (auto b = gBossOf.find(locked); b != gBossOf.end() && b->second <= 0xFFFFu) {
+            id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
+            if (!KnownPosition(id, &tx, &tz)) id = 0;
+        }
+        if (id != 0) {
+            const float d = std::hypot(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) - edge;
+            if (d <= range * 1.05f) { *outDist = (std::max)(0.0f, d); return id; }
+        }
+    }
     for (const auto& [id, actor] : gActorOf) {
         auto st = gState.find(id);
         if (st == gState.end() || !st->second.alive) continue;
@@ -11070,7 +12324,7 @@ u8 RealItemFor(royale::ItemId w) {
     using royale::ItemId;
     switch (w) {
         case ItemId::BasicSword: case ItemId::KokiriSword: return ITEM_SWORD_KOKIRI;
-        case ItemId::MasterSword: return ITEM_SWORD_MASTER;
+        case ItemId::MasterSword: case ItemId::GildedSword: return ITEM_SWORD_MASTER;
         case ItemId::BiggoronSword: return ITEM_SWORD_BGS;
         case ItemId::MegatonHammer: case ItemId::GiantsHammer: return ITEM_HAMMER;
         case ItemId::DekuStick: return ITEM_STICK;
@@ -11171,7 +12425,9 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
         if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
             PoseSeq(player, SeqFor(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, 0, gActionItem, player), t);
     }
+    gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
     Player_Draw(&player->actor, play);
+    gGildedPlayer = nullptr;
     if (swapped) {
         gSaveContext.equips.buttonItems[0] = button;
         player->itemAction = itemAction;
@@ -11328,7 +12584,6 @@ void OnPlayerUpdate() {
     ApplyPlatforms(player);
     ApplyRocks(player);
     HandleCombatInput(player, hud);
-    if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
     UpdateLocalRide(player, hud);
@@ -11354,12 +12609,22 @@ void OnPlayerUpdate() {
         CancelGameDeath(player);
     }
     static bool wasDead = false;
-    if (dead && !wasDead && InField()) {
+    if (dead && !wasDead && IsLive(hud)) StartDeath(hud);
+    if (LiveAndAlive(hud) && InField()) {   // how far you went, for the end screen (a jump of more than a few steps is a teleport, not travel)
+        const float x = player->actor.world.pos.x, z = player->actor.world.pos.z;
+        const float step = gMyStats.havePos ? std::hypot(x - gMyStats.lastX, z - gMyStats.lastZ) : 0.0f;
+        if (step < 120.0f) gMyStats.distance += step;
+        gMyStats.lastX = x; gMyStats.lastZ = z; gMyStats.havePos = true;
+    }
+    if (dead && !wasDead && InField()) {   // your body falls where you stood, thrown away from whoever got you (or backwards)
         royale::PuppetState me;
         me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
         me.id = hud.selfId; me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
         const float a = me.rot * (3.14159265f / 32768.0f);
-        SpawnCorpse(me, -std::sin(a), -std::cos(a));
+        float px = -std::sin(a), pz = -std::cos(a);
+        auto killer = gState.find(gDeath.killer);
+        if (killer != gState.end() && std::hypot(me.x - killer->second.x, me.z - killer->second.z) > 1.0f) { px = me.x - killer->second.x; pz = me.z - killer->second.z; }
+        gDeath.body = SpawnCorpse(me, px, pz);
     }
     if (dead && !wasDead) gSpectateTarget = kSpectateSelf;
     wasDead = dead;
@@ -11379,6 +12644,14 @@ void OnPlayerUpdate() {
             player->actor.prevPos = player->actor.world.pos;
             player->actor.velocity.y = 0.0f;
             player->actor.shape.rot.y = t->rot;
+        } else if (gDeath.body != 0) {   // watching your own body: stay (unseen) with it as it tumbles, so the camera keeps it in view
+            auto body = gCorpses.find(gDeath.body);
+            if (body != gCorpses.end() && !body->second.dying && body->second.actor != nullptr) {
+                player->actor.world.pos = body->second.actor->world.pos;
+                player->actor.prevPos = player->actor.world.pos;
+                player->actor.velocity.y = 0.0f;
+                player->actor.speedXZ = 0.0f;
+            }
         }
     } else if (gSpectating) {
         gSpectating = false; // the flag is per-frame, so it clears itself
@@ -11405,6 +12678,8 @@ void ReportEvents(const royale::HudState& hud) {
                 Say("A player left the lobby");
                 break;
             case royale::ClientEvent::Type::Damaged: {
+                if (e.other == hud.selfId && e.id != hud.selfId && IsLive(hud)) { gMyStats.damage += e.amount; gMyStats.hits++; }   // for the death and end screens
+                if (e.id == hud.selfId && IsLive(hud)) gMyStats.taken += e.amount;
                 if (!InGame()) break;
                 Player* me = GET_PLAYER(gPlayState);
                 const double now = ImGui::GetTime();
@@ -11514,6 +12789,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyStats.chests++;
                 if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
                     gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
@@ -11633,10 +12909,16 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (InGame()) {   // Link's cry as he goes down
-                    auto victim = gActorOf.find(e.id);
-                    if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
+                if (mine && !me) {   // for the death and end screens (and their medals)
+                    gMyStats.kills++;
+                    if (!gMyStats.anyElim) gMyStats.firstStrike = true;
+                    const double now = ImGui::GetTime();
+                    gMyStats.streak = now - gMyStats.lastKillAt < kStreakSec ? gMyStats.streak + 1 : 1;
+                    gMyStats.bestStreak = std::max(gMyStats.bestStreak, gMyStats.streak);
+                    gMyStats.lastKillAt = now;
                 }
+                if (!royale::IsBossId(e.id)) gMyStats.anyElim = true;
+                // (Link's cry as he goes down comes from his body, see Corpse_Update.)
                 // The server stops sending eliminated players, so their puppet just vanishes: leave their body here instead, thrown away
                 // from whoever got them (or backwards, for the storm). Your own body is made in OnPlayerUpdate.
                 // (A player who was only just seen, or just went out of range, is found in gLastSeen: any kind of death leaves a body.)
@@ -11663,10 +12945,13 @@ void ReportEvents(const royale::HudState& hud) {
                 else if (royale::IsBossId(e.other)) line = victim + (me ? " were" : " was") + " defeated by the " + royale::kBossDefs[gBossKindSeen.count(e.other) ? gBossKindSeen[e.other] : 0].name;
                 else line = (mine ? std::string("You") : nameOf(e.other)) + " eliminated " + victim;
                 AddFeed(line, me ? IM_COL32(255, 110, 110, 255) : mine ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 235, 255));
-                if (me) {
-                    ShowBanner("ELIMINATED  -  #" + std::to_string(std::max(1, hud.alive)), IM_COL32(255, 110, 110, 255), 4.0f);
-                    gSpectateTarget = kSpectateSelf;
-                    for (const auto& st : gSession.Puppets()) if (st.alive && st.id == e.other) gSpectateTarget = st.id;   // watch whoever got you
+                if (me) {   // the death screen takes it from here (DrawDeathScreen)
+                    gDeath.killer = e.other;
+                    if (e.other == royale::net::kNoPlayer16) gDeath.by = "by the storm";
+                    else if (royale::IsBossId(e.other)) gDeath.by = "by the " + std::string(royale::kBossDefs[gBossKindSeen.count(e.other) ? gBossKindSeen[e.other] : 0].name);
+                    else if (e.other == hud.selfId) gDeath.by = "by your own attack";
+                    else gDeath.by = "by " + nameOf(e.other);
+                    StartDeath(hud);
                 }
                 break;
             }
@@ -12366,7 +13651,14 @@ void CatPoof(PlayState* play, float x, float y, float z) {
     }
 }
 
+bool LobbyPetsActive() {
+    return CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0 && gSession.Joined() &&
+        gSession.Hud().state==royale::MatchState::Lobby && InPlayableScene(royale::MatchState::Lobby) && !gSkydiving && !gSpectating;
+}
+bool SocialPet_Update(Actor* actor, PlayState* play, int pet);
+royale::lobby::Group gLobbyPetGroup;
 void Cat_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,0)) return;
     namespace L = royale::lilo;
     CatBrain& c = gCat;
     const float dt = 1.0f / royale::kTickHz;
@@ -12572,7 +13864,7 @@ int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"),
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = MapOption("LiloPet", false) && PetKind() == 0 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 0)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
                       !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }
@@ -12660,7 +13952,8 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
 }
 
 
-void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::maya::Pose& pose, int face) {
+// `screen` is the tablet's picture; `onlyBone` (when not -1) draws just that bone's parts (the dropped tablet on its own).
+void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::maya::Pose& pose, int face, int screen = 0, int onlyBone = -1) {
     GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace A = royale::maya;
     constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
@@ -12698,11 +13991,14 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
         const A::Batch& bt = A::kBatches[b];
         // Hobby props parked below the floor are omitted, even beside cliffs.
         const int bone = A::kVerts[bt.firstVert].b0;
+        if (onlyBone >= 0 && bone != onlyBone) continue;
         if (A::kBoneIsProp[bone] && pose.bone[bone].t[1] < -100.0f) continue;
-        const int tex = bt.texture == A::kFace ? 2 + pic : static_cast<int>(bt.texture);   // 0 cloth, 1 skin, 2 and up the faces
+        const int scr = std::clamp(screen, 0, static_cast<int>(A::kScreenCount) - 1), faceTex = 2 + static_cast<int>(A::kFaceCount);
+        const int tex = bt.texture == A::kFace ? 2 + pic : bt.texture == A::kScreen ? faceTex + scr : static_cast<int>(bt.texture);   // 0 cloth, 1 skin, then the faces, then the screens
         if (tex != loaded) {
-            const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : A::kFaceTex[tex - 2];
-            const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : A::kFaceH;
+            const bool isScreen = tex >= faceTex;
+            const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : isScreen ? A::kScreenTex[tex - faceTex] : A::kFaceTex[tex - 2];
+            const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : isScreen ? A::kScreenW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : isScreen ? A::kScreenH : A::kFaceH;
             gDPLoadTextureBlock(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
                                 G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
             loaded = tex;
@@ -12719,19 +14015,90 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
 
 
 
+// Maya's two real, user-confirmed playful responses. A dedicated mixer slot
+// respects game volume and never interrupts Lilo, Avriella, music or other SFX.
+double gMayaVoiceQuietUntil=0;
+void StopMayaVoice() { StopVoice(kVoiceMaya); StopVoice(kVoicePhone); gMayaVoiceQuietUntil=0; }
+// Mom's cartoon phone babble on the video call (synthesised, shared/maya_phone.h).
+void PlayMayaPhone() {
+    static const auto babble = std::make_shared<const std::vector<int16_t>>(royale::maya_phone::kData, royale::maya_phone::kData + royale::maya_phone::kCount);
+    const float volume = GameVolume(false);
+    if (volume < 0.01f || !CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1)) return;
+    StartVoice(kVoicePhone, babble, false, royale::maya_phone::kRate, false, volume * 0.8f);
+}
+bool PlayMayaVoice(int clip, bool force=false) {
+    namespace S=royale::maya_snd;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    const double now=ImGui::GetTime();
+    const float volume=GameVolume(false)*.8f;
+    if (!CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1) || volume<.01f || clip<0 || clip>=S::kClipCount ||
+        !VoiceDone(kVoiceMaya) || (!force && now<gMayaVoiceQuietUntil)) return false;
+    if(!cache[clip])cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoiceMaya,cache[clip],false,S::kRate,false,volume);
+    gMayaVoiceQuietUntil=now+static_cast<double>(S::kClips[clip].count)/S::kRate+3.0+Rand_ZeroOne()*2.0;
+    return true;
+}
+
 // Maya is a local cosmetic companion. Original mesh/rig: tools/maya/.
 struct MayaCompanionState {
     Actor* actor = nullptr;
     royale::maya::Animator anim;
-    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0;
+    royale::TailTracker tail;   // her ponytail's cloth springs (royale::maya::ApplyPonytail)
+    // The video-chat scene: 1 chatting, 2 running from the cloud, 3 watching it clear and then going back for the tablet; 0 none.
+    int scene = 0;
+    float sceneT = 0, cloudX = 0, cloudY = 0, cloudZ = 0;
+    bool fartHeard = false, phoneHeard = false;
+    royale::TabletBody tablet;   // the dropped tablet, a physics object lying about until she fetches it
+    bool tabletLive = false;
+    float tabletAge = 0;
+    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0, speed = 0, expressionClock = 0, greeting = 2.8f;
     int line = 0, hobby = 0;
-    bool talking = false;
+    bool talking = false, greeted = false, voiceReplyPlayed = false;
 };
 MayaCompanionState gMayaCompanion;
 
 static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= kTextMayaCompanion, "Companion text overlap");
 static_assert(kTextMayaCompanion + royale::kMayaCompanionLineCount <= 0x7FFF, "Maya text overflow");
+bool PetPathClear(PlayState* play,const Vec3f& pos,float x,float z) {
+    Vec3f from={pos.x,pos.y+20,pos.z},to={x,pos.y+20,z},hit;
+    CollisionPoly* poly=nullptr;s32 bgId=0;
+    return !BgCheck_EntityLineTest1(&play->colCtx,&from,&to,&hit,&poly,true,false,false,true,&bgId);
+}
+bool PetFloorAt(float x,float z,float* y) {
+    if(InField()) return WalkableAt({x,z}) && FloorAt(x,z,y);
+    return RawFloorAt(x,z,y) && !WaterAt(x,z,*y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z);
+}
+// Where the tablet is in the world right now (centre and orientation), from her pose, facing and the scale she is drawn at.
+void MayaTabletWorld(const royale::maya::Pose& pose, const Vec3f& base, float yaw, float scale, float outPos[3], float outQ[4]) {
+    namespace M = royale::maya;
+    static const int tb = M::BoneByName("tablet");
+    const float c0[3] = {M::kTabletCenter[0], M::kTabletCenter[1], M::kTabletCenter[2]};
+    float m[3];
+    royale::TabletBody::Rot(pose.bone[tb].q, c0, m);
+    for (int i = 0; i < 3; i++) m[i] += pose.bone[tb].t[i];
+    const float cy = std::cos(yaw), sn = std::sin(yaw);
+    outPos[0] = base.x + (m[0] * cy + m[2] * sn) * scale;
+    outPos[1] = base.y + m[1] * scale;
+    outPos[2] = base.z + (-m[0] * sn + m[2] * cy) * scale;
+    const float hy = std::sin(yaw * 0.5f), hw = std::cos(yaw * 0.5f), *q = pose.bone[tb].q;   // world = turn about Y by yaw, then the pose
+    outQ[0] = hw * q[0] + hy * q[2];
+    outQ[1] = hw * q[1] + hy * q[3];
+    outQ[2] = hw * q[2] - hy * q[0];
+    outQ[3] = hw * q[3] - hy * q[1];
+}
+// The dropped tablet on its own, lying wherever it came to rest.
+void DrawMayaTablet(PlayState* play, const royale::TabletBody& b) {
+    namespace M = royale::maya;
+    static const int tb = M::BoneByName("tablet");
+    M::Pose pose;
+    for (int i = 0; i < 4; i++) pose.bone[tb].q[i] = b.q[i];
+    float rc[3];
+    royale::TabletBody::Rot(b.q, M::kTabletCenter, rc);
+    for (int i = 0; i < 3; i++) pose.bone[tb].t[i] = -rc[i];
+    DrawMayaCompanionModel(play, b.p[0], b.p[1], b.p[2], 0.0f, M::kWorldScale, pose, 0, M::kScreenBuilding, tb);
+}
 void MayaCompanion_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,2)) return;
     namespace M = royale::maya;
     auto& c = gMayaCompanion;
     Player* player = GET_PLAYER(play);
@@ -12739,63 +14106,156 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
     const auto& pp = player->actor.world.pos;
     float dx = pp.x - actor->world.pos.x, dz = pp.z - actor->world.pos.z;
     float distance = std::hypot(dx, dz);
+    c.expressionClock += dt; c.greeting = std::max(0.0f,c.greeting-dt);
     bool talking = TalkingTo(actor);
-    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 5; c.hobbyTime = 0; }
+    if (c.scene && talking) { c.scene = 0; StopVoice(kVoicePhone); }   // you spoke to her: the scene is over (a dropped tablet stays where it fell)
+    if (c.tabletLive) {   // the dropped tablet bounces and settles; it is gone once she has fetched it or after a while
+        const float groundY = actor->world.pos.y;
+        auto floorAt = [groundY](float x, float z) { float y; return FloorAt(x, z, &y) ? y : groundY; };
+        for (int i = 0; i < 6; i++) c.tablet.Step(dt / 6.0f, floorAt);
+        c.tabletAge += dt;
+        if (c.tabletAge > 30.0f) c.tabletLive = false;
+    }
+    if (c.talking && !talking) { c.voiceReplyPlayed=false; c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 8; c.hobbyTime = 0; }
     c.talking = talking;
     int clip = M::kIdle;
-    if (distance > 115.0f && !talking) {
+    if (c.scene >= 2 && !talking) {
+        // The video-chat scene's second half: bolt from the cloud (the way the cloud is not), stand and gape while it drifts, then fetch the tablet.
+        c.sceneT += dt; c.still = 0; c.hobbyTime = 0;
+        float dirX, dirZ, desired;
+        const float tx = c.tablet.p[0] - actor->world.pos.x, tz = c.tablet.p[2] - actor->world.pos.z, td = std::hypot(tx, tz);
+        if (c.scene == 2) {
+            dirX = actor->world.pos.x - c.cloudX; dirZ = actor->world.pos.z - c.cloudZ;
+            const float l = std::hypot(dirX, dirZ);
+            if (l < 1.0f) { dirX = -std::sin(c.yaw); dirZ = -std::cos(c.yaw); } else { dirX /= l; dirZ /= l; }
+            desired = 150.0f;
+            if (c.sceneT > 2.6f) { c.scene = 3; c.sceneT = 0; }
+        } else {
+            dirX = tx; dirZ = tz;
+            if (td > 1.0f) { dirX /= td; dirZ /= td; }
+            desired = c.sceneT > 4.5f && c.tabletLive && td > 30.0f ? 62.0f : 0.0f;   // wait for the cloud to thin, then walk back for the tablet
+            if (c.sceneT > 4.5f && (!c.tabletLive || td <= 30.0f)) {
+                if (c.tabletLive) { c.tabletLive = false; SparkBurst(play, c.tablet.p[0], c.tablet.p[1] + 6.0f, c.tablet.p[2], { 255, 190, 220, 255 }, 8, 2.0f); }
+                c.scene = 0; c.hobby = 0; c.hobbyTime = 0;
+            }
+            if (distance > 600.0f) c.scene = 0;
+        }
+        const float wantYaw = std::atan2(dirX, dirZ);
+        c.yaw += std::atan2(std::sin(wantYaw-c.yaw),std::cos(wantYaw-c.yaw))*(c.scene == 2 ? .35f : .15f);
+        c.speed += std::clamp(desired-c.speed,-300.0f*dt,260.0f*dt);
+        const float step = c.speed * dt;
+        const float nx = actor->world.pos.x + std::sin(c.yaw) * step, nz = actor->world.pos.z + std::cos(c.yaw) * step;
+        float floor = 0;
+        if (step > 0.01f && PetFloorAt(nx,nz,&floor) && PetPathClear(play,actor->world.pos,nx,nz) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+            actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor;
+        }
+        if (c.scene == 2) clip = M::kRun;
+        else clip = c.speed > 20.0f ? M::kWalk : M::kIdle;
+        if (c.scene == 2 && c.sceneT < 1.8f) {   // the cloud keeps rolling out where the tablet fell
+            FartCloudStep(play, c.cloudX, c.cloudY - 12.0f, c.cloudZ, 3, 2.4f);
+        } else if (c.scene >= 2 && c.sceneT < 3.2f) FartCloudStep(play, c.cloudX, c.cloudY - 12.0f, c.cloudZ, 1, 2.6f);
+    } else if (distance > 115.0f && !talking) {
+        if (c.scene == 1) { c.scene = 0; StopVoice(kVoicePhone); }   // she was called away mid-chat
         c.still = 0; c.hobbyTime = 0;
         const float yaw = std::atan2(dx, dz);
-        c.yaw = yaw;
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.18f;
         const bool scooter = distance > 260.0f;
         const bool running = distance > 185.0f;
-        const float step = std::min(distance - 90.0f, (scooter ? 250.0f : running ? 190.0f : 130.0f) * dt);
+        const float desired = scooter ? 240.0f : running ? 130.0f : 62.0f;
+        c.speed += std::clamp(desired-c.speed,-260.0f*dt,180.0f*dt);
+        const float step = std::min(distance - 90.0f, c.speed * dt);
         float nx = actor->world.pos.x + dx / distance * step;
         float nz = actor->world.pos.z + dz / distance * step;
         float floor = 0;
-        if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+        if (PetFloorAt(nx,nz,&floor) && PetPathClear(play,actor->world.pos,nx,nz) && std::fabs(floor-actor->world.pos.y)<45.0f) {
             actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor; c.blockedTime = 0;
         } else {
             c.blockedTime += dt;
             if (distance > 700.0f || c.blockedTime > 2.5f || std::fabs(pp.y-actor->world.pos.y)>170.0f) {
             // Catch up on a valid nearby floor after a climb or teleport.
             nx = pp.x - std::sin(yaw)*90; nz = pp.z - std::cos(yaw)*90;
-            if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
+            if (PetFloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
             }
         }
         clip = scooter ? M::kScooter : running ? M::kRun : M::kWalk;
     } else {
         c.still += dt; c.hobbyTime += dt;
-        c.yaw = std::atan2(dx,dz);
-        static constexpr int hobbies[] = {M::kTablet,M::kDraw,M::kPizza,M::kLearn,M::kCheer};
-        if (c.hobbyTime > 8) { c.hobby = (c.hobby + 1) % 5; c.hobbyTime = 0; }
-        clip = talking ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+        const float yaw=std::atan2(dx,dz);
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.08f;
+        c.speed=std::max(0.0f,c.speed-260.0f*dt);
+        static constexpr int hobbies[] = {M::kFidget,M::kTablet,M::kDraw,M::kHop,M::kPizza,M::kLearn,M::kCheer,M::kPoint,M::kVideochat};
+        const int hobbyClip=hobbies[c.hobby];
+        const float duration=M::InfoOf(hobbyClip).loops ? M::ClipSeconds(hobbyClip)+.4f : M::ClipSeconds(hobbyClip)+.3f;
+        if (!talking && c.scene == 0 && c.hobbyTime > duration) { c.hobby = (c.hobby + 1) % 9; c.hobbyTime = 0; }
+        // Hobbies first; after a long wait she sits down, and after a longer one she nods off hugging her knees.
+        clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 45 ? M::kSleep : c.still > 24 ? M::kSit : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
-    if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
-    c.anim.Play(clip); c.anim.Update(dt);
-    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
-    actor->focus.pos = actor->world.pos; actor->focus.pos.y += 90;
+    if (c.scene == 0 && clip == M::kVideochat && !talking) { c.scene = 1; c.sceneT = 0; c.fartHeard = false; c.phoneHeard = false; c.tabletLive = false; }
+    if (c.scene == 1) {
+        clip = M::kVideochat;
+        const float t = c.anim.clip == M::kVideochat ? c.anim.time : 0.0f;
+        M::Pose pose; M::SampleClip(M::kVideochat, t, pose);
+        float tp[3], tq[4];
+        MayaTabletWorld(pose, actor->world.pos, c.yaw, M::kWorldScale, tp, tq);
+        if (t >= 0.55f && !c.phoneHeard && t < M::kVideoChatFartTime) { c.phoneHeard = true; PlayMayaPhone(); }   // mom's cartoon babble
+        if (t >= M::kVideoChatFartTime && !c.fartHeard) { c.fartHeard = true; StopVoice(kVoicePhone); PlayOneShot(2); }   // ...cut off by the big one
+        if (t >= M::kVideoChatFartTime + 0.15f && t < M::kVideoChatDropTime)   // the cloud pours out of the screen, thicker and thicker
+            FartCloudStep(play, tp[0], tp[1] - 12.0f, tp[2], 2, 0.7f + 1.2f * (t - M::kVideoChatFartTime));
+        if (t >= M::kVideoChatDropTime && !c.tabletLive) {   // it leaves her hands: from here on it is a falling object
+            M::Pose held; M::SampleClip(M::kVideochat, M::kVideoChatDropTime, held);
+            MayaTabletWorld(held, actor->world.pos, c.yaw, M::kWorldScale, tp, tq);
+            c.tablet = royale::TabletBody{};
+            for (int i = 0; i < 3; i++) c.tablet.p[i] = tp[i];
+            for (int i = 0; i < 4; i++) c.tablet.q[i] = tq[i];
+            // flung forward and up a little as her hands fly open
+            c.tablet.v[0] = std::sin(c.yaw) * 55.0f; c.tablet.v[2] = std::cos(c.yaw) * 55.0f; c.tablet.v[1] = 30.0f;
+            c.tablet.w[0] = 7.0f; c.tablet.w[2] = (Rand_ZeroOne() - 0.5f) * 9.0f;
+            c.tabletLive = true; c.tabletAge = 0;
+            c.cloudX = tp[0]; c.cloudY = tp[1]; c.cloudZ = tp[2];
+            FartCloudStep(play, tp[0], tp[1] - 12.0f, tp[2], 14, 2.2f);
+        }
+        if (t >= M::kVideoChatFleeTime) { c.scene = 2; c.sceneT = 0; clip = M::kRun; c.speed = 60.0f; }
+    }
+    if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && c.scene == 0 && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
+    if (!c.greeted && c.greeting>0) c.greeted=PlayMayaVoice(royale::maya_snd::kHappy);
+    if (talking && !c.voiceReplyPlayed) c.voiceReplyPlayed=PlayMayaVoice(c.line>=10 ? royale::maya_snd::kHappy : royale::maya_snd::kPlayful,true);
+    if (clip!=c.anim.clip && (clip==M::kCheer || clip==M::kHop || clip==M::kGiggle)) PlayMayaVoice(royale::maya_snd::kHappy);
+    c.anim.Play(clip,(clip==M::kSit || clip==M::kSleep || c.anim.clip==M::kSit || c.anim.clip==M::kSleep) ? .8f : .35f);
+    // Cycles per second that match the ground speed to the stride, so her feet plant instead of skating.
+    const float rate=clip==M::kWalk ? std::clamp(c.speed/M::kWalkStride*M::ClipSeconds(M::kWalk),.35f,2.0f) : clip==M::kRun ? std::clamp(c.speed/M::kRunStride*M::ClipSeconds(M::kRun),.6f,2.1f) : 1.0f;
+    c.anim.Update(dt,rate);
+    c.yaw=std::atan2(std::sin(c.yaw),std::cos(c.yaw));
+    actor->shape.rot.y = static_cast<s16>(static_cast<int32_t>(c.yaw * (32768.0f / 3.14159265f)));
+    actor->focus.pos = actor->world.pos; actor->focus.pos.y += royale::maya::kFocusHeight;
 }
 void MayaCompanion_Draw(Actor* actor, PlayState* play) {
     royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
-    const int face = std::fmod(gMayaCompanion.anim.time,3.7f)<.12f ? royale::maya::kFaceShut : royale::maya::kFaceSmile;
-    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,.72f,pose,face);
+    {   // the ponytail follows how she moves and turns, and the wind (the cloth physics setting scales it; off = the baked sway only)
+        float wx, wz, wind; WindNow(&wx, &wz, &wind);
+        gMayaCompanion.tail.Update(ImGui::GetTime(), actor->world.pos.x, actor->world.pos.z, gMayaCompanion.yaw, std::clamp(wind, 0.0f, 1.0f));
+        royale::maya::ApplyPonytail(pose, gMayaCompanion.tail.spring, gClothScale);
+    }
+    const int face = royale::maya::Expression(gMayaCompanion.anim.clip,gMayaCompanion.anim.time,gMayaCompanion.expressionClock);
+    const int screen = royale::maya::ScreenFor(gMayaCompanion.anim.clip,gMayaCompanion.anim.time);
+    if (gMayaCompanion.tabletLive) { static const int tb = royale::maya::BoneByName("tablet"); pose.bone[tb].t[1] = -300.0f; }   // the one in her hands has gone: it is on the floor
+    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,royale::maya::kWorldScale,pose,face,screen);
+    if (gMayaCompanion.tabletLive) DrawMayaTablet(play, gMayaCompanion.tablet);
 }
-void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
+void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) { StopMayaVoice(); gMayaCompanion = MayaCompanionState{}; } }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
-    const bool want = DebugOn(kDbgAllies) && MapOption("LiloPet",false) && PetKind()==2 && gSession.Joined() &&
-        (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
-    if (!want) { if (gMayaCompanion.actor) Actor_Kill(gMayaCompanion.actor); gMayaCompanion = MayaCompanionState{}; return; }
+    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet",false) && PetKind()==2)) && gSession.Joined() &&
+        InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
+    if (!want) { if (gMayaCompanion.actor) { Actor_Kill(gMayaCompanion.actor); StopMayaVoice(); } gMayaCompanion = MayaCompanionState{}; return; }
     if (gMayaCompanion.actor) return;
     Player* player=GET_PLAYER(gPlayState);
     const auto& p=player->actor.world.pos;
     float y; const float x=p.x+70, z=p.z+45;
-    if (!FloorAt(x,z,&y)) return;
+    if (!PetFloorAt(x,z,&y)) return;
     Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
     if (!a) return;
     a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
-    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=18;
+    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=12;
     gMayaCompanion = MayaCompanionState{}; gMayaCompanion.actor=a;
 }
 
@@ -13048,6 +14508,7 @@ struct BabyBrain {
     bool sleepy = false;      // just woke: heavy eyes for a moment
     int line = 0;             // what she says next (royale::kAvriellaPetLines)
     int face = 0;
+    royale::TailTracker tail;                          // her tuft's cloth springs (royale::ApplyTuft)
     royale::HatSpring capSpring;                       // the green cap she waves about: its tail swings with her hand
     float hx = 0, hy = 0, hz = 0, hvx = 0, hvy = 0, hvz = 0;   // where her hand was and how fast it was going last frame
     double capSeen = 0, tugAt = 0;
@@ -13125,6 +14586,7 @@ const Actor* NearestLootTo(float x, float z, float range) {
 }
 
 void Baby_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,1)) return;
     namespace A = royale::avriella;
     BabyBrain& c = gBaby;
     const float dt = 1.0f / royale::kTickHz;
@@ -13644,6 +15106,11 @@ void DrawBabyToys(PlayState* play, const royale::avriella::Pose& pose) {
 void Baby_Draw(Actor* actor, PlayState* play) {
     royale::avriella::Pose pose;
     gBaby.anim.Evaluate(pose);
+    {   // the tuft follows how she moves and turns, and the wind (the cloth physics setting scales it; off = a stiff tuft)
+        float wx, wz, wind; WindNow(&wx, &wz, &wind);
+        gBaby.tail.Update(ImGui::GetTime(), actor->world.pos.x, actor->world.pos.z, gBaby.yaw, std::clamp(wind, 0.0f, 1.0f));
+        royale::avriella::ApplyTuft(pose, gBaby.tail.spring, gClothScale);
+    }
     DrawAvriellaModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gBaby.yaw, kBabyScale, pose, gBaby.face);
     if (gBaby.mood == BabyMood::Cap) DrawBabyCap(play, pose);
     if (gBaby.mood == BabyMood::Plush || gBaby.mood == BabyMood::Tv || gBaby.mood == BabyMood::Laptop) DrawBabyToys(play, pose);
@@ -13652,7 +15119,7 @@ void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.
 
 void ReconcileBabyPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = MapOption("LiloPet", false) && PetKind() == 1 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr &&
+    const bool want = DebugOn(kDbgAvriella) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 1)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr &&
                       !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); EndBabyToy(gBaby, true); }
@@ -13675,6 +15142,8 @@ void ReconcileBabyPet(const royale::HudState& hud) {
     gBaby.anim = royale::avriella::Animator{};
     gBaby.anim.Play(royale::avriella::kSit, 0.0f);
 }
+
+#include "RoyaleLobbyPets.h"
 
 // ---- Lilo ---------------------------------------------------------------------------------------------------------------------------
 // An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): Lilo sits at a random spot on the map. Talk to her with A: she
@@ -13941,6 +15410,12 @@ void Ally_Update(Actor* actor, PlayState* play) {
     actor->shape.rot.y = a.rot;
     actor->world.rot.y = a.rot;
     actor->focus.pos = actor->world.pos;
+    actor->focus.pos.y += 55.0f;
+    // Z-targeting, as with the game's own NPCs (the white reticle, not the red one an enemy gets): works on the free ones and on the helpers
+    // alike, so you can face them to talk or see who is fighting for whom.
+    actor->targetMode = 3;
+    actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED;
+    actor->flags &= ~ACTOR_FLAG_HOSTILE;
 
     const NpcSpec spec = NpcOf(a.kind);
     if (!a.skReady) {
@@ -14206,6 +15681,63 @@ bool IsBotActor(const void* actor) {
     return st != gState.end() && st->second.isBot;
 }
 
+// Wrap equipment in an explicit material scope. The wrapper and sunlight
+// snapshot live in Claude's double-buffered graphics pool, like character data.
+void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dListPtr) {
+    if (!gSession.Client() || !playPtr || !playerPtr || !dListPtr) return;
+    PlayState* play = static_cast<PlayState*>(playPtr);
+    Player* player = static_cast<Player*>(playerPtr);
+    Gfx** dList = static_cast<Gfx**>(dListPtr);
+    if (!*dList) return;
+    const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    if (!normals && !bumps) return;
+    using namespace royale::item_surface;
+    const uint8_t* normal = nullptr;
+    const uint8_t* height = nullptr;
+    float scale = 1.0f / 2000.0f;
+    if (limb == PLAYER_LIMB_L_HAND &&
+        (player->leftHandType == PLAYER_MODELTYPE_LH_SWORD || player->leftHandType == PLAYER_MODELTYPE_LH_SWORD_2 ||
+         player->leftHandType == PLAYER_MODELTYPE_LH_BGS)) {
+        switch (player->heldItemAction) {
+            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_normal; height = kokiri_sword_bump; break;
+            case PLAYER_IA_SWORD_MASTER: normal = master_sword_normal; height = master_sword_bump; break;
+            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_normal; height = biggoron_sword_bump; break;
+            default: return;
+        }
+        scale = 1.0f / 4000.0f;
+    } else if ((limb == PLAYER_LIMB_R_HAND && player->rightHandType == PLAYER_MODELTYPE_RH_SHIELD) ||
+               limb == PLAYER_LIMB_SHEATH) {
+        switch (player->currentShield) {
+            case PLAYER_SHIELD_DEKU: normal = deku_shield_normal; height = deku_shield_bump; break;
+            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_normal; height = hylian_shield_bump; break;
+            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_normal; height = mirror_shield_bump; break;
+            default: return;
+        }
+    } else return;
+    struct ItemDraw { GfxSurfaceMap material; Gfx commands[4]; };
+    ItemDraw* draw = static_cast<ItemDraw*>(FrameAlloc(play, sizeof(ItemDraw)));
+    if (!draw) return;
+    draw->material = {};
+    draw->material.normal = normal;
+    draw->material.height = height;
+    draw->material.width = draw->material.heightPixels = kSize;
+    draw->material.normalStrength = normals / 100.0f;
+    draw->material.bumpStrength = bumps / 100.0f;
+    draw->material.uvScale = scale;
+    const auto& lighting = play->envCtx.lightSettings;
+    for (int k = 0; k < 3; ++k) {
+        draw->material.sunDirection[k] = lighting.light1Dir[k] / 127.0f;
+        draw->material.sunColor[k] = lighting.light1Color[k] / 255.0f;
+        draw->material.ambientColor[k] = lighting.ambientColor[k] / 255.0f;
+    }
+    gSPSurfaceMap(&draw->commands[0], reinterpret_cast<uintptr_t>(&draw->material));
+    gSPDisplayList(&draw->commands[1], *dList);
+    gSPSurfaceMap(&draw->commands[2], 0);
+    gSPEndDisplayList(&draw->commands[3]);
+    *dList = draw->commands;
+}
+
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     Feat("cap cloth");
     if (!DebugOn(kDbgCloth)) return;
@@ -14257,6 +15789,143 @@ bool SheathHasChildren(const Player* pl) {
     if (skel == nullptr || pl->skelAnime.limbCount < PLAYER_LIMB_SHEATH) return true;
     const LodLimb* sheath = static_cast<const LodLimb*>(SEGMENTED_TO_VIRTUAL(skel[PLAYER_LIMB_SHEATH - 1]));
     return sheath == nullptr || sheath->child != LIMB_DONE;
+}
+
+// ---- the Gilded Sword in the hand and on the back (patch 0023) ---------------------------------------------------------------------------------
+// Link's own sword limbs ask the mod about every sword they are about to draw. For the Gilded Sword (the player in gGildedPlayer) the hand draws
+// an empty fist, the sheath is drawn without the Master Sword in it, and the sword comes from shared/gilded_sword_model.h (made in Blender: see
+// tools/gilded_sword). The moves, the sounds and the hit trail are the Master Sword's own: only the blade's length (the trail follows it) is ours.
+// what: 0 = how long is the custom blade (limb units; stays 0 when this player holds no custom sword), 1 = draw it in the hand (the hand limb's
+// matrix is current), 2 = draw it stowed on the back (the sheath limb's matrix is current).
+constexpr float kGildedBladeBase = royale::gilded_sword_model::kBladeStart;   // the blade starts here along the model's X; the game's own blade starts at the hand's X = 0
+constexpr float kGildedGripLift = 400.0f;      // the game's blades run along y = 400 of the hand limb (see func_80090A28 in z_player_lib.c)
+constexpr float kGildedHandRoll = 0.0f;        // turn about the blade, radians: change this if the guard is seen edge-on
+constexpr float kGildedBackX = 1000.0f, kGildedBackY = 300.0f, kGildedBackZ = 0.0f, kGildedBackTurn = 2.55f;   // where and how it rests on the back (the sheath limb)
+
+// The sword is drawn lit by the same lights as Link himself, one run of triangles per (surface class, material): the material's colour is the primitive
+// colour, the triangles carry their outward normals. Each surface class has its own normal and bump map (shared/gilded_sword_surface.h), set up the
+// way the game's own sword and shield maps are (OnPlayerItemMaterial, libultraship patch 0003), so the blade shows its engraved diamonds in the sun.
+struct GildedGroup { int cls = 0, mat = 0; std::vector<Vtx> vtx; std::vector<Gfx> dl; };
+struct GildedGpu { std::vector<GildedGroup> groups; bool built = false; };
+GildedGpu gGildedGpu[2];
+std::unique_ptr<royale::gilded_surface::Map> gGildedMaps[4];
+
+const GildedGpu& GildedMeshFor(int variant) {
+    namespace gm = royale::gilded_sword_model;
+    GildedGpu& g = gGildedGpu[variant];
+    if (g.built) return g;
+    g.built = true;
+    g.groups.reserve(16);   // (never grows past this: the display lists point into each group)
+    auto add = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            GildedGroup* grp = nullptr;
+            for (GildedGroup& e : g.groups) if (e.cls == tris[i].cls && e.mat == tris[i].mat) { grp = &e; break; }
+            if (grp == nullptr) { g.groups.emplace_back(); grp = &g.groups.back(); grp->cls = tris[i].cls; grp->mat = tris[i].mat; }
+            for (int k = 0; k < 3; k++) {
+                Vtx v{};
+                v.n.ob[0] = tris[i].p[k * 3]; v.n.ob[1] = tris[i].p[k * 3 + 1]; v.n.ob[2] = tris[i].p[k * 3 + 2];
+                v.n.flag = 0; v.n.tc[0] = v.n.tc[1] = 0;
+                v.n.n[0] = tris[i].n[0]; v.n.n[1] = tris[i].n[1]; v.n.n[2] = tris[i].n[2];
+                v.n.a = 255;
+                grp->vtx.push_back(v);
+            }
+        }
+    };
+    add(gm::kHilt, gm::kHiltCount);
+    if (variant == 0) add(gm::kBlade, gm::kBladeCount); else add(gm::kScabbard, gm::kScabbardCount);
+    for (GildedGroup& e : g.groups) {
+        const size_t verts = e.vtx.size(), batches = (verts / 3 + 9) / 10;
+        e.dl.assign(verts / 3 + batches + 2, Gfx{});
+        Gfx* d = e.dl.data();
+        gDPSetPrimColor(d++, 0, 0, gm::kMatRgb[e.mat][0], gm::kMatRgb[e.mat][1], gm::kMatRgb[e.mat][2], 255);
+        for (size_t first = 0; first < verts; first += 30) {
+            const size_t n = std::min<size_t>(30, verts - first);
+            gSPVertex(d++, reinterpret_cast<uintptr_t>(&e.vtx[first]), static_cast<int>(n), 0);
+            for (size_t t = 0; t + 2 < n; t += 3) gSP1Triangle(d++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+        }
+        gSPEndDisplayList(d++);
+        e.dl.resize(static_cast<size_t>(d - e.dl.data()));
+    }
+    return g;
+}
+
+void DrawGildedMesh(PlayState* play, int variant) {
+    const GildedGpu& mesh = GildedMeshFor(variant);
+    const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    const bool surfaces = normals != 0 || bumps != 0;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);   // (lit by the game's lights; both sides of the blade show)
+    gDPSetCombineLERP(POLY_OPA_DISP++, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE);   // light x the material's colour
+    for (int cls = 0; cls < 4; cls++) {
+        bool any = false;
+        for (const GildedGroup& e : mesh.groups) any |= e.cls == cls;
+        if (!any) continue;
+        if (surfaces) {
+            if (!gGildedMaps[cls]) gGildedMaps[cls] = std::make_unique<royale::gilded_surface::Map>(royale::gilded_surface::Build(static_cast<royale::gilded_surface::Class>(cls)));
+            const royale::gilded_surface::Map& map = *gGildedMaps[cls];
+            GfxSurfaceMap* material = static_cast<GfxSurfaceMap*>(FrameAlloc(play, sizeof(GfxSurfaceMap)));
+            if (material != nullptr) {
+                *material = {};
+                material->normal = map.normal.data();
+                material->height = map.height.data();
+                material->width = material->heightPixels = static_cast<uint32_t>(map.size);
+                material->normalStrength = normals / 100.0f;
+                material->bumpStrength = bumps / 100.0f;
+                material->uvScale = map.uvScale;
+                const auto& lighting = play->envCtx.lightSettings;
+                for (int k = 0; k < 3; ++k) {
+                    material->sunDirection[k] = lighting.light1Dir[k] / 127.0f;
+                    material->sunColor[k] = lighting.light1Color[k] / 255.0f;
+                    material->ambientColor[k] = lighting.ambientColor[k] / 255.0f;
+                }
+                gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(material));
+            }
+        }
+        for (const GildedGroup& e : mesh.groups) if (e.cls == cls) gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(e.dl.data()));
+        if (surfaces) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+    }
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);                              // and the game's own limbs after it get the state they expect
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void GildedGlint(PlayState* play, const Vec3f& at, s16 scale, s16 life) {
+    Vec3f pos = at, vel = { 0.0f, 0.5f, 0.0f }, accel = { 0.0f, -0.02f, 0.0f };
+    Color_RGBA8 prim = { 255, 238, 150, 255 }, env = { 255, 176, 40, 255 };
+    EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, life);
+}
+
+void OnPlayerCustomSword(void* playPtr, void* playerPtr, int32_t what, int32_t* value) {
+    Feat("gilded sword");
+    if (value == nullptr || playerPtr == nullptr || static_cast<const Player*>(playerPtr) != gGildedPlayer) return;
+    namespace gm = royale::gilded_sword_model;
+    if (what == 0) { *value = static_cast<int32_t>(gm::kBladeTip - gm::kBladeStart); return; }
+    PlayState* play = static_cast<PlayState*>(playPtr);
+    const Player* pl = static_cast<const Player*>(playerPtr);
+    Matrix_Push();
+    if (what == 1) {
+        Matrix_Translate(-kGildedBladeBase, kGildedGripLift, 0.0f, MTXMODE_APPLY);
+        if (kGildedHandRoll != 0.0f) Matrix_RotateX(kGildedHandRoll, MTXMODE_APPLY);
+        // gold glints: along the blade now and then, and a burst at the point while it swings
+        if (pl->meleeWeaponState != 0) {
+            Vec3f tip = { gm::kBladeTip, 0.0f, 0.0f }, world;
+            Matrix_MultVec3f(&tip, &world);
+            GildedGlint(play, world, 80, 12);
+            if (Rand_ZeroOne() < 0.5f) { Vec3f mid = { gm::kBladeStart + (gm::kBladeTip - gm::kBladeStart) * (0.35f + 0.5f * Rand_ZeroOne()), 0.0f, 0.0f }; Matrix_MultVec3f(&mid, &world); GildedGlint(play, world, 50, 10); }
+        } else if (Rand_ZeroOne() < 0.02f) {
+            Vec3f spot = { gm::kBladeStart + (gm::kBladeTip - gm::kBladeStart) * Rand_ZeroOne(), 0.0f, 0.0f }, world;
+            Matrix_MultVec3f(&spot, &world);
+            GildedGlint(play, world, 36, 16);
+        }
+        DrawGildedMesh(play, 0);
+    } else if (what == 2) {
+        Matrix_Translate(kGildedBackX, kGildedBackY, kGildedBackZ, MTXMODE_APPLY);
+        Matrix_RotateY(kGildedBackTurn, MTXMODE_APPLY);
+        DrawGildedMesh(play, 1);
+    }
+    Matrix_Pop();
 }
 
 void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
@@ -14460,7 +16129,7 @@ void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
     switch (id) {
         case ItemId::DekuStick: put(ITEM_STICK); break;
         case ItemId::KokiriSword: case ItemId::BasicSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_KOKIRI); break;
-        case ItemId::MasterSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_MASTER); break;
+        case ItemId::MasterSword: case ItemId::GildedSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_MASTER); break;
         case ItemId::BiggoronSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_BIGGORON); break;
         case ItemId::MegatonHammer: case ItemId::GiantsHammer: put(ITEM_HAMMER); break;
         case ItemId::Slingshot: case ItemId::TripleSlingshot: put(ITEM_SLINGSHOT); break;
@@ -14639,9 +16308,13 @@ void OnGameFrameUpdate() {
     Feat("messages"); RegisterRoyaleMessages();
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
-    Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    if (LobbyPetsActive()) {
+        const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;
+        gLobbyPetGroup.Step({p.x,p.z},1.0f/royale::kTickHz);
+    } else gLobbyPetGroup=royale::lobby::Group{};
+    Feat("cat pet"); ReconcileCatPet(hud);
     Feat("Maya companion"); ReconcileMayaCompanion(hud);
-    Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
+    Feat("baby pet"); ReconcileBabyPet(hud);
     Feat("lobby reef aquarium"); ReconcileLobbyReef();
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
@@ -14670,7 +16343,7 @@ void OnGameFrameUpdate() {
     if (joined && InGame()) {
         if (hud.state == royale::MatchState::Lobby) {
             if (WantsWaitingRoom) {
-                if (InWaitingRoom()) WantsWaitingRoom = false;
+                if (InSelectedWaitingRoom()) WantsWaitingRoom = false;
                 else GoToWaitingRoom();
             }
         } else if (MustBeInField(hud.state) && !InField()) {
@@ -14679,6 +16352,9 @@ void OnGameFrameUpdate() {
     }
 
     if (hud.state != gLastState) {
+        if (hud.state == royale::MatchState::Lobby || hud.state == royale::MatchState::Countdown) ResetMatchUi();   // a new match: nobody is dead yet
+        if (hud.state == royale::MatchState::Ending && joined) StartEndScreen(hud);
+        if (hud.state == royale::MatchState::Drop) gMyStats.startAt = ImGui::GetTime();
         if (hud.state == royale::MatchState::Countdown && joined) {
             KillAllEnemies();
             WantsWaitingRoom = false;
@@ -14710,7 +16386,9 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
+    StopMayaVoice();
     gMayaCompanion = MayaCompanionState{};
+    gLobbyPetGroup=royale::lobby::Group{};
     gActorOf.clear();
     gPlaying.clear();
     gMotion.clear();
@@ -14747,6 +16425,8 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerClothLimb>(OnPlayerClothLimb);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerCustomSword>(OnPlayerCustomSword);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerItemMaterial>(OnPlayerItemMaterial);
     // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
     // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {
@@ -14882,7 +16562,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kConvergenceMapIndex);
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kKingdomMapIndex);   // Hyrule Kingdom is the main map
         if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
@@ -14911,6 +16591,8 @@ UiState& Ui() {
         gGroundFrost = CVarGetInteger(ROYALE_CVAR("GroundFrost"), 1) != 0;
         gGroundLeaves = CVarGetInteger(ROYALE_CVAR("GroundLeaves"), 1) != 0;
         gGroundMerge = CVarGetInteger(ROYALE_CVAR("GroundMerge"), 1) != 0;
+        gGroundTrails = CVarGetInteger(ROYALE_CVAR("GroundTrails"), 1) != 0;
+        gGroundDeform = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundDeform"), 100), 0, 200) / 100.0f;
         gGroundAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundAmount"), 100), 0, 200) / 100.0f;
         gHitFlash = CVarGetInteger(ROYALE_CVAR("HitFlash"), 1) != 0;
         gHitParticles = CVarGetInteger(ROYALE_CVAR("HitParticles"), 1) != 0;
@@ -14929,6 +16611,16 @@ UiState& Ui() {
         gWaterBodiesRefl = CVarGetInteger(ROYALE_CVAR("WaterBodies"), 1) != 0;
         gWaterUnder = CVarGetInteger(ROYALE_CVAR("WaterUnder"), 1) != 0;
         gWaterCurrent = CVarGetInteger(ROYALE_CVAR("WaterCurrent"), 1) != 0;
+        gWaterChop = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterChop"), 60), 0, 200) / 100.0f;
+        gWaterClarity = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterClarity"), 100), 0, 200) / 100.0f;
+        gWaterGlints = CVarGetInteger(ROYALE_CVAR("WaterGlints"), 1) != 0;
+        gWaterGlintAmt = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterGlintAmt"), 100), 0, 200) / 100.0f;
+        gWaterCaustics = CVarGetInteger(ROYALE_CVAR("WaterCaustics"), 1) != 0;
+        gWaterCausticAmt = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterCausticAmt"), 100), 0, 200) / 100.0f;
+        gWaterFoamTex = CVarGetInteger(ROYALE_CVAR("WaterFoamTex"), 1) != 0;
+        gWaterFoamAmt = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterFoamAmt"), 100), 0, 200) / 100.0f;
+        gWaterRipples = CVarGetInteger(ROYALE_CVAR("WaterRipples"), 1) != 0;
+        gWaterUnderAmt = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterUnderAmt"), 100), 0, 200) / 100.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
@@ -15067,11 +16759,13 @@ namespace {
 // The island's collision in the game's own formats. Built once, then it stays: the game keeps pointers into it for as long as the scene is loaded.
 std::vector<Vec3s> gFortniteVtx;
 std::vector<CollisionPoly> gFortnitePoly;
-SurfaceType gFortniteSurface[1];
+SurfaceType gFortniteSurface[16];
 CamData gFortniteCam[1];
 WaterBox gFortniteWater[1];
 CollisionHeader gFortniteHeader;
 bool gFortniteBuilt = false;
+
+bool gTerrainMapId8() { return royale::fortnite::gTerrainMapId == royale::kKingdomMapIndex; }
 
 CollisionHeader* FortniteHeader() {
     namespace fn = royale::fortnite;
@@ -15084,7 +16778,7 @@ CollisionHeader* FortniteHeader() {
         const fn::Poly& p = mesh.polys[i];
         CollisionPoly& c = gFortnitePoly[i];
         c = {};
-        c.type = 0;
+        c.type = p.surface;
         c.flags_vIA = p.a;
         c.flags_vIB = p.b;
         c.vIC = p.c;
@@ -15092,6 +16786,16 @@ CollisionHeader* FortniteHeader() {
         c.dist = p.dist;
     }
     gFortniteSurface[0] = {};                       // plain ground: no exit, no damage, the first camera entry
+    if (gTerrainMapId8()) {   // Hyrule Kingdom's table: footsteps, climbable ivy and cliffs (wall type 4), hook-shot wood
+        constexpr int n = sizeof(royale::kingdom::kSurfaces) / sizeof(royale::kingdom::kSurfaces[0]);
+        static_assert(n <= 16, "surface table");
+        for (int i = 0; i < n; i++) {
+            const auto& sf = royale::kingdom::kSurfaces[i];
+            gFortniteSurface[i] = {};
+            gFortniteSurface[i].data[0] = sf.climb ? (4u << 21) : 0u;
+            gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
+        }
+    }
     gFortniteCam[0] = {};
     gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
     gFortniteCam[0].numCameras = 0;

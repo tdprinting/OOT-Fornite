@@ -41,7 +41,7 @@ def main():
         for i in range(96):
             c = chr(i+32)
             tile = Image.new('L',(24,32))
-            ImageDraw.Draw(tile).text((1,1),c,font=font,fill=255,anchor='lt')
+            ImageDraw.Draw(tile).text((1,0),c,font=font,fill=255,anchor='la')
             widths.append(min(24, round(font.getlength(c))+1))
             # IA8: white intensity and four-bit coverage, so edges alpha blend.
             glyphs.extend(0xf0 | (a >> 4) for a in tile.tobytes())

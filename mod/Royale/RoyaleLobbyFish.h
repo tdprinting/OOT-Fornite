@@ -4,7 +4,7 @@ royale::reef::Aquarium gReef;
 int gReefRetry = 0;
 
 bool LobbyReefActive() {
-    return gPlayState != nullptr && gSession.Joined() && InWaitingRoom() &&
+    return gPlayState != nullptr && gSession.Joined() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME &&
            gSession.Hud().state == royale::MatchState::Lobby && DebugOn(kDbgLobbyFish);
 }
 

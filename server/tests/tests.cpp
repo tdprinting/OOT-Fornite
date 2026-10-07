@@ -2,6 +2,7 @@
 #include "../sim.h"
 #include "../nav.h"
 #include "../../shared/meshes.h"
+#include "../../shared/gilded_sword_surface.h"
 #include "../../shared/objmodel.h"
 #include "../../shared/tune.h"
 #include "../../shared/poi.h"
@@ -65,9 +66,9 @@ static void StormTimeline() {
     float last = 1e9f;
     for (float t = 0; t < s.TotalDuration(); t += 1.0f) { float r = s.SafeZoneAt(t).radius; CHECK(r <= last + 1e-3f); last = r; }
     CHECK(s.DamagePerSecond({1999, 0}, 0) == 0.0f);     // inside the map, phase 1 holds
-    CHECK(std::abs(s.DamagePerSecond({5000, 0}, 0) - 0.5f * (2000.0f / 3500.0f)) < 1e-4f);     // outside the map (a small map's storm hurts a little less)
+    CHECK(std::abs(s.DamagePerSecond({5000, 0}, 0) - kStormPhases[0].damagePerSec * (2000.0f / 3500.0f)) < 1e-4f);     // outside the map (a small map's storm hurts a little less)
     Storm big(7, {{0, 0}, 5000});
-    CHECK(big.DamagePerSecond({9000, 0}, 0) == 0.5f);
+    CHECK(big.DamagePerSecond({9000, 0}, 0) == kStormPhases[0].damagePerSec);
 }
 static void LootDeterministicAndValid() {
     auto a = GenerateLoot(99, MapCircle(), 400, 0.15f), b = GenerateLoot(99, MapCircle(), 400, 0.15f);
@@ -182,6 +183,16 @@ static void CombatMath() {
     CHECK(KindOf(ItemId::Longshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
     for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
+    // The Gilded Sword is the strongest sword: it reaches further and hits harder than the Master Sword, one-handed, Legendary only, and found as loot.
+    const WeaponStats gilded = WeaponOf(ItemId::GildedSword), master = WeaponOf(ItemId::MasterSword);
+    CHECK(gilded.damage > master.damage && gilded.range > master.range && !gilded.ranged && !IsTwoHanded(ItemId::GildedSword));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::MasterSword, Rarity::Legendary));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::BiggoronSword, Rarity::Epic));
+    CHECK(InPool(ItemId::GildedSword) && DefOf(ItemId::GildedSword).minRarity == Rarity::Legendary && DefOf(ItemId::GildedSword).maxRarity == Rarity::Legendary);
+    bool found = false;
+    Rng rng(77);
+    for (int i = 0; i < 4000 && !found; i++) { ItemId it; if (PickItem(rng, Rarity::Legendary, &it) && it == ItemId::GildedSword) found = true; }
+    CHECK(found);
 }
 static void AttackRules() {
     Simulation sim = Duel(1, {0, 0}, {50, 0});
@@ -510,8 +521,8 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 19 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(kItemCount >= 80 && kPoolItemCount == 90 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 20 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 20 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
@@ -584,7 +595,7 @@ static void GearChangesDamageDealtAndTaken() {
     };
     const ItemId none = ItemId::Count;
     float plain = hit(none, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Normal);
-    CHECK(std::abs(plain - 0.8f) < 0.001f);                                       // Kokiri Sword at Common
+    CHECK(std::abs(plain - 0.8f * kPlayerDamageScale) < 0.001f);                  // Kokiri Sword at Common
     CHECK(hit(ItemId::SpiritMedallion, GearSlot::Charm, none, GearSlot::Mask, DamageKind::Normal) > plain);   // melee gear hits harder
     CHECK(hit(ItemId::SkullMask, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Normal) == plain);          // ranged gear doesn't help a sword
     CHECK(hit(none, GearSlot::Mask, ItemId::LightMedallion, GearSlot::Charm, DamageKind::Normal) < plain);    // damage reduction
@@ -592,7 +603,7 @@ static void GearChangesDamageDealtAndTaken() {
     float storm = hit(none, GearSlot::Mask, none, GearSlot::Mask, DamageKind::Storm);
     CHECK(std::abs(storm - 1.0f) < 0.001f);
     CHECK(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Storm) < storm);
-    CHECK(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Fire) == storm);            // Zora Mask doesn't stop fire
+    CHECK(std::abs(hit(none, GearSlot::Mask, ItemId::ZoraMask, GearSlot::Mask, DamageKind::Fire) - storm * kHazardDamageScale) < 0.001f); // Zora Mask doesn't stop fire
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Fire) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Explosion) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Storm) == storm);
@@ -723,11 +734,11 @@ static void PotionVariants() {
     CHECK(m.UsePotion(1000));
     float before = p->health;
     m.Damage(1000, 1.0f, 1);
-    CHECK(std::abs((before - p->health) - 0.5f) < 0.001f);
+    CHECK(std::abs((before - p->health) - 0.5f * kPlayerDamageScale) < 0.001f);
     for (int i = 0; i < 7 * kTickHz; i++) m.Tick(kDt);
     before = p->health;
     m.Damage(1000, 1.0f, 1);
-    CHECK(std::abs((before - p->health) - 1.0f) < 0.001f);
+    CHECK(std::abs((before - p->health) - kPlayerDamageScale) < 0.001f);
     CHECK(!m.UsePotion(1000));                                                         // empty bag
 }
 
@@ -775,7 +786,7 @@ static void WeaponEffects() {
         t->pos = {50, 0};
         float before = t->health;
         m.Damage(1000, 1.0f, 1);
-        CHECK(std::abs((before - t->health) - 1.25f) < 0.001f);
+        CHECK(std::abs((before - t->health) - 1.25f * kPlayerDamageScale) < 0.001f);
         for (int i = 0; i < 3 * kTickHz; i++) m.Tick(kDt);
         CHECK(!m.Stunned(*t));
     }
@@ -1521,7 +1532,7 @@ static void HeartChestsAndAdultPower() {
     const float hp = me->health;
     me->invulnUntil = 0; me->armor = 0;
     m.Damage(1, 0.5f, 1000);
-    CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken) < 0.01f);
+    CHECK(std::abs((hp - me->health) - 0.5f * kAdultTaken * kPlayerDamageScale) < 0.01f);
     // A second one straight away is not wasted; near the end it tops you up.
     const size_t again = m.AddLoot({{0, 0}, ItemId::AdultPower, Rarity::Legendary, true});
     CHECK(!m.PickUp(1, again, false));
@@ -2836,6 +2847,68 @@ static void IslandPuddles() {
     CHECK(land > 10000 && steepInland * 100 < land);   // under one percent of the inland is too steep to stand on
 }
 
+
+// Snow that is walked in: a footprint is a smooth dent (deepest in the middle, a low rim just outside, nothing far away, no creases), the deepest pit
+// wins where prints overlap, prints fill in over time, a hard landing digs a bigger crater than a soft one, feet alternate sides of the line walked,
+// and the new puddle, snow and bank meshes are smooth (soft rim alpha on the puddle, no step at the edge of the snow, lip that stands above the ground).
+static void SnowDeformation() {
+    namespace gp = royale::ground;
+    const gp::Dent d = {100.0f, 50.0f, 0.7f, 11.0f, 6.5f, 8.0f};
+    CHECK(std::fabs(gp::DentChange(d, 100.0f, 50.0f) + 8.0f) < 1e-4f);                  // the full depth at its middle
+    CHECK(gp::DentChange(d, 100.0f + gp::DentReach(d) + 1.0f, 50.0f) == 0.0f);        // nothing outside its reach
+    float lowest = 0.0f, highest = 0.0f, prev = 0.0f, worstStep = 0.0f;
+    for (int i = 0; i <= 400; i++) {   // walk straight through it, along its long axis: the change must be continuous
+        const float lx = -gp::DentReach(d) * 1.1f + i * (gp::DentReach(d) * 2.2f / 400.0f);
+        const float c = gp::DentChange(d, d.x + lx * std::cos(d.yaw), d.z + lx * std::sin(d.yaw));
+        lowest = std::min(lowest, c); highest = std::max(highest, c);
+        if (i > 0) worstStep = std::max(worstStep, std::fabs(c - prev));
+        prev = c;
+    }
+    CHECK(lowest < -7.9f && highest > 1.0f && highest < 0.5f * 8.0f && worstStep < 0.5f);   // a pit, a low rim, no jumps
+    // the dent is turned: along its axis it is longer than across it
+    const float along = gp::DentChange(d, d.x + 9.0f * std::cos(d.yaw), d.z + 9.0f * std::sin(d.yaw));
+    const float across = gp::DentChange(d, d.x - 9.0f * std::sin(d.yaw), d.z + 9.0f * std::cos(d.yaw));
+    CHECK(along < across - 1.0f);
+    // two prints on top of each other dig no deeper than one; a trail keeps a ridge between prints
+    const gp::Dent two[2] = {d, d};
+    CHECK(std::fabs(gp::DentsChange(two, 2, d.x, d.z) - gp::DentChange(d, d.x, d.z)) < 1e-4f);
+    const gp::Dent trail[2] = {{0, 0, 0, 11, 6.5f, 8}, {40, 0, 0, 11, 6.5f, 8}};
+    CHECK(gp::DentsChange(trail, 2, 20.0f, 0.0f) > -1.0f && gp::DentsChange(trail, 2, 0.0f, 0.0f) < -7.0f);
+    // prints fill in
+    CHECK(gp::DentLeft(0.0f, 30.0f) > 0.999f && gp::DentLeft(30.0f, 30.0f) < 0.001f && gp::DentLeft(10.0f, 30.0f) > gp::DentLeft(20.0f, 30.0f));
+    // feet alternate and sit either side of the line walked (walking along +x, the feet are offset along z)
+    float lx, lz, rx, rz;
+    gp::FootprintAt(10.0f, 0.0f, 1.0f, 0.0f, 1, 5.0f, &lx, &lz);
+    gp::FootprintAt(10.0f, 0.0f, 1.0f, 0.0f, -1, 5.0f, &rx, &rz);
+    CHECK(lx == 10.0f && rx == 10.0f && std::fabs(lz - 5.0f) < 1e-5f && std::fabs(rz + 5.0f) < 1e-5f);
+    // a landing: none when soft, bigger and deeper the harder
+    CHECK(gp::CraterFor(100.0f, 1.0f).radius == 0.0f);
+    const gp::Crater c1 = gp::CraterFor(500.0f, 1.0f), c2 = gp::CraterFor(1400.0f, 1.0f);
+    CHECK(c1.radius > 20.0f && c2.radius > c1.radius && c2.depth > c1.depth && gp::CraterFor(500.0f, 2.0f).radius > c1.radius * 1.9f);
+    // the pile's profile falls to nothing at the edge with no slope there, the bank is a smooth bump on the water's edge
+    CHECK(gp::PileProfile(1.0f) == 0.0f && gp::PileProfile(0.0f) == 1.0f && gp::PileProfile(0.98f) < 0.01f);
+    CHECK(gp::BankHeight(1.0f, 3.0f) == 3.0f && gp::BankHeight(1.5f, 3.0f) < 0.01f && gp::BankHeight(0.5f, 3.0f) < 0.01f);
+    // the meshes: puddles fade out at their rim and are opaque inside, the snow is a fine surface with no step at its edge, the bank stands above the ground
+    for (uint32_t shape = 0; shape < gp::kPuddleShapes; shape++) {
+        const MeshData puddle = BuildMesh(MeshKind::Ground, gp::kPuddleFirst + shape), bank = BuildMesh(MeshKind::Ground, gp::kBankFirst + shape);
+        int clear = 0, solid = 0;
+        for (const auto& v : puddle.v) { clear += v.a == 0; solid += v.a == 255; }
+        CHECK(clear > 50 && solid > 200 && puddle.Triangles() > 250);
+        float mn[3], mx[3];
+        bank.Bounds(mn, mx);
+        CHECK(bank.Triangles() > 200 && mx[1] > 3.0f && mx[1] < 4.0f);
+    }
+    for (uint32_t v = gp::kPileFirst; v < gp::kDriftFirst + gp::kDriftShapes; v++) {
+        const MeshData snow = BuildMesh(MeshKind::Ground, v);
+        float mn[3], mx[3];
+        snow.Bounds(mn, mx);
+        CHECK(snow.Triangles() > 300 && mn[1] > -0.01f && mx[1] > 10.0f);
+        int lowCorners = 0;
+        for (const auto& p : snow.v) lowCorners += p.y < 0.05f;
+        CHECK(lowCorners >= 60);   // the outer ring lies on the ground: the edge is flush, not a wall
+    }
+}
+
 static void BouldersAndFormations() {
     // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
     // budget, and each map's stone a different colour.
@@ -2977,16 +3050,51 @@ static void TownsAreDifferentPlaces() {
     CHECK(names.size() == big.pois.size());
 }
 
+static void GildedSwordSurfaceMaps() {
+    namespace gs = royale::gilded_surface;
+    namespace gm = royale::gilded_sword_model;
+    // Every triangle names a material and a surface class that exist, and its outward direction is a real direction.
+    auto check = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            CHECK(tris[i].mat < 7 && tris[i].cls < 4);
+            const float l = std::sqrt(static_cast<float>(tris[i].n[0] * tris[i].n[0] + tris[i].n[1] * tris[i].n[1] + tris[i].n[2] * tris[i].n[2]));
+            CHECK(l > 100.0f && l < 140.0f);
+        }
+    };
+    check(gm::kBlade, gm::kBladeCount); check(gm::kHilt, gm::kHiltCount); check(gm::kScabbard, gm::kScabbardCount);
+    // The blade's flat sides face up and down, so the engraving is projected onto them (the game projects along a triangle's dominant axis).
+    for (int i = 0; i < gm::kBladeCount; i++) CHECK(std::abs(gm::kBlade[i].n[2]) > 100);
+    for (int c = 0; c < static_cast<int>(gs::Class::Count); c++) {
+        const gs::Map m = gs::Build(static_cast<gs::Class>(c)), again = gs::Build(static_cast<gs::Class>(c));
+        const size_t bytes = static_cast<size_t>(m.size) * m.size * 4;
+        CHECK(m.size >= 64 && m.normal.size() == bytes && m.height.size() == bytes && m.uvScale > 0 && m.normal == again.normal && m.height == again.height);   // deterministic
+        double mean = 0, var = 0; int up = 0;
+        for (size_t i = 0; i < bytes; i += 4) { mean += m.height[i]; up += m.normal[i + 2] >= 128; CHECK(m.normal[i + 3] == 255 && m.height[i] == m.height[i + 1]); }
+        mean /= bytes / 4;
+        for (size_t i = 0; i < bytes; i += 4) var += (m.height[i] - mean) * (m.height[i] - mean);
+        var /= bytes / 4;
+        CHECK(mean > 80 && mean < 180 && std::sqrt(var) > 3.0 && std::sqrt(var) < 70.0);   // real relief, nothing blown out
+        CHECK(up == static_cast<int>(bytes / 4));                                           // every normal points out of the surface
+    }
+    // The blade's engraving is laid on the model's own diamonds: a groove runs just inside every diamond's edge, and the gold diamond's heart is a raised boss.
+    const float p = gm::kDiamondPitch, x0 = gm::kBladeStart;
+    const float boss = gs::detail::BladeHeight(x0 + p * 0.5f, 0.0f), plain = gs::detail::BladeHeight(x0 + p * 0.5f, gm::kBladeHalfWidth * 0.95f);
+    CHECK(boss > plain + 0.05f);
+    const float groove = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.5f * 0.965f), inside = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.2f);
+    CHECK(std::fabs(groove - 0.5f) > 0.04f || std::fabs(inside - 0.5f) > 0.01f);
+    // The pattern repeats every two diamonds along the blade and across the tile.
+    CHECK(std::fabs(gs::detail::BladeHeight(x0 + 100.0f, 120.0f) - gs::detail::BladeHeight(x0 + 100.0f + 2.0f * p, 120.0f)) < 0.001f);
+}
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame)));   // nothing below the ground (the glider's origin is its handle bar, not the ground)
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
@@ -3000,6 +3108,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > -15 && mn[1] < 5 && mx[1] > 70 && mx[1] < 110 && mx[0] - mn[0] > 230 && mx[0] - mn[0] < 300);   // the handle bar is the origin; the wing is above it
+            if (static_cast<MeshKind>(k) == MeshKind::GildedSword) CHECK(mx[0] > 5500 && mx[0] < 6500 && mn[0] < -1000 && mx[1] - mn[1] < 2600);   // grip at the origin, blade along +X in limb units
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
@@ -3118,7 +3227,7 @@ static void TheMajorBoss() {
         Run(on, half - 10.0f);
         CHECK(on.match.FindBoss(kDragonId) == nullptr);
         bool announced = false;
-        for (int i = 0; i < 20 * 25; i++) {
+        for (int i = 0; i < 20 * 25 && !announced; i++) {                                         // look as it arrives, before its first dive
             on.Tick(kDt);
             for (const auto& e : on.match.DrainEvents()) announced |= e.type == MatchEvent::Type::BossSpawned;
         }
@@ -3166,7 +3275,7 @@ static void TheMajorBoss() {
         Run(sim, 0.5f);
         CHECK(h->health > 99.99f);
         Run(sim, 1.0f);
-        CHECK(h->health < 100.0f - 1.2f);
+        CHECK(h->health < 100.0f - 1.2f * kBossDamageScale);
         Run(sim, 4.0f);                                                                              // let the burn finish
         const float after = h->health;
         h->pos = {1500, 0};
@@ -3586,6 +3695,31 @@ static void ShockwaveGrenade() {
     }
 }
 
+// A boss's swing or a helper's strike follows the same rules a player's weapon does: rolling dodges it, a raised shield in front takes most of it.
+static void BlowsFollowThePlayersRules() {
+    Simulation sim = Duel(5, {100, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* h = m.Find(1);
+    h->health = h->maxHealth = 7.0f;
+    h->invulnUntil = 0; h->armor = 0; h->hasShield = false;
+    m.DrainEvents();
+    CHECK(m.Blow(*h, {0, 0}, 1.0f, 1000));                                                    // a plain blow lands
+    CHECK(std::fabs((7.0f - h->health) - kPlayerDamageScale) < 0.001f);
+    h->health = 7.0f;
+    CHECK(m.StartRoll(1));
+    CHECK(!m.Blow(*h, {0, 0}, 1.0f, 1000) && h->health == 7.0f);                              // rolled clean through it
+    Run(sim, Match::kRollSeconds + 0.2f);
+    h->invulnUntil = 0;
+    h->hasShield = true; h->shield = {ItemId::HylianShield, Rarity::Common};
+    h->anim = static_cast<uint8_t>(Anim::Guard); h->rot = 0;
+    const float before = h->health;
+    CHECK(m.Blow(*h, {0, 500}, 1.0f, 1000));                                                  // from in front: shield and guard
+    const float guarded = before - h->health;
+    h->health = before; h->anim = 0;
+    CHECK(m.Blow(*h, {0, 500}, 1.0f, 1000));
+    CHECK(guarded < (before - h->health) * 0.5f);
+}
+
 static void ShieldBar() {
     Simulation sim = Duel(5, {100, 0}, {0, 0});
     Match& m = sim.match;
@@ -3594,14 +3728,15 @@ static void ShieldBar() {
     h->health = h->maxHealth = 3.0f;
     h->armor = 2.0f;
     m.DrainEvents();
+    const float k = 1.0f / kPlayerDamageScale;   // hits below are given before the overall damage dial, so they land as written
     // The shield soaks damage before health does.
-    m.Damage(1, 1.5f, 1000);
+    m.Damage(1, 1.5f * k, 1000);
     CHECK(std::fabs(h->armor - 0.5f) < 0.001f && h->health == 3.0f);
     float announced = 0;
     for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Damaged && e.a == 1) announced = e.amount;
     CHECK(std::fabs(announced - 1.5f) < 0.001f);                                          // the hit marker shows the whole hit
     const float dealt = b->damageDealt;
-    m.Damage(1, 1.0f, 1000);
+    m.Damage(1, 1.0f * k, 1000);
     CHECK(h->armor == 0 && std::fabs(h->health - 2.5f) < 0.001f);                         // what is left goes to health
     CHECK(std::fabs(b->damageDealt - dealt - 1.0f) < 0.001f);                              // damage dealt counts shield and health
     h->armor = 2.0f;
@@ -4439,7 +4574,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();

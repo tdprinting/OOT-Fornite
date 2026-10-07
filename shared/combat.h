@@ -37,6 +37,7 @@ constexpr WeaponStats WeaponOf(ItemId id) {
         case ItemId::KokiriSword:   return {0.8f, 90, 0.6f, false};
         case ItemId::MasterSword:   return {1.5f, 100, 0.6f, false};
         case ItemId::BiggoronSword: return {2.0f, 120, 1.1f, false};
+        case ItemId::GildedSword:   return {1.9f, 115, 0.7f, false}; // Majora's Mask's strongest sword: one-handed like the Master Sword, but a longer blade and a harder hit
         case ItemId::MegatonHammer: return {2.5f, 110, 1.3f, false};
         case ItemId::Slingshot:     return {0.5f, 800, 0.8f, true};
         case ItemId::Boomerang:     return {0.6f, 500, 1.0f, true};
@@ -45,11 +46,11 @@ constexpr WeaponStats WeaponOf(ItemId id) {
         case ItemId::Bombchus:      return {1.5f, 900, 2.5f, true, E::None, 0, 0, 100};
         case ItemId::DekuNuts:      return {0.3f, 450, 3.0f, true, E::Stun, 2.0f};
         case ItemId::TripleSlingshot: return {0.45f, 800, 0.9f, true, E::None, 0, 0, 0, 3};
-        case ItemId::GiantsHammer:  return {3.2f, 150, 1.7f, false, E::None, 0, 0, 220};
+        case ItemId::GiantsHammer:  return {2.8f, 150, 1.7f, false, E::None, 0, 0, 220};
         case ItemId::HomingBombchus: return {1.6f, 1000, 2.4f, true, E::None, 0, 0, 110, 1, true};
         case ItemId::FireArrows:    return {0.9f, 1200, 1.2f, true, E::Burn, 3.0f, 0.25f};
         case ItemId::IceArrows:     return {0.8f, 1200, 1.4f, true, E::Freeze, 1.5f};
-        case ItemId::LightArrows:   return {1.8f, 1500, 1.8f, true, E::PierceShield};
+        case ItemId::LightArrows:   return {1.6f, 1500, 1.8f, true, E::PierceShield};
         case ItemId::Hookshot:      return {0.4f, 900, 2.5f, true, E::Pull, 1.0f};
         case ItemId::ShockwaveGrenade: return {1.2f, 520, 5.0f, true, E::Stun, 1.2f, 0, 180};
         default:                    return {0, 0, 1, false};

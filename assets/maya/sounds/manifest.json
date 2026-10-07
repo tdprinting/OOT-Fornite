@@ -1,0 +1,18 @@
+{
+  "source": "User-supplied family recording IMG_9975.mov",
+  "speaker_confirmation": "User confirmed Maya makes the playful sounds; opening line excluded",
+  "clips": [
+    {
+      "file": "maya_happy.wav",
+      "start": 4.615,
+      "end": 5.39,
+      "label": "Happy vocalization"
+    },
+    {
+      "file": "maya_playful.wav",
+      "start": 9.805,
+      "end": 10.835,
+      "label": "Playful response"
+    }
+  ]
+}

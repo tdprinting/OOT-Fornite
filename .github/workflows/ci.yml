@@ -33,6 +33,13 @@ jobs:
           submodules: false
       - name: Fetch ENet only
         run: git submodule update --init --depth 1 third_party/enet
+      - name: Validate generated item normal and bump maps
+        run: python3 scripts/test_item_surface_maps.py
+      - name: Compile material shaders for desktop OpenGL and Android GLES
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y glslang-tools
+          python3 scripts/test_item_surface_shaders.py
       - name: Build and test with UBSan
         run: |
           cmake -S server -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
