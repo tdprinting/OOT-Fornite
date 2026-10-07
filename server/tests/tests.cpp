@@ -177,7 +177,7 @@ static void Run(Simulation& sim, float seconds) {
 static void CombatMath() {
     CHECK(WeaponDps(ItemId::MasterSword, Rarity::Epic) > WeaponDps(ItemId::KokiriSword, Rarity::Common));
     CHECK(WeaponDps(ItemId::KokiriSword, Rarity::Legendary) > WeaponDps(ItemId::KokiriSword, Rarity::Common));
-    CHECK(KindOf(ItemId::Hookshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
+    CHECK(KindOf(ItemId::Longshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
     for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
 }
@@ -280,8 +280,8 @@ static void PickUpRulesAndSwap() {
     bool dropped = false;
     for (auto& e : m.Loot()) if (!e.taken && e.spawn.item == ItemId::BiggoronSword) dropped = true;
     CHECK(dropped);
-    CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::Hookshot, Rarity::Rare, false})));  // abilities go in the ability slot
-    CHECK(m.Find(1000)->hasAbility && m.Find(1000)->ability.item == ItemId::Hookshot);
+    CHECK(m.PickUp(1000, m.AddLoot({{0, 0}, ItemId::Longshot, Rarity::Epic, false})));  // abilities go in the ability slot
+    CHECK(m.Find(1000)->hasAbility && m.Find(1000)->ability.item == ItemId::Longshot);
 }
 static void PotionRules() {
     Simulation sim = Duel(1, {1500, 0}, {0, 0});
@@ -509,9 +509,9 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
     CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 17 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 19 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
-    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
+    CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 20 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
     int perSlot[kGearSlots] = {};
@@ -930,8 +930,8 @@ static void AbilitiesThatMovePlayers() {
     me->rot = 0x4000;                                                                  // facing +x
     m.DrainEvents();
 
-    // Hookshot pulls whoever is in front of you to you, stuns them, and costs nothing if nobody is there.
-    give(ItemId::Hookshot);
+    // Longshot pulls whoever is in front of you to you, stuns them, and costs nothing if nobody is there.
+    give(ItemId::Longshot);
     foe->pos = {-400, 0};                                                              // behind
     CHECK(!m.UseAbility(1) && me->abilityReadyAt == 0);                               // nobody in front: not used up
     foe->pos = {400, 0};
@@ -942,11 +942,11 @@ static void AbilitiesThatMovePlayers() {
     for (auto& e : m.DrainEvents()) teleported |= e.type == MatchEvent::Type::Teleported && e.a == 1000;
     CHECK(teleported);
 
-    // Longshot reaches much farther than Hookshot.
-    foe->pos = {1300, 0}; foe->stunUntil = 0;
-    give(ItemId::Hookshot);
-    CHECK(!m.UseAbility(1));
+    // Out of reach it does nothing, and costs nothing.
+    foe->pos = {1900, 0}; foe->stunUntil = 0;
     give(ItemId::Longshot);
+    CHECK(!m.UseAbility(1));
+    foe->pos = {1300, 0};
     CHECK(m.UseAbility(1) && Distance(foe->pos, me->pos) < 130);
 
     // Farore's Wind: the first use marks a spot for free, the second jumps back to it.
@@ -1141,10 +1141,10 @@ static void BotsUseAbilitiesWhenItCounts() {
         Run(sim, 3);
         CHECK(b->abilityReadyAt == 0);
     }
-    {   // The Hookshot reels in a foe who is out of sword range.
+    {   // The Longshot reels in a foe who is out of sword range.
         Simulation sim = Duel(5, {500, 0}, {0, 0});
         PlayerState* b = sim.match.Find(1000);
-        b->ability = {ItemId::Hookshot, Rarity::Rare}; b->hasAbility = true;
+        b->ability = {ItemId::Longshot, Rarity::Rare}; b->hasAbility = true;
         b->weapon = {ItemId::KokiriSword, Rarity::Common};
         float closest = 1e9f;
         for (int i = 0; i < 5 * kTickHz; i++) { sim.Tick(kDt); closest = (std::min)(closest, Distance(b->pos, sim.match.Find(1)->pos)); }
@@ -2631,7 +2631,7 @@ static void SandboxCommands() {
     CHECK(m.SandboxCart({1700, -1900}, 0.5f) && m.Vehicles()[0].index == 0 && !m.Vehicles()[0].gone);
     // Giving: an item goes straight into the bag or hands at the rarity asked for (within what the item allows).
     CHECK(m.SandboxGive(1, ItemId::MasterSword, Rarity::Epic) && m.Players()[0].weapon.item == ItemId::MasterSword && m.Players()[0].weapon.rarity == Rarity::Epic);
-    CHECK(m.SandboxGive(1, ItemId::ShockwaveGrenade, Rarity::Legendary) && m.Players()[0].hasAbility && m.Players()[0].ability.item == ItemId::ShockwaveGrenade);
+    CHECK(m.SandboxGive(1, ItemId::ShockwaveGrenade, Rarity::Legendary) && (m.Players()[0].weapon.item == ItemId::ShockwaveGrenade || (!m.Players()[0].reserve.empty() && m.Players()[0].reserve.back().item == ItemId::ShockwaveGrenade)));
     CHECK(m.SandboxGive(1, ItemId::HoverBoots, Rarity::Rare) && (m.Players()[0].gearMask & (1 << static_cast<int>(GearSlot::Boots))));
     // Weather stays where it is put; it only follows the schedule when set free. Teleports and supply drops work.
     m.SandboxWeather(Season::Winter, Sky::Snow, 80);
@@ -3553,52 +3553,35 @@ static void ChickenTune() {
 }
 
 static void ShockwaveGrenade() {
-    CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Ability && !IsSong(ItemId::ShockwaveGrenade));
-    CHECK(AbilityOf(ItemId::ShockwaveGrenade).fx[0].type == EffectType::Launch && AbilityOf(ItemId::ShockwaveGrenade).cooldown > 0);
-    // A mobility item now: a player's own game throws them up, so the server leaves everyone where they are and hurts nobody.
-    Simulation sim = Duel(5, {100, 0}, {0, 0});
-    Match& m = sim.match;
-    PlayerState* user = m.Find(1);
-    PlayerState* near = m.Find(1000);
-    user->pos = {0, 0};
-    near->pos = {200, 0};
-    user->ability = {ItemId::ShockwaveGrenade, Rarity::Rare};
-    user->hasAbility = true;
-    user->abilityReadyAt = 0;
-    m.DrainEvents();
-    CHECK(m.UseAbility(1));
-    CHECK(Distance(near->pos, {200, 0}) < 0.01f && !m.Stunned(*near) && near->health == near->maxHealth);   // nobody else is touched
-    CHECK(Distance(user->pos, {0, 0}) < 0.01f && user->health == user->maxHealth);                         // the client moves its own player
-    CHECK(!m.UseAbility(1));                                                                                // recharging
-    // A bot is carried away from the nearest enemy, and never off the map.
-    Simulation hop = Duel(5, {100, 0}, {0, 0});
-    PlayerState* bot = hop.match.Find(1000);
-    hop.match.Find(1)->pos = {0, 0};
-    bot->pos = {150, 0};
-    bot->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
-    bot->hasAbility = true;
-    bot->abilityReadyAt = 0;
-    CHECK(hop.match.UseAbility(1000));
-    CHECK(bot->pos.x > 500.0f && std::fabs(bot->pos.z) < 0.01f);
-    Simulation edge = Duel(5, {100, 0}, {0, 0});
-    edge.match.Find(1)->pos = {1800, 0};
-    edge.match.Find(1000)->pos = {1960, 0};
-    edge.match.Find(1000)->ability = {ItemId::ShockwaveGrenade, Rarity::Legendary};
-    edge.match.Find(1000)->hasAbility = true;
-    edge.match.Find(1000)->abilityReadyAt = 0;
-    CHECK(edge.match.UseAbility(1000));
-    CHECK(Distance(edge.match.Find(1000)->pos, MapCircle().center) <= MapCircle().radius);
-    // A bot uses it when an enemy is on top of it and it is losing.
-    Simulation botFight = Duel(5, {100, 0}, {0, 0});
-    PlayerState* b = botFight.match.Find(1000);
-    b->ability = {ItemId::ShockwaveGrenade, Rarity::Epic};
-    b->hasAbility = true;
-    b->health = 1.0f;
-    botFight.match.Find(1)->pos = {150, 0};
-    botFight.match.Find(1)->weapon = {ItemId::BiggoronSword, Rarity::Epic};
-    bool used = false;
-    for (int i = 0; i < 3 * kTickHz; i++) { botFight.Tick(kDt); used |= b->abilityReadyAt > 0; }
-    CHECK(used);
+    // Hookshot and Shockwave Grenade are hotbar weapons used with B, not powers.
+    CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Weapon && KindOf(ItemId::Hookshot) == ItemKind::Weapon);
+    CHECK(InPool(ItemId::ShockwaveGrenade) && InPool(ItemId::Hookshot));
+    {   // The grenade hurts the target and stuns everyone around it, but not you.
+        Simulation sim = Duel(5, {100, 0}, {0, 0});
+        Match& m = sim.match;
+        PlayerState* user = m.Find(1);
+        PlayerState* target = m.Find(1000);
+        user->pos = {0, 0};
+        target->pos = {300, 0};
+        user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
+        user->attackReadyAt = 0;
+        const float before = target->health;
+        CHECK(m.Attack(1, 1000).ok && target->health < before && m.Stunned(*target));
+        CHECK(!m.Stunned(*user) && user->health == user->maxHealth);
+        CHECK(!m.Attack(1, 1000).ok);   // recharging: a grenade is slow
+    }
+    {   // The hookshot reels the target in and stuns them.
+        Simulation sim = Duel(5, {100, 0}, {0, 0});
+        Match& m = sim.match;
+        PlayerState* user = m.Find(1);
+        PlayerState* target = m.Find(1000);
+        user->pos = {0, 0};
+        user->rot = 0x4000;   // facing +x
+        target->pos = {700, 0};
+        user->weapon = {ItemId::Hookshot, Rarity::Rare};
+        user->attackReadyAt = 0;
+        CHECK(m.Attack(1, 1000).ok && Distance(target->pos, user->pos) < 130 && target->pos.x > 0 && m.Stunned(*target));
+    }
 }
 
 static void ShieldBar() {

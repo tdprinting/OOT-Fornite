@@ -404,6 +404,7 @@ class BotController {
             case WeaponEffect::Burn: dps *= 1.2f; break;
             case WeaponEffect::Freeze: dps *= 1.3f; break;
             case WeaponEffect::Stun: dps *= 1.25f; break;
+            case WeaponEffect::Pull: dps *= 1.5f; break;
             case WeaponEffect::PierceShield: dps *= 1.15f; break;
             case WeaponEffect::None: break;
         }

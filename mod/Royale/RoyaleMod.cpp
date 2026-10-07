@@ -124,6 +124,7 @@ void Player_UseItem(PlayState* play, Player* player, s32 item);
 s8 Player_ItemToItemAction(s32 item);
 void Player_Draw(Actor* actor, PlayState* play);
 extern f32 gRoyaleRunSpeedScale;   // Link's top run speed multiplier (patches/0011); sprinting raises it
+extern s32 gRoyaleNoUseOnTakeOut;   // 1 = taking an item out never uses it too (patches/0023); the use comes from pressing B
 extern s32 gRoyaleNoAimView;    // 1 = bow, slingshot, boomerang and hookshot ready and fire in place, never the first-person aiming view (patches/0019)
 extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
@@ -905,6 +906,7 @@ Look LookFor(royale::ItemId weapon) {
         case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
         case ItemId::Hookshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_HOOKSHOT, ITEM_HOOKSHOT };
+        case ItemId::ShockwaveGrenade: return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_BOMB, ITEM_BOMB };   // thrown like a bomb
         case ItemId::Longshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_LONGSHOT, ITEM_LONGSHOT };
         case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
             return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };   // the elemental arrows are loosed from the real bow
@@ -8966,6 +8968,7 @@ void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale:
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;
+    if (weapon == royale::ItemId::Hookshot) return royale::Anim::Shoot;   // the chain is fired like a bow (Grip::Hook picks the hookshot pose)
     const royale::AmmoKind a = royale::AmmoUsedBy(weapon);
     return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
 }
@@ -10782,6 +10785,15 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
+    // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
+    if (hud.weapon == royale::ItemId::Hookshot || hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        float tx = 0, tz = 0;
+        if (hud.weapon == royale::ItemId::ShockwaveGrenade && bestDist < 1e8f && KnownPosition(best, &tx, &tz)) {
+            const Vec3f at = { tx, player->actor.world.pos.y, tz };
+            PowerFx(gPlayState, hud.weapon, at, false, &player->actor, hud.selfId);
+        }
+    }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
     if (hasAmmo && ammoKind != royale::AmmoKind::None) gSession.ReportAttack(royale::net::kNoPlayer16, false);
@@ -11179,6 +11191,7 @@ void OnPlayerUpdate() {
     Feat("player update");
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     gRoyaleNoAimView = 0;
+    gRoyaleNoUseOnTakeOut = 0;
     if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
@@ -11248,6 +11261,7 @@ void OnPlayerUpdate() {
     // Shots are aimed by where Link faces, with a target or without: with nothing to Z-target the game would otherwise swing the camera into the
     // first-person aiming view (a mode this match never uses), so ready and fire in place as it does when locked on.
     gRoyaleNoAimView = gSession.Joined() && IsLive(hud) ? 1 : 0;
+    gRoyaleNoUseOnTakeOut = gRoyaleNoAimView;
     SyncLocalWeapon(player, hud);
     DriveFortnite(player, hud);
     EnsureSolidScenery();
