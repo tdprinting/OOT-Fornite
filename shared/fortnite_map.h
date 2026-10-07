@@ -3,6 +3,7 @@
 #include "fortnite_map_data.h"
 #include "sandbox_terrain.h"
 #include "convergence_data.h"
+#include "kingdom_data.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -56,6 +57,10 @@ inline void UseTerrainForMap(int mapId) {
         gHeightData = convergence::kHeights; gColourData = convergence::kColours; gCoverData = convergence::kCover;
         gSpawnX = 0.0f; gSpawnZ = -600.0f;
     }
+    if (mapId == 8) {   // Hyrule Kingdom (map.h kKingdomMapIndex)
+        gHeightData = kingdom::kHeights; gColourData = kingdom::kColours; gCoverData = kingdom::kCover;
+        gSpawnX = 2000.0f; gSpawnZ = 1100.0f;
+    }
 }
 inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
 
@@ -101,7 +106,7 @@ inline Cover CoverAt(float x, float z) {
 
 struct Vert { int16_t x, y, z; };
 // One triangle the way the game stores it: three vertex numbers, the unit normal times 32767 (always pointing up) and the plane distance.
-struct Poly { uint16_t a, b, c; int16_t nx, ny, nz, dist; };
+struct Poly { uint16_t a, b, c; int16_t nx, ny, nz, dist; uint8_t surface = 0; };   // surface: an index into the map's table (0 plain ground)
 struct Mesh {
     std::vector<Vert> verts;
     std::vector<Poly> polys;
@@ -125,6 +130,16 @@ inline Mesh BuildCollision() {
     if (gTerrainMapId == 7) {
         for (const auto& v : convergence::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
         for (const auto& p : convergence::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist});
+        m.lo = m.hi = m.verts.front();
+        for (const auto& v : m.verts) {
+            m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
+            m.hi = {std::max(m.hi.x,v.x),std::max(m.hi.y,v.y),std::max(m.hi.z,v.z)};
+        }
+        return m;
+    }
+    if (gTerrainMapId == 8) {   // Hyrule Kingdom: the ground and every building in one baked mesh, with a surface per triangle
+        for (const auto& v : kingdom::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : kingdom::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
         m.lo = m.hi = m.verts.front();
         for (const auto& v : m.verts) {
             m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};

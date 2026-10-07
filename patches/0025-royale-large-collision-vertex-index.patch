@@ -1,0 +1,21 @@
+diff --git a/soh/src/code/z_bgcheck.c b/soh/src/code/z_bgcheck.c
+index 3ae4cab..e26f345 100644
+--- a/soh/src/code/z_bgcheck.c
++++ b/soh/src/code/z_bgcheck.c
+@@ -1217,13 +1217,14 @@ void BgCheck_GetPolySubdivisionBounds(CollisionContext* colCtx, Vec3s* vtxList,
+     f32 z;
+ 
+     Vec3s* vtx;
+-    s16 vtxId = COLPOLY_VTX_INDEX(polyList[polyId].vtxData[0]);
++    s32 vtxId = COLPOLY_VTX_INDEX(polyList[polyId].vtxData[0]);
+ 
+     Math_Vec3s_ToVec3f(&maxVtx, &vtxList[vtxId]);
+     Math_Vec3f_Copy(&minVtx, &maxVtx);
+ 
+     for (vtxDataTemp = polyList[polyId].vtxData + 1; vtxDataTemp < polyList[polyId].vtxData + 3; vtxDataTemp++) {
+-        vtxId = COLPOLY_VTX_INDEX(*vtxDataTemp);
++        // The third vertex number is a full u16 everywhere else (vIC), so it is not masked here either (large custom maps).
++        vtxId = vtxDataTemp == polyList[polyId].vtxData + 2 ? *vtxDataTemp : COLPOLY_VTX_INDEX(*vtxDataTemp);
+         vtx = &vtxList[vtxId];
+         x = vtx->x;
+         y = vtx->y;

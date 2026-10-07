@@ -25,6 +25,9 @@
 #include "fortnite_map.h"
 #include "convergence_layout.h"
 #include "convergence_model.h"
+#include "kingdom_layout.h"
+#include "kingdom_model.h"
+#include "kingdom_surface_maps.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
@@ -688,13 +691,22 @@ s32 gSolidBgId = -1;   // the collision slot holding the solid scenery (see "sol
 // directly instead of with the game's raycasts: the same answers, far cheaper (the host asks thousands of times when it lays out a match).
 bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
 bool BlocksAreBaked();   // the climbing blocks are in the island's collision (see "WantedBlocks")
+// The maps built by hand in Blender (shared/convergence_data.h, shared/kingdom_data.h): everything on them is baked, nothing is scattered.
+bool OnAuthoredTerrain() { return OnIsland() && royale::IsAuthoredMap(royale::fortnite::gTerrainMapId); }
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
+bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
     if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kKingdomMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::KingdomLootHeightAt({x,z},&lootY) ? lootY : royale::KingdomGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -817,6 +829,7 @@ bool HazardFloorAt(float x, float z) {
 
 bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
+    if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -825,9 +838,9 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex || gMapId == royale::kConvergenceMapIndex) {   // authored maps retain their intended storm footprint
+    if (gMapId == royale::kSandboxMapIndex || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
@@ -9428,7 +9441,7 @@ struct SolidBuilder {
                           static_cast<s16>(std::lround(std::clamp(z, -32000.0f, 32000.0f))) };
         return nv++;
     }
-    void Box(const royale::convergence::PropCollider& c) {
+    template <class C> void Box(const C& c) {
         const int first=nv;
         for(int y=0;y<2;++y) for(int z=0;z<2;++z) for(int x=0;x<2;++x)
             V(x?c.x1:c.x0,y?c.y1:c.y0,z?c.z1:c.z0);
@@ -9551,10 +9564,11 @@ float PlatformFoot(size_t i) {
 
 // Fill the mesh with the scenery nearest (x, z). Returns false if the same pieces are already in it.
 bool BuildSolidMesh(float x, float z, bool force) {
-    if (OnConvergenceTerrain()) {
+    if (OnAuthoredTerrain()) {
         const Player* player=GET_PLAYER(gPlayState);
         const size_t limit=static_cast<size_t>(std::max(0,std::min((SolidPolyBudget()-1)/12,(kSolidMaxVtx-3)/8)));
-        const auto chosen=royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
+        const bool kingdomMap=OnKingdomTerrain();
+        const auto chosen=kingdomMap?royale::KingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
         std::vector<uint64_t> keys;
         for(size_t i:chosen) keys.push_back((1ull<<62)|i);
         std::sort(keys.begin(),keys.end());
@@ -9564,7 +9578,7 @@ bool BuildSolidMesh(float x, float z, bool force) {
         // Keep a valid header even where there are no nearby objects.
         b.V(-10,-10000,-10);b.V(10,-10000,-10);b.V(0,-10000,10);
         b.T(0,1,2,{0,-10010,0},0,0);
-        for(size_t i:chosen) b.Box(royale::convergence::kPropColliders[i]);
+        for(size_t i:chosen) { if(kingdomMap) b.Box(royale::kingdom::kPropColliders[i]); else b.Box(royale::convergence::kPropColliders[i]); }
         gSolidHeader={};gSolidHeader.numVertices=static_cast<u16>(b.nv);gSolidHeader.vtxList=gSolidVtx;
         gSolidHeader.numPolygons=static_cast<u16>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
         Vec3s lo=gSolidVtx[0],hi=lo;
@@ -9699,11 +9713,11 @@ void Solid_Destroy(Actor* actor, PlayState* play) {
 
 // The mesh only changes here, in the actor's own update: the game takes it in right after every actor has updated, in the same frame.
 void Solid_Update(Actor* actor, PlayState* play) {
-    if (!OnConvergenceTerrain() && (!gSession.Client() || !InField())) return;
+    if (!OnAuthoredTerrain() && (!gSession.Client() || !InField())) return;
     const Player* player = GET_PLAYER(play);
     if (player == nullptr) return;
     const float x = player->actor.world.pos.x, z = player->actor.world.pos.z;
-    if (!OnConvergenceTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
+    if (!OnAuthoredTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
     gSolidAge = 0;
     gSolidCentre = { x, z };
     if (BuildSolidMesh(x, z, false)) play->colCtx.dyna.bitFlag |= DYNAPOLY_INVALIDATE_LOOKUP;
@@ -9731,7 +9745,7 @@ int SolidActorId() {
 void EnsureSolidScenery() {
     // Authored props must be solid in the map lobby too, before the host requests
     // a match measurement and even if the custom scene outlives the connection.
-    const bool want = OnConvergenceTerrain() || (gInFieldFrames > 20 &&
+    const bool want = OnAuthoredTerrain() || (gInFieldFrames > 20 &&
         gSession.Client() != nullptr && InField() && !gSession.Client()->Props().empty());
     if (want && gSolidActor == nullptr && !gSolidFailed) {
         gSolidCentre = { 1e9f, 1e9f };
@@ -10543,7 +10557,7 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
     actor->world.pos = actor->home.pos = { 0, 0, 0 };
 }
 void FortniteTerrain_Update(Actor*, PlayState*) {
-    if (OnConvergenceTerrain()) EnsureSolidScenery();
+    if (OnAuthoredTerrain()) EnsureSolidScenery();
 }
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
@@ -10596,6 +10610,117 @@ void DrawConvergenceStructures(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// Hyrule Kingdom's buildings, towers, bridges and trees (shared/kingdom_model.h): the same idea as Convergence's, with 128 x 128 textures and a
+// reach per batch (landmarks are drawn from far away, foliage only near). The texture is a 128-wide tile: gDPLoadTextureBlock is limited to 4095 texels
+// (64 x 64 at 16 bits), the tile load is not, and its coordinates are S10.5 so one repeat is 4096.
+//
+// The outsides of stone, wood, roofs, thatch, cobbles, plaster and bark are also drawn lit, with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
+// each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
+// shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
+// batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
+void DrawKingdomStructures(PlayState* play) {
+    if (!OnKingdomTerrain()) return;
+    namespace km = royale::kingdom;
+    static std::vector<Vtx> vertices, litVertices;
+    static std::vector<std::vector<Gfx>> lists, litLists;
+    constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
+    if (vertices.empty()) {
+        const size_t count = sizeof(km::kDrawVertices) / sizeof(km::kDrawVertices[0]);
+        vertices.resize(count); litVertices.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            const auto& v = km::kDrawVertices[i];
+            auto& dst = vertices[i].v;
+            dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
+            dst.tc[0] = v.s; dst.tc[1] = v.t;
+            dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255;
+            auto& lit = litVertices[i].n;
+            lit.ob[0] = v.x; lit.ob[1] = v.y; lit.ob[2] = v.z; lit.flag = 0;
+            lit.tc[0] = v.s; lit.tc[1] = v.t;
+            lit.n[0] = v.nx; lit.n[1] = v.ny; lit.n[2] = v.nz; lit.a = 255;
+        }
+        lists.resize(kBatchCount); litLists.resize(kBatchCount);
+        for (size_t i = 0; i < kBatchCount; ++i) {
+            const auto& batch = km::kBatches[i];
+            for (int pass = 0; pass < (batch.surface ? 2 : 1); ++pass) {
+                auto& dl = pass ? litLists[i] : lists[i];
+                const std::vector<Vtx>& source = pass ? litVertices : vertices;
+                dl.resize(batch.count / 3 + batch.count / 30 + 3);
+                Gfx* p = dl.data();
+                for (uint32_t first = 0; first < batch.count; first += 30) {
+                    const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
+                    gSPVertex(p++, reinterpret_cast<uintptr_t>(&source[batch.first + first]), n, 0);
+                    for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
+                }
+                gSPEndDisplayList(p++);
+                dl.resize(static_cast<size_t>(p - dl.data()));
+            }
+        }
+    }
+    const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
+    Rig* rig = (normalPercent > 0 || bumpPercent > 0) ? static_cast<Rig*>(FrameAlloc(play, sizeof(Rig))) : nullptr;
+    const bool relief = rig != nullptr;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0, 0, 0, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
+    int loaded = -1;
+    auto loadTexture = [&](int texture) {
+        if (loaded == texture) return;
+        gDPLoadTextureTile(POLY_OPA_DISP++, km::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, km::kTextureSize, km::kTextureSize, 0, 0, km::kTextureSize - 1, km::kTextureSize - 1, 0,
+            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
+        loaded = texture;
+    };
+    // a chunk is 1853 x 1926 units across: test its far corner, not its middle
+    auto inReach = [&](const km::Batch& batch) { return std::hypot(play->view.eye.x - batch.x, play->view.eye.z - batch.z) <= batch.reach + 1400.0f; };
+    for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
+        const auto& batch = km::kBatches[i];
+        if ((batch.surface && relief) || !inReach(batch)) continue;
+        loadTexture(batch.texture);
+        gSPDisplayList(POLY_OPA_DISP++, lists[i].data());
+    }
+    if (relief) {   // the lit, relief-mapped faces, one surface class at a time
+        {
+            // The baked light, as a game light: a sky ambient and a sun from the south east late in the morning (tools/maps/kingdom/geom.py SUN).
+            const Lights1 base = gdSPDefLights1(148, 148, 148, 107, 104, 98, -57, 99, -55);
+            rig->lights = base;
+            for (int c = 0; c < km::kSurfaceClasses; ++c) {
+                GfxSurfaceMap& m = rig->maps[c];
+                m = {};
+                m.normal = km::kSurfaceNormal[c];
+                m.height = km::kSurfaceBump[c];
+                m.width = m.heightPixels = km::kSurfaceSize;
+                m.normalStrength = normalPercent / 100.0f;
+                m.bumpStrength = bumpPercent / 100.0f;
+                m.uvScale = 1.0f / km::kSurfaceUnits[c];
+                m.sunDirection[0] = -57.0f / 127.0f; m.sunDirection[1] = 99.0f / 127.0f; m.sunDirection[2] = -55.0f / 127.0f;
+                m.sunColor[0] = 107.0f / 255.0f; m.sunColor[1] = 104.0f / 255.0f; m.sunColor[2] = 98.0f / 255.0f;
+                m.ambientColor[0] = m.ambientColor[1] = m.ambientColor[2] = 148.0f / 255.0f;
+            }
+            gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+            gSPSetLights1(POLY_OPA_DISP++, rig->lights);
+            for (int c = 1; c <= km::kSurfaceClasses; ++c) {
+                bool started = false;
+                for (size_t i = 0; i < kBatchCount; ++i) {
+                    const auto& batch = km::kBatches[i];
+                    if (batch.surface != c || !inReach(batch)) continue;
+                    if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
+                    loadTexture(batch.texture);
+                    gSPDisplayList(POLY_OPA_DISP++, litLists[i].data());
+                }
+                if (started) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+            }
+            gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+        }
+    }
+    gSPTexture(POLY_OPA_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -10643,6 +10768,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     }
     CLOSE_DISPS(play->state.gfxCtx);
     DrawConvergenceStructures(play);
+    DrawKingdomStructures(play);
 }
 
 int FortniteActorId() {
@@ -10670,7 +10796,7 @@ int FortniteActorId() {
 std::vector<royale::fortnite::Block> WantedBlocks() {
     namespace fn = royale::fortnite;
     std::vector<fn::Block> out;
-    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || gMapId == royale::kConvergenceMapIndex) return out;
+    if (!gSession.Client() || !royale::IsIslandMap(gMapId) || royale::IsAuthoredMap(gMapId)) return out;
     const float half = royale::kPlatformHalf;
     for (const royale::Prop& p : gSession.Client()->Props()) {
         if (!royale::IsPlatform(p.kind) || static_cast<int>(out.size()) >= fn::kMaxBlocks) continue;
@@ -15447,7 +15573,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), 0);
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kKingdomMapIndex);   // Hyrule Kingdom is the main map
         if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
@@ -15793,7 +15919,8 @@ void DrawMainMenu(UiState& ui, const royale::HudState& h) {
         const char* current = royale::MapOf(ui.mapId).name;
         ImGui::SetNextItemWidth(-1);
         if (ImGui::BeginCombo("##solo_map", current)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (!royale::IsPlayableMap(i)) continue;
                 if (ImGui::Selectable(royale::MapOf(i).name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -16589,14 +16716,14 @@ void DrawGraphicsUi() {
     ImGui::TextColored(kGrey, "One section for each look of the game. Open one to switch it on or off and set how strong it is. Only you see these, and they are saved.");
     ImGui::Spacing();
 
-    if (ImGui::CollapsingHeader("Sword and shield surface detail")) {
+    if (ImGui::CollapsingHeader("Surface detail: swords, shields and Hyrule Kingdom")) {
         int normal = std::clamp(CVarGetInteger(ROYALE_CVAR("ItemNormals"), 100), 0, 200);
         int bump = std::clamp(CVarGetInteger(ROYALE_CVAR("ItemBumps"), 50), 0, 200);
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Normal detail (%)", &normal, 0, 200)) { CVarSetInteger(ROYALE_CVAR("ItemNormals"), normal); SaveGfx(); }
         ImGui::SetNextItemWidth(280);
         if (ImGui::SliderInt("Bump detail (%)", &bump, 0, 200)) { CVarSetInteger(ROYALE_CVAR("ItemBumps"), bump); SaveGfx(); }
-        ImGui::TextColored(kGrey, "Wood grain and metal detail follow the sunlight. Set both to zero to turn them off.");
+        ImGui::TextColored(kGrey, "Wood grain and metal detail on gear, and the stone, wood, roofs, thatch, cobbles and bark of Hyrule Kingdom, follow the sunlight. Set both to zero to turn them off.");
     }
 
     if (GfxSection("Cloth physics", "Cloth")) {
@@ -16830,11 +16957,13 @@ namespace {
 // The island's collision in the game's own formats. Built once, then it stays: the game keeps pointers into it for as long as the scene is loaded.
 std::vector<Vec3s> gFortniteVtx;
 std::vector<CollisionPoly> gFortnitePoly;
-SurfaceType gFortniteSurface[1];
+SurfaceType gFortniteSurface[16];
 CamData gFortniteCam[1];
 WaterBox gFortniteWater[1];
 CollisionHeader gFortniteHeader;
 bool gFortniteBuilt = false;
+
+bool gTerrainMapId8() { return royale::fortnite::gTerrainMapId == royale::kKingdomMapIndex; }
 
 CollisionHeader* FortniteHeader() {
     namespace fn = royale::fortnite;
@@ -16847,7 +16976,7 @@ CollisionHeader* FortniteHeader() {
         const fn::Poly& p = mesh.polys[i];
         CollisionPoly& c = gFortnitePoly[i];
         c = {};
-        c.type = 0;
+        c.type = p.surface;
         c.flags_vIA = p.a;
         c.flags_vIB = p.b;
         c.vIC = p.c;
@@ -16855,6 +16984,16 @@ CollisionHeader* FortniteHeader() {
         c.dist = p.dist;
     }
     gFortniteSurface[0] = {};                       // plain ground: no exit, no damage, the first camera entry
+    if (gTerrainMapId8()) {   // Hyrule Kingdom's table: footsteps, climbable ivy and cliffs (wall type 4), hook-shot wood
+        constexpr int n = sizeof(royale::kingdom::kSurfaces) / sizeof(royale::kingdom::kSurfaces[0]);
+        static_assert(n <= 16, "surface table");
+        for (int i = 0; i < n; i++) {
+            const auto& sf = royale::kingdom::kSurfaces[i];
+            gFortniteSurface[i] = {};
+            gFortniteSurface[i].data[0] = sf.climb ? (4u << 21) : 0u;
+            gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
+        }
+    }
     gFortniteCam[0] = {};
     gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
     gFortniteCam[0].numCameras = 0;
