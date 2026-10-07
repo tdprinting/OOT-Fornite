@@ -25,20 +25,21 @@ def jump(t,a,b,h):
     return h*4*u*(1-u) if 0<u<1 else 0
 
 def paint_cloth(x,y):
-    # 48-pixel torso island, 16-pixel plain sleeve island: no stretched stripe on the arms.
-    base=(.95,.93,.88)
-    if y<2 or y>29:base=mix(base,(.74,.76,.77),.17)
+    # A plain white tee (48-pixel torso island, 16-pixel sleeve island) with a hand-painted pixel cartoon blue-dog face on the chest front (centre x=24).
+    base=(.96,.96,.94)
+    if y<2 or y>29:base=mix(base,(.80,.82,.84),.18)
     if x<48:
-        # Familiar small mouse/cartoon motifs, as on the reference shirt.
-        for cx,cy,red in ((7,9,False),(23,9,True),(39,9,False),(14,23,True),(31,23,False)):
-            dx=(x-cx)/.76;dy=(y-cy)/.76;ink=(.78,.25,.18) if red else (.24,.43,.71)
-            if (dx/3.0)**2+((dy+2)/2.8)**2<1 or (dx+2.7)**2+(dy+5)**2<3 or (dx-2.7)**2+(dy+5)**2<3:base=ink
-            if abs(dx)<1.8 and -1<dy<2:base=(.94,.89,.77)
-            if abs(dx)<2 and 2<=dy<4:base=(.85,.26,.17)
-            if 3<dy<5 and 1<abs(dx)<3.5:base=(.28,.37,.57)
-            if dy==5 and 1<abs(dx)<4:base=(.82,.59,.26)
-    elif y>26:base=mix(base,(.74,.76,.77),.19)
-    return B.quant5(B.jitter(base,x,y,41,.014))
+        cx,cy=24.0,13.0;px=x+.5;py=y+.5
+        def e(ex,ey,rx,ry):return ((px-ex)/rx)**2+((py-ey)/ry)**2
+        ink=(.10,.12,.2)
+        if e(cx-5.2,cy-4.6,1.9,3.2)<1 or e(cx+5.2,cy-4.6,1.9,3.2)<1:base=(.18,.30,.62)                 # ears, dark blue
+        if e(cx,cy,5.6,5.0)<1:base=(.38,.60,.88)                                                       # head, mid blue
+        if e(cx,cy+2.4,3.6,2.8)<1:base=(.97,.84,.64)                                                   # cream muzzle
+        if e(cx-2.2,cy-1.1,1.15,1.35)<1 or e(cx+2.2,cy-1.1,1.15,1.35)<1:base=(1,1,1)                  # eyes
+        if e(cx-2.0,cy-.9,.55,.7)<1 or e(cx+2.0,cy-.9,.55,.7)<1:base=ink
+        if e(cx,cy+1.2,1.4,.8)<1:base=ink                                                              # nose
+        if abs(px-cx)<1.3 and abs(py-(cy+4.3))<.4:base=(.75,.28,.30)                                   # tongue/smile
+    return B.quant5(B.jitter(base,x,y,41,.010))
 
 def ellipse(x,y,cx,cy,rx,ry):return ((x-cx)/rx)**2+((y-cy)/ry)**2
 
