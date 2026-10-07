@@ -2406,7 +2406,7 @@ static void FortniteMapIsSound() {
     fn::BlockVertices(10, 20, false, coarse);
     CHECK(fine.size() == static_cast<size_t>(fn::kBlockVerts) && coarse.size() == 4);
     bool dry = true;
-    for (const fn::DrawVert& v : fine) dry &= v.y >= fn::kWaterY - 1;
+    for (const fn::DrawVert& v : fine) dry &= v.y >= fn::kSeabedY - 1;
     CHECK(dry);
     CHECK(fine.front().x == coarse[0].x && fine.front().z == coarse[0].z && fine.back().x == coarse[3].x && fine.back().z == coarse[3].z);
     CHECK(fine.front().y == coarse[0].y && fine.back().y == coarse[3].y);
@@ -2420,7 +2420,7 @@ static void FortniteMapIsSound() {
             for (const fn::DrawVert& v : vs) {
                 float gy = 0;
                 if (!fn::GroundHeight(std::clamp<float>(v.x, -fn::kHalfX + 0.5f, fn::kHalfX - 0.5f), std::clamp<float>(v.z, -fn::kHalfZ + 0.5f, fn::kHalfZ - 0.5f), &gy)) continue;
-                onGround &= std::fabs(std::max(gy, static_cast<float>(fn::kWaterY)) - v.y) < 3.0f;
+                onGround &= std::fabs(std::max(gy, static_cast<float>(fn::kSeabedY)) - v.y) < 3.0f;
             }
         }
     }

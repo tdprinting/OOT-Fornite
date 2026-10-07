@@ -157,9 +157,14 @@ inline Mesh BuildCollision() {
 
 // ---- the drawn island -----------------------------------------------------------------------------------------------------------------
 // The island is drawn in blocks, one per collision square. Up close a block has kSub x kSub squares of vertex colour (a baked texture), a little
-// further off half as many, and far away it is just its own two triangles. Water is drawn as a flat sheet at the water level, with the sea bed's
+// further off half as many, and far away it is just its own two triangles. Water is a sheet at the water level (the mod draws it) over a flat sea bed kSeabedDrop below, with the sea bed's
 // colour, so swimming looks right; a block that is all open water is only ever its two triangles, whatever the distance (there is nothing to
 // see in it but the sheet).
+
+// The sea bed is drawn this far under the water sheet (and follows the real ground where that is shallower). The sheet used to lie on a bed drawn
+// flat at the water level, so it had no depth to show: ripples and wakes had nowhere to dip to, and a faint tint on an opaque bed read as nothing.
+inline constexpr int kSeabedDrop = 40;
+inline constexpr int kSeabedY = kWaterY - kSeabedDrop;
 
 struct DrawVert { int16_t x, y, z; uint8_t r, g, b; };
 
@@ -169,7 +174,7 @@ inline DrawVert FineVertex(int fi, int fj) {   // fine vertex (fi, fj), 0..kFine
     const float h00 = static_cast<float>(VertexHeight(ci, cj)), h10 = static_cast<float>(VertexHeight(ci + 1, cj));
     const float h01 = static_cast<float>(VertexHeight(ci, cj + 1)), h11 = static_cast<float>(VertexHeight(ci + 1, cj + 1));
     float y = u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
-    y = std::max(y, static_cast<float>(kWaterY));
+    y = std::max(y, static_cast<float>(kSeabedY));
     const uint8_t* c = &gColourData[(static_cast<size_t>(fj) * (kFine + 1) + fi) * 3];
     return { Round16(-kHalfX + kCellX * fi / kSub), Round16(y), Round16(-kHalfZ + kCellZ * fj / kSub), c[0], c[1], c[2] };
 }

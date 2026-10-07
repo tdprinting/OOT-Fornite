@@ -5,19 +5,24 @@ from mathutils import Vector
 import numpy as np
 
 def native_texture(im):
-    """Area filtering keeps fine mortar/roof seams visible in the 32px game texture."""
+    """Area-filtered RGBA5551, explicitly big-endian bytes for the N64 texture uploader.
+
+    Do not emit uint16_t texels: their host-endian memory swaps colour/alpha bits on
+    Windows and Android, although tests of the numeric values still look correct.
+    """
     w,h=im.size
     pixels=np.asarray(im.pixels[:],dtype=np.float32).reshape(h,w,4)
     rgb=pixels.reshape(32,h//32,32,w//32,4).mean(axis=(1,3))[:,:,:3]
     q=np.rint(np.clip(rgb,0,1)*31).astype(np.uint16)
-    return ((q[:,:,0]<<11)|(q[:,:,1]<<6)|(q[:,:,2]<<1)|1).ravel().tolist()
+    words=((q[:,:,0]<<11)|(q[:,:,1]<<6)|(q[:,:,2]<<1)|1)
+    return list(words.astype('>u2').tobytes())
 
 def refresh_native_textures(root):
     names=['grass','forest','sand','basalt','snow','stone','plaster','wood','roof','blue_roof','moss','path','gold','water','linen','rug','ceramic','pages','iron']
     path=os.path.join(root,'shared','convergence_model.h')
     with open(path) as f:content=f.read()
-    start=content.index('alignas(8) inline constexpr uint16_t kTextures[][1024] = {')
-    textures='alignas(8) inline constexpr uint16_t kTextures[][1024] = {\n'
+    start=content.index('alignas(8) inline constexpr uint8_t kTextures[][2048] = {')
+    textures='alignas(8) inline constexpr uint8_t kTextures[][2048] = {\n'
     for name in names:
         mat=bpy.data.materials.get(name)
         im=next(n.image for n in mat.node_tree.nodes if n.type=='TEX_IMAGE') if mat else bpy.data.images.load(os.path.join(root,'assets','maps','hyrule_convergence',name+'.png'))
@@ -64,7 +69,14 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('};\n')
     terrain=next(o for o in cols['Terrain'].objects if o.name=='Island terrain')
     terrain.data.calc_loop_triangles()
-    cv=[];cp=[];lookup={}; obstacles=[]
+    cv=[];cp=[];lookup={}; obstacles=[]; prop_colliders=[]; static_fixtures=[]; audit=[]
+    def bounds(o):
+        points=[o.matrix_world@Vector(p) for p in o.bound_box]
+        return [min(p[i] for p in points) for i in range(3)],[max(p[i] for p in points) for i in range(3)]
+    def obstacle(lo,hi):
+        base=height((lo[0]+hi[0])/2,(lo[1]+hi[1])/2)
+        if hi[2]>base+.4 and lo[2]<base+1.8:
+            obstacles.append((round(lo[0]*100),round(hi[0]*100),round(-hi[1]*100),round(-lo[1]*100)))
     def vertex(co):
         g=game(co)
         if g not in lookup:lookup[g]=len(cv);cv.append(g)
@@ -84,16 +96,43 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
             n.normalize();cp.append((a,b,c,*[round(v*32767) for v in n],round(-n.dot(A))))
         if o!=terrain:
             lo=[min(p[i] for p in verts) for i in range(3)];hi=[max(p[i] for p in verts) for i in range(3)]
+            static_fixtures.append((*game((lo[0],hi[1],lo[2])),*game((hi[0],lo[1],hi[2])),json.dumps(o.name)))
             # Vertical obstacles only. Floors, thresholds and overhead beams stay navigable.
-            base=height((lo[0]+hi[0])/2,(lo[1]+hi[1])/2)
-            if hi[2]>base+.4 and lo[2]<base+1.8:
-                obstacles.append((round(lo[0]*100),round(hi[0]*100),round(-hi[1]*100),round(-lo[1]*100)))
+            obstacle(lo,hi)
     collision(terrain)
-    for key in ['Architecture','Props','Foliage']:
+    # Keep every building shell and tree trunk permanently solid. Furniture and
+    # loose cover use the existing nearby-collision actor: the complete world would
+    # otherwise exceed the scene's 13-bit collision vertex indices.
+    for key in ['Architecture','Foliage']:
         for o in cols[key].objects:
             if o.type!='MESH':continue
-            solid=o.get('collision',False) or 'pitched roof' in o.name or any(n in o.name for n in ['bed frame','Pantry shelf','Hearth back','table','Quarry forge','Ranch hay bale'])
-            if solid:collision(o,simple=key=='Props')
+            solid=key=='Architecture' and not o.name.split('.')[0].endswith(' oak post') or o.name.startswith('Tree trunk')
+            if solid:
+                collision(o);audit.append({'name':o.name,'collision':'static'})
+    groups={}
+    for o in cols['Props'].objects:
+        if o.type!='MESH' or o.name.startswith(('Loot chest','Chest band','Geometric woven carpet','Pillow','Firewood','Gable brace','Carved door','Door oak','Tower gold')):continue
+        lo,hi=bounds(o);name=o.name.split('.')[0]
+        role=next((r for r in ['bed','table','bench','shelf','hearth'] if r in name.lower()),None)
+        if name=='Woven bedcover':role='bed'
+        if name=='Table jug':role=None
+        if role:
+            b=min(buildings,key=lambda b:(b['center_blender'][0]-(lo[0]+hi[0])/2)**2+(b['center_blender'][1]-(lo[1]+hi[1])/2)**2)
+            key=(b['name'],tuple(b['center_blender']),role)
+        elif min(hi[0]-lo[0],hi[1]-lo[1])>=.34 and hi[2]-lo[2]>=.24:
+            key=(o.name,)
+        else:continue  # small loose books/pottery and soft trim are decorative
+        if key not in groups:groups[key]=[lo,hi,[]]
+        g=groups[key];g[0]=[min(a,b) for a,b in zip(g[0],lo)];g[1]=[max(a,b) for a,b in zip(g[1],hi)];g[2].append(o.name)
+    for lo,hi,names in groups.values():
+        low=game((lo[0],hi[1],lo[2]));high=game((hi[0],lo[1],hi[2]))
+        prop_colliders.append((*low,*high,json.dumps(names[0])))
+        obstacle(lo,hi)
+        audit.extend({'name':n,'collision':'nearby'} for n in names)
+    # The fountain is a shallow walkable platform, not a hole or an exit.
+    fountain=next(o for o in cols['Terrain'].objects if o.name=='Market fountain basin')
+    collision(fountain);flo,fhi=bounds(fountain)
+    obstacles=list(dict.fromkeys(obstacles))
     assert len(cv)<8192,('Collision exceeds 13-bit vertex limit',len(cv))
     assert len(cp)<65536
     # Grid coordinates follow the existing island machinery. Blender Y is the negative game Z.
@@ -120,6 +159,11 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('inline constexpr char kCover[] =\n'+''.join('"'+cover[i:i+256]+'"\n' for i in range(0,len(cover),256))+';\n')
         f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint16_t a,b,c; int16_t nx,ny,nz,dist; };\n')
         array(f,'Vertex','kCollisionVertices',cv);array(f,'Triangle','kCollisionTriangles',cp)
+        f.write('struct PropCollider { int16_t x0,y0,z0,x1,y1,z1; const char* name; };\n')
+        array(f,'PropCollider','kPropColliders',prop_colliders)
+        array(f,'PropCollider','kStaticFixtures',static_fixtures)
+        f.write('struct FloorPatch { float x,z,radius,y; };\n')
+        array(f,'FloorPatch','kFloorPatches',[(round((flo[0]+fhi[0])*50),round(-(flo[1]+fhi[1])*50),round((fhi[0]-flo[0])*50),round(fhi[2]*100))])
         f.write('struct Obstacle { float x0,x1,z0,z1; };\n');array(f,'Obstacle','kObstacles',obstacles)
         f.write('struct Building { float x,z,halfWidth,halfDepth,floorY; };\n')
         array(f,'Building','kBuildings',[(round(b['center_blender'][0]*100),round(-b['center_blender'][1]*100),b['size_blender'][0]*50,b['size_blender'][1]*50,round((b['center_blender'][2]+.11)*100)) for b in buildings])
@@ -149,11 +193,13 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('// GENERATED by tools/maps/build_convergence.py.\n#pragma once\n#include <cstdint>\nnamespace royale { namespace convergence {\nstruct DrawVertex { int16_t x,y,z,s,t; uint8_t r,g,b; };\n')
         array(f,'DrawVertex','kDrawVertices',draw)
         f.write('struct Batch { uint32_t first,count; uint16_t texture; int16_t x,z; };\n');array(f,'Batch','kBatches',batches)
-        f.write('alignas(8) inline constexpr uint16_t kTextures[][1024] = {\n')
+        f.write('// RGBA5551 texture bytes, high byte first; independent of host byte order.\n')
+        f.write('alignas(8) inline constexpr uint8_t kTextures[][2048] = {\n')
         for name in names:
             im=next(n.image for n in mats[name].node_tree.nodes if n.type=='TEX_IMAGE');vals=native_texture(im)
             f.write('{'+','.join(map(str,vals))+'},\n')
         f.write('};\n} }\n')
-    report={'collision_vertices':len(cv),'collision_triangles':len(cp),'draw_triangles':len(draw)//3,'draw_batches':len(batches),'navigation_obstacles':len(obstacles),'loading_zone_surfaces':0,'texture_count':len(names)}
+    report={'collision_vertices':len(cv),'collision_triangles':len(cp),'nearby_prop_colliders':len(prop_colliders),'draw_triangles':len(draw)//3,'draw_batches':len(batches),'navigation_obstacles':len(obstacles),'loading_zone_surfaces':0,'texture_count':len(names)}
     with open(os.path.join(out,'export_report.json'),'w') as f:json.dump(report,f,indent=2)
+    with open(os.path.join(out,'collision_audit.json'),'w') as f:json.dump(audit,f,indent=2)
     print('GAME EXPORT',report)
