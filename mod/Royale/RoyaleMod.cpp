@@ -17,6 +17,7 @@
 #include "avriella_anim.h"
 #include "maya_anim.h"
 #include "cart_model.h"
+#include "gilded_sword_icon.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "convergence_layout.h"
@@ -5850,8 +5851,27 @@ void* RealIcon(royale::ItemId id) {
 // ---- item icons ------------------------------------------------------------------------------------------------------------
 // The game's own item icons live in its resource archive and aren't reachable from here, so every item gets a small hand-drawn
 // icon built from lines and shapes, tinted by what the item is. `tier` is the rarity colour, used as the accent.
+// The Gilded Sword's icon is the reference picture of the sword (mod/Royale/gilded_sword_icon.h, made by scripts/make_gilded_sword_icon.py).
+ImTextureID GildedIconTexture() {
+    static ImTextureID tex = nullptr;
+    static int id = -1;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        tex = UploadRgba(royale::kGildedIconRgba, royale::kGildedIconSize, royale::kGildedIconSize, &id);
+    }
+    return tex;
+}
+
 void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 tier) {
     using royale::ItemId;
+    if (id == ItemId::GildedSword) {
+        if (ImTextureID tex = GildedIconTexture()) {
+            const float h = s * 0.5f;
+            dl->AddImage(tex, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h));
+            return;
+        }
+    }
     if (void* real = RealIcon(id)) {
         const float h = s * 0.5f;
         dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), ImVec2(0, 0), ImVec2(1, 1), RealIconTint(id));
