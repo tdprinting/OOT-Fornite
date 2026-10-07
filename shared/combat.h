@@ -13,6 +13,7 @@ enum class WeaponEffect : uint8_t {
     Freeze,       // target can't act for effectSeconds and takes 25% more damage while frozen
     Stun,         // target can't act for effectSeconds
     PierceShield, // ignores the target's shield
+    Pull,         // reels the target in to just in front of the attacker (the Hookshot), then stuns them for effectSeconds
 };
 
 struct WeaponStats {
