@@ -12759,6 +12759,7 @@ bool PlayMayaVoice(int clip, bool force=false) {
 struct MayaCompanionState {
     Actor* actor = nullptr;
     royale::maya::Animator anim;
+    royale::TailTracker tail;   // her ponytail's cloth springs (royale::maya::ApplyPonytail)
     float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0, speed = 0, expressionClock = 0, greeting = 2.8f;
     int line = 0, hobby = 0;
     bool talking = false, greeted = false, voiceReplyPlayed = false;
@@ -12839,6 +12840,11 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
 }
 void MayaCompanion_Draw(Actor* actor, PlayState* play) {
     royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
+    {   // the ponytail follows how she moves and turns, and the wind (the cloth physics setting scales it; off = the baked sway only)
+        float wx, wz, wind; WindNow(&wx, &wz, &wind);
+        gMayaCompanion.tail.Update(ImGui::GetTime(), actor->world.pos.x, actor->world.pos.z, gMayaCompanion.yaw, std::clamp(wind, 0.0f, 1.0f));
+        royale::maya::ApplyPonytail(pose, gMayaCompanion.tail.spring, gClothScale);
+    }
     const int face = royale::maya::Expression(gMayaCompanion.anim.clip,gMayaCompanion.anim.time,gMayaCompanion.expressionClock);
     DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,royale::maya::kWorldScale,pose,face);
 }
@@ -13109,6 +13115,7 @@ struct BabyBrain {
     bool sleepy = false;      // just woke: heavy eyes for a moment
     int line = 0;             // what she says next (royale::kAvriellaPetLines)
     int face = 0;
+    royale::TailTracker tail;                          // her tuft's cloth springs (royale::ApplyTuft)
     royale::HatSpring capSpring;                       // the green cap she waves about: its tail swings with her hand
     float hx = 0, hy = 0, hz = 0, hvx = 0, hvy = 0, hvz = 0;   // where her hand was and how fast it was going last frame
     double capSeen = 0, tugAt = 0;
@@ -13706,6 +13713,11 @@ void DrawBabyToys(PlayState* play, const royale::avriella::Pose& pose) {
 void Baby_Draw(Actor* actor, PlayState* play) {
     royale::avriella::Pose pose;
     gBaby.anim.Evaluate(pose);
+    {   // the tuft follows how she moves and turns, and the wind (the cloth physics setting scales it; off = a stiff tuft)
+        float wx, wz, wind; WindNow(&wx, &wz, &wind);
+        gBaby.tail.Update(ImGui::GetTime(), actor->world.pos.x, actor->world.pos.z, gBaby.yaw, std::clamp(wind, 0.0f, 1.0f));
+        royale::avriella::ApplyTuft(pose, gBaby.tail.spring, gClothScale);
+    }
     DrawAvriellaModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, gBaby.yaw, kBabyScale, pose, gBaby.face);
     if (gBaby.mood == BabyMood::Cap) DrawBabyCap(play, pose);
     if (gBaby.mood == BabyMood::Plush || gBaby.mood == BabyMood::Tv || gBaby.mood == BabyMood::Laptop) DrawBabyToys(play, pose);

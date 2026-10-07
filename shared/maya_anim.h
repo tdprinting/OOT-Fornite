@@ -5,6 +5,7 @@
 // Each clip stores, per frame and per bone, the rotation and offset that carry a rest-pose vertex to its posed place. Sampling a clip mixes the
 // two nearest frames; an Animator cross-fades from one clip to the next so changes of mood never snap. A vertex follows one or two bones.
 #include "maya_model.h"
+#include "tail_swing.h"
 #include <algorithm>
 #include <cmath>
 
@@ -184,6 +185,25 @@ inline int Expression(int clip, float seconds, float clock) {
     float blink=std::isfinite(clock) ? std::fmod(std::max(0.0f,clock),4.37f) : 0.0f;
     if (face!=kFaceGiggle && blink>3.10f && blink<3.29f) return blink<3.15f || blink>3.24f ? kFaceHalf : kFaceShut;
     return face;
+}
+
+// The ponytail's two joints bent by the cloth springs (royale::TailTracker). `strength` is the player's cloth setting (0 = off). Positive fore trails
+// the tail back, positive side trails it out to her left, as for Link's cap.
+inline int BoneByName(const char* name) {
+    for (int i = 0; i < kBoneCount; i++) { const char* a = kBoneNames[i]; const char* b = name; while (*a && *a == *b) { a++; b++; } if (*a == *b) return i; }
+    return -1;
+}
+inline void ApplyPonytail(Pose& p, const HatSpring& sp, float strength) {
+    static const int b1 = BoneByName("ponytail"), b2 = BoneByName("ponytail2");
+    if (b1 < 0 || b2 < 0 || !(strength > 0.01f)) return;
+    const float fore1 = sp.baseFore * 0.8f * strength, side1 = -sp.baseSide * 0.8f * strength;
+    const float fore2 = (0.9f * (sp.baseFore - sp.midFore) + 0.9f * (sp.midFore - sp.tipFore) + 0.35f * sp.baseFore) * strength;
+    const float side2 = -(0.9f * (sp.baseSide - sp.midSide) + 0.9f * (sp.midSide - sp.tipSide) + 0.35f * sp.baseSide) * strength;
+    float top[3];
+    PosedPoint(p.bone[b1], kBoneHeads[b1], top);
+    SwingBone(p.bone[b1], kBoneHeads[b1], fore1, side1);
+    SwingBoneAt(p.bone[b2], top, fore1, side1);              // the lower joint rides on the upper one...
+    SwingBone(p.bone[b2], kBoneHeads[b2], fore2, side2);     // ...and bends further on its own
 }
 
 } // namespace maya

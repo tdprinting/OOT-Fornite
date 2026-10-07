@@ -1,5 +1,6 @@
 #include "maya_anim.h"
 #include "maya_sounds.h"
+#include "avriella_anim.h"
 #include "map.h"
 #include <cassert>
 #include <cmath>
@@ -68,6 +69,34 @@ int main() {
     }
     // Stride constants match the clips: a cycle's planted foot travels about one stride.
     assert(M::kWalkStride>20 && M::kRunStride>M::kWalkStride);
+    // Cloth physics on her ponytail: walking along +X (her left) trails the tail out to -X, and a rest pose with no motion leaves it alone.
+    {
+        royale::TailTracker tr;M::Pose rest;M::SampleClip(M::kIdle,0,rest);M::Pose moved=rest;
+        double now=0;tr.Update(now,0,0,0,0);
+        for(int i=0;i<40;i++){now+=1.0/20;tr.Update(now,i*6.0f,0,0,0);}
+        M::ApplyPonytail(moved,tr.spring,1.0f);
+        const int b2=M::BoneByName("ponytail2");assert(b2>=0);
+        float a[3],b[3];royale::PosedPoint(rest.bone[b2],M::kBoneHeads[b2],a);royale::PosedPoint(moved.bone[b2],M::kBoneHeads[b2],b);
+        // the lower joint's rest tip moves; check a vertex on it instead of the head
+        float tipRest[3]={0,0,0},tipMoved[3]={0,0,0};int n=0;
+        for(const auto& v:M::kVerts) if(v.b0==b2&&v.w0==255){float pr[3],pm[3],nn[3];M::SkinVertex(rest,v,pr,nn);M::SkinVertex(moved,v,pm,nn);for(int k=0;k<3;k++){tipRest[k]+=pr[k];tipMoved[k]+=pm[k];}n++;}
+        assert(n>0);
+        assert(tipMoved[0]/n<tipRest[0]/n-.2f);           // trails to -X
+        assert(std::fabs(tipMoved[1]/n-tipRest[1]/n)<4.0f);   // still hangs, does not stretch away
+        M::Pose off=rest;M::ApplyPonytail(off,tr.spring,0.0f);
+        for(int k=0;k<7;k++) assert(off.bone[b2].q[k%4]==rest.bone[b2].q[k%4]);   // cloth physics off: untouched
+        royale::TailTracker still;now=0;still.Update(now,5,5,1,0);for(int i=0;i<40;i++){now+=1.0/20;still.Update(now,5,5,1,0);}
+        M::Pose calm=rest;M::ApplyPonytail(calm,still.spring,1.0f);
+        assert(std::fabs(calm.bone[b2].q[0]-rest.bone[b2].q[0])<.08f);
+    }
+    {   // Avriella's tuft: moving forward trails it back (toward -Z), cloth off leaves it alone.
+        namespace A=royale::avriella;royale::TailTracker tr;double now=0;tr.Update(now,0,0,0,0);
+        for(int i=0;i<40;i++){now+=1.0/20;tr.Update(now,0,i*6.0f,0,0);}
+        A::Pose rest;A::SampleClip(A::kSit,0,rest);A::Pose moved=rest;A::ApplyTuft(moved,tr.spring,1.0f);
+        float zr=0,zm=0;int n=0;for(const auto& v:A::kVerts) if(v.b0==5&&v.w0==255){float pr[3],pm[3],nn[3];A::SkinVertex(rest,v,pr,nn);A::SkinVertex(moved,v,pm,nn);zr+=pr[2];zm+=pm[2];n++;}
+        assert(n>0 && zm/n<zr/n-.1f);
+        A::Pose off=rest;A::ApplyTuft(off,tr.spring,0.0f);assert(off.bone[5].q[0]==rest.bone[5].q[0] && off.bone[5].t[2]==rest.bone[5].t[2]);
+    }
     // Every hobby reveals exactly its own prop; walking parks all five.
     const int clips[]={M::kTablet,M::kDraw,M::kPizza,M::kScooter,M::kLearn};
     const char* names[]={"tablet","draw","pizza","scooter","learn"};
