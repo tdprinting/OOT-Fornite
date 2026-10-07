@@ -62,7 +62,7 @@ Goron brick and the glowing firebox). Empties mark the two seats, where riders s
 The glider is a hang glider in the same style: `assets/glider/glider.blend` (also `glider.glb`) has a wooden A-frame control bar with two leather grips,
 two struts up to a keel spine, leading-edge spars with gold tips, a gold nose cap, and a striped still wing (about 470 triangles in all). The game reads
 it from `shared/glider_model.h`, which is generated. **The handle bar is the origin**: the game puts it exactly where Link's two hands are (it reads
-each hand's position as it draws him), so he always holds the grips, and banking, pitching and swaying all turn about the bar.
+each hand's position as it draws him), so he always holds the grips (the glider is drawn at 70% size and a little flatter, about the bar, so it hangs close over his head), and banking, pitching and swaying all turn about the bar.
 
 - **Rebuild everything from code:** `python3.11 tools/glider/build_glider.py` (needs `pip install bpy==4.2.0`). It writes the .blend and .glb.
 - **After changing the .blend by hand** (or the build script): `python3.11 tools/glider/export_glider.py` regenerates `shared/glider_model.h`. Keep the
