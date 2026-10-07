@@ -2083,6 +2083,8 @@ struct Corpse {
     float hitCooldown = 0;
     bool pinned = false;         // an emote double: stands where the local player is and plays an emote, instead of falling
     int emote = 0;
+    bool forward = false;        // thrown the way it faced: it goes down on its front instead of its back
+    int frames = 0;              // updates so far (the death cry waits for the second, when the game knows where on screen the body is)
 };
 std::unordered_map<uint16_t, Corpse> gCorpses;       // corpse id -> body
 std::unordered_map<const Actor*, uint16_t> gCorpseOf;
@@ -2130,6 +2132,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     const float dt = 1.0f / royale::kTickHz;
     if (!c.test) c.age += dt;
     if (c.age > kCorpseSeconds) { c.dying = true; Actor_Kill(actor); return; }
+    if (++c.frames == 2 && !c.test) PuppetVoice(player, NA_SE_VO_LI_DOWN);   // Link's cry as he goes down
 
     // Walking into a body shoves it (and sets it rolling). Not while invisible: a spectator stands on their own body.
     {
@@ -2187,6 +2190,7 @@ void Corpse_Update(Actor* actor, PlayState* play) {
             actor->world.pos.y = ground + lift;
             onGround = true;
             if (c.vy < -120.0f && c.bounces < 4) {   // a bounce: it keeps a third of its height, the tumble changes, and the limbs fling
+                if (c.bounces < 2) PuppetSfx(actor, NA_SE_PL_BODY_HIT);   // the thud of hitting the ground
                 c.vy = -c.vy * 0.34f;
                 c.bounces++;
                 c.vel.x *= 0.72f; c.vel.z *= 0.72f;
@@ -2270,7 +2274,8 @@ void Corpse_Update(Actor* actor, PlayState* play) {
     }
 
     if (!c.animStarted) {
-        LinkAnimation_PlayOnce(play, &player->skelAnime, (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA); // knocked flat on the back
+        // knocked flat: on the back, or on the front when the blow came from behind
+        LinkAnimation_PlayOnce(play, &player->skelAnime, c.forward ? RA(normal_front_downA) : (LinkAnimationHeader*)&gPlayerAnim_link_normal_back_downA);
         c.animStarted = true;
     }
     LinkAnimation_Update(play, &player->skelAnime);
@@ -2322,11 +2327,12 @@ Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
 }
 
 // The body of player `s`, thrown along (pushX, pushZ). Once per elimination: the elimination event and the puppet list can both report it.
-void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
-    if (gPlayState == nullptr) return;
+// Returns the body's id (0 if none was made).
+uint16_t SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
+    if (gPlayState == nullptr) return 0;
     const double now = ImGui::GetTime();
     auto fell = gFellAt.find(s.id);
-    if (fell != gFellAt.end() && now - fell->second < 10.0) return;
+    if (fell != gFellAt.end() && now - fell->second < 10.0) return 0;
     gFellAt[s.id] = now;
     {   // room for one more: the oldest body goes
         size_t bodies = 0;
@@ -2343,7 +2349,7 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     gSpawningPuppet = id;
     Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
     gSpawningPuppet = 0;
-    if (actor == nullptr) return;
+    if (actor == nullptr) return 0;
     actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);   // a body can't be Z-targeted like a player
     Corpse c;
     c.actor = actor;
@@ -2355,10 +2361,12 @@ void SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     c.pitchVel = -7.0f - (id % 3);                            // flips over backwards
     c.spin = (id & 1 ? 1.0f : -1.0f) * 2.0f;
     c.rollVel = -sideways / kBodyRadius * 0.5f;
+    c.forward = pushX * std::sin(yaw) + pushZ * std::cos(yaw) > 0.0f;
     c.weapon = s.weapon;
     c.tunic = s.tunic;
     gCorpses[id] = c;
     gCorpseOf[actor] = id;
+    return id;
 }
 
 // ---- the lobby test ragdoll ---------------------------------------------------------------------------------------------------
@@ -5558,7 +5566,7 @@ struct SupplyMark { float x, z; double until; };
 std::vector<SupplyMark> gSupplyMarks;   // announced crates, shown on the minimap until they have landed and been taken
 
 
-// Spectating after you are eliminated: you can watch yourself (where you fell) or any other player who is still alive, and nobody else.
+// Spectating after you are eliminated: you can watch your own body (where it fell) or any other player who is still alive, and nobody else.
 // D-pad Left/Right (or the < > buttons) switch between them; if the one you watch is eliminated the view moves on to the next living player.
 constexpr uint16_t kSpectateSelf = 0xFFFF;
 uint16_t gSpectateTarget = kSpectateSelf;
@@ -5585,7 +5593,7 @@ const royale::PuppetState* SpectateTarget() {
 
 std::string SpectateName() {
     if (const royale::PuppetState* t = SpectateTarget()) return t->name.empty() ? "Link" : t->name;
-    return "yourself";
+    return "Your body";
 }
 
 // Is something covering the game right now (its own pause screen or the port's menu)? Then the storm and weather tints stay off the screen.
@@ -6503,20 +6511,16 @@ void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     }
 }
 
-// The end-of-match standings.
-// The replay of the match that just ended, as a top-down map at high speed beside the results: the storm closing in, everybody's dots, trails for you,
-// red flashes where somebody was eliminated. It loops.
-void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+// The replay of the match that just ended, as a top-down map at high speed (on the end screen, see DrawEndScreen): the storm closing in, everybody's
+// dots, trails for you and the winner, red rings where somebody was eliminated. It loops. `a` is the top left of the square map, `side` its size;
+// the title goes just above it and the clock just below.
+void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 a, float side, float scale, const royale::HudState& h) {
     royale::GameClient* client = gSession.Client();
-    if (client == nullptr || !client->ReplayComplete() || h.map.radius <= 0) return;
+    if (client == nullptr || !client->ReplayComplete() || h.map.radius <= 0 || side < 60.0f * scale) return;
     const royale::Replay& rp = client->GetReplay();
-    const float pw = std::min(ds.x * 0.9f, 640.0f * scale);
-    const float room = (ds.x - pw) * 0.5f - 24.0f * scale;
-    const float side = std::min(room, ds.y * 0.5f);
-    if (side < 150.0f * scale) return;                                  // no room beside the results on a small screen
-    const ImVec2 a(24.0f * scale, ds.y * 0.28f), b(a.x + side, a.y + side);
-    dl->AddRectFilled(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), OotPanel(225), 10.0f * scale);
-    dl->AddRect(ImVec2(a.x - 8 * scale, a.y - 30 * scale), ImVec2(b.x + 8 * scale, b.y + 28 * scale), IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 2.0f * scale);
+    if (rp.frames.empty()) return;
+    const ImVec2 b(a.x + side, a.y + side);
+    dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 90), 6.0f * scale);
     const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float k = side * 0.5f / h.map.radius * 0.97f;
     auto toPanel = [&](float x, float z) { return ImVec2(c.x + (x - h.map.center.x) * k, c.y - (z - h.map.center.z) * k); };
@@ -6571,44 +6575,6 @@ void DrawReplay(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const int secs = static_cast<int>(f0 * royale::kReplayStepSec);
     std::snprintf(caption, sizeof(caption), "%d:%02d    %d alive", secs / 60, secs % 60, alive);
     dl->AddText(font, 17.0f * scale, ImVec2(a.x, b.y + 5 * scale), IM_COL32(235, 235, 240, 255), caption);
-}
-
-void DrawResultsPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    if (h.results.empty()) return;
-    const float pw = std::min(ds.x * 0.9f, 640.0f * scale), rowH = 26.0f * scale;
-    const int shown = std::min<int>(8, static_cast<int>(h.results.size()));
-    const float ph = (shown + 4) * rowH + 70.0f * scale;
-    const ImVec2 a((ds.x - pw) * 0.5f, ds.y * 0.28f), b(a.x + pw, a.y + ph);
-    dl->AddRectFilled(a, b, OotPanel(225), 10.0f * scale);
-    dl->AddRect(a, b, IM_COL32(255, 210, 70, 255), 10.0f * scale, 0, 3.0f * scale);
-    auto put = [&](float x, float y, ImU32 col, float size, const std::string& t) { dl->AddText(font, size, ImVec2(x, y), col, t.c_str()); };
-    float y = a.y + 10.0f * scale;
-    put(a.x + 18 * scale, y, IM_COL32(255, 210, 70, 255), 24 * scale, "RESULTS");
-    y += rowH * 1.3f;
-    const float cName = a.x + 60 * scale, cKills = a.x + pw - 270 * scale, cDmg = a.x + pw - 190 * scale, cPts = a.x + pw - 90 * scale;
-    const ImU32 head = IM_COL32(170, 170, 180, 255);
-    put(a.x + 18 * scale, y, head, 15 * scale, "#"); put(cName, y, head, 15 * scale, "Player"); put(cKills, y, head, 15 * scale, "Kills");
-    put(cDmg, y, head, 15 * scale, "Damage"); put(cPts, y, head, 15 * scale, "Points");
-    y += rowH * 0.9f;
-    bool selfShown = false;
-    auto row = [&](int rank, const royale::ResultsRow& r) {
-        const ImU32 col = r.self ? IM_COL32(120, 255, 140, 255) : IM_COL32(235, 235, 240, 255);
-        put(a.x + 18 * scale, y, col, 17 * scale, std::to_string(rank));
-        put(cName, y, col, 17 * scale, r.name + (r.placement == 1 ? "  (winner)" : ""));
-        put(cKills, y, col, 17 * scale, std::to_string(r.kills));
-        char dmg[16]; std::snprintf(dmg, sizeof(dmg), "%.1f", r.damage);
-        put(cDmg, y, col, 17 * scale, dmg);
-        put(cPts, y, col, 17 * scale, std::to_string(r.score));
-        y += rowH;
-    };
-    for (int i = 0; i < shown; i++) { row(i + 1, h.results[i]); selfShown |= h.results[i].self; }
-    if (!selfShown) {
-        for (size_t i = 0; i < h.results.size(); i++) if (h.results[i].self) { put(a.x + 18 * scale, y, head, 15 * scale, "..."); y += rowH * 0.8f; row(static_cast<int>(i) + 1, h.results[i]); }
-    }
-    y += 6.0f * scale;
-    const std::string footer = h.isHost ? "Press A to play again with everyone who is here" : "Waiting for the host to play again...";
-    ImVec2 sz = font->CalcTextSizeA(18 * scale, FLT_MAX, 0.0f, footer.c_str());
-    put(a.x + (pw - sz.x) * 0.5f, b.y - 32 * scale, IM_COL32(255, 236, 140, 255), 18 * scale, footer);
 }
 
 // The splash shown at the start of every match's countdown, in the look of OoT's title and file-select screens: deep blue-green
@@ -7159,6 +7125,457 @@ void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     gFloatingNumbers.erase(std::remove_if(gFloatingNumbers.begin(), gFloatingNumbers.end(), [&](const FloatingNumber& f) { return now - f.at > 1.0; }), gFloatingNumbers.end());
 }
 
+// ---- dying, spectating and the end of the match -----------------------------------------------------------------------------------
+// One flow, start to finish:
+//   1. You are eliminated. Your Link is hidden and his body falls as a ragdoll (SpawnCorpse) with his cry and a thud at each bounce. The camera
+//      stays on the body (OnPlayerUpdate), the edges of the screen go dark red and "ELIMINATED" says who got you and where you placed.
+//   2. A moment later the death card comes up under it: your kills, damage and points so far, and two buttons, Spectate and Leave.
+//   3. Spectating: a slim bar at the top says whom you watch; < and > (or D-pad Left/Right) go through your body and everyone still standing.
+//   4. The match ends: "VICTORY ROYALE!" or your place, then the end screen: your numbers, how your points add up, every player and bot with their
+//      place, kills, damage and score, the replay, and Keep spectating / New match / Leave. Keep spectating hides it; D-pad Up (or the Results
+//      chip) brings it back.
+// It is all drawn on ImGui's foreground list with the colours in kUi, so a new menu look only has to change kUi and the Draw* functions here.
+// Controller, while the card or the end screen is up: D-pad Left/Right picks a button, A presses it, B is Keep spectating, D-pad Up/Down scroll
+// the table. Touch: tap the buttons, drag the table.
+struct UiStyle {
+    ImU32 dim, panel, edge, gold, white, grey, red, green, selfRow, rowAlt, button, buttonHot, buttonOff, tile;
+};
+const UiStyle kUi = {
+    IM_COL32(0, 0, 0, 150),        // dim: over the game behind the end screen
+    IM_COL32(16, 12, 8, 232),      // panel
+    IM_COL32(255, 210, 70, 255),   // edge: the gold border
+    IM_COL32(255, 210, 70, 255),   // gold
+    IM_COL32(245, 245, 240, 255),  // white
+    IM_COL32(165, 165, 175, 255),  // grey
+    IM_COL32(255, 92, 84, 255),    // red
+    IM_COL32(120, 255, 140, 255),  // green: you
+    IM_COL32(70, 120, 60, 150),    // selfRow
+    IM_COL32(255, 255, 255, 12),   // rowAlt
+    IM_COL32(58, 44, 22, 245),     // button
+    IM_COL32(128, 96, 32, 250),    // buttonHot
+    IM_COL32(40, 36, 32, 200),     // buttonOff
+    IM_COL32(255, 255, 255, 16),   // tile
+};
+constexpr double kDeathCardDelay = 1.8;   // seconds of watching your body fall before the card comes up
+constexpr double kEndPanelDelay = 2.4;    // seconds of the big title alone before the end screen
+
+bool IsLive(const royale::HudState& h);   // with the match's health, below
+
+// What you did this match, counted from the server's events (the exact numbers arrive with the results when the match ends).
+struct MyMatchStats { int kills = 0, chests = 0; float damage = 0; };
+MyMatchStats gMyStats;
+
+struct DeathUi {
+    bool active = false;        // you are out of this match
+    double at = 0;              // when (ImGui time)
+    uint16_t killer = royale::net::kNoPlayer16;
+    std::string by;             // "by Saria", "by the storm" (empty until the elimination event says)
+    int aliveAtDeath = 0, place = 0;
+    bool placeSettled = false;
+    bool card = true;           // the death card is up (until Spectate)
+    int focus = 0;              // the card's button with the controller's focus: 0 Spectate, 1 Leave
+    uint16_t body = 0;          // your body (a corpse id), 0 for none
+};
+DeathUi gDeath;
+
+struct EndUi {
+    bool open = false;          // the end screen is up (Keep spectating hides it)
+    double at = 0;              // when the match ended
+    int focus = 1;              // 0 Keep spectating, 1 New match, 2 Leave
+    float scroll = 0;           // the table, in pixels
+    bool byScore = false;       // the table's order: by place, or by score
+    bool dragging = false;
+};
+EndUi gEnd;
+
+// The controller's presses for the card and the end screen, taken off the game in MatchUiInput and used up when they are drawn.
+struct UiPad { bool a = false, b = false, left = false, right = false, up = false, down = false; };
+UiPad gUiPad;
+
+void UiSfx(u16 sfx) { Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
+
+void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; }
+
+// You are out. Called by the elimination event and by OnPlayerUpdate, whichever sees it first.
+void StartDeath(const royale::HudState& h) {
+    if (gDeath.active) return;
+    gDeath.active = true;
+    gDeath.at = ImGui::GetTime();
+    gDeath.aliveAtDeath = h.alive;
+    gDeath.place = std::max(1, h.alive);
+    gDeath.card = true;
+    gDeath.focus = 0;
+    gSpectateTarget = kSpectateSelf;   // the camera stays on your body until you choose to spectate
+}
+
+// The match has ended: the big title, then the end screen.
+void StartEndScreen(const royale::HudState& h) {
+    gEnd = {};
+    gEnd.open = true;
+    gEnd.at = ImGui::GetTime();
+    gEnd.focus = h.isHost ? 1 : 0;
+    if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) Audio_PlayFanfare(NA_BGM_ITEM_GET);
+}
+
+bool DeathCardUp(const royale::HudState& h) { return gDeath.active && gDeath.card && IsLive(h) && ImGui::GetTime() - gDeath.at > kDeathCardDelay; }
+bool EndScreenUp(const royale::HudState& h) { return h.state == royale::MatchState::Ending && gEnd.open && ImGui::GetTime() - gEnd.at > kEndPanelDelay; }
+
+// Runs before the game reads the controller (from OnEmoteWheelInput). While the death card or the end screen is up the controller is theirs (Start
+// still opens the menu). Returns true when it took this frame's buttons.
+bool MatchUiInput(Input& in, const royale::HudState& hud) {
+    const bool card = DeathCardUp(hud), end = EndScreenUp(hud);
+    if (!card && !end) {
+        gUiPad = {};
+        if (hud.state == royale::MatchState::Ending && !gEnd.open && (in.press.button & BTN_DUP)) {   // bring the results back
+            gEnd.open = true;
+            gEnd.at = ImGui::GetTime() - kEndPanelDelay;
+            in.press.button &= ~BTN_DUP; in.cur.button &= ~BTN_DUP;
+            UiSfx(NA_SE_SY_DECIDE);
+        }
+        return false;
+    }
+    const u16 p = in.press.button;
+    gUiPad.a |= (p & BTN_A) != 0;
+    gUiPad.b |= (p & BTN_B) != 0;
+    gUiPad.left |= (p & BTN_DLEFT) != 0;
+    gUiPad.right |= (p & BTN_DRIGHT) != 0;
+    gUiPad.up |= (p & BTN_DUP) != 0;
+    gUiPad.down |= (p & BTN_DDOWN) != 0;
+    in.cur.button &= BTN_START; in.press.button &= BTN_START; in.rel.button &= BTN_START;
+    in.cur.stick_x = in.cur.stick_y = in.rel.stick_x = in.rel.stick_y = in.press.stick_x = in.press.stick_y = 0;
+    return true;
+}
+
+bool UiTapIn(ImVec2 a, ImVec2 b) {
+    ImGuiIO& io = ImGui::GetIO();
+    return ImGui::IsMouseClicked(0) && !io.WantCaptureMouse && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y;
+}
+
+void UiText(ImDrawList* dl, ImFont* font, float size, ImVec2 at, ImU32 col, const std::string& t, bool shadow = true) {
+    if (shadow) dl->AddText(font, size, ImVec2(at.x + size * 0.06f, at.y + size * 0.06f), IM_COL32(0, 0, 0, (col >> 24) * 220 / 255), t.c_str());
+    dl->AddText(font, size, at, col, t.c_str());
+}
+float UiTextW(ImFont* font, float size, const std::string& t) { return font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str()).x; }
+// Text centred on x, shrunk to fit `maxW` if it has to.
+void UiTextCentred(ImDrawList* dl, ImFont* font, float size, float cx, float y, ImU32 col, const std::string& t, float maxW = 1e9f) {
+    const float w = UiTextW(font, size, t);
+    if (w > maxW && w > 0) size *= maxW / w;
+    UiText(dl, font, size, ImVec2(cx - UiTextW(font, size, t) * 0.5f, y), col, t);
+}
+
+ImU32 UiAlpha(ImU32 col, float a) { return (col & 0x00FFFFFF) | (static_cast<ImU32>(((col >> 24) & 0xFF) * std::clamp(a, 0.0f, 1.0f)) << 24); }
+
+// A button. Returns true when it is tapped, or pressed with A while it has the controller's focus.
+bool UiButton(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& label, bool focused, bool enabled, float alpha = 1.0f) {
+    ImGuiIO& io = ImGui::GetIO();
+    const bool hover = io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y && !io.WantCaptureMouse;
+    const float r = 8.0f * scale;
+    dl->AddRectFilled(a, b, UiAlpha(!enabled ? kUi.buttonOff : (focused || hover) ? kUi.buttonHot : kUi.button, alpha), r);
+    dl->AddRect(a, b, UiAlpha(enabled ? kUi.edge : kUi.grey, alpha * (enabled ? 1.0f : 0.5f)), r, 0, (focused && enabled ? 3.0f : 1.5f) * scale);
+    UiTextCentred(dl, font, 21.0f * scale, (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - 11.0f * scale, UiAlpha(enabled ? kUi.white : kUi.grey, alpha), label, b.x - a.x - 12.0f * scale);
+    if (!enabled || alpha < 0.9f) return false;
+    if (UiTapIn(a, b)) { UiSfx(NA_SE_SY_DECIDE); return true; }
+    if (focused && gUiPad.a) { gUiPad.a = false; UiSfx(NA_SE_SY_DECIDE); return true; }
+    return false;
+}
+
+// A number with a label under it, on a faint tile.
+void UiTile(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& value, const std::string& label, ImU32 col, float alpha = 1.0f) {
+    dl->AddRectFilled(a, b, UiAlpha(kUi.tile, alpha), 8.0f * scale);
+    const float cx = (a.x + b.x) * 0.5f, h = b.y - a.y;
+    UiTextCentred(dl, font, h * 0.46f, cx, a.y + h * 0.1f, UiAlpha(col, alpha), value, b.x - a.x - 8.0f * scale);
+    UiTextCentred(dl, font, h * 0.24f, cx, a.y + h * 0.62f, UiAlpha(kUi.grey, alpha), label, b.x - a.x - 8.0f * scale);
+}
+
+// Dark red closing in from the edges of the screen.
+void UiVignette(ImDrawList* dl, ImVec2 ds, float strength) {
+    if (strength <= 0.0f) return;
+    const ImU32 edge = IM_COL32(40, 0, 0, static_cast<int>(200 * std::min(1.0f, strength))), clear = IM_COL32(40, 0, 0, 0);
+    const float bandY = ds.y * 0.3f, bandX = ds.x * 0.22f;
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(ds.x, bandY), edge, edge, clear, clear);
+    dl->AddRectFilledMultiColor(ImVec2(0, ds.y - bandY), ds, clear, clear, edge, edge);
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(bandX, ds.y), edge, clear, clear, edge);
+    dl->AddRectFilledMultiColor(ImVec2(ds.x - bandX, 0), ds, clear, edge, edge, clear);
+}
+
+std::string UiThousands(int n) {
+    std::string s = std::to_string(std::abs(n));
+    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(static_cast<size_t>(i), ",");
+    return n < 0 ? "-" + s : s;
+}
+
+// Steps 1 to 3: the moment you go down, the death card, and the spectating bar.
+void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    Feat("death screen");
+    const bool spectatingEnd = h.state == royale::MatchState::Ending && !gEnd.open && h.haveSelf && !h.selfAlive;
+    if (!(gDeath.active && IsLive(h)) && !spectatingEnd) return;
+    const double now = ImGui::GetTime(), t = now - gDeath.at;
+    // Your place: the player count may or may not have taken you off yet when the elimination arrives, so look again a moment later.
+    if (gDeath.active && !gDeath.placeSettled && t > 0.8) {
+        gDeath.place = h.alive >= gDeath.aliveAtDeath ? gDeath.aliveAtDeath + 1 : gDeath.aliveAtDeath;
+        if (IsLive(h)) gDeath.place = std::max(2, gDeath.place);
+        gDeath.placeSettled = true;
+    }
+    const float cx = ds.x * 0.5f;
+
+    if (gDeath.active && gDeath.card && IsLive(h)) {
+        // 1. Going down: a red flash, the edges darken, the big word.
+        if (t < 0.5) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(150, 0, 0, static_cast<int>(110 * (1.0 - t / 0.5))));
+        UiVignette(dl, ds, static_cast<float>(std::min(1.0, t / 0.6)));
+        const float in = static_cast<float>(std::min(1.0, t / 0.35));
+        const float titleSize = (58.0f + 18.0f * (1.0f - in)) * scale;
+        UiTextCentred(dl, font, titleSize, cx, ds.y * 0.13f, UiAlpha(kUi.red, in), "ELIMINATED");
+        const float sub = static_cast<float>(std::clamp((t - 0.35) / 0.4, 0.0, 1.0));
+        UiTextCentred(dl, font, 24.0f * scale, cx, ds.y * 0.13f + 70.0f * scale, UiAlpha(kUi.white, sub), gDeath.by, ds.x * 0.9f);
+        UiTextCentred(dl, font, 30.0f * scale, cx, ds.y * 0.13f + 104.0f * scale, UiAlpha(kUi.gold, sub),
+                      "#" + std::to_string(gDeath.place) + "  of " + std::to_string(std::max(gDeath.place, h.playerLimit)));
+
+        // 2. The death card.
+        if (t < kDeathCardDelay) return;
+        const float a = static_cast<float>(std::min(1.0, (t - kDeathCardDelay) / 0.3));
+        const float pw = std::min(ds.x - 32.0f * scale, 600.0f * scale), ph = 196.0f * scale;
+        const ImVec2 pa(cx - pw * 0.5f, ds.y - ph - 28.0f * scale + (1.0f - a) * 30.0f * scale), pb(pa.x + pw, pa.y + ph);
+        dl->AddRectFilled(pa, pb, UiAlpha(kUi.panel, a), 12.0f * scale);
+        dl->AddRect(pa, pb, UiAlpha(kUi.edge, a), 12.0f * scale, 0, 2.5f * scale);
+        const float pad = 16.0f * scale, gap = 10.0f * scale, tileH = 70.0f * scale;
+        const float tw = (pw - pad * 2 - gap * 2) / 3.0f;
+        const int points = royale::ScorePoints(gMyStats.damage, gMyStats.kills, gMyStats.chests, gDeath.place);
+        char dmg[16];
+        std::snprintf(dmg, sizeof(dmg), "%.1f", gMyStats.damage);
+        const std::string values[3] = { std::to_string(gMyStats.kills), dmg, UiThousands(points) };
+        const char* labels[3] = { "KILLS", "DAMAGE", "POINTS" };
+        for (int i = 0; i < 3; i++) {
+            const ImVec2 ta(pa.x + pad + i * (tw + gap), pa.y + pad);
+            UiTile(dl, font, scale, ta, ImVec2(ta.x + tw, ta.y + tileH), values[i], labels[i], i == 2 ? kUi.gold : kUi.white, a);
+        }
+        if (gUiPad.left || gUiPad.right) { gDeath.focus = 1 - gDeath.focus; UiSfx(NA_SE_SY_CURSOR); }
+        gUiPad.left = gUiPad.right = gUiPad.up = gUiPad.down = gUiPad.b = false;
+        const float by = pa.y + pad + tileH + 14.0f * scale, bh = 50.0f * scale, bw = (pw - pad * 2 - gap) * 0.5f;
+        if (UiButton(dl, font, scale, ImVec2(pa.x + pad, by), ImVec2(pa.x + pad + bw, by + bh), "Spectate", gDeath.focus == 0, true, a)) {
+            gDeath.card = false;
+            gSpectateTarget = kSpectateSelf;
+            for (const auto& st : gSession.Puppets()) if (st.alive && st.id == gDeath.killer) gSpectateTarget = st.id;   // whoever got you
+            if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
+        }
+        if (UiButton(dl, font, scale, ImVec2(pb.x - pad - bw, by), ImVec2(pb.x - pad, by + bh), "Leave match", gDeath.focus == 1, true, a)) {
+            gSession.Leave();
+            return;
+        }
+        UiTextCentred(dl, font, 14.0f * scale, cx, pb.y - 22.0f * scale, UiAlpha(kUi.grey, a), "D-pad Left / Right to choose, A to select");
+        gUiPad.a = false;
+        return;
+    }
+
+    // 3. Spectating: whom you watch, and the arrows to switch.
+    UiVignette(dl, ds, 0.35f);
+    const float bw = std::min(ds.x - 32.0f * scale, 460.0f * scale), bh = 58.0f * scale;
+    const ImVec2 a(cx - bw * 0.5f, 14.0f * scale), b(a.x + bw, a.y + bh);
+    dl->AddRectFilled(a, b, kUi.panel, 10.0f * scale);
+    dl->AddRect(a, b, kUi.edge, 10.0f * scale, 0, 2.0f * scale);
+    UiTextCentred(dl, font, 14.0f * scale, cx, a.y + 6.0f * scale, kUi.grey, "SPECTATING");
+    UiTextCentred(dl, font, 24.0f * scale, cx, a.y + 24.0f * scale, kUi.white, SpectateName(), bw - 140.0f * scale);
+    for (int side = 0; side < 2; side++) {
+        const ImVec2 ba(side == 0 ? a.x + 8.0f * scale : b.x - 58.0f * scale, a.y + 8.0f * scale), bb(ba.x + 50.0f * scale, b.y - 8.0f * scale);
+        if (UiButton(dl, font, scale, ba, bb, side == 0 ? "<" : ">", false, true)) CycleSpectate(side == 0 ? -1 : 1);
+    }
+    std::string under = IsLive(h) ? std::to_string(h.alive) + " still standing   |   you placed #" + std::to_string(gDeath.place) : "The match is over";
+    UiTextCentred(dl, font, 15.0f * scale, cx, b.y + 6.0f * scale, kUi.grey, under + "   |   D-pad Left / Right to switch");
+}
+
+// Step 4: the end screen.
+void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    Feat("end screen");
+    if (h.state != royale::MatchState::Ending) return;
+    const double now = ImGui::GetTime(), t = now - gEnd.at;
+    const float cx = ds.x * 0.5f;
+    const bool won = h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16;
+    const royale::ResultsRow* me = nullptr;
+    for (const auto& r : h.results) if (r.self) me = &r;
+    const int place = me != nullptr && me->placement > 0 ? me->placement : won ? 1 : gDeath.place;
+    const std::string title = won ? "VICTORY ROYALE!" : place > 0 ? "You placed #" + std::to_string(place) : "MATCH OVER";
+    std::string winnerLine = won ? "You are the last one standing" : !h.winnerName.empty() ? "Winner: " + h.winnerName : "Nobody survived";
+
+    if (!gEnd.open) {   // kept spectating: a chip to bring the results back
+        const std::string label = "Results (D-pad Up)";
+        const float w = UiTextW(font, 18.0f * scale, label) + 28.0f * scale;
+        const ImVec2 a(ds.x - w - 16.0f * scale, 16.0f * scale), b(ds.x - 16.0f * scale, 16.0f * scale + 40.0f * scale);
+        if (UiButton(dl, font, scale, a, b, label, false, true)) { gEnd.open = true; gEnd.at = now - kEndPanelDelay; }
+        return;
+    }
+
+    // The big title alone first.
+    dl->AddRectFilled(ImVec2(0, 0), ds, UiAlpha(kUi.dim, static_cast<float>(std::min(1.0, t / 0.6))));
+    if (t < kEndPanelDelay) {
+        const float in = static_cast<float>(std::min(1.0, t / 0.4));
+        UiTextCentred(dl, font, (won ? 64.0f : 54.0f) * scale * (0.8f + 0.2f * in), cx, ds.y * 0.36f, UiAlpha(won ? kUi.gold : kUi.white, in), title, ds.x * 0.92f);
+        UiTextCentred(dl, font, 26.0f * scale, cx, ds.y * 0.36f + 78.0f * scale, UiAlpha(won ? kUi.white : kUi.gold, in), winnerLine, ds.x * 0.9f);
+        gUiPad = {};
+        return;
+    }
+    const float a = static_cast<float>(std::min(1.0, (t - kEndPanelDelay) / 0.3));
+
+    // The panel.
+    const float pw = std::min(ds.x - 32.0f * scale, 960.0f * scale), ph = std::min(ds.y - 32.0f * scale, 640.0f * scale);
+    const ImVec2 pa(cx - pw * 0.5f, (ds.y - ph) * 0.5f), pb(pa.x + pw, pa.y + ph);
+    dl->AddRectFilled(pa, pb, UiAlpha(kUi.panel, a), 14.0f * scale);
+    dl->AddRect(pa, pb, UiAlpha(kUi.edge, a), 14.0f * scale, 0, 3.0f * scale);
+    const float pad = 20.0f * scale;
+    float y = pa.y + pad;
+
+    // Title, and who won on the right.
+    UiText(dl, font, 38.0f * scale, ImVec2(pa.x + pad, y), UiAlpha(won ? kUi.gold : kUi.white, a), title);
+    {
+        const float tw = UiTextW(font, 20.0f * scale, winnerLine);
+        UiText(dl, font, 20.0f * scale, ImVec2(pb.x - pad - tw, y + 2.0f * scale), UiAlpha(kUi.gold, a), winnerLine);
+        const std::string where = std::string(CurrentMap().name) + "   |   " + std::to_string(h.results.size()) + " players";
+        const float ww = UiTextW(font, 15.0f * scale, where);
+        UiText(dl, font, 15.0f * scale, ImVec2(pb.x - pad - ww, y + 26.0f * scale), UiAlpha(kUi.grey, a), where);
+    }
+    y += 54.0f * scale;
+
+    // Your numbers.
+    const int kills = me ? me->kills : gMyStats.kills, chests = me ? me->chests : gMyStats.chests;
+    const float damage = me ? me->damage : gMyStats.damage;
+    const int score = me ? me->score : royale::ScorePoints(damage, kills, chests, place);
+    {
+        const float gap = 10.0f * scale, tileH = 66.0f * scale, tw = (pw - pad * 2 - gap * 4) / 5.0f;
+        char dmg[16];
+        std::snprintf(dmg, sizeof(dmg), "%.1f", damage);
+        const std::string values[5] = { place > 0 ? "#" + std::to_string(place) : "-", std::to_string(kills), dmg, std::to_string(chests), UiThousands(score) };
+        const char* labels[5] = { "PLACE", "KILLS", "DAMAGE", "CHESTS", "SCORE" };
+        for (int i = 0; i < 5; i++) {
+            const ImVec2 ta(pa.x + pad + i * (tw + gap), y);
+            UiTile(dl, font, scale, ta, ImVec2(ta.x + tw, ta.y + tileH), values[i], labels[i], i == 0 && place == 1 ? kUi.gold : i == 4 ? kUi.gold : kUi.white, a);
+        }
+        y += tileH + 8.0f * scale;
+    }
+    // How the points add up (the server's own sum: shared/balance.h ScorePoints, plus mini bosses).
+    {
+        const int pDamage = static_cast<int>(damage * royale::kPointsPerHeartOfDamage + 0.5f), pKills = kills * royale::kPointsPerKill, pChests = chests * royale::kPointsPerChest;
+        const int pLasted = place > 0 ? (royale::kMaxPlayers - place) * royale::kPointsPerPlacementStep : 0, pWin = place == 1 ? royale::kPointsForWinning : 0;
+        const int pOther = score - (pDamage + pKills + pChests + pLasted + pWin);
+        std::string line = UiThousands(pDamage) + " damage  +  " + UiThousands(pKills) + " kills  +  " + UiThousands(pChests) + " chests  +  " + UiThousands(pLasted) + " lasting";
+        if (pWin) line += "  +  " + UiThousands(pWin) + " win";
+        if (pOther > 0) line += "  +  " + UiThousands(pOther) + " mini bosses";
+        line += "  =  " + UiThousands(score) + " points";
+        UiTextCentred(dl, font, 16.0f * scale, cx, y, UiAlpha(kUi.grey, a), line, pw - pad * 2);
+        y += 28.0f * scale;
+    }
+
+    // The buttons at the bottom.
+    const float bh = 50.0f * scale, hintH = 22.0f * scale, by = pb.y - pad - hintH - bh;
+    // The table (and the replay beside it when there is room).
+    const float bodyTop = y, bodyBottom = by - 12.0f * scale;
+    float tableRight = pb.x - pad;
+    royale::GameClient* client = gSession.Client();
+    const bool replay = client != nullptr && client->ReplayComplete() && pw > 760.0f * scale;
+    if (replay) {
+        const float side = std::min(bodyBottom - bodyTop - 56.0f * scale, pw * 0.3f);
+        if (side > 120.0f * scale) {
+            tableRight = pb.x - pad - side - pad;
+            if (a > 0.99f) DrawReplay(dl, font, ImVec2(pb.x - pad - side, bodyTop + 28.0f * scale), side, scale, h);
+        }
+    }
+    {
+        const float x0 = pa.x + pad, x1 = tableRight, tw = x1 - x0, rowH = 32.0f * scale, headH = 28.0f * scale;
+        const float cRank = x0 + 10.0f * scale, cName = x0 + 58.0f * scale, cKills = x1 - 250.0f * scale, cDmg = x1 - 165.0f * scale, cScore = x1 - 80.0f * scale;
+        const ImU32 head = UiAlpha(kUi.grey, a);
+        const char* scoreHead = gEnd.byScore ? "Score v" : "Score";
+        const char* rankHead = gEnd.byScore ? "#" : "# v";
+        UiText(dl, font, 15.0f * scale, ImVec2(cRank, bodyTop), head, rankHead, false);
+        UiText(dl, font, 15.0f * scale, ImVec2(cName, bodyTop), head, "Player", false);
+        UiText(dl, font, 15.0f * scale, ImVec2(cKills, bodyTop), head, "Kills", false);
+        UiText(dl, font, 15.0f * scale, ImVec2(cDmg, bodyTop), head, "Damage", false);
+        UiText(dl, font, 15.0f * scale, ImVec2(cScore, bodyTop), head, scoreHead, false);
+        if (UiTapIn(ImVec2(x0, bodyTop - 4.0f * scale), ImVec2(x1, bodyTop + headH)) && a > 0.99f) { gEnd.byScore = !gEnd.byScore; gEnd.scroll = 0; UiSfx(NA_SE_SY_CURSOR); }
+        dl->AddLine(ImVec2(x0, bodyTop + headH - 4.0f * scale), ImVec2(x1, bodyTop + headH - 4.0f * scale), UiAlpha(kUi.edge, a * 0.5f), 1.0f * scale);
+
+        const ImVec2 la(x0, bodyTop + headH), lb(x1, bodyBottom);
+        const float viewH = lb.y - la.y;
+        std::vector<const royale::ResultsRow*> rows;
+        for (const auto& r : h.results) rows.push_back(&r);
+        if (!gEnd.byScore) std::stable_sort(rows.begin(), rows.end(), [](const royale::ResultsRow* p, const royale::ResultsRow* q) {
+            return (p->placement > 0 ? p->placement : 999) < (q->placement > 0 ? q->placement : 999);
+        });
+        const float maxScroll = std::max(0.0f, static_cast<float>(rows.size()) * rowH - viewH);
+        // scrolling: D-pad Up/Down, the mouse wheel, or dragging the list
+        ImGuiIO& io = ImGui::GetIO();
+        if (gUiPad.up) gEnd.scroll -= rowH * 3.0f;
+        if (gUiPad.down) gEnd.scroll += rowH * 3.0f;
+        const bool overList = io.MousePos.x >= la.x && io.MousePos.x <= lb.x && io.MousePos.y >= la.y && io.MousePos.y <= lb.y && !io.WantCaptureMouse;
+        if (overList) gEnd.scroll -= io.MouseWheel * rowH * 2.0f;
+        if (ImGui::IsMouseClicked(0) && overList) gEnd.dragging = true;
+        if (!ImGui::IsMouseDown(0)) gEnd.dragging = false;
+        if (gEnd.dragging) gEnd.scroll -= io.MouseDelta.y;
+        gEnd.scroll = std::clamp(gEnd.scroll, 0.0f, maxScroll);
+
+        dl->PushClipRect(la, lb, true);
+        float ry = la.y - gEnd.scroll;
+        int index = 0;
+        for (const royale::ResultsRow* r : rows) {
+            if (ry + rowH >= la.y && ry <= lb.y) {
+                const ImVec2 ra(x0, ry), rb(x1, ry + rowH - 2.0f * scale);
+                if (r->self) dl->AddRectFilled(ra, rb, UiAlpha(kUi.selfRow, a), 6.0f * scale);
+                else if (index % 2) dl->AddRectFilled(ra, rb, UiAlpha(kUi.rowAlt, a), 6.0f * scale);
+                const bool winner = r->placement == 1;
+                const ImU32 col = UiAlpha(r->self ? kUi.green : winner ? kUi.gold : kUi.white, a);
+                const float ty = ry + (rowH - 20.0f * scale) * 0.5f - 1.0f * scale;
+                const int shownRank = gEnd.byScore ? index + 1 : r->placement;
+                UiText(dl, font, 20.0f * scale, ImVec2(cRank, ty), col, shownRank > 0 ? std::to_string(shownRank) : "-", false);
+                std::string name = r->name.empty() ? "Link" : r->name;
+                if (r->self) name += " (you)";
+                const float nameMax = cKills - cName - 70.0f * scale;
+                float nameSize = 20.0f * scale;
+                const float nw = UiTextW(font, nameSize, name);
+                if (nw > nameMax && nw > 0) nameSize *= std::max(0.6f, nameMax / nw);
+                UiText(dl, font, nameSize, ImVec2(cName, ty), col, name, false);
+                float tagX = cName + UiTextW(font, nameSize, name) + 10.0f * scale;
+                if (winner) {   // a little gold crown
+                    const float s = 7.0f * scale, base = ry + rowH * 0.5f + s * 0.6f;
+                    dl->AddRectFilled(ImVec2(tagX, base - s * 0.5f), ImVec2(tagX + s * 3.0f, base), UiAlpha(kUi.gold, a));
+                    for (int k = 0; k < 3; k++) dl->AddTriangleFilled(ImVec2(tagX + k * s, base - s * 0.5f), ImVec2(tagX + (k + 1) * s, base - s * 0.5f), ImVec2(tagX + (k + 0.5f) * s, base - s * 1.7f), UiAlpha(kUi.gold, a));
+                    tagX += s * 3.0f + 8.0f * scale;
+                }
+                if (r->isBot) UiText(dl, font, 13.0f * scale, ImVec2(tagX, ty + 4.0f * scale), UiAlpha(kUi.grey, a), "BOT", false);
+                UiText(dl, font, 20.0f * scale, ImVec2(cKills, ty), col, std::to_string(r->kills), false);
+                char dmg[16];
+                std::snprintf(dmg, sizeof(dmg), "%.1f", r->damage);
+                UiText(dl, font, 20.0f * scale, ImVec2(cDmg, ty), col, dmg, false);
+                UiText(dl, font, 20.0f * scale, ImVec2(cScore, ty), col, UiThousands(r->score), false);
+            }
+            ry += rowH;
+            index++;
+        }
+        if (rows.empty()) UiTextCentred(dl, font, 18.0f * scale, (x0 + x1) * 0.5f, la.y + 20.0f * scale, UiAlpha(kUi.grey, a), "Waiting for the results...");
+        dl->PopClipRect();
+        if (maxScroll > 0) {   // a thin scroll bar
+            const float barH = std::max(24.0f * scale, viewH * viewH / (viewH + maxScroll));
+            const float barY = la.y + (viewH - barH) * (gEnd.scroll / maxScroll);
+            dl->AddRectFilled(ImVec2(x1 + 4.0f * scale, barY), ImVec2(x1 + 8.0f * scale, barY + barH), UiAlpha(kUi.edge, a * 0.6f), 2.0f * scale);
+        }
+    }
+
+    // Keep spectating / New match / Leave.
+    const bool canNew = h.isHost;
+    if (gUiPad.left || gUiPad.right) {
+        const int dir = gUiPad.left ? -1 : 1;
+        do { gEnd.focus = (gEnd.focus + 3 + dir) % 3; } while (gEnd.focus == 1 && !canNew);
+        UiSfx(NA_SE_SY_CURSOR);
+    }
+    if (gUiPad.b) { gEnd.open = false; UiSfx(NA_SE_SY_FSEL_CLOSE); }
+    gUiPad.left = gUiPad.right = gUiPad.up = gUiPad.down = gUiPad.b = false;
+    if (!canNew && gEnd.focus == 1) gEnd.focus = 0;
+    const float gap = 12.0f * scale, bw = (pw - pad * 2 - gap * 2) / 3.0f;
+    if (UiButton(dl, font, scale, ImVec2(pa.x + pad, by), ImVec2(pa.x + pad + bw, by + bh), "Keep spectating", gEnd.focus == 0, true, a)) gEnd.open = false;
+    if (UiButton(dl, font, scale, ImVec2(pa.x + pad + bw + gap, by), ImVec2(pa.x + pad + bw * 2 + gap, by + bh), "New match", gEnd.focus == 1, canNew, a))
+        gSession.RequestPlayAgain();
+    if (UiButton(dl, font, scale, ImVec2(pb.x - pad - bw, by), ImVec2(pb.x - pad, by + bh), "Leave", gEnd.focus == 2, true, a)) { gSession.Leave(); return; }
+    gUiPad.a = false;
+    const std::string hint = canNew ? "D-pad Left / Right to choose, A to select, B to keep spectating, D-pad Up / Down to scroll"
+                                    : "Only the host can start a new match   |   B to keep spectating, D-pad Up / Down to scroll";
+    UiTextCentred(dl, font, 14.0f * scale, cx, pb.y - pad - hintH + 6.0f * scale, UiAlpha(kUi.grey, a), hint, pw - pad * 2);
+}
+
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawOverlay() {
     DrawTitleLogo();
@@ -7171,7 +7588,7 @@ void DrawOverlay() {
     DrawUnderwaterOverlay(dl, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
     const ImU32 white = IM_COL32(255, 255, 255, 255), gold = IM_COL32(255, 210, 70, 255), red = IM_COL32(255, 90, 90, 255),
-                green = IM_COL32(110, 230, 130, 255), grey = IM_COL32(190, 190, 190, 255);
+                green = IM_COL32(110, 230, 130, 255);
     auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {
         dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
         dl->AddText(font, size, ImVec2(x, y), col, t.c_str());
@@ -7190,35 +7607,16 @@ void DrawOverlay() {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
         if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to " + std::string(CurrentMap().name) + "...");
     }
-    if (h.state == royale::MatchState::Ending) {
-        centered(ds.y * 0.16f, gold, 46 * scale, h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16 ? "VICTORY ROYALE!" : "MATCH OVER");
-        if (!h.winnerName.empty() && h.winnerId != h.selfId) centered(ds.y * 0.16f + 56 * scale, white, 26 * scale, "Winner: " + h.winnerName);
-        centered(ds.y * 0.16f + 92 * scale, grey, 20 * scale, "Open the menu and choose Leave to go back");
-    }
-    if (live && h.haveSelf && !h.selfAlive) {
-        centered(ds.y * 0.12f, red, 34 * scale, "ELIMINATED");
-        centered(ds.y * 0.12f + 42 * scale, white, 22 * scale, "Watching " + SpectateName());
-        ImGuiIO& io = ImGui::GetIO();
-        const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
-        for (int side = 0; side < 2; side++) {
-            const float bw = 54.0f * scale, bh = 40.0f * scale;
-            const ImVec2 a(side == 0 ? ds.x * 0.5f - 190.0f * scale : ds.x * 0.5f + 136.0f * scale, ds.y * 0.12f + 36.0f * scale), b(a.x + bw, a.y + bh);
-            dl->AddRectFilled(a, b, OotPanel(205), 6.0f * scale);
-            dl->AddRect(a, b, IM_COL32(255, 236, 120, 255), 6.0f * scale, 0, 2.0f * scale);
-            dl->AddText(font, 24.0f * scale, ImVec2(a.x + 19 * scale, a.y + 7 * scale), IM_COL32(255, 255, 255, 255), side == 0 ? "<" : ">");
-            if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) CycleSpectate(side == 0 ? -1 : 1);
-        }
-    }
     if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
     if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
-
-    if (h.state == royale::MatchState::Ending) { DrawResultsPanel(dl, font, ds, scale, h); DrawReplay(dl, font, ds, scale, h); }
 
     DrawPickupFx(dl, ds, scale);
     DrawFeed(dl, font, ds, scale);
     DrawGains(dl, font, ds, scale);
     DrawHitEffects(dl, font, ds, scale);
     DrawBanners(dl, font, ds, scale);
+    DrawDeathScreen(dl, font, ds, scale, h);   // going down, the death card, spectating
+    DrawEndScreen(dl, font, ds, scale, h);     // the match is over
 
     if (!live || !h.haveSelf) return;
 
@@ -7493,6 +7891,7 @@ void OnEmoteWheelInput() {
     if (gPlayState == nullptr || !gSession.Joined() || !InGame()) { if (gWheel.open) CloseEmoteWheel(); return; }
     Input& in = gPlayState->state.input[0];
     const royale::HudState hud = gSession.Hud();
+    if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
     // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
@@ -11609,7 +12008,6 @@ void OnPlayerUpdate() {
     ApplyPlatforms(player);
     ApplyRocks(player);
     HandleCombatInput(player, hud);
-    if (hud.state == royale::MatchState::Ending && hud.isHost && (gPlayState->state.input[0].press.button & BTN_A)) gSession.RequestPlayAgain();
     UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
     UpdateLocalRide(player, hud);
@@ -11635,12 +12033,16 @@ void OnPlayerUpdate() {
         CancelGameDeath(player);
     }
     static bool wasDead = false;
-    if (dead && !wasDead && InField()) {
+    if (dead && !wasDead && IsLive(hud)) StartDeath(hud);
+    if (dead && !wasDead && InField()) {   // your body falls where you stood, thrown away from whoever got you (or backwards)
         royale::PuppetState me;
         me.x = player->actor.world.pos.x; me.y = player->actor.world.pos.y; me.z = player->actor.world.pos.z;
         me.id = hud.selfId; me.rot = player->actor.shape.rot.y; me.weapon = hud.weapon; me.tunic = gLocalTunic; me.scene = static_cast<uint8_t>(gPlayState->sceneNum);
         const float a = me.rot * (3.14159265f / 32768.0f);
-        SpawnCorpse(me, -std::sin(a), -std::cos(a));
+        float px = -std::sin(a), pz = -std::cos(a);
+        auto killer = gState.find(gDeath.killer);
+        if (killer != gState.end() && std::hypot(me.x - killer->second.x, me.z - killer->second.z) > 1.0f) { px = me.x - killer->second.x; pz = me.z - killer->second.z; }
+        gDeath.body = SpawnCorpse(me, px, pz);
     }
     if (dead && !wasDead) gSpectateTarget = kSpectateSelf;
     wasDead = dead;
@@ -11660,6 +12062,14 @@ void OnPlayerUpdate() {
             player->actor.prevPos = player->actor.world.pos;
             player->actor.velocity.y = 0.0f;
             player->actor.shape.rot.y = t->rot;
+        } else if (gDeath.body != 0) {   // watching your own body: stay (unseen) with it as it tumbles, so the camera keeps it in view
+            auto body = gCorpses.find(gDeath.body);
+            if (body != gCorpses.end() && !body->second.dying && body->second.actor != nullptr) {
+                player->actor.world.pos = body->second.actor->world.pos;
+                player->actor.prevPos = player->actor.world.pos;
+                player->actor.velocity.y = 0.0f;
+                player->actor.speedXZ = 0.0f;
+            }
         }
     } else if (gSpectating) {
         gSpectating = false; // the flag is per-frame, so it clears itself
@@ -11686,6 +12096,7 @@ void ReportEvents(const royale::HudState& hud) {
                 Say("A player left the lobby");
                 break;
             case royale::ClientEvent::Type::Damaged: {
+                if (e.other == hud.selfId && e.id != hud.selfId && IsLive(hud)) gMyStats.damage += e.amount;   // for the death card
                 if (!InGame()) break;
                 Player* me = GET_PLAYER(gPlayState);
                 const double now = ImGui::GetTime();
@@ -11795,6 +12206,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyStats.chests++;
                 if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
                     gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size()) {
@@ -11914,10 +12326,8 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (InGame()) {   // Link's cry as he goes down
-                    auto victim = gActorOf.find(e.id);
-                    if (victim != gActorOf.end() && victim->second != nullptr) PuppetVoice((Player*)victim->second, NA_SE_VO_LI_DOWN);
-                }
+                if (mine && !me) gMyStats.kills++;
+                // (Link's cry as he goes down comes from his body, see Corpse_Update.)
                 // The server stops sending eliminated players, so their puppet just vanishes: leave their body here instead, thrown away
                 // from whoever got them (or backwards, for the storm). Your own body is made in OnPlayerUpdate.
                 // (A player who was only just seen, or just went out of range, is found in gLastSeen: any kind of death leaves a body.)
@@ -11944,10 +12354,13 @@ void ReportEvents(const royale::HudState& hud) {
                 else if (royale::IsBossId(e.other)) line = victim + (me ? " were" : " was") + " defeated by the " + royale::kBossDefs[gBossKindSeen.count(e.other) ? gBossKindSeen[e.other] : 0].name;
                 else line = (mine ? std::string("You") : nameOf(e.other)) + " eliminated " + victim;
                 AddFeed(line, me ? IM_COL32(255, 110, 110, 255) : mine ? IM_COL32(255, 220, 90, 255) : IM_COL32(230, 230, 235, 255));
-                if (me) {
-                    ShowBanner("ELIMINATED  -  #" + std::to_string(std::max(1, hud.alive)), IM_COL32(255, 110, 110, 255), 4.0f);
-                    gSpectateTarget = kSpectateSelf;
-                    for (const auto& st : gSession.Puppets()) if (st.alive && st.id == e.other) gSpectateTarget = st.id;   // watch whoever got you
+                if (me) {   // the death screen takes it from here (DrawDeathScreen)
+                    gDeath.killer = e.other;
+                    if (e.other == royale::net::kNoPlayer16) gDeath.by = "by the storm";
+                    else if (royale::IsBossId(e.other)) gDeath.by = "by the " + std::string(royale::kBossDefs[gBossKindSeen.count(e.other) ? gBossKindSeen[e.other] : 0].name);
+                    else if (e.other == hud.selfId) gDeath.by = "by your own attack";
+                    else gDeath.by = "by " + nameOf(e.other);
+                    StartDeath(hud);
                 }
                 break;
             }
@@ -15372,6 +15785,8 @@ void OnGameFrameUpdate() {
     }
 
     if (hud.state != gLastState) {
+        if (hud.state == royale::MatchState::Lobby || hud.state == royale::MatchState::Countdown) ResetMatchUi();   // a new match: nobody is dead yet
+        if (hud.state == royale::MatchState::Ending && joined) StartEndScreen(hud);
         if (hud.state == royale::MatchState::Countdown && joined) {
             KillAllEnemies();
             WantsWaitingRoom = false;
@@ -16439,41 +16854,49 @@ std::string ExportMapJson() {
     return path;
 }
 
+// The menu's copy of the end screen (DrawEndScreen is the main one, over the game).
 void DrawResults(const royale::HudState& h) {
     Heading("MATCH OVER");
     if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) ImGui::TextColored(kGold, "VICTORY ROYALE! You won!");
     else if (!h.winnerName.empty()) ImGui::TextColored(kGold, "Winner: %s", h.winnerName.c_str());
     else ImGui::Text("Nobody survived.");
     ImGui::Spacing();
-    if (ImGui::BeginTable("royale_results", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+    std::vector<const royale::ResultsRow*> rows;
+    for (const auto& r : h.results) rows.push_back(&r);
+    std::stable_sort(rows.begin(), rows.end(), [](const royale::ResultsRow* p, const royale::ResultsRow* q) {
+        return (p->placement > 0 ? p->placement : 999) < (q->placement > 0 ? q->placement : 999);
+    });
+    if (ImGui::BeginTable("royale_results", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
         ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch, 3.0f);
         ImGui::TableSetupColumn("Kills");
         ImGui::TableSetupColumn("Damage");
-        ImGui::TableSetupColumn("Points");
+        ImGui::TableSetupColumn("Chests");
+        ImGui::TableSetupColumn("Score");
         ImGui::TableHeadersRow();
-        int rank = 1;
-        for (const auto& r : h.results) {
+        for (const royale::ResultsRow* r : rows) {
             ImGui::TableNextRow();
-            const ImVec4 col = r.self ? kGreen : ImVec4(1, 1, 1, 1);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", rank++);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s%s", r.name.c_str(), r.placement == 1 ? "  (winner)" : "");
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.kills);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%.1f", r.damage);
-            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r.score);
+            const ImVec4 col = r->self ? kGreen : r->placement == 1 ? kGold : ImVec4(1, 1, 1, 1);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r->placement);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s%s%s", r->name.c_str(), r->self ? " (you)" : "", r->isBot ? "  BOT" : "");
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r->kills);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%.1f", r->damage);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r->chests);
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%d", r->score);
         }
         ImGui::EndTable();
     }
-    ImGui::TextColored(kGrey, "Points: %d per heart of damage, %d per kill, %d per chest, plus a bonus for lasting longer and %d for winning.",
+    ImGui::TextColored(kGrey, "Score: %d per heart of damage, %d per kill, %d per chest, plus a bonus for lasting longer and %d for winning.",
                        royale::kPointsPerHeartOfDamage, royale::kPointsPerKill, royale::kPointsPerChest, royale::kPointsForWinning);
     ImGui::Spacing();
     if (h.isHost) {
-        if (ImGui::Button("Play again", ImVec2(220, 0))) gSession.RequestPlayAgain();
+        if (ImGui::Button("New match", ImVec2(220, 0))) gSession.RequestPlayAgain();
         ImGui::TextColored(kGrey, "Starts a new match right away with everyone who is connected.");
     } else {
-        ImGui::TextColored(kGrey, "Waiting for the host to play again...");
+        ImGui::TextColored(kGrey, "Only the host can start a new match.");
     }
-    if (ImGui::Button("Back to the menu", ImVec2(220, 0))) gSession.Leave();
+    if (!gEnd.open && ImGui::Button("Show the results screen", ImVec2(220, 0))) { gEnd.open = true; gEnd.at = ImGui::GetTime() - kEndPanelDelay; }
+    if (ImGui::Button("Leave", ImVec2(220, 0))) gSession.Leave();
 }
 
 // ---- in-game updater (Android) --------------------------------------------------------------------------------------------------
