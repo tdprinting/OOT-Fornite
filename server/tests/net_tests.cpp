@@ -119,6 +119,10 @@ static void MessagesRoundTrip() {
     { EvBossDown bad, out; bad.boss = 12; CHECK(!RoundTrips(bad, out)); }                    // not a boss id
     { Snapshot a, b; BossNet n; n.index = 3; n.kind = 2; n.x = 10; n.z = -4; n.rot = -123; n.hp = 77; n.smashing = true; a.bosses = {n};
       CHECK(RoundTrips(a, b) && b.bosses.size() == 1 && b.bosses[0].Id() == kBossIdBase + 3 && b.bosses[0].kind == 2 && b.bosses[0].rot == -123 && b.bosses[0].hp == 77 && b.bosses[0].smashing); }
+    for (int kind=static_cast<int>(BossKind::ChuRed);kind<=static_cast<int>(BossKind::ChuDark);kind++) {
+        Snapshot a,b; BossNet n; n.kind=static_cast<uint8_t>(kind);n.mode=static_cast<uint8_t>(DragonMode::Stunned);n.aux=4;a.bosses={n};
+        CHECK(RoundTrips(a,b) && b.bosses[0].kind==kind && b.bosses[0].aux==4);
+    }
     { Snapshot bad, out; BossNet n; n.index = 9; bad.bosses = {n}; CHECK(!RoundTrips(bad, out)); }   // index out of range
     { Snapshot a, b; BossNet n; n.mode = static_cast<uint8_t>(DragonMode::Stunned); n.aux = 2; a.bosses = {n};
       CHECK(RoundTrips(a, b) && b.bosses[0].mode == static_cast<uint8_t>(DragonMode::Stunned) && b.bosses[0].aux == 2); }   // what it is doing, and which variant

@@ -1,0 +1,18 @@
+{
+  "points": 220,
+  "triangles": 436,
+  "clips": [
+    "Idle",
+    "Wobble",
+    "Lunge",
+    "Puddle",
+    "Emerge",
+    "Discharge",
+    "Hurt",
+    "Petrify"
+  ],
+  "frames": 16,
+  "textureWidth": 256,
+  "textureHeight": 256,
+  "textureBytesPerVariant": 131072
+}

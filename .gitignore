@@ -41,3 +41,6 @@ assets/maya/*-preview.png
 /build-item-tests/
 /tools/__pycache__/
 /scripts/__pycache__/
+assets/chuchu/*.blend1
+/tools/chuchu/__pycache__/
+/build-chuchu-tests/

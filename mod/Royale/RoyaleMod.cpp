@@ -17,6 +17,7 @@
 #include "avriella_anim.h"
 #include "maya_anim.h"
 #include "cart_model.h"
+#include "chuchu_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "convergence_layout.h"
@@ -11801,7 +11802,7 @@ void RunSandboxCommands(const royale::HudState& hud) {
                 break;
             case SandboxCmd::ClearBots: m->SandboxClearBots(); break;
             case SandboxCmd::FreezeBots: if (royale::BotController* bots = gSession.SandboxBots()) bots->SetFrozen(c.a != 0); break;
-            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(c.a >= static_cast<int>(royale::BossKind::DragonFire) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
+            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(royale::IsMajorKind(static_cast<royale::BossKind>(c.a)) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
             case SandboxCmd::ClearBosses: m->SandboxClearBosses(); break;
             case SandboxCmd::Give: m->SandboxGive(self, static_cast<royale::ItemId>(c.a), static_cast<royale::Rarity>(c.b)); break;
             case SandboxCmd::Heal: m->SandboxHeal(self); break;
@@ -15583,7 +15584,7 @@ void DrawSandboxPanel(const royale::HudState& h) {
         ImGui::TextColored(kGold, "Bosses (they appear in front of you)");
         ButtonFlow flow;
         for (int i = 0; i < royale::kBossKindCount; i++) {
-            const std::string label = std::string(royale::BossOf(static_cast<royale::BossKind>(i)).name) + (i >= static_cast<int>(royale::BossKind::DragonFire) ? " (major)" : "");
+            const std::string label = std::string(royale::BossOf(static_cast<royale::BossKind>(i)).name) + (royale::IsMajorKind(static_cast<royale::BossKind>(i)) ? " (major)" : "");
             if (flow.Button(label.c_str())) SandboxDo(SandboxCmd::Boss, i);
         }
         if (flow.Button("Remove bosses")) SandboxDo(SandboxCmd::ClearBosses);

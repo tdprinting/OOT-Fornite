@@ -14,10 +14,19 @@ namespace royale {
 //   Moss   Moss Lizalfos (hides in the grass)    Tide   Big Octo (spinning charge)            Shade  Dead Hand (grabs, burrows)
 //   Dune   Iron Knuckle (its armour breaks off at half health and it gets fast)
 //   DragonFire Volvagia   DragonWater Morpha      DragonForest Phantom Ganon   DragonShadow Bongo Bongo   DragonSand Twinrova
-enum class BossKind : uint8_t { Stone, Lava, Frost, Moss, Tide, Shade, Dune, DragonFire, DragonWater, DragonForest, DragonShadow, DragonSand, Count };
-constexpr int kMiniBossKindCount = 7;
+// Append new kinds so the existing major boss IDs and authored region IDs stay stable.
+enum class BossKind : uint8_t { Stone, Lava, Frost, Moss, Tide, Shade, Dune, DragonFire, DragonWater, DragonForest, DragonShadow, DragonSand, ChuRed, ChuGreen, ChuYellow, ChuBlue, ChuDark, Count };
+constexpr int kMiniBossKindCount = 12;
+inline constexpr BossKind kMiniBossKinds[kMiniBossKindCount] = {
+    BossKind::Stone, BossKind::Lava, BossKind::Frost, BossKind::Moss, BossKind::Tide, BossKind::Shade, BossKind::Dune,
+    BossKind::ChuRed, BossKind::ChuGreen, BossKind::ChuYellow, BossKind::ChuBlue, BossKind::ChuDark
+};
+constexpr bool IsChuKind(BossKind k) { return k >= BossKind::ChuRed && k <= BossKind::ChuDark; }
+constexpr bool ChuCharged(BossKind k, float clock, bool dazed) {
+    return !dazed && (k == BossKind::ChuYellow || k == BossKind::ChuBlue) && static_cast<int>(clock * 0.5f) % 3 != 2;
+}
 // "Dragon" kinds are the major bosses (they all fly, or float, or hide; only Volvagia is still a dragon).
-constexpr bool IsDragonKind(BossKind k) { return static_cast<int>(k) >= static_cast<int>(BossKind::DragonFire); }
+constexpr bool IsDragonKind(BossKind k) { return k >= BossKind::DragonFire && k <= BossKind::DragonSand; }
 constexpr bool IsMajorKind(BossKind k) { return IsDragonKind(k); }
 
 // How a boss gets around the map when the straight way is blocked (a wall, a cliff, water, a gap between roofs). Mini bosses walk
@@ -61,6 +70,11 @@ constexpr BossDef kBossDefs[] = {
     {"Phantom Ganon", "Evil Spirit from Beyond", 80.0f, 1.0f, 3.0f, 160.0f, 2.4f, 9, Traverse::Warp, 360.0f},
     {"Bongo Bongo", "Phantom Shadow Beast", 80.0f, 1.0f, 3.0f, 130.0f, 2.4f, 9, Traverse::Vanish, 260.0f},
     {"Twinrova", "Sorceress Sisters", 80.0f, 1.0f, 3.0f, 190.0f, 2.4f, 9, Traverse::Fly, 430.0f},
+    {"Red ChuChu", "Blazing Jelly Giant", 20.0f, 0.8f, 1.5f, 65.0f, 1.15f, 3, Traverse::Leap, 0.0f},
+    {"Green ChuChu", "Vanishing Forest Jelly", 22.0f, 0.8f, 1.6f, 72.0f, 1.15f, 3, Traverse::Burrow, 0.0f},
+    {"Yellow ChuChu", "Crackling Jelly Giant", 24.0f, 0.9f, 1.7f, 62.0f, 1.2f, 4, Traverse::Leap, 0.0f},
+    {"Blue ChuChu", "Stormwater Jelly Giant", 26.0f, 1.0f, 1.8f, 55.0f, 1.2f, 4, Traverse::Swim, 0.0f},
+    {"Dark ChuChu", "Petrifying Shadow Jelly", 24.0f, 0.9f, 1.8f, 58.0f, 1.2f, 4, Traverse::Burrow, 0.0f},
 };
 constexpr int kBossKindCount = sizeof(kBossDefs) / sizeof(kBossDefs[0]);
 static_assert(kBossKindCount == static_cast<int>(BossKind::Count), "one definition per kind of boss");
@@ -132,5 +146,10 @@ enum class StrikeStyle : uint8_t {
     Spore,    // the Lizalfos's spore pods bursting: plain damage
     Count
 };
+
+constexpr StrikeStyle ChuStyle(BossKind k) {
+    return k == BossKind::ChuRed ? StrikeStyle::Fire : k == BossKind::ChuGreen ? StrikeStyle::Spore :
+           k == BossKind::ChuYellow || k == BossKind::ChuBlue ? StrikeStyle::Bolt : StrikeStyle::Shadow;
+}
 
 } // namespace royale
