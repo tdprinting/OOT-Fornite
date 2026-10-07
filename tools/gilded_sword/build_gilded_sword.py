@@ -125,15 +125,49 @@ def bipyramid(bm, a, b, r, sides, mat, mid=0.5):
         bm.faces.new((ring[j], ring[i], tb)).material_index = mat
 
 
+def orient_outward(bm, blade=False):
+    """Turns every face so that its normal points out of the solid it belongs to (the game lights the sword with them). Each separate piece (a tube, a
+    box, a gem) is turned away from its own middle; the blade's two flat sides are turned up and down."""
+    bm.faces.ensure_lookup_table()
+    bm.faces.index_update()
+    seen = set()
+    for f0 in bm.faces:
+        if f0.index in seen:
+            continue
+        island, stack = [], [f0]
+        seen.add(f0.index)
+        while stack:
+            f = stack.pop()
+            island.append(f)
+            for v in f.verts:
+                for g in v.link_faces:
+                    if g.index not in seen:
+                        seen.add(g.index)
+                        stack.append(g)
+        verts = {v for f in island for v in f.verts}
+        centre = sum((v.co for v in verts), Vector()) / len(verts)
+        for f in island:
+            f.normal_update()
+            c = f.calc_center_median()
+            if blade:
+                want = Vector((0, 0, 1 if c.z > 0 else -1))
+                out = f.normal.dot(want) < 0
+            else:
+                out = f.normal.dot(c - centre) < 0
+            if out:
+                f.normal_flip()
+
+
 # ---- the blade -------------------------------------------------------------------------------------------------------------------------
 
 NDIAMONDS = 5   # the pattern: this many diamonds along the blade, gold and silver in turn
+DIAMOND_PITCH = (BLADE_TIP - BLADE_START) / NDIAMONDS   # (game units) from one diamond's point to the next's
 
 
 def blade_width(x):
-    """Half the blade's width at x: broad at the guard, narrowing slowly, then quickly to the point."""
+    """Half the blade's width at x: the same all the way down the first four diamonds (the game's engraved surface map follows that), then it narrows to the point."""
     t = (x - BLADE_START) / (BLADE_TIP - BLADE_START)
-    return 5.4 * (1.0 - 0.3 * t) * max(0.0, 1.0 - t ** 5)
+    return 4.6 * min(1.0, (1.0 - t) / 0.2)    # straight sided, then the last diamond narrows to the point
 
 
 def blade_ridge(x):
@@ -164,6 +198,7 @@ def build_blade(mats):
                 tri(bm, C(k), E(k), C(k + 1), dia)                                    # the diamond's half on this side of the ridge
                 if k + 1 < n:
                     tri(bm, C(k + 1), E(k), E(k + 1), other)                          # the triangle between this diamond and the next, on the edge
+    orient_outward(bm, blade=True)
     bm.normal_update()
     bm.to_mesh(ob.data)
     bm.free()
@@ -209,6 +244,7 @@ def build_hilt(mats):
         pts2 = curl_points(sign, (BLADE_START - 0.6, 2.4), 3.4, -1.0, 0.7, 1.7)
         for a, b in zip(pts2, pts2[1:]):
             prism(bm, a, b, 0.55, 4, DARKSILVER, caps=False)
+    orient_outward(bm)
     bm.normal_update()
     bm.to_mesh(ob.data)
     bm.free()
@@ -239,6 +275,7 @@ def build_scabbard(mats):
     bipyramid(bm, (x1 - 0.5, 0, 0), (x1 + 4.0, 0, 0), w * 0.95, 6, GOLD, mid=0.0)
     box(bm, (x0 + 1.0, 0, 0), (1.0, section(x0)[0] + 0.5, section(x0)[1] + 0.5), SILVER)
     box(bm, (x0 + (x1 - x0) * 0.5, 0, 0), (0.8, section(x0 + (x1 - x0) * 0.5)[0] + 0.35, section(x0 + (x1 - x0) * 0.5)[1] + 0.35), DARKSILVER)
+    orient_outward(bm)
     bm.normal_update()
     bm.to_mesh(ob.data)
     bm.free()

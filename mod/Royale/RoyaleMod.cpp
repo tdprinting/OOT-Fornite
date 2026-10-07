@@ -19,6 +19,7 @@
 #include "maya_sounds.h"
 #include "cart_model.h"
 #include "gilded_sword_icon.h"
+#include "gilded_sword_surface.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "convergence_layout.h"
@@ -14447,15 +14448,91 @@ constexpr float kGildedGripLift = 400.0f;      // the game's blades run along y 
 constexpr float kGildedHandRoll = 0.0f;        // turn about the blade, radians: change this if the guard is seen edge-on
 constexpr float kGildedBackX = 1000.0f, kGildedBackY = 300.0f, kGildedBackZ = 0.0f, kGildedBackTurn = 2.55f;   // where and how it rests on the back (the sheath limb)
 
+// The sword is drawn lit by the same lights as Link himself, one run of triangles per (surface class, material): the material's colour is the primitive
+// colour, the triangles carry their outward normals. Each surface class has its own normal and bump map (shared/gilded_sword_surface.h), set up the
+// way the game's own sword and shield maps are (OnPlayerItemMaterial, libultraship patch 0003), so the blade shows its engraved diamonds in the sun.
+struct GildedGroup { int cls = 0, mat = 0; std::vector<Vtx> vtx; std::vector<Gfx> dl; };
+struct GildedGpu { std::vector<GildedGroup> groups; bool built = false; };
+GildedGpu gGildedGpu[2];
+std::unique_ptr<royale::gilded_surface::Map> gGildedMaps[4];
+
+const GildedGpu& GildedMeshFor(int variant) {
+    namespace gm = royale::gilded_sword_model;
+    GildedGpu& g = gGildedGpu[variant];
+    if (g.built) return g;
+    g.built = true;
+    g.groups.reserve(16);   // (never grows past this: the display lists point into each group)
+    auto add = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            GildedGroup* grp = nullptr;
+            for (GildedGroup& e : g.groups) if (e.cls == tris[i].cls && e.mat == tris[i].mat) { grp = &e; break; }
+            if (grp == nullptr) { g.groups.emplace_back(); grp = &g.groups.back(); grp->cls = tris[i].cls; grp->mat = tris[i].mat; }
+            for (int k = 0; k < 3; k++) {
+                Vtx v{};
+                v.n.ob[0] = tris[i].p[k * 3]; v.n.ob[1] = tris[i].p[k * 3 + 1]; v.n.ob[2] = tris[i].p[k * 3 + 2];
+                v.n.flag = 0; v.n.tc[0] = v.n.tc[1] = 0;
+                v.n.n[0] = tris[i].n[0]; v.n.n[1] = tris[i].n[1]; v.n.n[2] = tris[i].n[2];
+                v.n.a = 255;
+                grp->vtx.push_back(v);
+            }
+        }
+    };
+    add(gm::kHilt, gm::kHiltCount);
+    if (variant == 0) add(gm::kBlade, gm::kBladeCount); else add(gm::kScabbard, gm::kScabbardCount);
+    for (GildedGroup& e : g.groups) {
+        const size_t verts = e.vtx.size(), batches = (verts / 3 + 9) / 10;
+        e.dl.assign(verts / 3 + batches + 2, Gfx{});
+        Gfx* d = e.dl.data();
+        gDPSetPrimColor(d++, 0, 0, gm::kMatRgb[e.mat][0], gm::kMatRgb[e.mat][1], gm::kMatRgb[e.mat][2], 255);
+        for (size_t first = 0; first < verts; first += 30) {
+            const size_t n = std::min<size_t>(30, verts - first);
+            gSPVertex(d++, reinterpret_cast<uintptr_t>(&e.vtx[first]), static_cast<int>(n), 0);
+            for (size_t t = 0; t + 2 < n; t += 3) gSP1Triangle(d++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+        }
+        gSPEndDisplayList(d++);
+        e.dl.resize(static_cast<size_t>(d - e.dl.data()));
+    }
+    return g;
+}
+
 void DrawGildedMesh(PlayState* play, int variant) {
-    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::GildedSword, static_cast<uint32_t>(variant));
-    if (mesh == nullptr || mesh->dl.empty()) return;
+    const GildedGpu& mesh = GildedMeshFor(variant);
+    const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    const bool surfaces = normals != 0 || bumps != 0;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // the colours (and a fixed light) are in the vertices; both sides of the blade show
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);   // (lit by the game's lights; both sides of the blade show)
+    gDPSetCombineLERP(POLY_OPA_DISP++, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE);   // light x the material's colour
+    for (int cls = 0; cls < 4; cls++) {
+        bool any = false;
+        for (const GildedGroup& e : mesh.groups) any |= e.cls == cls;
+        if (!any) continue;
+        if (surfaces) {
+            if (!gGildedMaps[cls]) gGildedMaps[cls] = std::make_unique<royale::gilded_surface::Map>(royale::gilded_surface::Build(static_cast<royale::gilded_surface::Class>(cls)));
+            const royale::gilded_surface::Map& map = *gGildedMaps[cls];
+            GfxSurfaceMap* material = static_cast<GfxSurfaceMap*>(FrameAlloc(play, sizeof(GfxSurfaceMap)));
+            if (material != nullptr) {
+                *material = {};
+                material->normal = map.normal.data();
+                material->height = map.height.data();
+                material->width = material->heightPixels = static_cast<uint32_t>(map.size);
+                material->normalStrength = normals / 100.0f;
+                material->bumpStrength = bumps / 100.0f;
+                material->uvScale = map.uvScale;
+                const auto& lighting = play->envCtx.lightSettings;
+                for (int k = 0; k < 3; ++k) {
+                    material->sunDirection[k] = lighting.light1Dir[k] / 127.0f;
+                    material->sunColor[k] = lighting.light1Color[k] / 255.0f;
+                    material->ambientColor[k] = lighting.ambientColor[k] / 255.0f;
+                }
+                gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(material));
+            }
+        }
+        for (const GildedGroup& e : mesh.groups) if (e.cls == cls) gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(e.dl.data()));
+        if (surfaces) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+    }
     Gfx_SetupDL_25Opa(play->state.gfxCtx);                              // and the game's own limbs after it get the state they expect
     CLOSE_DISPS(play->state.gfxCtx);
 }

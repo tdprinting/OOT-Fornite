@@ -25,6 +25,21 @@ KEY = Vector((0.35, -0.45, 0.82)).normalized()
 FILL = Vector((-0.25, 0.35, -0.9)).normalized()
 
 
+# Which engraved surface map a triangle takes in the game (shared/gilded_sword_surface.h): 0 the blade's diamonds, 1 the wrapped cord of the grip,
+# 2 fine metal (guard, pommel, trims and the blade's point), 3 the scabbard's leather.
+CLS_BLADE, CLS_CORD, CLS_METAL, CLS_LEATHER = range(4)
+
+
+def surface_class(name, mat, cx):
+    if name == "GildedBlade":
+        return CLS_BLADE if cx < (g.BLADE_START + (g.NDIAMONDS - 1) * g.DIAMOND_PITCH) * 100.0 else CLS_METAL   # the last diamond narrows: no engraving there
+    if name == "GildedScabbard" and mat == g.LEATHER:
+        return CLS_LEATHER
+    if name == "GildedHilt" and mat == g.RED:
+        return CLS_CORD
+    return CLS_METAL
+
+
 def triangles(name):
     ob = bpy.data.objects[name]
     me = ob.data
@@ -39,15 +54,17 @@ def triangles(name):
         warm = 0.06 * max(0.0, n.dot(KEY))
         cool = 0.05 * (1.0 - max(0.0, n.dot(KEY)))
         rgb = [min(255, int(round(255 * c))) for c in (base[0] * shade + warm, base[1] * shade + warm * 0.6, base[2] * shade + cool)]
-        rows.append((pts, rgb))
+        mat = lt.material_index if lt.material_index < len(g.MATS) else 0
+        cx = sum(p.x for p in pts) / 3.0
+        rows.append((pts, rgb, tuple(max(-127, min(127, round(c * 127))) for c in n), mat, surface_class(name, mat, cx)))
     return rows
 
 
 def emit(rows):
     lines = []
-    for pts, rgb in rows:
+    for pts, rgb, n, mat, cls in rows:
         coords = ", ".join("%d" % round(c) for p in pts for c in (p.x, p.y, p.z))
-        lines.append("    {{%s}, {%d, %d, %d}}," % (coords, *rgb))
+        lines.append("    {{%s}, {%d, %d, %d}, %d, %d, {%d, %d, %d}}," % (coords, *n, mat, cls, *rgb))
     return "\n".join(lines)
 
 
@@ -65,10 +82,16 @@ def main():
 namespace royale {
 namespace gilded_sword_model {
 
-struct Tri { int16_t p[9]; uint8_t rgb[3]; };
+// A triangle: its three points, its outward direction (x127), its material (an index into kMatRgb), its surface-map class and a baked colour for drawing
+// the sword without lights (on the ground).
+struct Tri { int16_t p[9]; int8_t n[3]; uint8_t mat, cls; uint8_t rgb[3]; };
+
+// The materials' flat colours, in the order of the material index: gold, silver, grip red, grip band, crystal, leather, dark silver.
+constexpr uint8_t kMatRgb[%d][3] = {%s};
 
 // Where the blade starts and ends along X, and the pommel end of the grip (limb units): the game puts its hit trail along the blade.
 constexpr float kBladeStart = %.1ff, kBladeTip = %.1ff, kGripEnd = %.1ff;
+constexpr float kDiamondPitch = %.1ff, kBladeHalfWidth = %.1ff; // the blade's diamonds (limb units): one point to the next along X, and half the blade's width
 
 constexpr Tri kBlade[] = {
 %s
@@ -87,7 +110,7 @@ constexpr int kScabbardCount = %d;
 
 } // namespace gilded_sword_model
 } // namespace royale
-""" % (g.BLADE_START * 100, g.BLADE_TIP * 100, g.GRIP_END * 100, emit(blade), len(blade), emit(hilt), len(hilt), emit(scab), len(scab))
+""" % (len(g.MATS), ", ".join("{%d, %d, %d}" % tuple(round(255 * c) for c in m[1]) for m in g.MATS), g.BLADE_START * 100, g.BLADE_TIP * 100, g.GRIP_END * 100, g.DIAMOND_PITCH * 100, g.blade_width(g.BLADE_START) * 100, emit(blade), len(blade), emit(hilt), len(hilt), emit(scab), len(scab))
     with open(OUT, "w") as fh:
         fh.write(text)
     print("wrote", OUT, len(blade), "blade,", len(hilt), "hilt,", len(scab), "scabbard triangles")
