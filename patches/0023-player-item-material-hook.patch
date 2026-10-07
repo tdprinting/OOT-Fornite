@@ -1,0 +1,57 @@
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+@@ -9,6 +9,7 @@
+ DEFINE_HOOK(OnZTitleUpdate, (void* gameState));
+ DEFINE_HOOK(OnLoadGame, (int32_t fileNum));
+ DEFINE_HOOK(OnExitGame, (int32_t fileNum));
++DEFINE_HOOK(OnPlayerItemMaterial, (void* play, void* player, int32_t limbIndex, void* dList));
+ DEFINE_HOOK(OnPlayerClothLimb, (void* player, int32_t limbIndex, int16_t* rot));
+ DEFINE_HOOK(OnGameStateMainStart, ());
+ DEFINE_HOOK(OnGameFrameUpdate, ());
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+@@ -12,6 +12,7 @@
+ void GameInteractor_ExecuteOnZTitleUpdate(void* gameState);
+ void GameInteractor_ExecuteOnLoadGame(int32_t fileNum);
+ void GameInteractor_ExecuteOnExitGame(int32_t fileNum);
++void GameInteractor_ExecuteOnPlayerItemMaterial(void* play, void* player, int32_t limbIndex, void* dList);
+ void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot);
+ void GameInteractor_ExecuteOnGameStateMainStart();
+ void GameInteractor_ExecuteOnGameFrameUpdate();
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+@@ -16,6 +16,10 @@
+ 
+ void GameInteractor_ExecuteOnExitGame(int32_t fileNum) {
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnExitGame>(fileNum);
++}
++
++void GameInteractor_ExecuteOnPlayerItemMaterial(void* play, void* player, int32_t limbIndex, void* dList) {
++    GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerItemMaterial>(play, player, limbIndex, dList);
+ }
+ 
+ void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot) {
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -1449,6 +1449,8 @@
+         *dList = NULL;
+     }
+ 
++    GameInteractor_ExecuteOnPlayerItemMaterial(play, this, limbIndex, dList);
++
+     return false;
+ }
+ 
+@@ -1489,6 +1491,8 @@
+             *dList = NULL;
+         }
+     }
++
++    GameInteractor_ExecuteOnPlayerItemMaterial(play, this, limbIndex, dList);
+ 
+     return false;
+ }

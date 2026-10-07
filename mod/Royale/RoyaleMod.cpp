@@ -35,6 +35,8 @@
 #include "sky_model.h"
 #include "graphics_stability.h"
 #include "graphics_layers.h"
+#include "item_surface_maps.h"
+#include <libultraship/surface_map.h>
 #include "tune.h"
 #include "basic_pitch.h"
 #include "oot_arrange.h"
@@ -13957,6 +13959,63 @@ bool IsBotActor(const void* actor) {
     return st != gState.end() && st->second.isBot;
 }
 
+// Wrap equipment in an explicit material scope. The wrapper and sunlight
+// snapshot live in Claude's double-buffered graphics pool, like character data.
+void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dListPtr) {
+    if (!gSession.Client() || !playPtr || !playerPtr || !dListPtr) return;
+    PlayState* play = static_cast<PlayState*>(playPtr);
+    Player* player = static_cast<Player*>(playerPtr);
+    Gfx** dList = static_cast<Gfx**>(dListPtr);
+    if (!*dList) return;
+    const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    if (!normals && !bumps) return;
+    using namespace royale::item_surface;
+    const uint8_t* normal = nullptr;
+    const uint8_t* height = nullptr;
+    float scale = 1.0f / 2000.0f;
+    if (limb == PLAYER_LIMB_L_HAND &&
+        (player->leftHandType == PLAYER_MODELTYPE_LH_SWORD || player->leftHandType == PLAYER_MODELTYPE_LH_SWORD_2 ||
+         player->leftHandType == PLAYER_MODELTYPE_LH_BGS)) {
+        switch (player->heldItemAction) {
+            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_normal; height = kokiri_sword_bump; break;
+            case PLAYER_IA_SWORD_MASTER: normal = master_sword_normal; height = master_sword_bump; break;
+            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_normal; height = biggoron_sword_bump; break;
+            default: return;
+        }
+        scale = 1.0f / 4000.0f;
+    } else if ((limb == PLAYER_LIMB_R_HAND && player->rightHandType == PLAYER_MODELTYPE_RH_SHIELD) ||
+               limb == PLAYER_LIMB_SHEATH) {
+        switch (player->currentShield) {
+            case PLAYER_SHIELD_DEKU: normal = deku_shield_normal; height = deku_shield_bump; break;
+            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_normal; height = hylian_shield_bump; break;
+            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_normal; height = mirror_shield_bump; break;
+            default: return;
+        }
+    } else return;
+    struct ItemDraw { GfxSurfaceMap material; Gfx commands[4]; };
+    ItemDraw* draw = static_cast<ItemDraw*>(FrameAlloc(play, sizeof(ItemDraw)));
+    if (!draw) return;
+    draw->material = {};
+    draw->material.normal = normal;
+    draw->material.height = height;
+    draw->material.width = draw->material.heightPixels = kSize;
+    draw->material.normalStrength = normals / 100.0f;
+    draw->material.bumpStrength = bumps / 100.0f;
+    draw->material.uvScale = scale;
+    const auto& lighting = play->envCtx.lightSettings;
+    for (int k = 0; k < 3; ++k) {
+        draw->material.sunDirection[k] = lighting.light1Dir[k] / 127.0f;
+        draw->material.sunColor[k] = lighting.light1Color[k] / 255.0f;
+        draw->material.ambientColor[k] = lighting.ambientColor[k] / 255.0f;
+    }
+    gSPSurfaceMap(&draw->commands[0], reinterpret_cast<uintptr_t>(&draw->material));
+    gSPDisplayList(&draw->commands[1], *dList);
+    gSPSurfaceMap(&draw->commands[2], 0);
+    gSPEndDisplayList(&draw->commands[3]);
+    *dList = draw->commands;
+}
+
 void OnPlayerHatLimb(void* playerPtr, int16_t* rot) {
     Feat("cap cloth");
     if (!DebugOn(kDbgCloth)) return;
@@ -14495,6 +14554,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerClothLimb>(OnPlayerClothLimb);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerItemMaterial>(OnPlayerItemMaterial);
     // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
     // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {
@@ -15728,6 +15788,16 @@ void DrawGraphicsUi() {
     Heading("GRAPHICS");
     ImGui::TextColored(kGrey, "One section for each look of the game. Open one to switch it on or off and set how strong it is. Only you see these, and they are saved.");
     ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Sword and shield surface detail")) {
+        int normal = std::clamp(CVarGetInteger(ROYALE_CVAR("ItemNormals"), 100), 0, 200);
+        int bump = std::clamp(CVarGetInteger(ROYALE_CVAR("ItemBumps"), 50), 0, 200);
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Normal detail (%)", &normal, 0, 200)) { CVarSetInteger(ROYALE_CVAR("ItemNormals"), normal); SaveGfx(); }
+        ImGui::SetNextItemWidth(280);
+        if (ImGui::SliderInt("Bump detail (%)", &bump, 0, 200)) { CVarSetInteger(ROYALE_CVAR("ItemBumps"), bump); SaveGfx(); }
+        ImGui::TextColored(kGrey, "Wood grain and metal detail follow the sunlight. Set both to zero to turn them off.");
+    }
 
     if (GfxSection("Cloth physics", "Cloth")) {
         ImGui::PushID("cloth");
