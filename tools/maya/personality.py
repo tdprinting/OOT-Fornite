@@ -4,7 +4,7 @@ Angles below are model/world axes; converted to each joint's local space.
 """
 import math, sys, os
 import bpy
-from mathutils import Euler, Vector, Quaternion
+from mathutils import Euler, Vector, Quaternion, Matrix
 sys.path.insert(0,os.path.join(os.path.dirname(__file__),'../lilo'))
 import build_lilo as B
 FACES=('smile','half','shut','giggle','oh','talk','focus','wink')
@@ -201,7 +201,7 @@ def animate(rig,name,t,T):
         basis=rig.data.bones[prop].matrix_local.to_3x3()
         rig.pose.bones[prop].rotation_quaternion=(basis.inverted()@R@basis).to_quaternion()
         move(prop,Vector(center)-R@Vector(rest))
-    def grip(label,desired,orientation=None):
+    def grip(label,desired,orientation=None,pole_hint=None):
         # Analytic two-bone IK aligns the palm with the actual prop contact point.
         # Outward elbow poles keep a relaxed human bend rather than straight rods.
         upper=rig.pose.bones['arm'+label];lower=rig.pose.bones['forearm'+label]
@@ -216,14 +216,20 @@ def animate(rig,name,t,T):
         shoulder=parent_delta@S;l1=(E-S).length;l2=(W-E).length
         direction=target-shoulder;d=min(l1+l2-.002,max(abs(l1-l2)+.002,direction.length));direction.normalize()
         along=(l1*l1-l2*l2+d*d)/(2*d);height=math.sqrt(max(0,l1*l1-along*along))
-        pole=Vector((side,-.15,-.05));pole=(pole-direction*pole.dot(direction)).normalized()
+        pole=Vector(pole_hint if pole_hint is not None else (side,-.15,-.05));pole=(pole-direction*pole.dot(direction)).normalized()
         elbow=shoulder+direction*along+pole*height
-        wanted=(E-S).rotation_difference(elbow-shoulder).to_matrix()
+        def stable_frame(direction):
+            axis=direction.normalized();front=Vector((0,-1,0));front-=axis*front.dot(axis)
+            if front.length<.01:front=Vector((1,0,0))-axis*axis.x
+            front.normalize();side_axis=front.cross(axis).normalized()
+            return Matrix(((side_axis.x,front.x,axis.x),(side_axis.y,front.y,axis.y),(side_axis.z,front.z,axis.z)))
+        def align(rest,direction):return stable_frame(direction)@stable_frame(rest).transposed()
+        wanted=align(E-S,elbow-shoulder)
         basis=rig.data.bones[upper.name].matrix_local.to_3x3()
         upper.rotation_quaternion=(basis.inverted()@parent_delta.to_3x3().inverted()@wanted@basis).to_quaternion()
         bpy.context.view_layer.update()
         arm_delta=upper.matrix@rig.data.bones[upper.name].matrix_local.inverted();actual_elbow=arm_delta@E
-        wanted=(W-E).rotation_difference(target-actual_elbow).to_matrix()
+        wanted=align(W-E,target-actual_elbow)
         basis=rig.data.bones[lower.name].matrix_local.to_3x3()
         lower.rotation_quaternion=(basis.inverted()@arm_delta.to_3x3().inverted()@wanted@basis).to_quaternion()
         bpy.context.view_layer.update()
@@ -235,16 +241,16 @@ def animate(rig,name,t,T):
         error=Vector(desired)-palm(label)
         if error.length>.003:
             target+=error
-            wanted=(W-E).rotation_difference(target-actual_elbow).to_matrix()
+            wanted=align(W-E,target-actual_elbow)
             lower.rotation_quaternion=(basis.inverted()@arm_delta.to_3x3().inverted()@wanted@basis).to_quaternion()
             bpy.context.view_layer.update()
     if name=='wave':
         lift=env(t,.15,.65,2.3,3.1);flutter=env(t,.75,.95,2.1,2.45)
-        wrist=Euler((-.08,2.92+.16*math.sin(t*11)*flutter,0),'XYZ').to_quaternion()
-        R=Quaternion((1,0,0,0)).slerp(wrist,lift).to_matrix()
+        rot('handL',y=.18*math.sin(t*11)*flutter)
+        bpy.context.view_layer.update()
         target=Vector((.206,-.006,.697)).lerp(Vector((.24,-.075,1.23)),lift)
         target.x+=.095*math.sin(math.pi*lift)
-        grip('L',target,R)
+        grip('L',target,pole_hint=(.35,-.12,-1.0))
     elif name in ('tablet','learn'):
         R=Euler((.93,.025*math.sin(ph),.025*math.sin(ph-.3)),'XYZ').to_matrix()@Euler((0,0,math.pi),'XYZ').to_matrix()
         rest=Vector((0,-.235,.85)) if name=='tablet' else Vector((0,-.23,.87))
