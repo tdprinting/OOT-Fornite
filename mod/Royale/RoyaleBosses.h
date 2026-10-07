@@ -43,6 +43,9 @@ struct BossActor {
     float spin = 0;              // the Big Octo's spin, the Dodongo's roll
     bool armourOff = false;      // the Iron Knuckle has lost its armour
     float fxClock = 0;           // for effects that come every so often
+    float flashAge = 10.0f, flashLen = 0.0f;   // seconds since a hit flashed it, and how long that flash lasts (see HitFeedback)
+    u8 flashR = 255, flashG = 50, flashB = 20; // the colour of that flash
+    float recoilAge = 10.0f, recoilAmp = 0.0f, recoilDx = 0, recoilDz = 0;   // the rock away from a blow, laid over its animation (see RecoilTilt)
 };
 std::unordered_map<uint32_t, BossActor> gBosses;      // boss id -> its actor
 std::unordered_map<const Actor*, uint32_t> gBossOf;
@@ -113,9 +116,14 @@ float WaterTop(float x, float z, float floorY) {   // the water's surface over (
 
 // Tints the model in the boss's colours the way the game tints an enemy that is frozen or hit (fog laid over it), or flashes it red for a moment
 // after a hit, as every boss in the game does. `far` is how faint the tint is: 1700 strong, 4500 barely there.
-void BossTintOn(PlayState* play, u8 r, u8 g, u8 b, s16 far, float hurtAge) {
+void BossTintOn(PlayState* play, u8 r, u8 g, u8 b, s16 far, float hurtAge, const BossActor* flash = nullptr) {
     OPEN_DISPS(play->state.gfxCtx);
-    if (hurtAge < 0.12f) POLY_OPA_DISP = Gfx_SetFog(POLY_OPA_DISP, 255, 50, 0, 0, 900, 1099);
+    if (flash != nullptr && gHitFlash && flash->flashAge < flash->flashLen) {   // a hit: the game's own enemy flash (strong, fading), in the colour of the target
+        const float k = flash->flashAge / flash->flashLen;
+        gDPPipeSync(POLY_OPA_DISP++);
+        gDPSetFogColor(POLY_OPA_DISP++, flash->flashR, flash->flashG, flash->flashB, 255);
+        gSPFogPosition(POLY_OPA_DISP++, 0, static_cast<s16>(1700.0f + 2800.0f * k * k));
+    } else if (hurtAge < 0.12f) POLY_OPA_DISP = Gfx_SetFog(POLY_OPA_DISP, 255, 50, 0, 0, 900, 1099);
     else if (far > 0) {
         gDPPipeSync(POLY_OPA_DISP++);
         gDPSetFogColor(POLY_OPA_DISP++, r, g, b, 255);
@@ -383,6 +391,13 @@ void MiniBoss_Draw(Actor* actor, PlayState* play, BossActor& b, uint32_t id) {
     if (KindOf(b) == BK::Shade) lift = -150.0f * DeadHandSink(b);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y + lift, actor->world.pos.z, MTXMODE_NEW);
     Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    if (gHitReact && b.recoilAge < 0.5f) {   // a blow rocks it away from the attacker, over whatever it is doing
+        HitRecoil r; r.amp = b.recoilAmp; r.age = b.recoilAge; r.dx = b.recoilDx; r.dz = b.recoilDz;
+        float pitch, roll;
+        RecoilTilt(r, actor->shape.rot.y * (3.14159265f / 32768.0f), &pitch, &roll);
+        Matrix_RotateX(pitch, MTXMODE_APPLY);
+        Matrix_RotateZ(roll, MTXMODE_APPLY);
+    }
     if (KindOf(b) == BK::Lava && mode == BM::Charge) {   // the roll: curled up, tumbling forward about its middle
         Matrix_Translate(0.0f, 60.0f, 0.0f, MTXMODE_APPLY);
         Matrix_RotateX(b.spin, MTXMODE_APPLY);
@@ -400,7 +415,7 @@ void MiniBoss_Draw(Actor* actor, PlayState* play, BossActor& b, uint32_t id) {
         POLY_XLU_DISP = SkelAnime_DrawSkeleton2(play, &b.sk, nullptr, nullptr, actor, POLY_XLU_DISP);
         CLOSE_DISPS(play->state.gfxCtx);
     } else {
-        BossTintOn(play, m.r, m.g, m.b, m.far, b.hurtAge);
+        BossTintOn(play, m.r, m.g, m.b, m.far, b.hurtAge, &b);
         SkelAnime_DrawSkeletonOpa(play, &b.sk, MiniBoss_OverrideLimb, MiniBoss_PostLimb, actor);
         BossTintOff(play);
     }
@@ -644,7 +659,7 @@ void Volvagia_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     Matrix_RotateX(pitch, MTXMODE_APPLY);
     Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
     CLOSE_DISPS(play->state.gfxCtx);
-    BossTintOn(play, 0, 0, 0, 0, b.hurtAge);
+    BossTintOn(play, 0, 0, 0, 0, b.hurtAge, &b);
     SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Dragon_OverrideLimb, nullptr, actor);
     BossTintOff(play);
 }
@@ -795,7 +810,7 @@ void PhantomGanon_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     if (mode == BM::Charge) Matrix_RotateX(0.35f, MTXMODE_APPLY);   // leaning into the charge
     Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
     CLOSE_DISPS(play->state.gfxCtx);
-    BossTintOn(play, 0, 0, 0, 0, b.hurtAge);
+    BossTintOn(play, 0, 0, 0, 0, b.hurtAge, &b);
     SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, nullptr, nullptr, actor);
     BossTintOff(play);
 }
@@ -880,7 +895,7 @@ void Bongo_Draw(Actor* actor, PlayState* play, const BossActor& b, uint32_t id) 
     }
     Matrix_Scale(kBongoScale, kBongoScale, kBongoScale, MTXMODE_APPLY);
     Matrix_Translate(0.0f, 70000.0f, 0.0f, MTXMODE_APPLY);   // the game draws the head this far above where it is
-    BossTintOn(play, 0, 0, 0, 0, b.hurtAge);
+    BossTintOn(play, 0, 0, 0, 0, b.hurtAge, &b);
     SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, nullptr, nullptr, actor);
     BossTintOff(play);
     for (int h = 0; h < 2; h++) {
@@ -889,7 +904,7 @@ void Bongo_Draw(Actor* actor, PlayState* play, const BossActor& b, uint32_t id) 
         Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
         Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
         Matrix_Scale(kBongoScale, kBongoScale, kBongoScale, MTXMODE_APPLY);
-        BossTintOn(play, 0, 0, 0, 0, b.hurtAge);
+        BossTintOn(play, 0, 0, 0, 0, b.hurtAge, &b);
         SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).hand[h], nullptr, nullptr, actor);
         BossTintOff(play);
     }
@@ -975,7 +990,7 @@ void Twinrova_Draw(Actor* actor, PlayState* play, const BossActor& b) {
     Matrix_RotateZ(std::sin(t * 1.3f) * 0.08f, MTXMODE_APPLY);   // swaying on the broom
     Matrix_Scale(scale, scale, scale, MTXMODE_APPLY);
     CLOSE_DISPS(play->state.gfxCtx);
-    BossTintOn(play, 0, 0, 0, 0, b.hurtAge);
+    BossTintOn(play, 0, 0, 0, 0, b.hurtAge, &b);
     SkelAnime_DrawSkeletonOpa(play, &const_cast<BossActor&>(b).sk, Twinrova_OverrideLimb, Twinrova_PostLimb, actor);
     BossTintOff(play);
 }
@@ -1090,6 +1105,8 @@ void Boss_Update(Actor* actor, PlayState* play) {
     b.rot = static_cast<s16>(b.rot + diff * 0.35f);
     b.smashAge += dt;
     b.modeAge += dt;
+    b.flashAge += dt;
+    b.recoilAge += dt;
     b.hurtAge += royale::IsDragonKind(KindOf(b)) ? dt : 0.0f;   // the mini bosses count their own (MiniBoss_Update)
     if (royale::IsDragonKind(KindOf(b))) { if (b.hp < b.lastHp - 0.01f) b.hurtAge = 0.0f; b.lastHp = b.hp; }
     b.modeFresh = b.mode != b.shownMode || b.aux != b.shownAux;
