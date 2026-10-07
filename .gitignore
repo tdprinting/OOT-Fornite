@@ -23,5 +23,13 @@ assets/avriella/previews/
 assets/fish/*.blend1
 assets/fish/previews/
 
-# Local map validation builds
-/build-map-tests/
+# Maya authoring backups and local validation
+assets/maya/*.blend1
+assets/maya/*-preview.png
+/maya-tests.exe
+/maya-tests.obj
+/game-tests.exe
+/game-tests.obj
+/create_maya.py
+/tools/maya/test_maya.cmd
+/tools/maya/check_all.cmd
