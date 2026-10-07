@@ -204,6 +204,8 @@ float gFogAmount = 1.0f;            // the local option: how thick the fog banks
 bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
 bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
 float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
+bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true;   // the local options: hit feedback (see "hit feedback")
+float gHitAmount = 1.0f;            // the local option: how many hit particles, 0 (none) to 2
 int gWaterDetail = 1;               // the local option: how fine the water surface is, 0 low, 1 normal, 2 high
 float gWaterWaves = 1.0f;           // the local option: how high the swell is, 0 (flat) to 2
 bool gWaterFxOn = true;             // the local option: the game's own splashes, ripples and bubbles
@@ -343,11 +345,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Avriella", "Avriella the baby pet (the pet picker)" },
     { "Ragdoll", "Ragdoll bodies: full-body joints and the lobby test ragdoll" },
     { "LobbyFish", "Lobby reef aquarium (clownfish and cleaner wrasse)" },
+    { "HitFx", "Hit feedback: flash and particles on whatever is hit" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish };
-static_assert(kDbgLobbyFish + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx };
+static_assert(kDbgHitFx + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
@@ -6490,6 +6493,156 @@ bool KnownPosition(uint16_t id, float* x, float* z) {
     return false;
 }
 
+// ---- hit feedback ------------------------------------------------------------------------------------------------------------------
+// Every blow that lands makes the target flash and throw particles from the point of impact, the way the game's own enemies do (the red or
+// white flash of Actor_SetColorFilter, a hit mark, blood drops from CollisionCheck_SpawnRedBlood and friends), but scaled by how hard the hit was
+// and coloured for what was hit: red drops for living things, bone dust for skeletons, sparks for armour, ice for the frost, embers for fire.
+// It all runs through the game's own effect system (no display lists of ours), so the per-layer pool of "graphics layers" has nothing to carry.
+enum class HitKind { Flesh, Bone, Metal, Ice, Fire, Moss, Water, Shadow, Magic };
+
+HitKind HitKindOfBoss(const BossActor& b) {
+    switch (KindOf(b)) {
+        case BK::Stone: return HitKind::Bone;
+        case BK::Lava: case BK::DragonFire: return HitKind::Fire;
+        case BK::Frost: return HitKind::Ice;
+        case BK::Moss: return HitKind::Moss;
+        case BK::Tide: case BK::DragonWater: return HitKind::Water;
+        case BK::Shade: case BK::DragonShadow: return HitKind::Shadow;
+        case BK::Dune: return b.armourOff ? HitKind::Flesh : HitKind::Metal;
+        default: return HitKind::Magic;
+    }
+}
+
+// Where the blow lands on a target at `pos` (height `height` above its feet), nudged to the side the attacker is on.
+Vec3f HitPoint(const Vec3f& pos, float height, float fromX, float fromZ, bool haveFrom, float reach) {
+    Vec3f at = { pos.x, pos.y + height, pos.z };
+    if (haveFrom) {
+        const float dx = fromX - pos.x, dz = fromZ - pos.z, d = std::hypot(dx, dz);
+        if (d > 1.0f) { at.x += dx / d * reach; at.z += dz / d * reach; }
+    }
+    return at;
+}
+
+void HitParticles(PlayState* play, HitKind kind, const Vec3f& at, float size, int count, float fromX, float fromZ, bool haveFrom, bool kill) {
+    // Particles fly away from the attacker: the hit is a spray out of the far side as well as a puff at the near one.
+    float dirX = 0, dirZ = 0;
+    if (haveFrom) { const float dx = at.x - fromX, dz = at.z - fromZ, d = std::hypot(dx, dz); if (d > 1.0f) { dirX = dx / d; dirZ = dz / d; } }
+    auto spray = [&](Color_RGBA8 prim, Color_RGBA8 env, int n, float speed, s16 scale, s32 life) {
+        for (int i = 0; i < n; i++) {
+            Vec3f pos = { at.x + Rand_CenteredFloat(10.0f), at.y + Rand_CenteredFloat(10.0f), at.z + Rand_CenteredFloat(10.0f) };
+            const float sp = speed * (0.5f + Rand_ZeroOne());
+            Vec3f vel = { dirX * sp * 0.8f + Rand_CenteredFloat(speed), speed * (0.3f + Rand_ZeroOne() * 0.9f), dirZ * sp * 0.8f + Rand_CenteredFloat(speed) };
+            Vec3f accel = { 0.0f, -0.4f, 0.0f };
+            EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, life);
+        }
+    };
+    auto puff = [&](Color_RGBA8 prim, Color_RGBA8 env, s16 scale) {   // a soft puff of dust at the point of impact
+        Vec3f pos = { at.x, at.y, at.z }, vel = { dirX * 1.2f, 0.8f, dirZ * 1.2f }, accel = { 0.0f, 0.15f, 0.0f };
+        EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, scale, 6, 12, 0);
+    };
+    Vec3f mark = at;
+    const s16 markScale = static_cast<s16>(220.0f * size);
+    switch (kind) {
+        case HitKind::Flesh:
+            if (gHitBlood) {
+                EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_RED, markScale, &mark);
+                CollisionCheck_SpawnRedBlood(play, &mark);   // the game's red drops
+                spray({ 200, 20, 30, 255 }, { 110, 0, 20, 255 }, count, 3.0f * size, 40, 22);
+            } else {
+                EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+                spray({ 255, 255, 230, 255 }, { 255, 230, 120, 255 }, count, 3.0f * size, 40, 20);
+            }
+            break;
+        case HitKind::Bone:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_DUST, markScale, &mark);
+            puff({ 235, 225, 195, 255 }, { 150, 135, 100, 255 }, static_cast<s16>(260 * size));
+            spray({ 240, 230, 200, 255 }, { 170, 150, 110, 255 }, count, 2.6f * size, 34, 22);
+            break;
+        case HitKind::Metal:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_METAL, markScale, &mark);
+            CollisionCheck_SpawnShieldParticlesMetal(play, &mark);   // the shower of sparks off steel
+            spray({ 255, 240, 170, 255 }, { 255, 160, 40, 255 }, count, 3.6f * size, 30, 16);
+            break;
+        case HitKind::Ice:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            spray({ 225, 245, 255, 255 }, { 110, 180, 255, 255 }, count, 2.8f * size, 40, 24);
+            if (kill || size > 1.5f) EffectSsIcePiece_SpawnBurst(play, &mark, 0.6f * size);   // shards flying off
+            break;
+        case HitKind::Fire:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_RED, markScale, &mark);
+            spray({ 255, 190, 40, 255 }, { 255, 60, 0, 255 }, count, 3.0f * size, 44, 26);
+            puff({ 90, 60, 40, 200 }, { 30, 20, 10, 0 }, static_cast<s16>(200 * size));
+            break;
+        case HitKind::Moss:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_DUST, markScale, &mark);
+            spray({ 170, 240, 90, 255 }, { 40, 120, 20, 255 }, count, 2.8f * size, 38, 22);
+            break;
+        case HitKind::Water:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            CollisionCheck_SpawnWaterDroplets(play, &mark);   // the game's water droplets
+            spray({ 200, 235, 255, 255 }, { 60, 130, 230, 255 }, count, 2.8f * size, 36, 22);
+            break;
+        case HitKind::Shadow:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            puff({ 90, 40, 140, 220 }, { 20, 0, 40, 0 }, static_cast<s16>(280 * size));
+            spray({ 190, 120, 255, 255 }, { 70, 20, 130, 255 }, count, 2.8f * size, 40, 24);
+            break;
+        case HitKind::Magic:
+            EffectSsHitMark_SpawnCustomScale(play, EFFECT_HITMARK_WHITE, markScale, &mark);
+            spray({ 255, 255, 190, 255 }, { 120, 200, 255, 255 }, count, 3.4f * size, 44, 24);
+            break;
+    }
+}
+
+// Flash and particles for a blow of `hearts` on `id` (a player, a bot or a boss). `attacker` may be kNoPlayer16 (the storm, a fall): no spray then.
+void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool self) {
+    if (!DebugOn(kDbgHitFx) || gPlayState == nullptr) return;
+    if (self && !gHitOnSelf) return;
+    const float size = gHitScaled ? std::clamp(0.75f + hearts * 0.3f, 0.8f, 2.0f) * (kill ? 1.3f : 1.0f) : 1.0f;
+    float fromX = 0, fromZ = 0;
+    const bool haveFrom = attacker != royale::net::kNoPlayer16 && KnownPosition(attacker, &fromX, &fromZ);
+    Vec3f pos = { 0, 0, 0 };
+    float height = 36.0f;
+    HitKind kind = HitKind::Flesh;
+    BossActor* boss = nullptr;
+    Actor* actor = nullptr;
+    if (self) {
+        Player* me = GET_PLAYER(gPlayState);
+        pos = me->actor.world.pos;
+    } else if (royale::IsBossId(id)) {
+        auto it = gBosses.find(id);
+        if (it == gBosses.end() || it->second.actor == nullptr || it->second.fade < 0.2f) return;   // out of sight: nothing to hit
+        boss = &it->second;
+        pos = boss->actor->world.pos;
+        kind = HitKindOfBoss(*boss);
+        height = royale::IsDragonKind(KindOf(*boss)) ? 70.0f : 50.0f * royale::kBossDefs[boss->kind].scale;
+    } else {
+        auto a = gActorOf.find(id);
+        if (a == gActorOf.end()) return;
+        actor = a->second;
+        pos = actor->world.pos;
+    }
+    if (!self && std::hypot(pos.x - GET_PLAYER(gPlayState)->actor.world.pos.x, pos.z - GET_PLAYER(gPlayState)->actor.world.pos.z) > 2400.0f) return;   // too far to see
+    const Vec3f at = HitPoint(pos, height, fromX, fromZ, haveFrom, boss != nullptr ? 22.0f * royale::kBossDefs[boss->kind].scale : 14.0f);
+    if (gHitFlash && !self) {
+        const int frames = std::clamp(static_cast<int>(8 + 5 * size), 8, 20);
+        if (boss != nullptr) {
+            boss->flashAge = 0.0f; boss->flashLen = frames / royale::kTickHz;
+            const bool white = kind == HitKind::Bone || kind == HitKind::Metal || kind == HitKind::Magic;
+            const bool blue = kind == HitKind::Ice || kind == HitKind::Water;
+            boss->flashR = white ? 255 : blue ? 90 : 255;
+            boss->flashG = white ? 255 : blue ? 170 : kind == HitKind::Moss ? 160 : 40;
+            boss->flashB = white ? 255 : blue ? 255 : kind == HitKind::Shadow ? 200 : 20;
+        } else if (actor != nullptr) {
+            Actor_SetColorFilter(actor, 0x4000, 0xFF, 0, frames);   // the game's red enemy flash
+        }
+    }
+    if (gHitParticles && gHitAmount > 0.01f) {
+        const int count = std::clamp(static_cast<int>((self ? 3.0f : 5.0f) * size * gHitAmount + 0.5f), 0, 16);
+        HitParticles(gPlayState, kind, at, self ? std::min(size, 1.2f) : size, count, fromX, fromZ, haveFrom, kill);
+    }
+}
+
 void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
     if (gPlayState == nullptr || !InField()) { gFloatingNumbers.clear(); gIncomingHits.clear(); return; }
@@ -10689,6 +10842,7 @@ void ReportEvents(const royale::HudState& hud) {
                     Player_PlaySfx(&me->actor, NA_SE_VO_LI_DAMAGE_S);
                     Audio_PlaySoundGeneral(NA_SE_PL_BODY_HIT, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     gHurtAt = now; gHurtAmount = e.amount;
+                    HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, true);
                     gFloatingNumbers.push_back({ 0, 0, 0, e.amount, now, true });
                     if (e.other != royale::net::kNoPlayer16) {
                         gIncomingHits.push_back({ e.other, now });
@@ -10706,14 +10860,16 @@ void ReportEvents(const royale::HudState& hud) {
                         gHitMarkerAt = now;
                         gHitMarkerKill = e.health <= 0.001f;
                         if (known || target != gActorOf.end()) gFloatingNumbers.push_back({ tx, ty, tz, e.amount, now, false });
-                        if (target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
+                        HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
                         Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
                         swing(e.other);
+                        HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end()) {
-                            Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
+                            if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
                             if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
                         }
@@ -14134,6 +14290,12 @@ UiState& Ui() {
         gGroundLeaves = CVarGetInteger(ROYALE_CVAR("GroundLeaves"), 1) != 0;
         gGroundMerge = CVarGetInteger(ROYALE_CVAR("GroundMerge"), 1) != 0;
         gGroundAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundAmount"), 100), 0, 200) / 100.0f;
+        gHitFlash = CVarGetInteger(ROYALE_CVAR("HitFlash"), 1) != 0;
+        gHitParticles = CVarGetInteger(ROYALE_CVAR("HitParticles"), 1) != 0;
+        gHitBlood = CVarGetInteger(ROYALE_CVAR("HitBlood"), 1) != 0;
+        gHitScaled = CVarGetInteger(ROYALE_CVAR("HitScaled"), 1) != 0;
+        gHitOnSelf = CVarGetInteger(ROYALE_CVAR("HitOnSelf"), 1) != 0;
+        gHitAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("HitAmount"), 100), 0, 200) / 100.0f;
         gWaterDetail = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterDetail"), 1), 0, 2);
         gWaterWaves = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterWaves"), 100), 0, 200) / 100.0f;
         gWaterFxOn = CVarGetInteger(ROYALE_CVAR("WaterFx"), 1) != 0;
@@ -15314,6 +15476,21 @@ void DrawGraphicsUi() {
         ImGui::PushID("fx");
         GfxSwitch("BossFx", "Boss effects in the world");
         GfxSwitch("Projectiles", "Arrows, bombs and chest reveals");
+        ImGui::PopID();
+    }
+    if (GfxSection("Hit feedback", "HitFx")) {
+        ImGui::PushID("hitfx");
+        if (GfxSwitch("HitFx", "Flash and particles on whatever is hit")) {
+            static int amount = -1;
+            if (amount < 0) amount = static_cast<int>(gHitAmount * 100.0f + 0.5f);
+            GfxCheck("Flash the target on every hit", "HitFlash", &gHitFlash);
+            GfxCheck("Particles at the point of impact", "HitParticles", &gHitParticles);
+            GfxCheck("Red blood-style drops on living targets (off: pale sparks)", "HitBlood", &gHitBlood);
+            GfxCheck("Bigger hits throw bigger bursts", "HitScaled", &gHitScaled);
+            GfxCheck("Also show it when you are the one hit", "HitOnSelf", &gHitOnSelf);
+            if (GfxPercent("How many particles (%, 0 = none)", "HitAmount", &amount)) gHitAmount = amount / 100.0f;
+            ImGui::TextWrapped("Players and bots bleed red, skeletons shed bone dust, armour rings with sparks, and each mini boss and major boss has its own kind of burst.");
+        }
         ImGui::PopID();
     }
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
