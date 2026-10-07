@@ -28,3 +28,9 @@ A bot wanting a chest upstairs gets a route from `NavGrid::FindRoute` whose stop
 ## Tests
 
 `server/tests/kingdom_tests.cpp` (also in `tools/maps/run_map_tests.cmd`) checks the data, collision indices, layout, bosses, chests, and that the main places are joined for bots.
+
+### Swimming, climbing and fighting
+
+- Bots swim the river and sea (level -227, cells with terrain below -212). They float at the surface at 0.55 speed and the route costs 2.2 times more per cell, so they only swim when it saves a lot. Animations `Swim` and `Tread`.
+- Bots climb bare cliffs (rise 70 to 900) and the ivy walls listed in `kClimbWalls`. The bot stays at the foot while its height runs to the top (`Anim::Climb`), then steps on.
+- Fighting: a bot with a blade no longer chases a foe it cannot walk to, or one that is swimming; it prefers a reachable target, and it counts high ground (a 15% edge) and low ground (13% worse) in whether to fight or flee. Archers keep using perches.

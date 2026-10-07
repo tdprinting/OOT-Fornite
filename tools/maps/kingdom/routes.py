@@ -75,3 +75,25 @@ def upper_nodes(w, ground):
             kept.append(y)
         for y in kept: nodes.append((int(round(x)), int(round(z)), int(y)))
     return sorted(nodes)
+
+def climb_walls(w):
+    """The steep faces that can be climbed (ivy, mostly): for each triangle where the surface allows it, where it stands, which way it faces (outward,
+    in hundredths) and its lowest and highest points. The game links the ground in front of it to the floor behind its top edge."""
+    V = np.array(w.col_verts, float)
+    out = {}
+    for a, b, c, s in w.col_tris:
+        if not w.surfaces[s][1]: continue
+        A, B, C = V[a], V[b], V[c]
+        n = np.cross(B - A, C - A); ln = np.linalg.norm(n)
+        if ln < 1e-6: continue
+        n = n / ln
+        if abs(n[1]) > 0.35: continue
+        h = math.hypot(n[0], n[2])
+        if h < 1e-6: continue
+        cx = (A[0] + B[0] + C[0]) / 3; cz = (A[2] + B[2] + C[2]) / 3
+        y0 = min(A[1], B[1], C[1]); y1 = max(A[1], B[1], C[1])
+        key = (round(cx / 60), round(cz / 60), round(n[0] / h * 2), round(n[2] / h * 2))
+        # keep the highest triangle of each column of wall: the top edge is what is climbed to
+        if key not in out or out[key][5] < y1:
+            out[key] = (int(round(cx)), int(round(cz)), int(round(n[0] / h * 100)), int(round(n[2] / h * 100)), int(round(y0)), int(round(y1)))
+    return sorted(out.values())

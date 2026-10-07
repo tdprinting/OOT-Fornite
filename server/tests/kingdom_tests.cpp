@@ -117,10 +117,10 @@ int main() {
         GameServer server(host,5,MapOf(0).fallback,40);server.SetBossCount(3);
         CHECK(server.SelectMap(kKingdomMapIndex));server.SetPlayerLimit(30);server.Sim().match.AddHuman(1);
         CHECK(server.StartMatch());
-        float highest=0;float elapsed=0;
+        float highest=0;float elapsed=0;int swimTicks=0,climbTicks=0;
         while (elapsed<420.0f && server.Sim().match.State()!=MatchState::Ending) {
             server.Sim().Tick(kDt);elapsed+=kDt;
-            for (const auto& p:server.Sim().match.Players()) if (p.isBot && p.alive && elapsed>100.0f) highest=std::max(highest,p.y);
+            for (const auto& p:server.Sim().match.Players()) if (p.isBot && p.alive && elapsed>100.0f) {highest=std::max(highest,p.y);const auto a=static_cast<Anim>(p.anim);if(a==Anim::Swim||a==Anim::Tread)++swimTicks;if(a==Anim::Climb)++climbTicks;}
         }
         int upstairsTaken=0;
         for (const auto& l:server.Sim().match.Loot()) {
@@ -128,7 +128,9 @@ int main() {
             for (const auto& site:kingdom::kLootSites) if (Distance(l.spawn.pos,{site.x,site.z})<2.0f && site.y>KingdomGroundHeight({site.x,site.z})+90.0f) ++upstairsTaken;
         }
         std::printf("  bots upstairs: highest %.0f above the floor, %d chests upstairs opened\n",highest,upstairsTaken);
+        std::printf("  bots swam %d ticks, climbed %d ticks\n",swimTicks,climbTicks);
         CHECK(highest>200.0f && upstairsTaken>=1);
+        CHECK(climbTicks>0 && sizeof(kingdom::kClimbWalls)>0);
     }
     fortnite::UseTerrainForMap(kFortniteMapIndex);CHECK(!fortnite::gSandboxTerrain && fortnite::gHeightData==fortnite::kHeights);
     std::printf("Kingdom: %s (%d failures)\n",failures?"FAILED":"passed",failures);return failures?1:0;

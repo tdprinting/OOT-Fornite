@@ -68,10 +68,39 @@ class NavGrid {
         int cx, cz;
         return ToCell(p, cx, cz) && cells[Index(cx, cz)] == kOpen;
     }
-    // Anywhere a bot can stand: open ground, the ground right beside scenery, and the tops of blocks and low boulders.
+    // Anywhere a bot can stand: open ground, the ground right beside scenery, and the tops of blocks and low boulders. (Not water: carts and
+    // landings keep out of it. A swimming bot is Passable.)
     bool Standable(Vec2 p) const {
         int cx, cz;
+        return ToCell(p, cx, cz) && cells[Index(cx, cz)] != kBlocked && cells[Index(cx, cz)] != kWater;
+    }
+    // Anywhere a bot can get to: Standable, or water it can swim.
+    bool Passable(Vec2 p) const {
+        int cx, cz;
         return ToCell(p, cx, cz) && cells[Index(cx, cz)] != kBlocked;
+    }
+    bool Swimming(Vec2 p) const {
+        int cx, cz;
+        return hasWater && ToCell(p, cx, cz) && cells[Index(cx, cz)] == kWater;
+    }
+    // Make water cells swimmable: every blocked cell `swimmable` accepts, with a bot's body floating at `level` less `depth` (so its height is
+    // that of the surface, not the bed: the floor stays the bed's, as the clients draw from it).
+    void AddWater(float level, float depth, const PlacementFn& swimmable) {
+        for (int cz = 0; cz < h; cz++) {
+            for (int cx = 0; cx < w; cx++) {
+                const size_t i = static_cast<size_t>(Index(cx, cz));
+                if (cells[i] != kBlocked) continue;
+                const Vec2 c = CellCentre(cx, cz);
+                if (Distance(c, map.center) > map.radius || !swimmable(c)) continue;
+                cells[i] = kWater;
+                lift[i] = (level - depth) - floor[i];
+                hasWater = true;
+            }
+        }
+    }
+    float WaterLift(Vec2 p) const {
+        int cx, cz;
+        return hasWater && ToCell(p, cx, cz) && cells[Index(cx, cz)] == kWater ? lift[Index(cx, cz)] : 0.0f;
     }
     bool HasHeights() const { return heights; }
     // The scene's floor under p (0 without heights), what is stood on above it, and how high whatever is there stands (for hiding behind).
@@ -100,7 +129,7 @@ class NavGrid {
     // it as extra nodes. A node joins its neighbours that differ by a step, and joins a ground cell where a ramp or a doorstep meets it.
     struct UpperNode { float x, z, y; };
     // One stop of a route: where, and how high the feet are there.
-    struct Stop { Vec2 p; float y; bool upper; };
+    struct Stop { Vec2 p; float y; bool upper; bool climb; };
     void AddUpper(const std::vector<UpperNode>& nodes) {
         up = nodes;
         upAt.clear();
@@ -169,6 +198,7 @@ class NavGrid {
                 const int a = stack.back();
                 stack.pop_back();
                 count++;
+                if (!climbLinks.empty()) { auto it = climbLinks.find(a); if (it != climbLinks.end()) for (const auto& l : it->second) visit(l.first); }
                 if (static_cast<size_t>(a) >= cells.size()) { UpperLinks(a - static_cast<int>(cells.size()), visit); continue; }
                 const int ax = a % w, az = a / w;
                 for (int dz = -1; dz <= 1; dz++) {
@@ -178,7 +208,8 @@ class NavGrid {
                         const int b = Index(x, z);
                         if (cells[b] == kBlocked || region[b] >= 0) continue;
                         if (dx && dz && (cells[Index(ax + dx, az)] == kBlocked || cells[Index(ax, az + dz)] == kBlocked)) continue;   // no squeezing between corners
-                        if (std::fabs(Height(b) - Height(a)) > kClimbUp) continue;
+                        const bool cliff = climbing && cells[b] != kWater && cells[static_cast<size_t>(a)] != kWater && !(dx && dz);   // a bare cliff can be climbed
+                        if (std::fabs(Height(b) - Height(a)) > (cliff ? kCliffMax : kClimbUp)) continue;
                         visit(b);
                     }
                 }
@@ -206,8 +237,48 @@ class NavGrid {
         return regionSize[static_cast<size_t>(ra)] < 150;
     }
 
-    // A route that may use the upper nodes: ramps and stairs up to a floor or a roof, and back down. `fromUp` says the bot is on an upper floor (at
-    // height fromY); `toUp` that the goal is (at toY). The stops carry their heights; the last stop is `to` itself.
+    // ---- climbing --------------------------------------------------------------------------------------------------------------
+    // A steep face a bot can climb is a link between the foot of it and its top: bare cliffs (a drop of kCliffMin to kCliffMax between neighbouring
+    // cells) are found by the route search itself; ivy walls and the like are added with AddClimb.
+    static constexpr float kCliffMin = 70.0f, kCliffMax = 900.0f;
+    void SetClimbing(bool on) { climbing = on; }
+    bool HasRoutes() const { return !up.empty() || hasWater || climbing; }
+    // A climbable wall: from the ground at `foot` (standing at height footY) up to the floor behind its top edge (the parapet is over the floor, so a
+    // floor a little under topY counts), at `top`.
+    void AddClimb(Vec2 foot, float footY, Vec2 top, float topY) {
+        int fx, fz;
+        if (!ToCell(foot, fx, fz)) return;
+        const int a = Index(fx, fz);
+        if (cells[static_cast<size_t>(a)] == kBlocked || cells[static_cast<size_t>(a)] == kWater || std::fabs(Height(a) - footY) > 160.0f) return;
+        int b = -1, tx, tz;
+        float bestY = -1e9f;
+        ToCellClamped(top, tx, tz);
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                const int x = tx + dx, z = tz + dz;
+                if (x < 0 || z < 0 || x >= w || z >= h) continue;
+                auto it = upAt.find(Index(x, z));
+                if (it == upAt.end()) continue;
+                for (int j : it->second) {
+                    const UpperNode& m = up[static_cast<size_t>(j)];
+                    if (Distance({m.x, m.z}, top) <= 100.0f && m.y >= topY - 170.0f && m.y <= topY + 30.0f && m.y > bestY) { bestY = m.y; b = static_cast<int>(cells.size()) + j; }
+                }
+            }
+        }
+        if (b < 0 && ToCell(top, tx, tz) && cells[static_cast<size_t>(Index(tx, tz))] != kBlocked && cells[static_cast<size_t>(Index(tx, tz))] != kWater &&
+            Height(Index(tx, tz)) >= topY - 170.0f && Height(Index(tx, tz)) <= topY + 30.0f)
+            b = Index(tx, tz);
+        if (b < 0 || b == a || NodeY(b) - NodeY(a) < 60.0f) return;
+        auto& list = climbLinks[a];
+        for (const auto& l : list) if (l.first == b) return;
+        const float cost = 2.5f + (NodeY(b) - NodeY(a)) / 40.0f;
+        list.push_back({b, cost});
+        climbLinks[b].push_back({a, cost});
+        climbing = true;
+    }
+
+    // A route that may use the upper nodes, swim and climb: ramps and stairs up to a floor or a roof, rivers, cliffs and ivy. `fromUp` says the bot
+    // is on an upper floor (at height fromY); `toUp` that the goal is (at toY). The stops carry their heights; the last stop is `to` itself.
     bool FindRoute(Vec2 from, float fromY, bool fromUp, Vec2 to, float toY, bool toUp, std::vector<Stop>& out) const {
         out.clear();
         const int base = static_cast<int>(cells.size());
@@ -215,15 +286,16 @@ class NavGrid {
         if (fromUp) { const int n = UpperNear(from, fromY, 70.0f, 80.0f); if (n >= 0) start = base + n; }
         if (toUp) { const int n = UpperNear(to, toY, 70.0f, 60.0f); if (n < 0) return false; goal = base + n; }
         Vec2 a, b;
-        if (start < 0) { if (!Snap(from, &a, true)) return false; int cx, cz; ToCellClamped(a, cx, cz); start = Index(cx, cz); }
+        if (start < 0) { if (!Snap(from, &a, true, true)) return false; int cx, cz; ToCellClamped(a, cx, cz); start = Index(cx, cz); }
         if (goal < 0) { if (!Snap(to, &b, true)) return false; int cx, cz; ToCellClamped(b, cx, cz); goal = Index(cx, cz); }
-        if (start == goal) { out.push_back({to, NodeY(goal), goal >= base}); return true; }
+        if (start == goal) { out.push_back({to, NodeY(goal), goal >= base, false}); return true; }
         const Vec2 goalAt = NodeXZ(goal);
 
         struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
         const size_t total = cells.size() + up.size();
         std::vector<float> g(total, 1e18f);
         std::vector<int> parent(total, -1);
+        std::vector<uint8_t> via(total, 0);   // 1: the step into this node was a climb
         std::priority_queue<Node> open;
         g[static_cast<size_t>(start)] = 0;
         open.push({Distance(NodeXZ(start), goalAt) / kCell, start});
@@ -238,17 +310,22 @@ class NavGrid {
             if (n.idx == goal) { reached = true; break; }
             if (n.f - Distance(NodeXZ(n.idx), goalAt) / kCell > g[static_cast<size_t>(n.idx)] + 1e-3f) continue;
             expansions++;
-            auto relax = [&](int to2, float step) {
+            auto relax = [&](int to2, float step, bool climb) {
                 const float ng = g[static_cast<size_t>(n.idx)] + step;
                 if (ng < g[static_cast<size_t>(to2)]) {
                     g[static_cast<size_t>(to2)] = ng;
                     parent[static_cast<size_t>(to2)] = n.idx;
+                    via[static_cast<size_t>(to2)] = climb ? 1 : 0;
                     open.push({ng + Distance(NodeXZ(to2), goalAt) / kCell, to2});
                 }
             };
+            if (!climbLinks.empty()) {
+                auto it = climbLinks.find(n.idx);
+                if (it != climbLinks.end()) for (const auto& l : it->second) relax(l.first, l.second, true);
+            }
             if (n.idx >= base) {
                 const Vec2 at = NodeXZ(n.idx);
-                UpperLinks(n.idx - base, [&](int to2) { relax(to2, Distance(at, NodeXZ(to2)) / kCell + 0.05f); });
+                UpperLinks(n.idx - base, [&](int to2) { relax(to2, Distance(at, NodeXZ(to2)) / kCell + 0.05f, false); });
                 continue;
             }
             const int cx = n.idx % w, cz = n.idx / w;
@@ -256,37 +333,48 @@ class NavGrid {
                 const int x = cx + dxs[k], z = cz + dzs[k];
                 if (x < 0 || z < 0 || x >= w || z >= h || !Usable(Index(x, z), true)) continue;
                 if (k >= 4 && (!Usable(Index(cx + dxs[k], cz), true) || !Usable(Index(cx, cz + dzs[k]), true))) continue;
+                const int ni = Index(x, z);
                 float step = k >= 4 ? 1.41421356f : 1.0f;
-                const float rise = Height(Index(x, z)) - Height(n.idx);
-                if (!StepOk(Height(n.idx), Height(Index(x, z)))) continue;
-                if (k >= 4 && (std::fabs(Height(Index(cx + dxs[k], cz)) - Height(n.idx)) > kStepUp ||
-                               std::fabs(Height(Index(cx, cz + dzs[k])) - Height(n.idx)) > kStepUp)) continue;
-                if (rise > kStepUp) step += 1.5f; else if (-rise > kStepUp) step += 0.4f;
-                relax(Index(x, z), step);
+                const float rise = Height(ni) - Height(n.idx);
+                bool climb = false;
+                if (!StepOk(Height(n.idx), Height(ni))) {
+                    // a cliff: climbed straight up or down where it is steep enough, and nowhere near water
+                    if (!climbing || k >= 4 || cells[ni] == kWater || cells[static_cast<size_t>(n.idx)] == kWater ||
+                        std::fabs(rise) < kCliffMin || std::fabs(rise) > kCliffMax) continue;
+                    climb = true;
+                    step = 2.5f + std::fabs(rise) / 40.0f;
+                } else {
+                    if (k >= 4 && (std::fabs(Height(Index(cx + dxs[k], cz)) - Height(n.idx)) > kStepUp ||
+                                   std::fabs(Height(Index(cx, cz + dzs[k])) - Height(n.idx)) > kStepUp)) continue;
+                    if (rise > kStepUp) step += 1.5f; else if (-rise > kStepUp) step += 0.4f;
+                    if (cells[ni] == kWater) step *= 2.2f;       // swimming is slow
+                }
+                relax(ni, step, climb);
             }
-            GroundToUpper(n.idx, [&](int to2) { relax(to2, Distance(NodeXZ(n.idx), NodeXZ(to2)) / kCell + 0.05f); });
+            GroundToUpper(n.idx, [&](int to2) { relax(to2, Distance(NodeXZ(n.idx), NodeXZ(to2)) / kCell + 0.05f, false); });
         }
         if (!reached) return false;
 
         std::vector<Stop> raw;
-        for (int i = goal; i != start && i >= 0; i = parent[static_cast<size_t>(i)]) raw.push_back({NodeXZ(i), NodeY(i), i >= base});
+        for (int i = goal; i != start && i >= 0; i = parent[static_cast<size_t>(i)]) raw.push_back({NodeXZ(i), NodeY(i), i >= base, via[static_cast<size_t>(i)] != 0});
         std::reverse(raw.begin(), raw.end());
-        if (raw.empty()) { out.push_back({to, NodeY(goal), goal >= base}); return true; }
+        if (raw.empty()) { out.push_back({to, NodeY(goal), goal >= base, false}); return true; }
         raw.back().p = to;
-        // Thin it: a stop on a straight run at a steady slope is not needed.
-        Vec2 prev = NodeXZ(start);
-        float prevY = NodeY(start);
-        for (size_t i = 0; i < raw.size(); i++) {
-            if (i + 1 < raw.size()) {
-                const Vec2 d1 = {raw[i].p.x - prev.x, raw[i].p.z - prev.z}, d2 = {raw[i + 1].p.x - raw[i].p.x, raw[i + 1].p.z - raw[i].p.z};
-                const float l1 = std::hypot(d1.x, d1.z), l2 = std::hypot(d2.x, d2.z);
-                if (l1 > 1e-3f && l2 > 1e-3f && raw[i].upper == raw[i + 1].upper && (d1.x * d2.x + d1.z * d2.z) / (l1 * l2) > 0.995f &&
-                    std::fabs((raw[i].y - prevY) / l1 - (raw[i + 1].y - raw[i].y) / l2) < 0.04f)
-                    continue;
+        // String-pull the stretches of plain ground and water (a straight line that is clear is one stop); ramps, floors and climbs keep every stop.
+        Vec2 at = NodeXZ(start);
+        size_t i = 0;
+        while (i < raw.size()) {
+            size_t far = i;
+            if (!raw[i].upper && !raw[i].climb) {
+                for (size_t j = raw.size() - 1; j > i; j--) {
+                    bool plain = true;
+                    for (size_t k = i; k <= j && plain; k++) plain = !raw[k].upper && !raw[k].climb;
+                    if (plain && LineClear(at, raw[j].p, true)) { far = j; break; }
+                }
             }
-            out.push_back(raw[i]);
-            prev = raw[i].p;
-            prevY = raw[i].y;
+            out.push_back(raw[far]);
+            at = raw[far].p;
+            i = far + 1;
         }
         return true;
     }
@@ -316,7 +404,7 @@ class NavGrid {
             const float t = static_cast<float>(i) / static_cast<float>(steps);
             const Vec2 at = {a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t};
             if (!climber) { if (!Walkable(at)) return false; continue; }
-            if (!Standable(at)) return false;
+            if (!Passable(at)) return false;
             if (i > 0) {
                 const float up = StandHeight(at) - StandHeight(prev);
                 if (up > kStepUp || -up > kDropDown) return false;
@@ -327,8 +415,8 @@ class NavGrid {
     }
 
     // The nearest walkable point to p (p itself if it's fine). Searches outward in rings; returns false if there is none nearby.
-    bool Snap(Vec2 p, Vec2* out, bool climber = false) const {
-        if (climber ? Standable(p) : Walkable(p)) { *out = p; return true; }
+    bool Snap(Vec2 p, Vec2* out, bool climber = false, bool swimming = false) const {
+        if (climber ? (swimming ? Passable(p) : Standable(p)) : Walkable(p)) { *out = p; return true; }
         int cx, cz;
         ToCellClamped(p, cx, cz);
         for (int r = 1; r <= 12; r++) {
@@ -338,7 +426,7 @@ class NavGrid {
                 for (int dx = -r; dx <= r; dx++) {
                     if (std::abs(dx) != r && std::abs(dz) != r) continue;
                     const int x = cx + dx, z = cz + dz;
-                    if (x < 0 || z < 0 || x >= w || z >= h || !Usable(Index(x, z), climber)) continue;
+                    if (x < 0 || z < 0 || x >= w || z >= h || !Usable(Index(x, z), climber) || (!swimming && cells[Index(x, z)] == kWater)) continue;
                     const Vec2 c = CellCentre(x, z);
                     const float d = Distance(c, p);
                     if (d < best) { best = d; *out = c; found = true; }
@@ -355,7 +443,7 @@ class NavGrid {
     bool FindPath(Vec2 from, Vec2 to, std::vector<Vec2>& path, bool climber = false) const {
         path.clear();
         Vec2 a, b;
-        if (!Snap(from, &a, climber) || !Snap(to, &b, climber)) return false;
+        if (!Snap(from, &a, climber, true) || !Snap(to, &b, climber)) return false;
         if (LineClear(a, b, climber)) { path.push_back(b); return true; }
 
         int sx, sz, gx, gz;
@@ -429,7 +517,7 @@ class NavGrid {
     // Enough to cross the whole grid: a big map (the Kingdom is 220 cells across) has rivers to go round.
     int MaxExpansions() const { return (std::max)(6000, static_cast<int>(cells.size() / 2)); }
     // What a cell holds: nothing to stand on, open ground, ground right beside scenery, the top of scenery.
-    static constexpr uint8_t kBlocked = 0, kOpen = 1, kNearScenery = 2, kLifted = 3;
+    static constexpr uint8_t kBlocked = 0, kOpen = 1, kNearScenery = 2, kLifted = 3, kWater = 4;
 
     int Index(int cx, int cz) const { return cz * w + cx; }
     // Ids in a route: a ground cell is its index, an upper node is cells.size() + its number.
@@ -522,6 +610,9 @@ class NavGrid {
     std::unordered_map<int, std::vector<int>> upAt;   // ground cell -> the upper nodes inside it
     std::unordered_map<int, float> upperGoal;         // MarkUpper: cell -> the height of the chest up there
     bool heights = false;
+    bool hasWater = false;
+    bool climbing = false;
+    std::unordered_map<int, std::vector<std::pair<int, float>>> climbLinks;   // AddClimbs: ground cell or upper node -> where a climb leads and what it costs
 };
 
 // How tall a piece of scenery stands (what you stand on at the top of a boulder or block; a pillar is taller than anyone).

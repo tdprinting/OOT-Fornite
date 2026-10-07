@@ -190,6 +190,8 @@ def main():
     obs = obstacles(w, h)
     nodes = routes.upper_nodes(w, lambda x, z: walk_floor(w, h, x, z))
     print('upper nodes: %d' % len(nodes))
+    climbs = routes.climb_walls(w)
+    print('climbable walls: %d' % len(climbs))
     # ground colours and cover
     N = 385
     xs = -HALF_X + np.arange(N) * (2 * HALF_X / (N - 1)); zs = -HALF_Z + np.arange(N) * (2 * HALF_Z / (N - 1))
@@ -215,6 +217,7 @@ def main():
         f.write('struct Walkway { float x0,z0,x1,z1,halfWidth,y0,y1; };   // a deck, bridge or ramp: the floor along the strip from (x0, z0) to (x1, z1)\n')
         arr(f, 'Walkway', 'kWalkways', [(round(v[0]), round(v[1]), round(v[2]), round(v[3]), round(v[4], 1), round(v[5]), round(v[6])) for v in w.walkways])
         f.write('struct UpperNode { int16_t x,z,y; };   // somewhere to stand above the ground: a floor, ramp, roof or landing (tools/maps/kingdom/routes.py)\n'); arr(f, 'UpperNode', 'kUpperNodes', nodes)
+        f.write('struct ClimbWall { int16_t x,z,nx,nz,y0,y1; };   // a climbable face: where, which way it faces (hundredths), lowest and highest point\n'); arr(f, 'ClimbWall', 'kClimbWalls', climbs)
         f.write('struct LootSite { float x,y,z; };\n'); arr(f, 'LootSite', 'kLootSites', [(round(l[0]), round(l[1]), round(l[2])) for l in w.loot])
         f.write('struct Region { const char* name; float x,z; int boss; };\n')
         arr(f, 'Region', 'kRegions', [(quote(n), x, z, KINDS.get(b, -1)) for n, x, z, r, b, d in POIS])
