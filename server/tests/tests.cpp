@@ -2,6 +2,7 @@
 #include "../sim.h"
 #include "../nav.h"
 #include "../../shared/meshes.h"
+#include "../../shared/gilded_sword_surface.h"
 #include "../../shared/objmodel.h"
 #include "../../shared/tune.h"
 #include "../../shared/poi.h"
@@ -182,6 +183,16 @@ static void CombatMath() {
     CHECK(KindOf(ItemId::Longshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
     for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
+    // The Gilded Sword is the strongest sword: it reaches further and hits harder than the Master Sword, one-handed, Legendary only, and found as loot.
+    const WeaponStats gilded = WeaponOf(ItemId::GildedSword), master = WeaponOf(ItemId::MasterSword);
+    CHECK(gilded.damage > master.damage && gilded.range > master.range && !gilded.ranged && !IsTwoHanded(ItemId::GildedSword));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::MasterSword, Rarity::Legendary));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::BiggoronSword, Rarity::Epic));
+    CHECK(InPool(ItemId::GildedSword) && DefOf(ItemId::GildedSword).minRarity == Rarity::Legendary && DefOf(ItemId::GildedSword).maxRarity == Rarity::Legendary);
+    bool found = false;
+    Rng rng(77);
+    for (int i = 0; i < 4000 && !found; i++) { ItemId it; if (PickItem(rng, Rarity::Legendary, &it) && it == ItemId::GildedSword) found = true; }
+    CHECK(found);
 }
 static void AttackRules() {
     Simulation sim = Duel(1, {0, 0}, {50, 0});
@@ -510,8 +521,8 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 19 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(kItemCount >= 80 && kPoolItemCount == 90 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 20 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 20 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
@@ -2977,16 +2988,51 @@ static void TownsAreDifferentPlaces() {
     CHECK(names.size() == big.pois.size());
 }
 
+static void GildedSwordSurfaceMaps() {
+    namespace gs = royale::gilded_surface;
+    namespace gm = royale::gilded_sword_model;
+    // Every triangle names a material and a surface class that exist, and its outward direction is a real direction.
+    auto check = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            CHECK(tris[i].mat < 7 && tris[i].cls < 4);
+            const float l = std::sqrt(static_cast<float>(tris[i].n[0] * tris[i].n[0] + tris[i].n[1] * tris[i].n[1] + tris[i].n[2] * tris[i].n[2]));
+            CHECK(l > 100.0f && l < 140.0f);
+        }
+    };
+    check(gm::kBlade, gm::kBladeCount); check(gm::kHilt, gm::kHiltCount); check(gm::kScabbard, gm::kScabbardCount);
+    // The blade's flat sides face up and down, so the engraving is projected onto them (the game projects along a triangle's dominant axis).
+    for (int i = 0; i < gm::kBladeCount; i++) CHECK(std::abs(gm::kBlade[i].n[2]) > 100);
+    for (int c = 0; c < static_cast<int>(gs::Class::Count); c++) {
+        const gs::Map m = gs::Build(static_cast<gs::Class>(c)), again = gs::Build(static_cast<gs::Class>(c));
+        const size_t bytes = static_cast<size_t>(m.size) * m.size * 4;
+        CHECK(m.size >= 64 && m.normal.size() == bytes && m.height.size() == bytes && m.uvScale > 0 && m.normal == again.normal && m.height == again.height);   // deterministic
+        double mean = 0, var = 0; int up = 0;
+        for (size_t i = 0; i < bytes; i += 4) { mean += m.height[i]; up += m.normal[i + 2] >= 128; CHECK(m.normal[i + 3] == 255 && m.height[i] == m.height[i + 1]); }
+        mean /= bytes / 4;
+        for (size_t i = 0; i < bytes; i += 4) var += (m.height[i] - mean) * (m.height[i] - mean);
+        var /= bytes / 4;
+        CHECK(mean > 80 && mean < 180 && std::sqrt(var) > 3.0 && std::sqrt(var) < 70.0);   // real relief, nothing blown out
+        CHECK(up == static_cast<int>(bytes / 4));                                           // every normal points out of the surface
+    }
+    // The blade's engraving is laid on the model's own diamonds: a groove runs just inside every diamond's edge, and the gold diamond's heart is a raised boss.
+    const float p = gm::kDiamondPitch, x0 = gm::kBladeStart;
+    const float boss = gs::detail::BladeHeight(x0 + p * 0.5f, 0.0f), plain = gs::detail::BladeHeight(x0 + p * 0.5f, gm::kBladeHalfWidth * 0.95f);
+    CHECK(boss > plain + 0.05f);
+    const float groove = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.5f * 0.965f), inside = gs::detail::BladeHeight(x0 + p * 0.25f, gm::kBladeHalfWidth * 0.2f);
+    CHECK(std::fabs(groove - 0.5f) > 0.04f || std::fabs(inside - 0.5f) > 0.01f);
+    // The pattern repeats every two diamonds along the blade and across the tile.
+    CHECK(std::fabs(gs::detail::BladeHeight(x0 + 100.0f, 120.0f) - gs::detail::BladeHeight(x0 + 100.0f + 2.0f * p, 120.0f)) < 0.001f);
+}
 static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame)));   // nothing below the ground (the glider's origin is its handle bar, not the ground)
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
@@ -3000,6 +3046,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > -15 && mn[1] < 5 && mx[1] > 70 && mx[1] < 110 && mx[0] - mn[0] > 230 && mx[0] - mn[0] < 300);   // the handle bar is the origin; the wing is above it
+            if (static_cast<MeshKind>(k) == MeshKind::GildedSword) CHECK(mx[0] > 5500 && mx[0] < 6500 && mn[0] < -1000 && mx[1] - mn[1] < 2600);   // grip at the origin, blade along +X in limb units
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));
@@ -4439,7 +4486,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
