@@ -530,7 +530,20 @@ class Match {
                     break;
                 case WeaponEffect::Stun:
                     if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
+                    if (w.splashRadius > 0 && !immune) {   // a shockwave stuns everyone it reaches, not only the one it was thrown at
+                        for (auto& o : players) {
+                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune) continue;
+                            o.stunUntil = (std::max)(o.stunUntil, clock + seconds);
+                            o.dirty = true;
+                        }
+                    }
                     break;
+                case WeaponEffect::Pull: {   // the chain reels them in to just in front of you
+                    const float facing = static_cast<float>(a->rot) * (3.14159265f / 32768.0f);
+                    Teleport(*t, {a->pos.x + std::sin(facing) * 110.0f, a->pos.z + std::cos(facing) * 110.0f});
+                    if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
+                    break;
+                }
                 default:
                     break;
             }

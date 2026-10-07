@@ -123,7 +123,7 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 | Din's Fire | Ability | Rare to Legendary | Fire burst around you |
 | Farore's Wind | Ability | Epic to Legendary | Mark a spot, then jump back to it |
 | Nayru's Love | Ability | Epic to Legendary | Invulnerable for 4 seconds |
-| Hookshot | Ability | Rare to Epic | Pull the player in front of you to you |
+| Hookshot | Weapon (B) | Uncommon to Epic | B shoots the chain: reels the player in front of you to you and stuns them |
 | Longshot | Ability | Epic to Legendary | Pull from much farther away |
 | Lens of Truth | Ability | Uncommon to Epic | See every player for 10 seconds |
 | Magic Beans | Ability | Common to Rare | Heal over time for 10 seconds |
@@ -141,7 +141,7 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 | Nocturne of Shadow | Ability | Rare to Epic | Vanish and reappear somewhere else |
 | Requiem of Spirit | Ability | Rare to Epic | Stuns and hurts everyone near you |
 | Prelude of Light | Ability | Rare to Epic | Heals 1 heart and protects you briefly |
-| Shockwave Grenade | Ability | Uncommon to Legendary | Launches you high into the air; no fall damage until you land |
+| Shockwave Grenade | Weapon (B) | Common to Legendary | B throws it: a shockwave that hurts and stuns everyone around the target |
 | Kokiri Tunic | Gear | Common to Uncommon | Plain: slightly less damage taken |
 | Goron Tunic | Gear | Uncommon to Epic | Half damage from fire and explosions |
 | Zora Tunic | Gear | Uncommon to Epic | Less storm damage |

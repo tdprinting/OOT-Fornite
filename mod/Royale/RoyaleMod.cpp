@@ -700,6 +700,7 @@ Look LookFor(royale::ItemId weapon) {
         case ItemId::Slingshot: return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_SLINGSHOT, ITEM_SLINGSHOT };
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
         case ItemId::Hookshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_HOOKSHOT, ITEM_HOOKSHOT };
+        case ItemId::ShockwaveGrenade: return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_BOMB, ITEM_BOMB };   // thrown like a bomb
         case ItemId::Longshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_LONGSHOT, ITEM_LONGSHOT };
         case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
             return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };   // the elemental arrows are loosed from the real bow
@@ -8539,6 +8540,7 @@ void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale:
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;
+    if (weapon == royale::ItemId::Hookshot) return royale::Anim::Shoot;   // the chain is fired like a bow (Grip::Hook picks the hookshot pose)
     const royale::AmmoKind a = royale::AmmoUsedBy(weapon);
     return (a == royale::AmmoKind::Arrows || a == royale::AmmoKind::Seeds) ? royale::Anim::Shoot : royale::Anim::Throw;
 }
@@ -10083,6 +10085,15 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
+    // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
+    if (hud.weapon == royale::ItemId::Hookshot || hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        float tx = 0, tz = 0;
+        if (hud.weapon == royale::ItemId::ShockwaveGrenade && bestDist < 1e8f && KnownPosition(best, &tx, &tz)) {
+            const Vec3f at = { tx, player->actor.world.pos.y, tz };
+            PowerFx(gPlayState, hud.weapon, at, false, &player->actor, hud.selfId);
+        }
+    }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
     if (hasAmmo && ammoKind != royale::AmmoKind::None) gSession.ReportAttack(royale::net::kNoPlayer16, false);
