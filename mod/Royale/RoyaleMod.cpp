@@ -16,6 +16,7 @@
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
 #include "maya_anim.h"
+#include "maya_sounds.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
@@ -24,6 +25,7 @@
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
+#include "lobby_pets.h"
 #include "lobby_fish_model.h"
 #include "lobby_reef_geometry.h"
 #include "fortnite_scenery.h"
@@ -132,6 +134,10 @@ void FrameInterpolation_RecordCloseChild(void);
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
+static_assert(SCENE_KOKIRI_FOREST==royale::lobby::kAreas[1].scene && ENTR_KOKIRI_FOREST_0_1==royale::lobby::kAreas[1].entrance,"Kokiri waiting route");
+static_assert(SCENE_LON_LON_RANCH==royale::lobby::kAreas[2].scene && ENTR_LON_LON_RANCH_0_1==royale::lobby::kAreas[2].entrance,"Ranch waiting route");
+static_assert(SCENE_KAKARIKO_VILLAGE==royale::lobby::kAreas[3].scene && ENTR_KAKARIKO_VILLAGE_0_1==royale::lobby::kAreas[3].entrance,"Kakariko waiting route");
+static_assert(SCENE_LAKE_HYLIA==royale::lobby::kAreas[4].scene && ENTR_LAKE_HYLIA_0_1==royale::lobby::kAreas[4].entrance,"Lake waiting route");
 static_assert(SCENE_TEMPLE_OF_TIME == royale::kWaitingRoomScene, "update kWaitingRoomScene in shared/map.h");
 static_assert(SCENE_HYRULE_FIELD == royale::kHyruleFieldScene, "update kHyruleFieldScene in shared/map.h");
 static_assert(SCENE_HYRULE_FIELD == royale::kMaps[0].scene && SCENE_LAKE_HYLIA == royale::kMaps[1].scene && SCENE_KAKARIKO_VILLAGE == royale::kMaps[2].scene &&
@@ -296,9 +302,12 @@ bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
            (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || gMapId == royale::fortnite::gTerrainMapId)));
 }
-bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
+int WaitingAreaIndex() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.WaitingArea"),0),0,royale::lobby::kAreaCount-1); }
+bool InWaitingRoom() { return InGame() && royale::lobby::IsWaitingScene(gPlayState->sceneNum); }
+bool InSelectedWaitingRoom() { return InGame() && gPlayState->sceneNum==royale::lobby::WaitingArea(WaitingAreaIndex()).scene; }
 
 const char* SceneName(int scene) {
+    for (const auto& area:royale::lobby::kAreas) if(area.scene==scene)return area.name;
     static char other[24];
     for (int i = 0; i < royale::kMapCount; i++) if (scene == royale::kMaps[i].scene) return royale::kMaps[i].name;
     if (scene == SCENE_TEMPLE_OF_TIME) return "Temple of Time (waiting room)";
@@ -578,7 +587,7 @@ bool TravelTo(int entrance) {
     gTravelCooldown = 5 * royale::kTickHz;
     return true;
 }
-bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(ENTR_TEMPLE_OF_TIME_ENTRANCE); }
+bool GoToWaitingRoom() { Trace("travel: to the waiting room"); return TravelTo(royale::lobby::WaitingArea(WaitingAreaIndex()).entrance); }
 int EntranceFor(int mapId) {
     switch (royale::ClampMap(mapId)) {
         case 1: return ENTR_LAKE_HYLIA_0_1;
@@ -7357,7 +7366,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -12367,7 +12376,14 @@ void CatPoof(PlayState* play, float x, float y, float z) {
     }
 }
 
+bool LobbyPetsActive() {
+    return CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0 && gSession.Joined() &&
+        gSession.Hud().state==royale::MatchState::Lobby && InPlayableScene(royale::MatchState::Lobby) && !gSkydiving && !gSpectating;
+}
+bool SocialPet_Update(Actor* actor, PlayState* play, int pet);
+royale::lobby::Group gLobbyPetGroup;
 void Cat_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,0)) return;
     namespace L = royale::lilo;
     CatBrain& c = gCat;
     const float dt = 1.0f / royale::kTickHz;
@@ -12573,7 +12589,7 @@ int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"),
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = MapOption("LiloPet", false) && PetKind() == 0 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 0)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
                       !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }
@@ -12720,19 +12736,46 @@ void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float ya
 
 
 
+// Maya's two real, user-confirmed playful responses. A dedicated mixer slot
+// respects game volume and never interrupts Lilo, Avriella, music or other SFX.
+double gMayaVoiceQuietUntil=0;
+void StopMayaVoice() { StopVoice(kVoiceMaya); gMayaVoiceQuietUntil=0; }
+bool PlayMayaVoice(int clip, bool force=false) {
+    namespace S=royale::maya_snd;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    const double now=ImGui::GetTime();
+    const float volume=GameVolume(false)*.8f;
+    if (!CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1) || volume<.01f || clip<0 || clip>=S::kClipCount ||
+        !VoiceDone(kVoiceMaya) || (!force && now<gMayaVoiceQuietUntil)) return false;
+    if(!cache[clip])cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoiceMaya,cache[clip],false,S::kRate,false,volume);
+    gMayaVoiceQuietUntil=now+static_cast<double>(S::kClips[clip].count)/S::kRate+3.0+Rand_ZeroOne()*2.0;
+    return true;
+}
+
 // Maya is a local cosmetic companion. Original mesh/rig: tools/maya/.
 struct MayaCompanionState {
     Actor* actor = nullptr;
     royale::maya::Animator anim;
-    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0;
+    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0, speed = 0, expressionClock = 0, greeting = 2.8f;
     int line = 0, hobby = 0;
-    bool talking = false;
+    bool talking = false, greeted = false, voiceReplyPlayed = false;
 };
 MayaCompanionState gMayaCompanion;
 
 static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= kTextMayaCompanion, "Companion text overlap");
 static_assert(kTextMayaCompanion + royale::kMayaCompanionLineCount <= 0x7FFF, "Maya text overflow");
+bool PetPathClear(PlayState* play,const Vec3f& pos,float x,float z) {
+    Vec3f from={pos.x,pos.y+20,pos.z},to={x,pos.y+20,z},hit;
+    CollisionPoly* poly=nullptr;s32 bgId=0;
+    return !BgCheck_EntityLineTest1(&play->colCtx,&from,&to,&hit,&poly,true,false,false,true,&bgId);
+}
+bool PetFloorAt(float x,float z,float* y) {
+    if(InField()) return WalkableAt({x,z}) && FloorAt(x,z,y);
+    return RawFloorAt(x,z,y) && !WaterAt(x,z,*y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z);
+}
 void MayaCompanion_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,2)) return;
     namespace M = royale::maya;
     auto& c = gMayaCompanion;
     Player* player = GET_PLAYER(play);
@@ -12740,63 +12783,76 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
     const auto& pp = player->actor.world.pos;
     float dx = pp.x - actor->world.pos.x, dz = pp.z - actor->world.pos.z;
     float distance = std::hypot(dx, dz);
+    c.expressionClock += dt; c.greeting = std::max(0.0f,c.greeting-dt);
     bool talking = TalkingTo(actor);
-    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 5; c.hobbyTime = 0; }
+    if (c.talking && !talking) { c.voiceReplyPlayed=false; c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 8; c.hobbyTime = 0; }
     c.talking = talking;
     int clip = M::kIdle;
     if (distance > 115.0f && !talking) {
         c.still = 0; c.hobbyTime = 0;
         const float yaw = std::atan2(dx, dz);
-        c.yaw = yaw;
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.18f;
         const bool scooter = distance > 260.0f;
         const bool running = distance > 185.0f;
-        const float step = std::min(distance - 90.0f, (scooter ? 250.0f : running ? 190.0f : 130.0f) * dt);
+        const float desired = scooter ? 240.0f : running ? 150.0f : 95.0f;
+        c.speed += std::clamp(desired-c.speed,-260.0f*dt,180.0f*dt);
+        const float step = std::min(distance - 90.0f, c.speed * dt);
         float nx = actor->world.pos.x + dx / distance * step;
         float nz = actor->world.pos.z + dz / distance * step;
         float floor = 0;
-        if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+        if (PetFloorAt(nx,nz,&floor) && PetPathClear(play,actor->world.pos,nx,nz) && std::fabs(floor-actor->world.pos.y)<45.0f) {
             actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor; c.blockedTime = 0;
         } else {
             c.blockedTime += dt;
             if (distance > 700.0f || c.blockedTime > 2.5f || std::fabs(pp.y-actor->world.pos.y)>170.0f) {
             // Catch up on a valid nearby floor after a climb or teleport.
             nx = pp.x - std::sin(yaw)*90; nz = pp.z - std::cos(yaw)*90;
-            if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
+            if (PetFloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
             }
         }
         clip = scooter ? M::kScooter : running ? M::kRun : M::kWalk;
     } else {
         c.still += dt; c.hobbyTime += dt;
-        c.yaw = std::atan2(dx,dz);
-        static constexpr int hobbies[] = {M::kTablet,M::kDraw,M::kPizza,M::kLearn,M::kCheer};
-        if (c.hobbyTime > 8) { c.hobby = (c.hobby + 1) % 5; c.hobbyTime = 0; }
-        clip = talking ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+        const float yaw=std::atan2(dx,dz);
+        c.yaw += std::atan2(std::sin(yaw-c.yaw),std::cos(yaw-c.yaw))*.08f;
+        c.speed=std::max(0.0f,c.speed-260.0f*dt);
+        static constexpr int hobbies[] = {M::kFidget,M::kTablet,M::kDraw,M::kHop,M::kPizza,M::kLearn,M::kCheer,M::kPoint};
+        const int hobbyClip=hobbies[c.hobby];
+        const float duration=M::InfoOf(hobbyClip).loops ? M::ClipSeconds(hobbyClip)+.4f : M::ClipSeconds(hobbyClip)+.3f;
+        if (!talking && c.hobbyTime > duration) { c.hobby = (c.hobby + 1) % 8; c.hobbyTime = 0; }
+        clip = talking ? (c.line>=10 ? M::kGiggle : M::kTalk) : c.greeting>0 ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
     }
     if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
-    c.anim.Play(clip); c.anim.Update(dt);
-    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
-    actor->focus.pos = actor->world.pos; actor->focus.pos.y += 90;
+    if (!c.greeted && c.greeting>0) c.greeted=PlayMayaVoice(royale::maya_snd::kHappy);
+    if (talking && !c.voiceReplyPlayed) c.voiceReplyPlayed=PlayMayaVoice(c.line>=10 ? royale::maya_snd::kHappy : royale::maya_snd::kPlayful,true);
+    if (clip!=c.anim.clip && (clip==M::kCheer || clip==M::kHop || clip==M::kGiggle)) PlayMayaVoice(royale::maya_snd::kHappy);
+    c.anim.Play(clip,.35f);
+    const float rate=clip==M::kWalk ? std::clamp(c.speed/65.0f,.55f,1.8f) : clip==M::kRun ? std::clamp(c.speed/130.0f,.7f,1.5f) : 1.0f;
+    c.anim.Update(dt,rate);
+    c.yaw=std::atan2(std::sin(c.yaw),std::cos(c.yaw));
+    actor->shape.rot.y = static_cast<s16>(static_cast<int32_t>(c.yaw * (32768.0f / 3.14159265f)));
+    actor->focus.pos = actor->world.pos; actor->focus.pos.y += royale::maya::kFocusHeight;
 }
 void MayaCompanion_Draw(Actor* actor, PlayState* play) {
     royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
-    const int face = std::fmod(gMayaCompanion.anim.time,3.7f)<.12f ? royale::maya::kFaceShut : royale::maya::kFaceSmile;
-    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,.72f,pose,face);
+    const int face = royale::maya::Expression(gMayaCompanion.anim.clip,gMayaCompanion.anim.time,gMayaCompanion.expressionClock);
+    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,royale::maya::kWorldScale,pose,face);
 }
-void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
+void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) { StopMayaVoice(); gMayaCompanion = MayaCompanionState{}; } }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
-    const bool want = DebugOn(kDbgAllies) && MapOption("LiloPet",false) && PetKind()==2 && gSession.Joined() &&
-        (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
-    if (!want) { if (gMayaCompanion.actor) Actor_Kill(gMayaCompanion.actor); gMayaCompanion = MayaCompanionState{}; return; }
+    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet",false) && PetKind()==2)) && gSession.Joined() &&
+        InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
+    if (!want) { if (gMayaCompanion.actor) { Actor_Kill(gMayaCompanion.actor); StopMayaVoice(); } gMayaCompanion = MayaCompanionState{}; return; }
     if (gMayaCompanion.actor) return;
     Player* player=GET_PLAYER(gPlayState);
     const auto& p=player->actor.world.pos;
     float y; const float x=p.x+70, z=p.z+45;
-    if (!FloorAt(x,z,&y)) return;
+    if (!PetFloorAt(x,z,&y)) return;
     Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
     if (!a) return;
     a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
-    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=18;
+    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=12;
     gMayaCompanion = MayaCompanionState{}; gMayaCompanion.actor=a;
 }
 
@@ -13126,6 +13182,7 @@ const Actor* NearestLootTo(float x, float z, float range) {
 }
 
 void Baby_Update(Actor* actor, PlayState* play) {
+    if (SocialPet_Update(actor,play,1)) return;
     namespace A = royale::avriella;
     BabyBrain& c = gBaby;
     const float dt = 1.0f / royale::kTickHz;
@@ -13653,7 +13710,7 @@ void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.
 
 void ReconcileBabyPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = MapOption("LiloPet", false) && PetKind() == 1 && gSession.Joined() && (InField() || InWaitingRoom()) && gPlayState != nullptr &&
+    const bool want = DebugOn(kDbgAvriella) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 1)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr &&
                       !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); EndBabyToy(gBaby, true); }
@@ -13676,6 +13733,8 @@ void ReconcileBabyPet(const royale::HudState& hud) {
     gBaby.anim = royale::avriella::Animator{};
     gBaby.anim.Play(royale::avriella::kSit, 0.0f);
 }
+
+#include "RoyaleLobbyPets.h"
 
 // ---- Lilo ---------------------------------------------------------------------------------------------------------------------------
 // An Easter egg (switch it off with "Lilo the cat" under Minimap and game options): Lilo sits at a random spot on the map. Talk to her with A: she
@@ -14639,9 +14698,13 @@ void OnGameFrameUpdate() {
     Feat("messages"); RegisterRoyaleMessages();
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
-    Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    if (LobbyPetsActive()) {
+        const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;
+        gLobbyPetGroup.Step({p.x,p.z},1.0f/royale::kTickHz);
+    } else gLobbyPetGroup=royale::lobby::Group{};
+    Feat("cat pet"); ReconcileCatPet(hud);
     Feat("Maya companion"); ReconcileMayaCompanion(hud);
-    Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
+    Feat("baby pet"); ReconcileBabyPet(hud);
     Feat("lobby reef aquarium"); ReconcileLobbyReef();
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
     Feat("allies"); if (DebugOn(kDbgAllies)) ReconcileAllies(hud);
@@ -14670,7 +14733,7 @@ void OnGameFrameUpdate() {
     if (joined && InGame()) {
         if (hud.state == royale::MatchState::Lobby) {
             if (WantsWaitingRoom) {
-                if (InWaitingRoom()) WantsWaitingRoom = false;
+                if (InSelectedWaitingRoom()) WantsWaitingRoom = false;
                 else GoToWaitingRoom();
             }
         } else if (MustBeInField(hud.state) && !InField()) {
@@ -14709,7 +14772,9 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
+    StopMayaVoice();
     gMayaCompanion = MayaCompanionState{};
+    gLobbyPetGroup=royale::lobby::Group{};
     gActorOf.clear();
     gPlaying.clear();
     gMotion.clear();
@@ -14992,8 +15057,30 @@ const char* CleanName(const char* name) {
 // What the minimap shows. Players and bots are only the ones near you (the server sends the closest dozen), plus everyone while a Lens of
 // Truth or Saria's Song is active.
 // The pet: Lilo the cat or Avriella the baby follows you around. Only for looks: it changes nothing in the match, and only you see it.
+void DrawLobbyPetOption() {
+    bool all=CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0;
+    if(ImGui::Checkbox("All pets together in the lobby",&all)) {
+        CVarSetInteger(CVAR_SETTING("Royale.LobbyAllPets"),all ? 1 : 0);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    }
+    ImGui::TextWrapped("Lilo, Avriella and Maya play together nearby, greet you and regroup when you explore. During matches your selected companion follows you.");
+}
+void DrawWaitingAreaOption() {
+    int area=WaitingAreaIndex();
+    if(ImGui::BeginCombo("Waiting area",royale::lobby::WaitingArea(area).name)) {
+        for(int i=0;i<royale::lobby::kAreaCount;++i) {
+            if(ImGui::Selectable(royale::lobby::kAreas[i].name,i==area)) {
+                CVarSetInteger(CVAR_SETTING("Royale.WaitingArea"),i);
+                Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+                if(gSession.Joined() && gSession.Hud().state==royale::MatchState::Lobby && InWaitingRoom()) WantsWaitingRoom=true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+}
 void DrawPetOptions() {
     if (!ImGui::CollapsingHeader("Pets")) return;
+    DrawLobbyPetOption();
     bool on = MapOption("LiloPet", false);
     if (ImGui::Checkbox("Show my companion pet", &on)) {
         CVarSetInteger(CVAR_SETTING("Royale.LiloPet"), on ? 1 : 0);
@@ -15011,12 +15098,20 @@ void DrawPetOptions() {
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
     if (kind == 2)
-        ImGui::TextWrapped("Maya walks after you and rides her electric scooter to catch up. She plays on her tablet, draws, enjoys pizza and reads when you stop. Face her and press A to talk and see her next hobby.");
+        ImGui::TextWrapped("Maya walks and runs after you, rides her scooter to catch up, and waves, hops and giggles. When you stop she draws, plays on her tablet, reads or enjoys pizza. Face her and press A to talk.");
     else if (kind == 1)
         ImGui::TextWrapped("Avriella rolls after you (she cannot crawl yet), sits when you stop, and smiles a lot, kicks her legs, chews on tiny rocks, waves, claps, babbles, giggles, "
                            "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
     else
         ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
+    if (kind == 2 || CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0) {
+        bool voice=CVarGetInteger(CVAR_SETTING("Royale.MayaVoice"),1)!=0;
+        if(ImGui::Checkbox("Play Maya's voice",&voice)) {
+            CVarSetInteger(CVAR_SETTING("Royale.MayaVoice"),voice ? 1 : 0);
+            if(!voice)StopVoice(kVoiceMaya);
+            Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+        }
+    }
     if (!DebugOn(kDbgAllies) && kind == 2) ImGui::TextColored(kRed, "Maya is switched off with Allies in the Debug section.");
     if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");
 }
@@ -15466,7 +15561,8 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::Text("%s", scene < 0 ? "Not in a game" : SceneName(scene));
     ImGui::TextColored(kGrey, "Players in the same place can see each other. The match itself is on the chosen map (%s), and you are taken there automatically.", CurrentMap().name);
     ImGui::BeginDisabled(!InGame());
-    if (!InWaitingRoom() && ImGui::Button("Go to the waiting room", ImVec2(220, 0))) WantsWaitingRoom = true;
+    DrawWaitingAreaOption();
+    if (!InSelectedWaitingRoom() && ImGui::Button("Go to the waiting area", ImVec2(220, 0))) WantsWaitingRoom = true;
     if (!InField() && ImGui::Button((std::string("Go to ") + CurrentMap().name).c_str(), ImVec2(220, 0))) { WantsWaitingRoom = false; GoToField(); }
     ImGui::EndDisabled();
 
@@ -16170,7 +16266,9 @@ void RegisterRoyaleMenu() {
     mSohMenu->AddWidget(settings, "Settings##royale_settings", WIDGET_CUSTOM).CustomFunction([](WidgetInfo& info) {
         Heading("GAME SETTINGS");
         UiState& ui = Ui();
-        if (ImGui::Checkbox("Wait in the Temple of Time before a match", &ui.waitingRoom)) SaveUi(ui);
+        if (ImGui::Checkbox("Wait in a separate area before a match", &ui.waitingRoom)) SaveUi(ui);
+        DrawWaitingAreaOption();
+        DrawLobbyPetOption();
         DrawMinimapOptions();
         DrawUpdater();
     });

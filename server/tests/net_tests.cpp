@@ -4,6 +4,7 @@
 #include "game_server.h"
 #include "loopback.h"
 #include "../../shared/fortnite_map.h"
+#include "lobby_pets.h"
 #include <cstdio>
 #include <memory>
 
@@ -1194,6 +1195,11 @@ static void SceneIsRelayedBetweenPlayers() {
     PlayerNet seenOfA, seenOfB;
     CHECK(b.Sample(1, seenOfA) && seenOfA.scene == 0x43);
     CHECK(a.Sample(2, seenOfB) && seenOfB.scene == 0x51);
+    for(const auto& area:royale::lobby::kAreas) {
+        a.SendInput(10,20,30,0,0,static_cast<uint8_t>(area.scene));
+        rig.Run(.5f);
+        CHECK(b.Sample(1,seenOfA) && seenOfA.scene==area.scene);
+    }
 }
 
 static void BotsReportTheFieldScene() {

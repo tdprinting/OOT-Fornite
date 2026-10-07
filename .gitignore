@@ -36,5 +36,8 @@ assets/maya/*-preview.png
 /tools/maya/test_maya.cmd
 /tools/maya/check_all.cmd
 
+/tools/maya/refine_temp.py
+
+assets/maya/previews/
 # Local map validation builds
 /build-map-tests/
