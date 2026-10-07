@@ -94,6 +94,7 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 | Kokiri Sword | Weapon | Common to Rare | Fast melee |
 | Master Sword | Weapon | Epic to Legendary | Strong melee |
 | Biggoron's Sword | Weapon | Rare to Epic | Heavy melee, long reach |
+| Gilded Sword | Weapon | Legendary | The strongest sword: longer reach and a harder hit than the Master Sword |
 | Megaton Hammer | Weapon | Epic to Legendary | Slow, huge melee hit |
 | Slingshot | Weapon | Common to Rare | Weak, long-range |
 | Fairy Bow | Weapon | Rare to Legendary | Strong, long-range |

@@ -55,3 +55,20 @@ rotate Link at noon/dawn/night, compare both strengths at zero, inspect bots,
 raise shields while moving, switch maps and leave a match, and compare frame
 rate with a busy lobby. Check that skin and surrounding effects keep their
 original appearance and graphics-layer "Left out" counters do not increase.
+
+## The Gilded Sword's own maps
+
+The Gilded Sword (a Blender model drawn by the mod, not one of the game's limb lists: see `docs/CUSTOM_MODELS.md`) has maps of its own that follow its design.
+They are computed in `shared/gilded_sword_surface.h` from the same measures as the model (no baked arrays), and each triangle of the model carries a surface
+class that picks its map:
+
+| Class | Where | Map |
+|---|---|---|
+| Blade | the first four diamonds of the blade | 256 x 256, one tile = two diamonds (gold, silver) and the blade's width, so it lands exactly on the model's diamonds: a groove just inside every diamond's edge, concentric engraved diamonds with a raised boss in the gold ones, finer chevrons, an inset border and a pricked centre in the silver ones, brushed lines on the plain metal between, hammered metal under all of it |
+| Cord | the red wrapped grip | 64 x 64 diagonal rounded cords with a fine twist |
+| Metal | guard, pommel, bands, scabbard trims and the blade's point | 64 x 64 brushed lines and hammered dimples |
+| Leather | the scabbard | 64 x 64 pebbled grain |
+
+The sword is drawn lit by the same lights as Link (vertex normals, the material's colour as the primitive colour), with a `gSPSurfaceMap` around each class, so the
+sunlight-driven relief and the Graphics > surface detail sliders work on it like on the other swords. `tools/gilded_sword/dump_surface_maps.cpp` dumps the maps for
+viewing; PNGs of them are in `assets/gilded_sword/surface_maps`. Device check still needed: swing it at noon, dawn and night and compare the sliders at zero.

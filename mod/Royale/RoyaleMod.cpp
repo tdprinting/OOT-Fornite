@@ -18,6 +18,8 @@
 #include "maya_anim.h"
 #include "maya_sounds.h"
 #include "cart_model.h"
+#include "gilded_sword_icon.h"
+#include "gilded_sword_surface.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
 #include "convergence_layout.h"
@@ -909,7 +911,8 @@ Look LookFor(royale::ItemId weapon) {
     switch (weapon) {
         case ItemId::BasicSword:
         case ItemId::KokiriSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_KOKIRI, ITEM_SWORD_KOKIRI };
-        case ItemId::MasterSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };
+        case ItemId::MasterSword:
+        case ItemId::GildedSword: return { PLAYER_MODELGROUP_SWORD_AND_SHIELD, PLAYER_IA_SWORD_MASTER, ITEM_SWORD_MASTER };   // (the Gilded Sword is the Master Sword's moves with a model of its own: see OnPlayerCustomSword)
         case ItemId::BiggoronSword: return { PLAYER_MODELGROUP_BGS, PLAYER_IA_SWORD_BIGGORON, ITEM_SWORD_BGS };
         case ItemId::GiantsHammer:
         case ItemId::MegatonHammer: return { PLAYER_MODELGROUP_HAMMER, PLAYER_IA_HAMMER, ITEM_HAMMER };
@@ -1293,7 +1296,7 @@ void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo
     switch (static_cast<Anim>(anim)) {
         case Anim::Attack:
             if (grip == Grip::Hammer) PuppetSfx(&player->actor, NA_SE_IT_HAMMER_SWING);
-            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
+            else PuppetSfx(&player->actor, weapon == ItemId::MasterSword || weapon == ItemId::GildedSword ? NA_SE_IT_MASTER_SWORD_SWING : grip == Grip::TwoHand ? NA_SE_IT_SWORD_SWING_HARD : NA_SE_IT_SWORD_SWING);
             PuppetVoice(player, combo % 4 == 2 || grip == Grip::Hammer || grip == Grip::TwoHand ? NA_SE_VO_LI_SWORD_L : NA_SE_VO_LI_SWORD_N);
             break;
         case Anim::JumpSlash:
@@ -1956,6 +1959,9 @@ void ApplyLocalTunic(bool on) {
 
 void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float roll, bool diving, uint32_t scheme, bool plain = false, const Player* hanger = nullptr); // with the other custom models, below
 
+// The player being drawn right now if what they hold is the Gilded Sword (the game's sword limbs ask the mod to draw it: OnPlayerCustomSword).
+const Player* gGildedPlayer = nullptr;
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
@@ -1963,7 +1969,9 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     u8 original = gSaveContext.equips.buttonItems[0];
     gSaveContext.equips.buttonItems[0] = st ? PuppetLook(*st).buttonItem : ITEM_NONE;
     if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
+    gGildedPlayer = st != nullptr && st->weapon == royale::ItemId::GildedSword ? reinterpret_cast<const Player*>(actor) : nullptr;
     Player_Draw(actor, play);
+    gGildedPlayer = nullptr;
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
@@ -4843,11 +4851,29 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr int kGidGilded = 1001;    // the Gilded Sword's own model (shared/gilded_sword_model.h), see DrawItemModel
 constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
 
 // An item's model with the current matrix: the game's own (GetItem_Draw), or one of ours. Ours are built standing on y 0, so they are
 // lifted to be centred like the game's.
 void DrawItemModel(PlayState* play, int gid) {
+    if (gid == kGidGilded) {   // the sword on the ground: blade up and to the right, turning slowly, as the game's own swords lie
+        const GpuMesh* sword = GpuMeshFor(royale::MeshKind::GildedSword, 0);
+        if (sword == nullptr || sword->dl.empty()) return;
+        Matrix_Push();
+        Matrix_RotateZ(0.9f, MTXMODE_APPLY);
+        Matrix_Scale(0.0052f, 0.0052f, 0.0052f, MTXMODE_APPLY);   // limb units (a hundredth of a game unit) down to the size of the game's own loose swords
+        Matrix_Translate(-2200.0f, 0.0f, 0.0f, MTXMODE_APPLY);    // about the middle of the sword
+        OPEN_DISPS(play->state.gfxCtx);
+        Gfx_SetupDL_25Opa(play->state.gfxCtx);
+        gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+        gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(sword->dl.data()));
+        CLOSE_DISPS(play->state.gfxCtx);
+        Matrix_Pop();
+        return;
+    }
     if (gid != kGidGrenade) { GetItem_Draw(play, static_cast<s16>(gid)); return; }
     const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Grenade, 0);
     if (mesh == nullptr || mesh->dl.empty()) return;
@@ -5111,6 +5137,7 @@ int GidFor(royale::ItemId id) {
         case ItemId::Boomerang: return GID_BOOMERANG;
         case ItemId::Bombs: case ItemId::BombAmmo: return GID_BOMB;
         case ItemId::ShockwaveGrenade: return kGidGrenade;
+        case ItemId::GildedSword: return kGidGilded;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
         case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
@@ -5839,8 +5866,27 @@ void* RealIcon(royale::ItemId id) {
 // ---- item icons ------------------------------------------------------------------------------------------------------------
 // The game's own item icons live in its resource archive and aren't reachable from here, so every item gets a small hand-drawn
 // icon built from lines and shapes, tinted by what the item is. `tier` is the rarity colour, used as the accent.
+// The Gilded Sword's icon is the reference picture of the sword (mod/Royale/gilded_sword_icon.h, made by scripts/make_gilded_sword_icon.py).
+ImTextureID GildedIconTexture() {
+    static ImTextureID tex = nullptr;
+    static int id = -1;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        tex = UploadRgba(royale::kGildedIconRgba, royale::kGildedIconSize, royale::kGildedIconSize, &id);
+    }
+    return tex;
+}
+
 void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 tier) {
     using royale::ItemId;
+    if (id == ItemId::GildedSword) {
+        if (ImTextureID tex = GildedIconTexture()) {
+            const float h = s * 0.5f;
+            dl->AddImage(tex, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h));
+            return;
+        }
+    }
     if (void* real = RealIcon(id)) {
         const float h = s * 0.5f;
         dl->AddImage(real, ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), ImVec2(0, 0), ImVec2(1, 1), RealIconTint(id));
@@ -5926,6 +5972,17 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
         case ItemId::KokiriSword: sword(steel, green, 0.8f, 1.5f); break;
         case ItemId::MasterSword: sword(cyan, blue, 1.0f, 1.8f); dl->AddCircleFilled(P(-0.35f, 0.35f), u * 0.12f, gold, 8); break;
         case ItemId::BiggoronSword: sword(white, red, 1.0f, 2.8f); break;
+        case ItemId::GildedSword: {   // silver blade with gold diamonds down it, a red grip and a curled guard
+            sword(IM_COL32(214, 222, 238, 255), IM_COL32(210, 216, 232, 255), 1.0f, 2.6f);
+            for (float t : { 0.30f, 0.55f, 0.80f }) {
+                const float cx = -0.62f + 1.24f * t, cy = 0.62f - 1.24f * t;
+                dl->AddQuadFilled(P(cx - 0.17f, cy + 0.17f), P(cx + 0.07f, cy + 0.07f), P(cx + 0.17f, cy - 0.17f), P(cx - 0.07f, cy - 0.07f), gold);
+            }
+            dl->AddCircle(P(-0.52f, 0.02f), u * 0.13f, IM_COL32(210, 216, 232, 255), 10, th * 0.6f);   // the curls of the guard
+            dl->AddCircle(P(-0.02f, 0.52f), u * 0.13f, IM_COL32(210, 216, 232, 255), 10, th * 0.6f);
+            dl->AddLine(P(-0.5f, 0.5f), P(-0.7f, 0.7f), red, th * 1.5f);
+            break;
+        }
         case ItemId::MegatonHammer:
             dl->AddLine(P(-0.6f, 0.7f), P(0.35f, -0.35f), wood, th * 1.8f);
             dl->AddRectFilled(P(0.0f, -0.8f), P(0.78f, -0.15f), IM_COL32(120, 125, 140, 255), 3.0f);
@@ -11071,7 +11128,7 @@ u8 RealItemFor(royale::ItemId w) {
     using royale::ItemId;
     switch (w) {
         case ItemId::BasicSword: case ItemId::KokiriSword: return ITEM_SWORD_KOKIRI;
-        case ItemId::MasterSword: return ITEM_SWORD_MASTER;
+        case ItemId::MasterSword: case ItemId::GildedSword: return ITEM_SWORD_MASTER;
         case ItemId::BiggoronSword: return ITEM_SWORD_BGS;
         case ItemId::MegatonHammer: case ItemId::GiantsHammer: return ITEM_HAMMER;
         case ItemId::DekuStick: return ITEM_STICK;
@@ -11172,7 +11229,9 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
         if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
             PoseSeq(player, SeqFor(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, 0, gActionItem, player), t);
     }
+    gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
     Player_Draw(&player->actor, play);
+    gGildedPlayer = nullptr;
     if (swapped) {
         gSaveContext.equips.buttonItems[0] = button;
         player->itemAction = itemAction;
@@ -14398,6 +14457,143 @@ bool SheathHasChildren(const Player* pl) {
     return sheath == nullptr || sheath->child != LIMB_DONE;
 }
 
+// ---- the Gilded Sword in the hand and on the back (patch 0023) ---------------------------------------------------------------------------------
+// Link's own sword limbs ask the mod about every sword they are about to draw. For the Gilded Sword (the player in gGildedPlayer) the hand draws
+// an empty fist, the sheath is drawn without the Master Sword in it, and the sword comes from shared/gilded_sword_model.h (made in Blender: see
+// tools/gilded_sword). The moves, the sounds and the hit trail are the Master Sword's own: only the blade's length (the trail follows it) is ours.
+// what: 0 = how long is the custom blade (limb units; stays 0 when this player holds no custom sword), 1 = draw it in the hand (the hand limb's
+// matrix is current), 2 = draw it stowed on the back (the sheath limb's matrix is current).
+constexpr float kGildedBladeBase = royale::gilded_sword_model::kBladeStart;   // the blade starts here along the model's X; the game's own blade starts at the hand's X = 0
+constexpr float kGildedGripLift = 400.0f;      // the game's blades run along y = 400 of the hand limb (see func_80090A28 in z_player_lib.c)
+constexpr float kGildedHandRoll = 0.0f;        // turn about the blade, radians: change this if the guard is seen edge-on
+constexpr float kGildedBackX = 1000.0f, kGildedBackY = 300.0f, kGildedBackZ = 0.0f, kGildedBackTurn = 2.55f;   // where and how it rests on the back (the sheath limb)
+
+// The sword is drawn lit by the same lights as Link himself, one run of triangles per (surface class, material): the material's colour is the primitive
+// colour, the triangles carry their outward normals. Each surface class has its own normal and bump map (shared/gilded_sword_surface.h), set up the
+// way the game's own sword and shield maps are (OnPlayerItemMaterial, libultraship patch 0003), so the blade shows its engraved diamonds in the sun.
+struct GildedGroup { int cls = 0, mat = 0; std::vector<Vtx> vtx; std::vector<Gfx> dl; };
+struct GildedGpu { std::vector<GildedGroup> groups; bool built = false; };
+GildedGpu gGildedGpu[2];
+std::unique_ptr<royale::gilded_surface::Map> gGildedMaps[4];
+
+const GildedGpu& GildedMeshFor(int variant) {
+    namespace gm = royale::gilded_sword_model;
+    GildedGpu& g = gGildedGpu[variant];
+    if (g.built) return g;
+    g.built = true;
+    g.groups.reserve(16);   // (never grows past this: the display lists point into each group)
+    auto add = [&](const gm::Tri* tris, int count) {
+        for (int i = 0; i < count; i++) {
+            GildedGroup* grp = nullptr;
+            for (GildedGroup& e : g.groups) if (e.cls == tris[i].cls && e.mat == tris[i].mat) { grp = &e; break; }
+            if (grp == nullptr) { g.groups.emplace_back(); grp = &g.groups.back(); grp->cls = tris[i].cls; grp->mat = tris[i].mat; }
+            for (int k = 0; k < 3; k++) {
+                Vtx v{};
+                v.n.ob[0] = tris[i].p[k * 3]; v.n.ob[1] = tris[i].p[k * 3 + 1]; v.n.ob[2] = tris[i].p[k * 3 + 2];
+                v.n.flag = 0; v.n.tc[0] = v.n.tc[1] = 0;
+                v.n.n[0] = tris[i].n[0]; v.n.n[1] = tris[i].n[1]; v.n.n[2] = tris[i].n[2];
+                v.n.a = 255;
+                grp->vtx.push_back(v);
+            }
+        }
+    };
+    add(gm::kHilt, gm::kHiltCount);
+    if (variant == 0) add(gm::kBlade, gm::kBladeCount); else add(gm::kScabbard, gm::kScabbardCount);
+    for (GildedGroup& e : g.groups) {
+        const size_t verts = e.vtx.size(), batches = (verts / 3 + 9) / 10;
+        e.dl.assign(verts / 3 + batches + 2, Gfx{});
+        Gfx* d = e.dl.data();
+        gDPSetPrimColor(d++, 0, 0, gm::kMatRgb[e.mat][0], gm::kMatRgb[e.mat][1], gm::kMatRgb[e.mat][2], 255);
+        for (size_t first = 0; first < verts; first += 30) {
+            const size_t n = std::min<size_t>(30, verts - first);
+            gSPVertex(d++, reinterpret_cast<uintptr_t>(&e.vtx[first]), static_cast<int>(n), 0);
+            for (size_t t = 0; t + 2 < n; t += 3) gSP1Triangle(d++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
+        }
+        gSPEndDisplayList(d++);
+        e.dl.resize(static_cast<size_t>(d - e.dl.data()));
+    }
+    return g;
+}
+
+void DrawGildedMesh(PlayState* play, int variant) {
+    const GildedGpu& mesh = GildedMeshFor(variant);
+    const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    const bool surfaces = normals != 0 || bumps != 0;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);   // (lit by the game's lights; both sides of the blade show)
+    gDPSetCombineLERP(POLY_OPA_DISP++, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, PRIMITIVE);   // light x the material's colour
+    for (int cls = 0; cls < 4; cls++) {
+        bool any = false;
+        for (const GildedGroup& e : mesh.groups) any |= e.cls == cls;
+        if (!any) continue;
+        if (surfaces) {
+            if (!gGildedMaps[cls]) gGildedMaps[cls] = std::make_unique<royale::gilded_surface::Map>(royale::gilded_surface::Build(static_cast<royale::gilded_surface::Class>(cls)));
+            const royale::gilded_surface::Map& map = *gGildedMaps[cls];
+            GfxSurfaceMap* material = static_cast<GfxSurfaceMap*>(FrameAlloc(play, sizeof(GfxSurfaceMap)));
+            if (material != nullptr) {
+                *material = {};
+                material->normal = map.normal.data();
+                material->height = map.height.data();
+                material->width = material->heightPixels = static_cast<uint32_t>(map.size);
+                material->normalStrength = normals / 100.0f;
+                material->bumpStrength = bumps / 100.0f;
+                material->uvScale = map.uvScale;
+                const auto& lighting = play->envCtx.lightSettings;
+                for (int k = 0; k < 3; ++k) {
+                    material->sunDirection[k] = lighting.light1Dir[k] / 127.0f;
+                    material->sunColor[k] = lighting.light1Color[k] / 255.0f;
+                    material->ambientColor[k] = lighting.ambientColor[k] / 255.0f;
+                }
+                gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(material));
+            }
+        }
+        for (const GildedGroup& e : mesh.groups) if (e.cls == cls) gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(e.dl.data()));
+        if (surfaces) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+    }
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);                              // and the game's own limbs after it get the state they expect
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+void GildedGlint(PlayState* play, const Vec3f& at, s16 scale, s16 life) {
+    Vec3f pos = at, vel = { 0.0f, 0.5f, 0.0f }, accel = { 0.0f, -0.02f, 0.0f };
+    Color_RGBA8 prim = { 255, 238, 150, 255 }, env = { 255, 176, 40, 255 };
+    EffectSsKiraKira_SpawnDispersed(play, &pos, &vel, &accel, &prim, &env, scale, life);
+}
+
+void OnPlayerCustomSword(void* playPtr, void* playerPtr, int32_t what, int32_t* value) {
+    Feat("gilded sword");
+    if (value == nullptr || playerPtr == nullptr || static_cast<const Player*>(playerPtr) != gGildedPlayer) return;
+    namespace gm = royale::gilded_sword_model;
+    if (what == 0) { *value = static_cast<int32_t>(gm::kBladeTip - gm::kBladeStart); return; }
+    PlayState* play = static_cast<PlayState*>(playPtr);
+    const Player* pl = static_cast<const Player*>(playerPtr);
+    Matrix_Push();
+    if (what == 1) {
+        Matrix_Translate(-kGildedBladeBase, kGildedGripLift, 0.0f, MTXMODE_APPLY);
+        if (kGildedHandRoll != 0.0f) Matrix_RotateX(kGildedHandRoll, MTXMODE_APPLY);
+        // gold glints: along the blade now and then, and a burst at the point while it swings
+        if (pl->meleeWeaponState != 0) {
+            Vec3f tip = { gm::kBladeTip, 0.0f, 0.0f }, world;
+            Matrix_MultVec3f(&tip, &world);
+            GildedGlint(play, world, 80, 12);
+            if (Rand_ZeroOne() < 0.5f) { Vec3f mid = { gm::kBladeStart + (gm::kBladeTip - gm::kBladeStart) * (0.35f + 0.5f * Rand_ZeroOne()), 0.0f, 0.0f }; Matrix_MultVec3f(&mid, &world); GildedGlint(play, world, 50, 10); }
+        } else if (Rand_ZeroOne() < 0.02f) {
+            Vec3f spot = { gm::kBladeStart + (gm::kBladeTip - gm::kBladeStart) * Rand_ZeroOne(), 0.0f, 0.0f }, world;
+            Matrix_MultVec3f(&spot, &world);
+            GildedGlint(play, world, 36, 16);
+        }
+        DrawGildedMesh(play, 0);
+    } else if (what == 2) {
+        Matrix_Translate(kGildedBackX, kGildedBackY, kGildedBackZ, MTXMODE_APPLY);
+        Matrix_RotateY(kGildedBackTurn, MTXMODE_APPLY);
+        DrawGildedMesh(play, 1);
+    }
+    Matrix_Pop();
+}
+
 void OnPlayerClothLimb(void* playerPtr, int32_t limbIndex, int16_t* rot) {
     Feat("tunic and sheath cloth");
     if (!DebugOn(kDbgCloth)) return;
@@ -14599,7 +14795,7 @@ void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
     switch (id) {
         case ItemId::DekuStick: put(ITEM_STICK); break;
         case ItemId::KokiriSword: case ItemId::BasicSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_KOKIRI); break;
-        case ItemId::MasterSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_MASTER); break;
+        case ItemId::MasterSword: case ItemId::GildedSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_MASTER); break;
         case ItemId::BiggoronSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_BIGGORON); break;
         case ItemId::MegatonHammer: case ItemId::GiantsHammer: put(ITEM_HAMMER); break;
         case ItemId::Slingshot: case ItemId::TripleSlingshot: put(ITEM_SLINGSHOT); break;
@@ -14889,6 +15085,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerClothLimb>(OnPlayerClothLimb);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerCustomSword>(OnPlayerCustomSword);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerItemMaterial>(OnPlayerItemMaterial);
     // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
     // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
