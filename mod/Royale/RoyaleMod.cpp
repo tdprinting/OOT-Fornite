@@ -11994,8 +11994,13 @@ MayaCompanionState gMayaCompanion;
 
 static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= kTextMayaCompanion, "Companion text overlap");
 static_assert(kTextMayaCompanion + royale::kMayaCompanionLineCount <= 0x7FFF, "Maya text overflow");
+bool PetPathClear(PlayState* play,const Vec3f& pos,float x,float z) {
+    Vec3f from={pos.x,pos.y+20,pos.z},to={x,pos.y+20,z},hit;
+    CollisionPoly* poly=nullptr;s32 bgId=0;
+    return !BgCheck_EntityLineTest1(&play->colCtx,&from,&to,&hit,&poly,true,false,false,true,&bgId);
+}
 bool PetFloorAt(float x,float z,float* y) {
-    if(InField()) return FloorAt(x,z,y);
+    if(InField()) return WalkableAt({x,z}) && FloorAt(x,z,y);
     return RawFloorAt(x,z,y) && !WaterAt(x,z,*y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z);
 }
 void MayaCompanion_Update(Actor* actor, PlayState* play) {
@@ -12024,7 +12029,7 @@ void MayaCompanion_Update(Actor* actor, PlayState* play) {
         float nx = actor->world.pos.x + dx / distance * step;
         float nz = actor->world.pos.z + dz / distance * step;
         float floor = 0;
-        if (PetFloorAt(nx,nz,&floor) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+        if (PetFloorAt(nx,nz,&floor) && PetPathClear(play,actor->world.pos,nx,nz) && std::fabs(floor-actor->world.pos.y)<45.0f) {
             actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor; c.blockedTime = 0;
         } else {
             c.blockedTime += dt;

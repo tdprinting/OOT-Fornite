@@ -26,7 +26,7 @@ bool SocialPet_Update(Actor* actor, PlayState* play, int pet) {
         const float step=std::min(d,speed*dt);
         const float x=pos.x+dx/d*step,z=pos.z+dz/d*step;
         float y;
-        if(RawFloorAt(x,z,&y) && std::fabs(y-pos.y)<22 && !WaterAt(x,z,y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z)) {
+        if(PetPathClear(play,pos,x,z) && RawFloorAt(x,z,&y) && std::fabs(y-pos.y)<22 && !WaterAt(x,z,y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z)) {
             pos.x=x; pos.z=z; pos.y=y;
         } else {
             moving=false;
@@ -66,9 +66,12 @@ bool SocialPet_Update(Actor* actor, PlayState* play, int pet) {
         c.anim.Play(clip,.3f);c.anim.Update(dt);
     } else {
         auto& c=gMayaCompanion;c.expressionClock+=dt;c.speed=moving ? speed : 0;
-        const int clip=moving ? royale::maya::kWalk : attentive ? royale::maya::kWave :
+        int clip=moving ? royale::maya::kWalk : attentive ? royale::maya::kWave :
             phase==P::Activity::Chase ? royale::maya::kPoint : phase==P::Activity::Drawing ? royale::maya::kDraw :
             phase==P::Activity::Celebrate ? royale::maya::kCheer : royale::maya::kFidget;
+        // A one-shot ends in a relaxed pose rather than freezing an outstretched arm.
+        if(!royale::maya::InfoOf(clip).loops && c.anim.clip==clip && c.anim.time>=royale::maya::ClipSeconds(clip)) clip=royale::maya::kFidget;
+        if(c.anim.clip==royale::maya::kFidget && c.anim.time<2.0f && clip!=royale::maya::kWalk) clip=royale::maya::kFidget;
         if(clip!=c.anim.clip && clip==royale::maya::kCheer) PlayMayaVoice(royale::maya_snd::kHappy);
         c.anim.Play(clip,.35f);c.anim.Update(dt);
     }
