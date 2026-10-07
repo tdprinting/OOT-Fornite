@@ -207,7 +207,7 @@ def animate(rig,name,t,T):
         rot('ponytail',x=.18+.04*math.sin(ph*2),y=.05*math.sin(ph));rot('ponytail2',x=.08*math.sin(ph*2-1))
     elif name=='sleep':
         breathe=math.sin(ph*3)
-        move('root',(0,0,-.495+.006*breathe))
+        move('root',(0,0,-.465+.006*breathe))
         rot('pelvis',x=-.06)
         rot('torso',x=.45+.025*breathe,z=.03*math.sin(ph))
         rot('head',x=.70+.03*breathe,y=.10,z=.05*math.sin(ph))
