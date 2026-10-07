@@ -72,3 +72,11 @@ class that picks its map:
 The sword is drawn lit by the same lights as Link (vertex normals, the material's colour as the primitive colour), with a `gSPSurfaceMap` around each class, so the
 sunlight-driven relief and the Graphics > surface detail sliders work on it like on the other swords. `tools/gilded_sword/dump_surface_maps.cpp` dumps the maps for
 viewing; PNGs of them are in `assets/gilded_sword/surface_maps`. Device check still needed: swing it at noon, dawn and night and compare the sliders at zero.
+
+## Vertex layout guard (libultraship patch 0004)
+
+Fast3D batches triangles into one float array, and the OpenGL program reads it with a fixed number of floats per vertex. If a triangle is ever written with a
+different count (for example when a material changes how many attributes a shader has), every triangle after it in the batch is read from the wrong place and
+shows as huge wedges flung across the screen. Patch 0004 checks, after each triangle, that exactly the number of floats the program reads were written; a
+triangle that does not match is left out and one line is logged ("a triangle wrote N floats but its shader reads M"). It also leaves out triangles whose
+vertices are not finite numbers. If that log line ever appears, it names whether a surface map was on, which narrows the bug down.
