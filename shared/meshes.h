@@ -18,6 +18,7 @@ namespace royale {
 struct MeshVertex {
     float x, y, z;
     uint8_t r, g, b;
+    uint8_t a = 255;   // opacity; only the see-through ground patches (soft rims) set it, everything else is solid
 };
 
 enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
@@ -1031,7 +1032,7 @@ inline MeshData Ground(uint32_t variant) {
     for (int k = first; k < first + gm::kCorners[item]; k++) {
         const int16_t* p = &gm::kPos[k * 3];
         const uint8_t* c = &gm::kCol[k * 3];
-        m.v.push_back({p[0] * 0.25f, p[1] * 0.25f, p[2] * 0.25f, c[0], c[1], c[2]});
+        m.v.push_back({p[0] * 0.25f, p[1] * 0.25f, p[2] * 0.25f, c[0], c[1], c[2], gm::kAlpha[k]});
     }
     return m;
 }

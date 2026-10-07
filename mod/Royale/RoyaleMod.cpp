@@ -215,6 +215,8 @@ float gSkyClouds = 1.0f;            // the local option: how many clouds, 0 (non
 float gFogAmount = 1.0f;            // the local option: how thick the fog banks are, 0 (none) to 2
 bool gGroundPuddles = true, gGroundSnow = true, gGroundFrost = true, gGroundLeaves = true;   // the local options: which ground patches are drawn
 bool gGroundMerge = true;           // the local option: patches that touch run into one bigger patch
+bool gGroundTrails = true;          // the local option: snow keeps footprints and landing craters
+float gGroundDeform = 1.0f;         // the local option: how far snow and puddles shape the ground, 0 (flat) to 2 (deep prints, high banks)
 float gGroundAmount = 1.0f;         // the local option: how many ground patches the weather and the seasons leave, 0 (none) to 2
 bool gHitFlash = true, gHitParticles = true, gHitBlood = true, gHitScaled = true, gHitOnSelf = true, gHitReact = true;   // the local options: hit feedback (see "hit feedback")
 float gHitAmount = 1.0f;            // the local option: how many hit particles, 0 (none) to 2
@@ -2617,25 +2619,27 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
 struct GpuMesh {
     std::vector<Vtx> vtx;
     std::vector<Gfx> dl;
+    int sub = 1;   // corner positions are stored in 1/sub units (the ground patches use quarter units, so a puddle's 0.3-unit height and a snow lump survive)
 };
 GpuMesh gGpuMeshes[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots];
 bool gGpuBuilt[static_cast<int>(royale::MeshKind::Count)][royale::kMeshVariantSlots] = {};
 
 // Turns a triangle list into vertices and a display list. The vectors must not move afterwards: the display list points into them.
-bool BuildGpuMesh(const royale::MeshData& data, GpuMesh& m) {
+bool BuildGpuMesh(const royale::MeshData& data, GpuMesh& m, int sub = 1) {
     if (data.v.empty()) return false;
+    m.sub = sub;
     m.vtx.resize(data.v.size());
     for (size_t i = 0; i < data.v.size(); i++) {
         Vtx& v = m.vtx[i];
-        v.v.ob[0] = static_cast<s16>(std::lround(data.v[i].x));
-        v.v.ob[1] = static_cast<s16>(std::lround(data.v[i].y));
-        v.v.ob[2] = static_cast<s16>(std::lround(data.v[i].z));
+        v.v.ob[0] = static_cast<s16>(std::lround(data.v[i].x * static_cast<float>(sub)));
+        v.v.ob[1] = static_cast<s16>(std::lround(data.v[i].y * static_cast<float>(sub)));
+        v.v.ob[2] = static_cast<s16>(std::lround(data.v[i].z * static_cast<float>(sub)));
         v.v.flag = 0;
         v.v.tc[0] = v.v.tc[1] = 0;
         v.v.cn[0] = data.v[i].r;
         v.v.cn[1] = data.v[i].g;
         v.v.cn[2] = data.v[i].b;
-        v.v.cn[3] = 255;
+        v.v.cn[3] = data.v[i].a;
     }
     // The graphics chip takes up to 32 vertices at a time; each triangle has its own three, so ten triangles per batch.
     const size_t batches = (data.v.size() / 3 + 9) / 10;
@@ -2656,7 +2660,7 @@ const GpuMesh* GpuMeshFor(royale::MeshKind kind, uint32_t variant) {
     variant %= royale::kMeshVariantSlots;
     GpuMesh& m = gGpuMeshes[k][variant];
     if (gGpuBuilt[k][variant]) return &m;
-    if (!BuildGpuMesh(royale::BuildMesh(kind, variant), m)) return nullptr;
+    if (!BuildGpuMesh(royale::BuildMesh(kind, variant), m, kind == royale::MeshKind::Ground ? 4 : 1)) return nullptr;
     gGpuBuilt[k][variant] = true;
     return &m;
 }
@@ -3250,7 +3254,8 @@ void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float 
     Matrix_RotateZ(std::atan(sx), MTXMODE_APPLY);    // lean along the slope, then turn about the ground's own up
     Matrix_RotateX(-std::atan(sz), MTXMODE_APPLY);
     Matrix_RotateY(yaw, MTXMODE_APPLY);
-    Matrix_Scale(a / royale::ground::kMeshRadius, rise, b / royale::ground::kMeshRadius, MTXMODE_APPLY);
+    const float inv = 1.0f / static_cast<float>(m->sub);
+    Matrix_Scale(a / royale::ground::kMeshRadius * inv, rise * inv, b / royale::ground::kMeshRadius * inv, MTXMODE_APPLY);
     if (alpha < 0) {
         gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
         gSPDisplayList(POLY_OPA_DISP++, dl);
@@ -3263,49 +3268,88 @@ void DrawGroundPatch(PlayState* play, const GpuMesh* m, float x, float y, float 
 }
 
 // ---- walking through the patches ----------------------------------------------------------------------------------------------------------
-// Whoever walks through snow presses it down (the pile's mesh is dented under their feet and keeps a trail that fills in again, quickly while it
-// snows), and whoever walks through a puddle splashes it and sends rings out across it. The walkers are the local player, everyone else's actors and
-// the carts, the same set the water uses.
-struct Walker { const void* key; float x, y, z, size, speed; };
-struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0; };
-struct SnowDent { float x, z, birth; };
+// Whoever walks through snow leaves footprints (a left and a right foot, turned the way they were going, each a soft dent with a low rim of pushed
+// snow) that fill in again, quickly while it snows; whoever lands in it from a jump, a fall or the skydive leaves a crater as big as the fall was
+// hard. The snow mesh is cut into smaller triangles where a print lies so the print is a smooth shape, not a stamped square (DentedSnow), and every
+// point's height change comes from shared/ground_patches.h (DentsChange). Whoever walks through a puddle splashes it and sends rings out across it.
+// The walkers are the local player, everyone else's actors and the carts, the same set the water uses.
+struct Walker { const void* key; float x, y, z, size, speed, hx, hz, step, vy; };   // (hx, hz: the way they are going, a unit vector; step: the distance moved this frame; vy: up is positive)
+struct WalkTrack { float x = 0, y = 0, z = 0, sinceDent = 0, ring = 0, fall = 0; int side = 1; bool inPuddle = false; bool wasPuddle = false; uint32_t seen = 0, dentFrame = 0; };
+struct SnowDent { royale::ground::Dent d; float birth, life; };   // d.depth is how deep it was made (before it fills in)
 struct PuddleRing { float x, y, z, birth, size; };
 std::unordered_map<const void*, WalkTrack> gWalkTrack;
 std::vector<SnowDent> gSnowDents;
 std::vector<PuddleRing> gPuddleRings;
 uint32_t gWalkFrame = 0;
+int gDentTriBudget = 0;   // triangles the pressed-in snow may use this frame (each print splits the triangles round it into four)
 void CollectCartWalkers(const std::function<void(const void*, float, float, float, float)>& add);   // (the carts are known further down)
-constexpr float kDentReach = 34.0f, kDentDepth = 9.0f;   // how wide and how deep a foot goes into snow
+constexpr float kDentRimGrow = 30.0f;   // a walker this close outside a snow patch's edge still presses the rim
+constexpr float kFootLen = 11.0f, kFootWid = 6.5f, kFootDepth = 8.0f;   // a footprint (half-extents and depth in units) for someone of size 16
 
-// A copy of a snow patch's mesh with the snow pushed down where the dents are (`dents`: x, z, depth 0-1 in the world). nullptr when there is no memory this frame.
-Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<SnowDent>& dents, const std::vector<float>& depth) {
-    const size_t n = m->vtx.size();
-    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, n * sizeof(Vtx)));
+// A copy of a snow patch's mesh with the snow pressed down where the dents are. The triangles a dent reaches are each split into four (so a print
+// is round and smooth: the base mesh has a corner about every 10 units, a print is 20 long), then every corner is moved by the dents' combined height
+// change and tinted (pressed snow goes bluer in the pit, a shade whiter on the rim). Triangles no dent reaches are copied as they are, so the pile
+// looks exactly as it did until it is walked on, and neighbouring triangles always agree on their shared corners (no cracks). nullptr when there is
+// no memory or triangle budget left this frame (the pile is then drawn whole).
+Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, float a, float rise, float b, const std::vector<royale::ground::Dent>& dents) {
+    namespace gp = royale::ground;
+    struct PV { float lx, h, lz, r, g, bl; };
+    const size_t n = m->vtx.size(), tris = n / 3;
+    const float inv = 1.0f / static_cast<float>(m->sub);
+    const float sa = a / gp::kMeshRadius, sb = b / gp::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
+    auto corner = [&](size_t i) { const Vtx& v = m->vtx[i]; return PV{ v.v.ob[0] * inv * sa, v.v.ob[1] * inv * rise, v.v.ob[2] * inv * sb, static_cast<float>(v.v.cn[0]), static_cast<float>(v.v.cn[1]), static_cast<float>(v.v.cn[2]) }; };
+    auto worldX = [&](const PV& p) { return x + p.lx * c + p.lz * sn; };
+    auto worldZ = [&](const PV& p) { return z - p.lx * sn + p.lz * c; };
+    std::vector<uint8_t> touched(tris, 0);
+    size_t touchedCount = 0;
+    for (size_t t = 0; t < tris; t++) {
+        const PV p0 = corner(t * 3), p1 = corner(t * 3 + 1), p2 = corner(t * 3 + 2);
+        const float cx = (worldX(p0) + worldX(p1) + worldX(p2)) / 3.0f, cz = (worldZ(p0) + worldZ(p1) + worldZ(p2)) / 3.0f;
+        const float rad = std::max({ std::hypot(worldX(p0) - cx, worldZ(p0) - cz), std::hypot(worldX(p1) - cx, worldZ(p1) - cz), std::hypot(worldX(p2) - cx, worldZ(p2) - cz) });
+        for (const gp::Dent& d : dents)
+            if (std::hypot(cx - d.x, cz - d.z) < gp::DentReach(d) + rad) { touched[t] = 1; touchedCount++; break; }
+    }
+    if (touchedCount == 0) return nullptr;
+    const size_t outTris = tris + 3 * touchedCount;
+    if (static_cast<int>(outTris) > gDentTriBudget) return nullptr;
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, outTris * 3 * sizeof(Vtx)));
     if (v == nullptr) return nullptr;
-    const size_t batches = (n / 3 + 9) / 10;
-    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (n / 3 + batches + 1) * sizeof(Gfx)));
+    const size_t batches = (outTris + 9) / 10;
+    Gfx* dl = static_cast<Gfx*>(FrameAlloc(play, (outTris + batches + 1) * sizeof(Gfx)));
     if (dl == nullptr) return nullptr;
-    const float sa = a / royale::ground::kMeshRadius, sb = b / royale::ground::kMeshRadius, c = std::cos(yaw), sn = std::sin(yaw);
-    for (size_t i = 0; i < n; i++) {
-        v[i] = m->vtx[i];
-        const float lx = m->vtx[i].v.ob[0] * sa, lz = m->vtx[i].v.ob[2] * sb;
-        const float wx = x + lx * c + lz * sn, wz = z - lx * sn + lz * c, h = m->vtx[i].v.ob[1] * rise;
-        float sink = 0.0f;
-        for (size_t k = 0; k < dents.size(); k++) {
-            const float d = std::hypot(wx - dents[k].x, wz - dents[k].z);
-            if (d < kDentReach) { const float f = 1.0f - d / kDentReach; sink = std::max(sink, kDentDepth * depth[k] * f * f * (3.0f - 2.0f * f)); }
+    gDentTriBudget -= static_cast<int>(outTris);
+    const float cutoff = 0.4f;   // the snow never goes below this: the ground
+    size_t w = 0;
+    auto put = [&](const PV& p) {
+        Vtx& o = v[w++];
+        o = m->vtx[0];   // (flag, texture coordinates and alpha as the mesh has them)
+        const float wx = worldX(p), wz = worldZ(p);
+        const float dy = gp::DentsChange(dents.data(), static_cast<int>(dents.size()), wx, wz);
+        float h = p.h, r = p.r, g = p.g, bl = p.bl;
+        if (dy != 0.0f) {
+            h = std::max(cutoff, p.h + dy);
+            const float pit = std::clamp(-dy / kFootDepth, 0.0f, 1.0f) * 0.7f, rim = std::clamp(dy / 3.0f, 0.0f, 1.0f) * 0.35f;
+            r = r * (1.0f - pit) + 168.0f * pit; g = g * (1.0f - pit) + 188.0f * pit; bl = bl * (1.0f - pit) + 224.0f * pit;
+            r = r * (1.0f - rim) + 255.0f * rim; g = g * (1.0f - rim) + 255.0f * rim; bl = bl * (1.0f - rim) + 255.0f * rim;
         }
-        if (sink <= 0.0f) continue;
-        const float ny = std::max(0.4f, h - sink);
-        v[i].v.ob[1] = static_cast<s16>(std::lround(ny / std::max(0.05f, rise)));
-        const float k = std::min(1.0f, (h - ny) / kDentDepth) * 0.7f;   // the pressed snow goes a shade bluer
-        v[i].v.cn[0] = static_cast<u8>(v[i].v.cn[0] * (1.0f - k) + 168.0f * k);
-        v[i].v.cn[1] = static_cast<u8>(v[i].v.cn[1] * (1.0f - k) + 188.0f * k);
-        v[i].v.cn[2] = static_cast<u8>(v[i].v.cn[2] * (1.0f - k) + 224.0f * k);
+        o.v.ob[0] = static_cast<s16>(std::lround(p.lx / std::max(0.05f, sa) * static_cast<float>(m->sub)));
+        o.v.ob[1] = static_cast<s16>(std::lround(h / std::max(0.05f, rise) * static_cast<float>(m->sub)));
+        o.v.ob[2] = static_cast<s16>(std::lround(p.lz / std::max(0.05f, sb) * static_cast<float>(m->sub)));
+        o.v.cn[0] = static_cast<u8>(std::clamp(r, 0.0f, 255.0f)); o.v.cn[1] = static_cast<u8>(std::clamp(g, 0.0f, 255.0f)); o.v.cn[2] = static_cast<u8>(std::clamp(bl, 0.0f, 255.0f));
+    };
+    auto mid = [](const PV& p, const PV& q) { return PV{ (p.lx + q.lx) * 0.5f, (p.h + q.h) * 0.5f, (p.lz + q.lz) * 0.5f, (p.r + q.r) * 0.5f, (p.g + q.g) * 0.5f, (p.bl + q.bl) * 0.5f }; };
+    for (size_t t = 0; t < tris; t++) {
+        const PV p0 = corner(t * 3), p1 = corner(t * 3 + 1), p2 = corner(t * 3 + 2);
+        if (!touched[t]) { put(p0); put(p1); put(p2); continue; }
+        const PV m01 = mid(p0, p1), m12 = mid(p1, p2), m20 = mid(p2, p0);
+        put(p0); put(m01); put(m20);
+        put(m01); put(p1); put(m12);
+        put(m20); put(m12); put(p2);
+        put(m01); put(m12); put(m20);
     }
     Gfx* g = dl;
-    for (size_t first = 0; first < n; first += 30) {
-        const size_t count = std::min<size_t>(30, n - first);
+    for (size_t first = 0; first < w; first += 30) {
+        const size_t count = std::min<size_t>(30, w - first);
         gSPVertex(g++, reinterpret_cast<uintptr_t>(&v[first]), static_cast<int>(count), 0);
         for (size_t t = 0; t + 2 < count; t += 3) gSP1Triangle(g++, static_cast<int>(t), static_cast<int>(t + 1), static_cast<int>(t + 2), 0);
     }
@@ -3362,7 +3406,8 @@ void DrawGroundPatches(PlayState* play) {
             WalkTrack& tr = gWalkTrack[key];
             const float mx = x - tr.x, mz = z - tr.z;
             const bool jumped = tr.seen == 0 || std::hypot(mx, mz) > 500.0f || dt <= 0.0001f || paused;
-            walkers.push_back({ key, x, y, z, size, jumped ? 0.0f : std::hypot(mx, mz) / dt });
+            const float step = jumped ? 0.0f : std::hypot(mx, mz);
+            walkers.push_back({ key, x, y, z, size, step / std::max(dt, 0.0001f), step > 0.01f ? mx / step : 1.0f, step > 0.01f ? mz / step : 0.0f, step, jumped ? 0.0f : (y - tr.y) / std::max(dt, 0.0001f) });
         };
         add(pl, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 16.0f);
         for (const auto& [id, actor] : gActorOf)
@@ -3370,8 +3415,10 @@ void DrawGroundPatches(PlayState* play) {
         CollectCartWalkers(add);
     }
     const float nowT = t;
-    const float dentLife = snowing ? 8.0f : 30.0f;
-    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > dentLife) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    for (size_t i = 0; i < gSnowDents.size();) { if (nowT - gSnowDents[i].birth > gSnowDents[i].life) gSnowDents.erase(gSnowDents.begin() + i); else i++; }
+    gDentTriBudget = 2600;
+    const float deform = gGroundDeform;
+    const float dentLife = snowing ? 10.0f : 40.0f;   // how long a print lasts (it fills in faster while it snows)
     int fxBudget = paused ? 0 : 3;   // the game's own splashes and ripples this frame (its effect table is shared)
     // The ground says whether a seed may lie where it is: on level ground for water, off the water and the steep for the rest, and the island's
     // meadows and woods for what grows or falls there. Water that stands all the time (the wet places of the Fortnite Map) has an onset below zero.
@@ -3398,9 +3445,9 @@ void DrawGroundPatches(PlayState* play) {
         gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
         gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
         Gfx_SetupDL_25Xlu(play->state.gfxCtx);
-        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
-        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE);   // vertex colour, our alpha
-        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_FOG_SHADE_A, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies on
+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_FOG);   // (the vertex alpha is the soft rim, not the fog)
+        gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, SHADE, 0, PRIMITIVE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);   // vertex colour, vertex alpha x our fade
+        gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_AA_ZB_XLU_DECAL2);   // a decal: nudged toward the camera so it never z-fights with the ground it lies on
         CLOSE_DISPS(play->state.gfxCtx);
     }
     const Vec3f eye = play->view.eye;
@@ -3439,25 +3486,55 @@ void DrawGroundPatches(PlayState* play) {
                     return lx * lx / (ra * ra) + lz * lz / (rb * rb) < 1.0f && w.y < y + 40.0f;
                 };
                 if (!seeThrough) {
+                    const float lift = layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * std::min(deform, 1.5f) : 1.0f;   // deeper deformation also builds the snow up higher
                     Gfx* dented = nullptr;
-                    if (layer.kind == gp::Kind::Snow && !paused && (!gSnowDents.empty() || !walkers.empty())) {
-                        const float reachD = std::max(sh.a, sh.b) * shrink + kDentReach;
-                        std::vector<SnowDent> dents;
-                        std::vector<float> depth;
-                        for (const SnowDent& dn : gSnowDents)
-                            if (std::hypot(dn.x - x, dn.z - z) < reachD) { dents.push_back(dn); depth.push_back(std::clamp(1.0f - (nowT - dn.birth) / dentLife, 0.0f, 1.0f)); }
+                    if (layer.kind == gp::Kind::Snow && gGroundTrails && deform > 0.02f && !paused) {
+                        // Anyone standing or walking in this patch presses it down and leaves prints; someone who just landed leaves a crater.
                         for (const Walker& w : walkers) {
-                            if (!inside(w, kDentReach * 0.6f)) continue;
-                            dents.push_back({ w.x, w.z, nowT }); depth.push_back(1.0f);   // under their feet right now
+                            if (!inside(w, kDentRimGrow)) continue;
                             WalkTrack& tr = gWalkTrack[w.key];
-                            if (w.y < y + 14.0f && w.speed > 10.0f && std::hypot(w.x - tr.x, w.z - tr.z) + tr.sinceDent >= 26.0f && gSnowDents.size() < 160) {
-                                gSnowDents.push_back({ w.x, w.z, nowT });
-                                tr.sinceDent = 0.0f;
-                            } else tr.sinceDent += std::hypot(w.x - tr.x, w.z - tr.z);
+                            if (tr.dentFrame == gWalkFrame) continue;   // (once a frame, even inside two patches)
+                            tr.dentFrame = gWalkFrame;
+                            const float sz = std::clamp(w.size / 16.0f, 0.5f, 3.0f);
+                            const bool onGround = w.y < y + 14.0f && w.vy > -80.0f;
+                            if (!onGround) continue;
+                            if (tr.fall > 0.0f) {
+                                const gp::Crater cr = gp::CraterFor(tr.fall, sz);
+                                if (cr.radius > 0.0f) {
+                                    if (gSnowDents.size() >= 160) gSnowDents.erase(gSnowDents.begin());
+                                    gSnowDents.push_back({ { w.x, w.z, 0.0f, cr.radius, cr.radius, cr.depth }, nowT, dentLife * 2.0f });
+                                }
+                                tr.fall = 0.0f;
+                            }
+                            if (w.speed > 10.0f) {
+                                tr.sinceDent += w.step;
+                                const float stride = (20.0f + std::min(w.speed, 400.0f) / 25.0f) * sz;   // runners take longer strides
+                                if (tr.sinceDent >= stride) {
+                                    tr.sinceDent = 0.0f;
+                                    tr.side = -tr.side;
+                                    float fx, fz;
+                                    gp::FootprintAt(w.x, w.z, w.hx, w.hz, tr.side, 5.0f * sz, &fx, &fz);
+                                    if (gSnowDents.size() >= 160) gSnowDents.erase(gSnowDents.begin());
+                                    const float press = 0.7f + 0.3f * std::min(1.0f, w.speed / 200.0f);
+                                    gSnowDents.push_back({ { fx, fz, std::atan2(w.hz, w.hx), kFootLen * sz, kFootWid * sz, kFootDepth * press * sz }, nowT, dentLife });
+                                }
+                            }
                         }
-                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, dents, depth);
+                        // The dents that reach this patch (what is left of each one, and the weight on the snow under everyone's feet right now).
+                        const float reachD = std::max(sh.a, sh.b) * shrink + 60.0f;
+                        std::vector<gp::Dent> dents;
+                        for (const SnowDent& dn : gSnowDents)
+                            if (std::hypot(dn.d.x - x, dn.d.z - z) < reachD) {
+                                gp::Dent e = dn.d;
+                                e.depth *= gp::DentLeft(nowT - dn.birth, dn.life) * deform;
+                                if (e.depth > 0.05f) dents.push_back(e);
+                            }
+                        for (const Walker& w : walkers)
+                            if (inside(w, kDentRimGrow) && w.y < y + 14.0f) { const float sz = std::clamp(w.size / 16.0f, 0.5f, 3.0f); dents.push_back({ w.x, w.z, 0.0f, 12.0f * sz, 12.0f * sz, 5.0f * sz * deform }); }
+                        if (dents.size() > 40) dents.erase(dents.begin(), dents.end() - 40);   // the newest 40
+                        if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, dents);
                     }
-                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink, sh.b * shrink, -1, dented);
+                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, -1, dented);
                     continue;
                 }
                 if (layer.kind == gp::Kind::Puddle && !frozen) {   // wading through: a splash on the way in, rings while moving
@@ -3481,6 +3558,13 @@ void DrawGroundPatches(PlayState* play) {
                     }
                 }
                 const int alpha = static_cast<int>((layer.kind == gp::Kind::Puddle ? 225.0f : 190.0f) * fade);
+                if (layer.kind == gp::Kind::Puddle && deform > 0.02f && d < 700.0f) {   // the lip of mud round the water, so the water sits in a slight dip
+                    const GpuMesh* bank = GpuMeshFor(royale::MeshKind::Ground, gp::BankVariant(patch));
+                    if (bank != nullptr && !bank->dl.empty()) {
+                        const float growth = std::clamp(std::sqrt(sh.a * sh.b) / 70.0f, 0.35f, 1.0f);   // a puddle that is only just forming has hardly any bank
+                        DrawGroundPatch(play, bank, x, y + 0.5f, z, spot->sx, spot->sz, sh.yaw, sh.a, std::min(deform, 1.6f) * growth * fade, sh.b, -1);
+                    }
+                }
                 DrawGroundPatch(play, m, x, y + 1.0f, z, spot->sx, spot->sz, sh.yaw, sh.a, 1.0f, sh.b, alpha);
                 if (layer.kind != gp::Kind::Puddle || !raining || frozen || ripple == nullptr || ripple->dl.empty() || d > 650.0f) continue;
                 // Every drop that lands on a puddle rings out across it: each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle.
@@ -3510,7 +3594,13 @@ void DrawGroundPatches(PlayState* play) {
     for (auto it = gWalkTrack.begin(); it != gWalkTrack.end();) {
         WalkTrack& tr = it->second;
         bool live = false;
-        for (const Walker& w : walkers) if (w.key == it->first) { tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true; break; }
+        for (const Walker& w : walkers)
+            if (w.key == it->first) {
+                tr.x = w.x; tr.y = w.y; tr.z = w.z; tr.seen = gWalkFrame; live = true;
+                if (w.vy < -200.0f) tr.fall = std::max(tr.fall, -w.vy);   // falling hard: remember how hard until they land
+                else if (w.vy > -80.0f) tr.fall = 0.0f;                    // (a landing in snow has used it by now)
+                break;
+            }
         tr.wasPuddle = tr.inPuddle;
         tr.inPuddle = false;
         it = live ? std::next(it) : gWalkTrack.erase(it);
@@ -14857,6 +14947,8 @@ UiState& Ui() {
         gGroundFrost = CVarGetInteger(ROYALE_CVAR("GroundFrost"), 1) != 0;
         gGroundLeaves = CVarGetInteger(ROYALE_CVAR("GroundLeaves"), 1) != 0;
         gGroundMerge = CVarGetInteger(ROYALE_CVAR("GroundMerge"), 1) != 0;
+        gGroundTrails = CVarGetInteger(ROYALE_CVAR("GroundTrails"), 1) != 0;
+        gGroundDeform = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundDeform"), 100), 0, 200) / 100.0f;
         gGroundAmount = std::clamp(CVarGetInteger(ROYALE_CVAR("GroundAmount"), 100), 0, 200) / 100.0f;
         gHitFlash = CVarGetInteger(ROYALE_CVAR("HitFlash"), 1) != 0;
         gHitParticles = CVarGetInteger(ROYALE_CVAR("HitParticles"), 1) != 0;
@@ -16040,6 +16132,10 @@ void DrawGraphicsUi() {
             GfxCheck("Fallen leaves in autumn, blossom in spring", "GroundLeaves", &gGroundLeaves);
             if (GfxCheck("Patches that touch run into one bigger patch", "GroundMerge", &gGroundMerge)) ForgetFloraGround();
             if (GfxPercent("How many patches (%, 0 = none)", "GroundAmount", &amount)) gGroundAmount = amount / 100.0f;
+            static int deform = -1;
+            if (deform < 0) deform = static_cast<int>(gGroundDeform * 100.0f + 0.5f);
+            if (GfxPercent("Shaping the ground (%): snow depth and prints, puddle banks (0 = flat)", "GroundDeform", &deform)) gGroundDeform = deform / 100.0f;
+            GfxCheck("Footprints, trails and landing craters in snow", "GroundTrails", &gGroundTrails);
         }
         ImGui::PopID();
     }
