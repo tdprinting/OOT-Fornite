@@ -55,4 +55,3 @@ rotate Link at noon/dawn/night, compare both strengths at zero, inspect bots,
 raise shields while moving, switch maps and leave a match, and compare frame
 rate with a busy lobby. Check that skin and surrounding effects keep their
 original appearance and graphics-layer "Left out" counters do not increase.
-

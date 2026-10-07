@@ -24,7 +24,7 @@ diff --git a/include/libultraship/libultra/gbi.h b/include/libultraship/libultra
  #define G_SETTARGETINTERPINDEX 0x45
 +#define G_SURFACEMAP 0x46
 +#define gSPSurfaceMap(pkt, map) gDma1p(pkt, G_SURFACEMAP, map, 0, 0)
- 
+
  /*
   * The following commands are the "generated" RDP commands; the user
 diff --git a/src/graphic/Fast3D/lus_gbi.h b/src/graphic/Fast3D/lus_gbi.h
@@ -35,7 +35,7 @@ diff --git a/src/graphic/Fast3D/lus_gbi.h b/src/graphic/Fast3D/lus_gbi.h
  constexpr int8_t RDP_G_SETTILESIZE_INTERP = OPCODE(0x44);
  constexpr int8_t RDP_G_SETTARGETINTERPINDEX = OPCODE(0x45);
 +constexpr int8_t OTR_G_SURFACEMAP = OPCODE(0x46);
- 
+
  /*
   * The following commands are the "generated" RDP commands; the user
 diff --git a/src/graphic/Fast3D/gfx_cc.h b/src/graphic/Fast3D/gfx_cc.h
@@ -48,11 +48,11 @@ diff --git a/src/graphic/Fast3D/gfx_cc.h b/src/graphic/Fast3D/gfx_cc.h
 +    SURFACE_MAP = 31, // Keep bits 17..30 available for legacy shader IDs.
      MAX
  };
- 
+
 -#define SHADER_OPT(opt) ((uint64_t)(1 << static_cast<int>(ShaderOpts::opt)))
 +#define SHADER_OPT(opt) ((uint64_t)(1ULL << static_cast<int>(ShaderOpts::opt)))
  #endif
- 
+
  struct ColorCombinerKey {
 @@ -86,6 +87,7 @@
      bool opt_alpha_threshold;
@@ -71,7 +71,7 @@ diff --git a/src/graphic/Fast3D/gfx_cc.cpp b/src/graphic/Fast3D/gfx_cc.cpp
      cc_features->opt_invisible = (shader_id1 & SHADER_OPT(INVISIBLE)) != 0;
 +    cc_features->opt_surface_map = (shader_id1 & SHADER_OPT(SURFACE_MAP)) != 0;
      cc_features->opt_grayscale = (shader_id1 & SHADER_OPT(GRAYSCALE)) != 0;
- 
+
      cc_features->clamp[0][0] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_S);
 diff --git a/src/graphic/Fast3D/gfx_pc.h b/src/graphic/Fast3D/gfx_pc.h
 --- a/src/graphic/Fast3D/gfx_pc.h
@@ -89,7 +89,7 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +++ b/src/graphic/Fast3D/gfx_pc.cpp
 @@ -9,6 +9,7 @@
  #include <stdio.h>
- 
+
  #include <any>
 +#include <tuple>
  #include <map>
@@ -97,16 +97,16 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
  #include <unordered_map>
 @@ -25,6 +26,7 @@
  #include <string>
- 
+
  #include "gfx_pc.h"
 +#include <libultraship/surface_map.h>
  #include "gfx_cc.h"
  #include "lus_gbi.h"
  #include "gfx_window_manager_api.h"
 @@ -115,9 +117,19 @@
- 
+
  static const std::unordered_map<Mtx*, MtxF>* current_mtx_replacements;
- 
+
 -static float buf_vbo[MAX_BUFFERED * (32 * 3)]; // 3 vertices in a triangle and 32 floats per vtx
 +static float buf_vbo[MAX_BUFFERED * (80 * 3)]; // 3 vertices in a triangle and 32 floats per vtx
  static size_t buf_vbo_len;
@@ -121,7 +121,7 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +};
 +static std::map<SurfaceTextureKey, uint32_t> surface_textures;
 +
- 
+
  static struct GfxWindowManagerAPI* gfx_wapi;
  static struct GfxRenderingAPI* gfx_rapi;
 @@ -1231,6 +1243,17 @@
@@ -139,13 +139,13 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +            gfx_normalize_vector(d->surfaceSun);
 +        }
 +
- 
+
          if (v == NULL) {
              return;
 @@ -1572,6 +1595,11 @@
          cc_options |= (shader.id << 17);
      }
- 
+
 +    // Surface maps are implemented on OpenGL / GLES (the Android renderer).
 +    // Unsupported backends and custom shaders retain their original vertex layout.
 +    bool use_surface = surface_map && !shader.enabled && !is_rect &&
@@ -156,7 +156,7 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
      key.options = cc_options;
 @@ -1582,6 +1610,29 @@
      }
- 
+
      ColorCombiner* comb = gfx_lookup_or_create_color_combiner(key);
 +    if (use_surface) {
 +        // GLES guarantees 16 attributes. Reserve five for material data.
@@ -181,13 +181,13 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +            comb = gfx_lookup_or_create_color_combiner(key);
 +        }
 +    }
- 
+
      uint32_t tm = 0;
      uint32_t tex_width[2], tex_height[2], tex_width2[2], tex_height2[2];
 @@ -1835,6 +1886,28 @@
              }
          }
- 
+
 +        if (use_surface) {
 +            const LoadedVertex* sv = v_arr[i];
 +            // Project onto the dominant face plane. Material microdetail also works
@@ -249,7 +249,7 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +    }
 +    return false;
  }
- 
+
  bool gfx_set_shader_custom(F3DGfx** cmd0) {
 @@ -3961,6 +4065,7 @@
        { "G_REGBLENDEDTEX", gfx_register_blended_texture_handler_custom } },         // G_REGBLENDEDTEX (0x3f)
@@ -258,10 +258,10 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +    { OTR_G_SURFACEMAP, { "G_SURFACEMAP", gfx_surface_map_handler } },
      { OTR_G_LOAD_SHADER, { "G_LOAD_SHADER", gfx_set_shader_custom } },
  };
- 
+
 @@ -4146,6 +4251,7 @@
  }
- 
+
  static void gfx_sp_reset() {
 +    surface_map = nullptr;
      g_rsp.modelview_matrix_stack_size = 1;
@@ -302,7 +302,7 @@ diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.c
 @@ -529,6 +531,12 @@
          ++cnt;
      }
- 
+
 +    if (cc_features.opt_surface_map) {
 +        for (const char* name : { "aSurfacePosition", "aSurfaceNormal", "aSurfaceLight", "aSurfaceColor", "aSurfaceAmbient" }) {
 +            prg->attrib_locations[cnt] = glGetAttribLocation(shader_program, name);
@@ -313,9 +313,9 @@ diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.c
      prg->num_inputs = cc_features.num_inputs;
      prg->used_textures[0] = cc_features.used_textures[0];
 @@ -545,6 +553,10 @@
- 
+
      gfx_opengl_load_shader(prg);
- 
+
 +    if (cc_features.opt_surface_map) {
 +        glUniform1i(glGetUniformLocation(shader_program, "uSurfaceNormal"), 6);
 +        glUniform1i(glGetUniformLocation(shader_program, "uSurfaceHeight"), 7);
@@ -329,7 +329,7 @@ diff --git a/src/graphic/Fast3D/shaders/opengl/default.shader.vs b/src/graphic/F
 @@ -48,7 +48,28 @@
      @end
  @end
- 
+
 +@if(o_surface_map)
 +    @{attr} vec4 aSurfacePosition;
 +    @{out} vec4 vSurfacePosition;
@@ -359,7 +359,7 @@ diff --git a/src/graphic/Fast3D/shaders/opengl/default.shader.fs b/src/graphic/F
 --- a/src/graphic/Fast3D/shaders/opengl/default.shader.fs
 +++ b/src/graphic/Fast3D/shaders/opengl/default.shader.fs
 @@ -40,6 +40,16 @@
- 
+
  @if(o_blend[0]) uniform sampler2D uTexBlend0;
  @if(o_blend[1]) uniform sampler2D uTexBlend1;
 +
@@ -372,11 +372,11 @@ diff --git a/src/graphic/Fast3D/shaders/opengl/default.shader.fs b/src/graphic/F
 +uniform sampler2D uSurfaceNormal;
 +uniform sampler2D uSurfaceHeight;
 +@end
- 
+
  uniform int frame_count;
  uniform float noise_scale;
 @@ -169,6 +179,42 @@
- 
+
      texel = WRAP(texel, -0.51, 1.51);
      texel = clamp(texel, 0.0, 1.0);
 +    @if(o_surface_map)
