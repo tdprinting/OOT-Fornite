@@ -1,6 +1,6 @@
 # Hyrule Convergence
 
-An additional Battle Royale map, selectable in the main solo-test map chooser and the host lobby's map chooser. Existing map IDs are preserved: Fortnite 5, Sandbox 6, Hyrule Convergence 7. Protocol 25 prevents older clients from joining a world whose collision they cannot render.
+An additional Battle Royale map, selectable in the main solo-test map chooser and the host lobby's map chooser. Existing map IDs are preserved: Fortnite 5, Sandbox 6, Hyrule Convergence 7. Protocol 26 prevents older clients with the broken building collision from sharing the corrected world.
 
 The world uses the existing Hyrule Field custom-scene hooks, with its own height grid, minimap colours, textured native geometry and full scene collision. All buildings and their furnished interiors belong to the same scene. Their two open entrances have 220-unit width and 280-unit height. There are no door actors, room transitions or exit surfaces. Furniture sits beside a clear central aisle; beds, hearths, tables, shelves, pottery, books, benches and storage provide lived-in interiors. Roofs, walls and major furniture have collision. Small ornaments are decorative.
 
@@ -34,6 +34,16 @@ Rebuild from the repository root:
 ```
 
 The authoring script writes `shared/convergence_data.h` (terrain, collision, navigation footprints and placement data) and `shared/convergence_model.h` (textured draw batches). Source geometry is converted from Blender XYZ to engine `(100X,100Z,-100Y)`. The export checks the engine's 8191 maximum collision vertex index and 16-bit polygon count. Terrain triangles use the same diagonal and heights as the game lookup grid. Spatial draw batches are culled by distance. Buildings are rendered from persistent native vertex/display-list buffers, with no GLB parsing at runtime.
+
+## Device-reported texture and collision fixes
+
+Tee's device photo revealed neon checker patterns. The map exporter had emitted RGBA5551 as native `uint16_t` numbers; the graphics backend consumes big-endian bytes. Windows and Android therefore reversed each pixel's colour/alpha bytes. All 19 materials now use explicit high-byte-first `uint8_t` arrays, as the existing cart/pet exporters do. Tests inspect the actual upload bytes, opaque alpha, expected forest/wood/plaster colours and mortar contrast.
+
+The collision audit found an independent naming bug: filtering names containing `post` also removed walls and floors belonging to `outpost` buildings. The exporter now treats all architectural meshes as static collision except oak corner trim that already overlaps solid walls. Tree trunks and the shallow fountain platform are also permanently solid. The mesh has 7,930 vertices and 14,534 triangles, within the engine's scene limit.
+
+There are 242 additional furniture/cover collision proxies, including beds with mattress tops, table/bench/shelf frames, hearths, barrels, gravestones, boulders, hay and sizeable loose props. They use the existing `Royale_Solid` nearby collision actor, with closed boxes selected by three-dimensional distance and rebuilt when the nearest set changes. At most 34 boxes plus a harmless placeholder fit its 420-polygon/vertex budget. Selection is reconsidered every frame on this map and remains active in the lobby; the terrain actor maintains it while the authored scene is visible. Server navigation uses all 547 footprint obstacles, not just the locally selected boxes. Leaves, rugs, pillows and tiny loose books/pottery remain decorative. `collision_audit.json` records which authored objects received static or nearby collision.
+
+Regression checks now cast rays through both side walls, floors and roofs of every house, verify that both entrance routes stay open, test every tree trunk, and confirm that every prop proxy is selected when approached. Runtime rendering and collision use the actually loaded custom scene so a cached Convergence ID cannot apply these props to vanilla Hyrule Field.
 
 ## Validation and handoff
 
