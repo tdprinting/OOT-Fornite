@@ -2869,18 +2869,19 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     // The glider's origin is its handle bar, and the bar is put exactly where Link's two hands are (the game works out where each hand is as it
     // draws him), so he always holds the grips, whatever his size or pose. Banking, pitching and swaying all turn about the bar, so it stays in his hands.
-    // Link's size (1 at normal, bigger under Adult Power) scales where his raised hands are. The old fixed fallback of 125 sat well above his hands, so
-    // whenever the check below rejected them the bar floated over his head; remember where the hands were last seen (as an offset from his feet) instead.
+    // Link's size (1 at normal, bigger under Adult Power) scales the windows below. In the ledge-hang pose he hangs from his hands, so the hands are
+    // at (or even a little below) the point the game calls his position, with his body below them: the old check that the hands were well *above*
+    // that point threw the real hands away every frame, and the bar floated at the fixed fallback height above them instead. Trust any hand
+    // position that is finite and anywhere near him; the pose may not have taken yet only on the very first frame, when the position is (0, 0, 0).
     const float size = hanger != nullptr ? std::max(0.3f, hanger->actor.scale.y / 0.01f) : 1.0f;
-    static std::unordered_map<uint32_t, Vec3f> lastGrip;   // per glider: hands' offset from the feet
-    Vec3f grip = { x, y + 80.0f * size, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
+    static std::unordered_map<uint32_t, Vec3f> lastGrip;   // per glider: hands' offset from his position
+    Vec3f grip = { x, y + 20.0f * size, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
     if (auto it = lastGrip.find(scheme); it != lastGrip.end()) grip = { x + it->second.x, y + it->second.y, z + it->second.z };
     if (hanger != nullptr) {
         const Vec3f& l = hanger->bodyPartsPos[PLAYER_BODYPART_L_HAND];
         const Vec3f& r = hanger->bodyPartsPos[PLAYER_BODYPART_R_HAND];
         const float mx = (l.x + r.x) * 0.5f, my = (l.y + r.y) * 0.5f, mz = (l.z + r.z) * 0.5f;
-        // Trust the hands only if they are somewhere believable (near him, and not down at his feet or far over his head): the pose may not have taken yet.
-        if (std::isfinite(mx + my + mz) && std::fabs(mx - x) < 80.0f * size && std::fabs(mz - z) < 80.0f * size && my > y + 25.0f * size && my < y + 220.0f * size) {
+        if (std::isfinite(mx + my + mz) && std::fabs(mx - x) < 150.0f * size && std::fabs(mz - z) < 150.0f * size && std::fabs(my - y) < 260.0f * size) {
             grip = { mx, my, mz };
             if (lastGrip.size() > 48) lastGrip.clear();
             lastGrip[scheme] = { mx - x, my - y, mz - z };
