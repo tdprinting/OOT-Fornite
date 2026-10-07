@@ -1,0 +1,948 @@
+{
+  "map": "Hyrule Convergence",
+  "seed": 64,
+  "coordinate_conversion": "Blender XYZ -> game (100X,100Z,-100Y)",
+  "stats": {
+    "mesh_objects": 1940,
+    "triangles": 66858,
+    "buildings": 23,
+    "loot_sites": 32
+  },
+  "pois": [
+    {
+      "name": "Triforce Market",
+      "blender_xy": [
+        0,
+        0
+      ],
+      "boss_kind": null
+    },
+    {
+      "name": "Lon Lon Crossroads",
+      "blender_xy": [
+        -22,
+        -24
+      ],
+      "boss_kind": null
+    },
+    {
+      "name": "Lostwood Sanctuary",
+      "blender_xy": [
+        -44,
+        23
+      ],
+      "boss_kind": "Moss"
+    },
+    {
+      "name": "Ember Quarry",
+      "blender_xy": [
+        27,
+        43
+      ],
+      "boss_kind": "Lava"
+    },
+    {
+      "name": "Frostwatch Lodge",
+      "blender_xy": [
+        -17,
+        48
+      ],
+      "boss_kind": "Frost"
+    },
+    {
+      "name": "Spirit Caravanserai",
+      "blender_xy": [
+        46,
+        -24
+      ],
+      "boss_kind": "Dune"
+    },
+    {
+      "name": "Lake Lantern",
+      "blender_xy": [
+        38,
+        8
+      ],
+      "boss_kind": "Tide"
+    },
+    {
+      "name": "Whispering Graveyard",
+      "blender_xy": [
+        -43,
+        -28
+      ],
+      "boss_kind": "Shade"
+    },
+    {
+      "name": "Royal Ruins",
+      "blender_xy": [
+        4,
+        -43
+      ],
+      "boss_kind": "Stone"
+    }
+  ],
+  "buildings": [
+    {
+      "name": "Triforce Market house",
+      "center_blender": [
+        -9,
+        -7,
+        0.72
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Triforce Market house",
+      "center_blender": [
+        9,
+        -7,
+        0.72
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Triforce Market house",
+      "center_blender": [
+        -9,
+        7,
+        0.72
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Triforce Market house",
+      "center_blender": [
+        9,
+        7,
+        0.72
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lon Lon Crossroads house",
+      "center_blender": [
+        -31,
+        -31,
+        0.617757950170517
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lon Lon Crossroads house",
+      "center_blender": [
+        -13,
+        -31,
+        0.5896381341928579
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lon Lon Crossroads house",
+      "center_blender": [
+        -31,
+        -17,
+        0.5896381341928579
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lon Lon Crossroads house",
+      "center_blender": [
+        -13,
+        -17,
+        0.5896381341928579
+      ],
+      "size_blender": [
+        8,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lostwood Sanctuary outpost",
+      "center_blender": [
+        -38.44094948787575,
+        33.634705327542044,
+        0.7083269018571192
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lostwood Sanctuary outpost",
+      "center_blender": [
+        -49.55905051212425,
+        12.365294672457956,
+        0.7083269018571192
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Ember Quarry outpost",
+      "center_blender": [
+        37.162679866236815,
+        36.61878240957223,
+        -0.08365225944012822
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Ember Quarry outpost",
+      "center_blender": [
+        16.837320133763182,
+        49.38121759042777,
+        -0.08365225944012822
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Frostwatch Lodge outpost",
+      "center_blender": [
+        -5.688473298065512,
+        52.00616570693513,
+        1.6167852166349679
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Frostwatch Lodge outpost",
+      "center_blender": [
+        -28.31152670193449,
+        43.99383429306487,
+        1.6167852166349679
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Spirit Caravanserai outpost",
+      "center_blender": [
+        40.44920791965976,
+        -34.63901815398546,
+        0.7097842978002729
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Spirit Caravanserai outpost",
+      "center_blender": [
+        51.55079208034024,
+        -13.360981846014543,
+        0.7097842978002729
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lake Lantern outpost",
+      "center_blender": [
+        40.472125772598105,
+        -3.742597419840987,
+        1.1308483002689305
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Lake Lantern outpost",
+      "center_blender": [
+        35.527874227401895,
+        19.742597419840987,
+        1.1308483002689305
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Whispering Graveyard outpost",
+      "center_blender": [
+        -49.54807805724919,
+        -17.944022983510173,
+        0.7343004996634747
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Whispering Graveyard outpost",
+      "center_blender": [
+        -36.45192194275081,
+        -38.05597701648983,
+        0.7343004996634747
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Royal Ruins outpost",
+      "center_blender": [
+        -7.948414591905221,
+        -44.11148042715397,
+        0.4860903568199332
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Royal Ruins outpost",
+      "center_blender": [
+        15.948414591905221,
+        -41.88851957284603,
+        0.4860903568199332
+      ],
+      "size_blender": [
+        7,
+        6
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    },
+    {
+      "name": "Royal Pavilion",
+      "center_blender": [
+        0,
+        23,
+        0.72
+      ],
+      "size_blender": [
+        12,
+        9
+      ],
+      "door_clearance_units": [
+        220,
+        280
+      ],
+      "entrances": 2
+    }
+  ],
+  "markers": [
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -700.0,
+        84.0,
+        850.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        1100.0,
+        84.0,
+        850.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -700.0,
+        84.0,
+        -550.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        1100.0,
+        84.0,
+        -550.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        300,
+        75.0,
+        -200
+      ]
+    },
+    {
+      "name": "Triforce Market",
+      "kind": "poi",
+      "game_position": [
+        0,
+        60.0,
+        0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -2900.0,
+        73.78,
+        3250.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -1100.0,
+        70.96,
+        3250.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -2900.0,
+        70.96,
+        1850.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -1100.0,
+        70.96,
+        1850.0
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -1900,
+        61.96,
+        2200
+      ]
+    },
+    {
+      "name": "Lon Lon Crossroads",
+      "kind": "poi",
+      "game_position": [
+        -2200,
+        46.96,
+        2400
+      ]
+    },
+    {
+      "name": "Lostwood Sanctuary miniboss Moss",
+      "kind": "BossKind::Moss",
+      "game_position": [
+        -4400,
+        78.83,
+        -2300
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -3669.09,
+        82.83,
+        -3213.47
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -4780.91,
+        82.83,
+        -1086.53
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -4100,
+        73.83,
+        -2500
+      ]
+    },
+    {
+      "name": "Lostwood Sanctuary",
+      "kind": "poi",
+      "game_position": [
+        -4400,
+        58.83,
+        -2300
+      ]
+    },
+    {
+      "name": "Ember Quarry miniboss Lava",
+      "kind": "BossKind::Lava",
+      "game_position": [
+        2700,
+        -0.37,
+        -4300
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        3891.27,
+        3.63,
+        -3511.88
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        1858.73,
+        3.63,
+        -4788.12
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        3000,
+        -5.37,
+        -4500
+      ]
+    },
+    {
+      "name": "Ember Quarry",
+      "kind": "poi",
+      "game_position": [
+        2700,
+        -20.37,
+        -4300
+      ]
+    },
+    {
+      "name": "Frostwatch Lodge miniboss Frost",
+      "kind": "BossKind::Frost",
+      "game_position": [
+        -1700,
+        169.68,
+        -4800
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -393.85,
+        173.68,
+        -5050.62
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -2656.15,
+        173.68,
+        -4249.38
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -1400,
+        164.68,
+        -5000
+      ]
+    },
+    {
+      "name": "Frostwatch Lodge",
+      "kind": "poi",
+      "game_position": [
+        -1700,
+        149.68,
+        -4800
+      ]
+    },
+    {
+      "name": "Spirit Caravanserai miniboss Dune",
+      "kind": "BossKind::Dune",
+      "game_position": [
+        4600,
+        78.98,
+        2400
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        4219.92,
+        82.98,
+        3613.9
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        5330.08,
+        82.98,
+        1486.1
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        4900,
+        73.98,
+        2200
+      ]
+    },
+    {
+      "name": "Spirit Caravanserai",
+      "kind": "poi",
+      "game_position": [
+        4600,
+        58.98,
+        2400
+      ]
+    },
+    {
+      "name": "Lake Lantern miniboss Tide",
+      "kind": "BossKind::Tide",
+      "game_position": [
+        3800,
+        121.08,
+        -800
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        4222.21,
+        125.08,
+        524.26
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        3727.79,
+        125.08,
+        -1824.26
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        4100,
+        116.08,
+        -1000
+      ]
+    },
+    {
+      "name": "Lake Lantern",
+      "kind": "poi",
+      "game_position": [
+        3800,
+        101.08,
+        -800
+      ]
+    },
+    {
+      "name": "Whispering Graveyard miniboss Shade",
+      "kind": "BossKind::Shade",
+      "game_position": [
+        -4300,
+        81.43,
+        2800
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -4779.81,
+        85.43,
+        1944.4
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -3470.19,
+        85.43,
+        3955.6
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -4000,
+        76.43,
+        2600
+      ]
+    },
+    {
+      "name": "Whispering Graveyard",
+      "kind": "poi",
+      "game_position": [
+        -4300,
+        61.43,
+        2800
+      ]
+    },
+    {
+      "name": "Royal Ruins miniboss Stone",
+      "kind": "BossKind::Stone",
+      "game_position": [
+        400,
+        56.61,
+        4300
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        -619.84,
+        60.61,
+        4561.15
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        1769.84,
+        60.61,
+        4338.85
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        700,
+        51.61,
+        4100
+      ]
+    },
+    {
+      "name": "Royal Ruins",
+      "kind": "poi",
+      "game_position": [
+        400,
+        36.61,
+        4300
+      ]
+    },
+    {
+      "name": "Chest site",
+      "kind": "loot",
+      "game_position": [
+        300.0,
+        84.0,
+        -2075.0
+      ]
+    },
+    {
+      "name": "Lobby / safe storm fallback",
+      "kind": "spawn",
+      "game_position": [
+        0,
+        60.0,
+        -600
+      ]
+    },
+    {
+      "name": "Lon Lon Buggy",
+      "kind": "vehicle",
+      "game_position": [
+        -2200,
+        46.96,
+        2400
+      ]
+    },
+    {
+      "name": "Major boss safe center",
+      "kind": "major_boss_candidate",
+      "game_position": [
+        0,
+        60.0,
+        1300
+      ]
+    },
+    {
+      "name": "Link height reference 180 units",
+      "kind": "scale_reference",
+      "game_position": [
+        800,
+        60.0,
+        0
+      ]
+    }
+  ]
+}

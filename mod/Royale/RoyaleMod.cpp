@@ -15,13 +15,17 @@
 #include "avriella_toys.h"
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
+#include "maya_anim.h"
 #include "cart_model.h"
 #include "logo_data.h"
 #include "fortnite_map.h"
+#include "convergence_layout.h"
+#include "convergence_model.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
 #include "lobby_fish_model.h"
+#include "lobby_reef_geometry.h"
 #include "fortnite_scenery.h"
 #include "map.h"
 #include "meshes.h"
@@ -259,7 +263,7 @@ const royale::MapDef& CurrentMap() { return royale::MapOf(gMapId); }
 // (and the other way round for the real field). Outside a lobby nobody has picked a map, so the scene alone counts.
 bool InField() {
     return InGame() && gPlayState->sceneNum == CurrentMap().scene &&
-           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || (gMapId == royale::kSandboxMapIndex) == gFortniteSandbox)));
+           (!gSession.Joined() || (royale::IsIslandMap(gMapId) == gFortniteScene && (!gFortniteScene || gMapId == royale::fortnite::gTerrainMapId)));
 }
 bool InWaitingRoom() { return InGame() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME; }
 
@@ -449,6 +453,11 @@ bool OnIsland() { return gFortniteScene && gPlayState != nullptr && gPlayState->
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
     if (!InField()) return false;
+    if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
+        return true;
+    }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
     Vec3f pos = { x, 4000.0f, z };
     for (int tries = 0; tries < 6; tries++) {
@@ -568,6 +577,7 @@ bool HazardFloorAt(float x, float z) {
 }
 
 bool WalkableAt(royale::Vec2 p) {
+    if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -576,9 +586,9 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex) {   // the test map is a fixed arena: no measuring
+    if (gMapId == royale::kSandboxMapIndex || gMapId == royale::kConvergenceMapIndex) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
@@ -5209,8 +5219,8 @@ ImTextureID FortniteMinimapTexture() {
     static int texId = -1;
     static ImTextureID tex = nullptr;
     static int triedFor = -1;   // which ground the picture was made from (the island's or the Sandbox's)
-    if (triedFor != (royale::fortnite::gSandboxTerrain ? 1 : 0)) {
-        triedFor = royale::fortnite::gSandboxTerrain ? 1 : 0;
+    if (triedFor != royale::fortnite::gTerrainMapId) {
+        triedFor = royale::fortnite::gTerrainMapId;
         constexpr int n = royale::fortnite::kFine + 1;
         std::vector<uint8_t> rgba(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; i++) {
@@ -9623,6 +9633,55 @@ void FortniteTerrain_Init(Actor* actor, PlayState*) {
 void FortniteTerrain_Update(Actor*, PlayState*) {}
 void FortniteTerrain_Destroy(Actor* actor, PlayState*) { if (gFortniteActor == actor) gFortniteActor = nullptr; }
 
+// Authored structures use the same geometry as the Blender source and scene collision.
+// Persistent buffers keep display-list pointers valid; spatial batches limit draw cost.
+void DrawConvergenceStructures(PlayState* play) {
+    if (royale::fortnite::gTerrainMapId != royale::kConvergenceMapIndex) return;
+    namespace cv = royale::convergence;
+    static std::vector<Vtx> vertices;
+    static std::vector<std::vector<Gfx>> lists;
+    if (vertices.empty()) {
+        vertices.resize(sizeof(cv::kDrawVertices)/sizeof(cv::kDrawVertices[0]));
+        for (size_t i=0;i<vertices.size();++i) {
+            const auto& v=cv::kDrawVertices[i];auto& dst=vertices[i].v;
+            dst.ob[0]=v.x;dst.ob[1]=v.y;dst.ob[2]=v.z;dst.flag=0;
+            dst.tc[0]=v.s;dst.tc[1]=v.t;
+            dst.cn[0]=v.r;dst.cn[1]=v.g;dst.cn[2]=v.b;dst.cn[3]=255;
+        }
+        lists.resize(sizeof(cv::kBatches)/sizeof(cv::kBatches[0]));
+        for (size_t i=0;i<lists.size();++i) {
+            const auto& batch=cv::kBatches[i];auto& dl=lists[i];
+            dl.resize(batch.count/3 + batch.count/30 + 3);Gfx* p=dl.data();
+            for (uint32_t first=0;first<batch.count;first+=30) {
+                const int n=static_cast<int>(std::min<uint32_t>(30,batch.count-first));
+                gSPVertex(p++,reinterpret_cast<uintptr_t>(&vertices[batch.first+first]),n,0);
+                for (int t=0;t<n;t+=3) gSP1Triangle(p++,t,t+1,t+2,0);
+            }
+            gSPEndDisplayList(p++);dl.resize(static_cast<size_t>(p-dl.data()));
+        }
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0,0,0,MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++,MATRIX_NEWMTX(play->state.gfxCtx),G_MTX_NOPUSH|G_MTX_LOAD|G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++,G_LIGHTING|G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++,0xFFFF,0xFFFF,0,G_TX_RENDERTILE,G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++,G_CC_MODULATEIDECALA,G_CC_PASS2);
+    int loaded=-1;
+    for (size_t i=0;i<lists.size();++i) {
+        const auto& batch=cv::kBatches[i];
+        if (std::hypot(play->view.eye.x-batch.x,play->view.eye.z-batch.z)>6500.0f) continue;
+        if (loaded!=batch.texture) {
+            gDPLoadTextureBlock(POLY_OPA_DISP++,cv::kTextures[batch.texture],G_IM_FMT_RGBA,G_IM_SIZ_16b,32,32,0,
+                G_TX_WRAP|G_TX_NOMIRROR,G_TX_WRAP|G_TX_NOMIRROR,5,5,G_TX_NOLOD,G_TX_NOLOD);
+            loaded=batch.texture;
+        }
+        gSPDisplayList(POLY_OPA_DISP++,lists[i].data());
+    }
+    gSPTexture(POLY_OPA_DISP++,0,0,0,G_TX_RENDERTILE,G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -9669,6 +9728,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
         }
     }
     CLOSE_DISPS(play->state.gfxCtx);
+    DrawConvergenceStructures(play);
 }
 
 int FortniteActorId() {
@@ -9703,7 +9763,7 @@ void DriveFortnite(Player* player, const royale::HudState& hud) {
         gFortniteActor = nullptr;
     }
     if (!gSession.Joined()) return;
-    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && gFortniteSandbox != (gMapId == royale::kSandboxMapIndex)))) {
+    if (gPlayState->sceneNum == SCENE_HYRULE_FIELD && (gFortniteScene != royale::IsIslandMap(gMapId) || (gFortniteScene && royale::fortnite::gTerrainMapId != gMapId))) {
         GoToField();   // the host changed the map: load the scene again with the right ground
         return;
     }
@@ -11046,6 +11106,7 @@ void DriveStormAlerts(const royale::HudState& hud) {
 constexpr u16 kTextLilo = 0x7F00;       // Lilo sitting on the map
 constexpr u16 kTextLiloPet = 0x7F01;    // Lilo the pet: 0x7F01 onwards, one per line in royale::kLiloPetLines
 constexpr u16 kTextMaya = 0x7F10;
+constexpr u16 kTextMayaCompanion = 0x7F60;
 constexpr u16 kTextSign = 0x7F20;
 constexpr u16 kTextAvriellaPet = 0x7F30;   // Avriella the baby pet: 0x7F30 onwards, one per line in royale::kAvriellaPetLines
 static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= 0x7FFF, "Avriella's lines run past the Royale text ids");
@@ -11061,6 +11122,8 @@ void RegisterRoyaleMessages() {
         cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextLiloPet + i), CustomMessage(royale::kLiloPetLines[i]));
     for (int i = 0; i < royale::kAvriellaPetLineCount; i++)
         cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextAvriellaPet + i), CustomMessage(royale::kAvriellaPetLines[i]));
+    for (int i=0; i<royale::kMayaCompanionLineCount; ++i)
+        cm->CreateMessage("RoyaleMod", static_cast<u16>(kTextMayaCompanion+i), CustomMessage(royale::kMayaCompanionLines[i]));
     cm->CreateMessage("RoyaleMod", kTextMaya, CustomMessage(royale::kMayaGreeting));
     cm->CreateMessage("RoyaleMod", kTextSign, CustomMessage(royale::kMapSignText, TEXTBOX_TYPE_WOODEN));
     gRoyaleMessagesMade = true;
@@ -11686,7 +11749,7 @@ void Cat_Draw(Actor* actor, PlayState* play) {
 void Cat_Destroy(Actor* actor, PlayState*) { if (gCat.actor == actor) { gCat.actor = nullptr; gCat.placed = false; } }
 
 // Which pet follows you when the pet option is on: 0 Lilo the cat, 1 Avriella the baby (picked in the "Your pet" section of the menu).
-int PetKind() { return CVarGetInteger(CVAR_SETTING("Royale.PetKind"), 0) == 1 ? 1 : 0; }
+int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"), 0), 0, 2); }
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
@@ -11776,6 +11839,144 @@ void DrawAvriellaModel(PlayState* play, float x, float y, float z, float yaw, fl
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+
+void DrawMayaCompanionModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::maya::Pose& pose, int face) {
+    namespace A = royale::maya;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * A::kVertCount));
+    if (vtx == nullptr) return;
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for Lilo
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < A::kVertCount; i++) {
+        const A::Vert& v = A::kVerts[i];
+        float p[3], n[3];
+        A::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.55f + 0.55f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(245.0f * lit);
+        o.v.cn[3] = 255;
+    }
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours; she is seen from all sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // her texture times the vertex colour
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    Matrix_Scale(scale / kSub, scale / kSub, scale / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const int pic = std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1);
+    int loaded = -1;
+    for (int b = 0; b < A::kBatchCount; b++) {
+        const A::Batch& bt = A::kBatches[b];
+        // Hobby props parked below the floor are omitted, even beside cliffs.
+        const int bone = A::kVerts[bt.firstVert].b0;
+        if (A::kBoneIsProp[bone] && pose.bone[bone].t[1] < -100.0f) continue;
+        const int tex = bt.texture == A::kFace ? 2 + pic : static_cast<int>(bt.texture);   // 0 cloth, 1 skin, 2 and up the faces
+        if (tex != loaded) {
+            const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : A::kFaceTex[tex - 2];
+            const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : A::kFaceH;
+            gDPLoadTextureBlock(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+                                G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            loaded = tex;
+        }
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0, A::kTris[t + 1][0], A::kTris[t + 1][1], A::kTris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, A::kTris[t][0], A::kTris[t][1], A::kTris[t][2], 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
+
+
+// Maya is a local cosmetic companion. Original mesh/rig: tools/maya/.
+struct MayaCompanionState {
+    Actor* actor = nullptr;
+    royale::maya::Animator anim;
+    float yaw = 0, still = 0, hobbyTime = 0, blockedTime = 0;
+    int line = 0, hobby = 0;
+    bool talking = false;
+};
+MayaCompanionState gMayaCompanion;
+
+static_assert(kTextAvriellaPet + royale::kAvriellaPetLineCount <= kTextMayaCompanion, "Companion text overlap");
+static_assert(kTextMayaCompanion + royale::kMayaCompanionLineCount <= 0x7FFF, "Maya text overflow");
+void MayaCompanion_Update(Actor* actor, PlayState* play) {
+    namespace M = royale::maya;
+    auto& c = gMayaCompanion;
+    Player* player = GET_PLAYER(play);
+    const float dt = 1.0f / royale::kTickHz;
+    const auto& pp = player->actor.world.pos;
+    float dx = pp.x - actor->world.pos.x, dz = pp.z - actor->world.pos.z;
+    float distance = std::hypot(dx, dz);
+    bool talking = TalkingTo(actor);
+    if (c.talking && !talking) { c.line = (c.line + 1) % royale::kMayaCompanionLineCount; c.hobby = c.line % 5; c.hobbyTime = 0; }
+    c.talking = talking;
+    int clip = M::kIdle;
+    if (distance > 115.0f && !talking) {
+        c.still = 0; c.hobbyTime = 0;
+        const float yaw = std::atan2(dx, dz);
+        c.yaw = yaw;
+        const bool scooter = distance > 260.0f;
+        const bool running = distance > 185.0f;
+        const float step = std::min(distance - 90.0f, (scooter ? 250.0f : running ? 190.0f : 130.0f) * dt);
+        float nx = actor->world.pos.x + dx / distance * step;
+        float nz = actor->world.pos.z + dz / distance * step;
+        float floor = 0;
+        if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor) && std::fabs(floor-actor->world.pos.y)<45.0f) {
+            actor->world.pos.x = nx; actor->world.pos.z = nz; actor->world.pos.y = floor; c.blockedTime = 0;
+        } else {
+            c.blockedTime += dt;
+            if (distance > 700.0f || c.blockedTime > 2.5f || std::fabs(pp.y-actor->world.pos.y)>170.0f) {
+            // Catch up on a valid nearby floor after a climb or teleport.
+            nx = pp.x - std::sin(yaw)*90; nz = pp.z - std::cos(yaw)*90;
+            if (WalkableAt({nx,nz}) && FloorAt(nx,nz,&floor)) { actor->world.pos = {nx,floor,nz}; c.blockedTime=0; }
+            }
+        }
+        clip = scooter ? M::kScooter : running ? M::kRun : M::kWalk;
+    } else {
+        c.still += dt; c.hobbyTime += dt;
+        c.yaw = std::atan2(dx,dz);
+        static constexpr int hobbies[] = {M::kTablet,M::kDraw,M::kPizza,M::kLearn,M::kCheer};
+        if (c.hobbyTime > 8) { c.hobby = (c.hobby + 1) % 5; c.hobbyTime = 0; }
+        clip = talking ? M::kWave : c.still > 3 ? hobbies[c.hobby] : M::kIdle;
+    }
+    if (!talking && distance < 140 && std::fabs(player->linearVelocity) < 3.0f && OfferTalk(actor, play, static_cast<u16>(kTextMayaCompanion+c.line), 140.0f)) { c.talking=true; clip=M::kWave; }
+    c.anim.Play(clip); c.anim.Update(dt);
+    actor->shape.rot.y = static_cast<s16>(c.yaw * (32768.0f / 3.14159265f));
+    actor->focus.pos = actor->world.pos; actor->focus.pos.y += 90;
+}
+void MayaCompanion_Draw(Actor* actor, PlayState* play) {
+    royale::maya::Pose pose; gMayaCompanion.anim.Evaluate(pose);
+    const int face = std::fmod(gMayaCompanion.anim.time,3.7f)<.12f ? royale::maya::kFaceShut : royale::maya::kFaceSmile;
+    DrawMayaCompanionModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,gMayaCompanion.yaw,.72f,pose,face);
+}
+void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) gMayaCompanion = MayaCompanionState{}; }
+void ReconcileMayaCompanion(const royale::HudState& hud) {
+    const bool want = DebugOn(kDbgAllies) && MapOption("LiloPet",false) && PetKind()==2 && gSession.Joined() &&
+        (InField() || InWaitingRoom()) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
+    if (!want) { if (gMayaCompanion.actor) Actor_Kill(gMayaCompanion.actor); gMayaCompanion = MayaCompanionState{}; return; }
+    if (gMayaCompanion.actor) return;
+    Player* player=GET_PLAYER(gPlayState);
+    const auto& p=player->actor.world.pos;
+    float y; const float x=p.x+70, z=p.z+45;
+    if (!FloorAt(x,z,&y)) return;
+    Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
+    if (!a) return;
+    a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
+    a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    a->uncullZoneForward=4000; a->uncullZoneScale=1500; a->uncullZoneDownward=1500; a->shape.shadowScale=18;
+    gMayaCompanion = MayaCompanionState{}; gMayaCompanion.actor=a;
+}
 
 // ---- Avriella's toys: a stuffed Bluey, a little television and a laptop ----------------------------------------------------------------
 // Made in Blender (tools/avriella/build_toys.py, assets/avriella/toys.blend; the plush is about 1300 triangles, the TV about 600, the laptop about 400, all with tiny
@@ -13361,7 +13562,13 @@ bool SignNear() {
 
 // A next to Lilo, Maya or the sign when the game did not already start the talk itself: open the same text box directly.
 void PressedATalk() {
-    if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
+    Player* player = GET_PLAYER(gPlayState);
+    Actor* companion = gMayaCompanion.actor;
+    if (companion && std::fabs(player->linearVelocity) < 3.0f &&
+        std::hypot(player->actor.world.pos.x-companion->world.pos.x, player->actor.world.pos.z-companion->world.pos.z) < 140.0f) {
+        if (StartTalk(companion, static_cast<u16>(kTextMayaCompanion+gMayaCompanion.line))) gMayaCompanion.talking=true;
+    }
+    else if (MayaNear()) { if (StartTalk(gMayaActor, kTextMaya)) TalkToMaya(); }
     else if (LiloNear()) { if (StartTalk(gLiloActor, kTextLilo)) TalkToLilo(); }
     else if (SignNear()) StartTalk(gSignActor, kTextSign);
 }
@@ -13610,6 +13817,7 @@ void OnGameFrameUpdate() {
     Feat("Maya"); if (DebugOn(kDbgAllies)) ReconcileMaya(hud);
     Feat("Lilo"); if (DebugOn(kDbgAllies)) ReconcileLilo(hud);
     Feat("cat pet"); if (DebugOn(kDbgAllies)) ReconcileCatPet(hud);
+    Feat("Maya companion"); ReconcileMayaCompanion(hud);
     Feat("baby pet"); if (DebugOn(kDbgAvriella)) ReconcileBabyPet(hud);
     Feat("lobby reef aquarium"); ReconcileLobbyReef();
     Feat("Lilo effects"); if (DebugOn(kDbgAllies)) { UpdateLiloFx(); UpdateToxicClouds(hud); }
@@ -13678,6 +13886,7 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
+    gMayaCompanion = MayaCompanionState{};
     gActorOf.clear();
     gPlaying.clear();
     gMotion.clear();
@@ -13844,7 +14053,8 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = std::min(royale::ClampMap(CVarGetInteger(ROYALE_CVAR("Map"), 0)), royale::kPlayableMapCount - 1);   // the Sandbox is never a lobby map
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), 0);
+        if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
         ui.weatherIntensity = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherIntensity"), 60), 0, 100);
@@ -13959,15 +14169,20 @@ void DrawPetOptions() {
     bool changed = ImGui::RadioButton("Lilo the cat", &kind, 0);
     ImGui::SameLine();
     changed |= ImGui::RadioButton("Avriella the baby", &kind, 1);
+    ImGui::SameLine();
+    changed |= ImGui::RadioButton("Maya", &kind, 2);
     if (changed) {
         CVarSetInteger(CVAR_SETTING("Royale.PetKind"), kind);
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
     }
-    if (kind == 1)
+    if (kind == 2)
+        ImGui::TextWrapped("Maya walks after you and rides her electric scooter to catch up. She plays on her tablet, draws, enjoys pizza and reads when you stop. Face her and press A to talk and see her next hobby.");
+    else if (kind == 1)
         ImGui::TextWrapped("Avriella rolls after you (she cannot crawl yet), sits when you stop, and smiles a lot, kicks her legs, chews on tiny rocks, waves, claps, babbles, giggles, "
                            "stacks rocks, stands up and wobbles, reaches for loot, and falls asleep if you stand still for long. Stand still facing her and press A to talk.");
     else
         ImGui::TextWrapped("Lilo walks or runs after you, sits when you stop, then grooms, stretches, pounces and naps. Stand still facing her and press A to talk.");
+    if (!DebugOn(kDbgAllies) && kind == 2) ImGui::TextColored(kRed, "Maya is switched off with Allies in the Debug section.");
     if (!DebugOn(kDbgAvriella) && kind == 1) ImGui::TextColored(kRed, "Avriella is switched off in the Debug section.");
 }
 
@@ -14324,10 +14539,11 @@ void DrawLobby(UiState& ui, const royale::HudState& h) {
     ImGui::TextColored(kGrey, "%s", royale::MapOf(h.mapId).blurb);
     if (h.isHost) {
         UiState& ui = Ui();
-        if (h.mapId < royale::kPlayableMapCount) ui.mapId = h.mapId;
+        if (royale::IsPlayableMap(h.mapId)) ui.mapId = h.mapId;
         ImGui::SetNextItemWidth(260);
         if (ImGui::BeginCombo("Choose the map", royale::MapOf(ui.mapId).name)) {
-            for (int i = 0; i < royale::kPlayableMapCount; i++) {
+            for (int i = 0; i < royale::kMapCount; i++) {
+                if (!royale::IsPlayableMap(i)) continue;
                 if (ImGui::Selectable(royale::kMaps[i].name, i == ui.mapId)) {
                     ui.mapId = i;
                     gSession.SelectMap(i);
@@ -15051,7 +15267,7 @@ void DrawGraphicsUi() {
     }
     if (GfxSection("Lobby aquarium", "LobbyFish")) {
         GfxSwitch("LobbyFish", "Clownfish and cleaner wrasse in the waiting room");
-        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, and busy cleaner wrasse. Only for looks.");
+        ImGui::TextWrapped("A little reef to watch before the match: curious clownfish, a shy youngster, busy cleaner wrasse and hermit crabs sifting the sand.");
     }
     ImGui::Spacing();
 }
@@ -15179,8 +15395,8 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
     const bool sandbox = gMapId == royale::kSandboxMapIndex;
-    if (sandbox != gFortniteSandbox || sandbox != royale::fortnite::gSandboxTerrain) {   // the other ground: the collision and the drawn mesh are made again from it
-        royale::fortnite::UseTerrain(sandbox);
+    if (gMapId != royale::fortnite::gTerrainMapId) {   // rebuild both collision and drawing on every custom-map change
+        royale::fortnite::UseTerrainForMap(gMapId);
         gFortniteSandbox = sandbox;
         gFortniteBuilt = false;
         gFortniteGpu.built = false;
