@@ -28,3 +28,12 @@ python3 tools/maps/placement_preview.py out.png dump.txt [older-dump.txt]
 Gold diamonds are chests with something beside them, red ones are out in the open. The Fortnite Map, the sandbox and Convergence use their real ground. The five Ocarina of
 Time scenes have a floor only inside the game, so the preview gives them a stand-in (a ridge, a plateau and rolling ground) inside the scene's own circle:
 it shows the rules, not the real scene.
+
+## Climbing blocks are ground (island maps)
+
+On the Fortnite Map and the sandbox the stone climbing blocks are built into the scene's own collision (`fortnite::gBlocks`, `BuildCollision`) instead of the moving-object
+collision that is rebuilt as you walk (which made Link hover and slide). The collision is chosen when the scene loads and the blocks are only known once the host has laid the
+map out, so the scene loads once more before the drop if they are not in it yet (`DriveFortnite`). Rocks, boulders, standing stones and the island's cliffs and oaks
+stay moving-object collision, because they can be lifted or smashed. The original scenes keep the old blocks.
+
+Also: the field's own rocks, bushes, chests and items are refused when the island scene loads, so nothing invisible from the old Hyrule Field can be touched.

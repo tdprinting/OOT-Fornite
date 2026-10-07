@@ -4419,10 +4419,37 @@ static void PlacementIsPurposeful() {
     }
 }
 
+// The climbing blocks baked into the island's collision: eight corners and ten triangles each, a flat top and outward vertical sides.
+static void BlocksAreBakedIntoTheCollision() {
+    namespace fn = royale::fortnite;
+    fn::UseTerrainForMap(fn::kMapId);
+    fn::gBlocks.clear();
+    const fn::Mesh plain = fn::BuildCollision();
+    fn::gBlocks = {{500.0f, -300.0f, 75.0f, -20.0f, 120.0f}, {650.0f, -300.0f, 75.0f, 0.0f, 180.0f}};
+    const fn::Mesh withBlocks = fn::BuildCollision();
+    fn::gBlocks.clear();
+    CHECK(withBlocks.verts.size() == plain.verts.size() + 16 && withBlocks.polys.size() == plain.polys.size() + 20);
+    CHECK(withBlocks.verts.size() < 8191);
+    int tops = 0, sides = 0;
+    for (size_t i = plain.polys.size(); i < withBlocks.polys.size(); i++) {
+        const fn::Poly& p = withBlocks.polys[i];
+        const fn::Vert &a = withBlocks.verts[p.a], &b = withBlocks.verts[p.b], &c = withBlocks.verts[p.c];
+        const double ny = p.ny / 32767.0, nx = p.nx / 32767.0, nz = p.nz / 32767.0;
+        CHECK(std::fabs(nx * nx + ny * ny + nz * nz - 1.0) < 1e-3);
+        for (const fn::Vert* v : {&a, &b, &c}) CHECK(std::fabs(nx * v->x + ny * v->y + nz * v->z + p.dist) < 1.5);   // all three corners lie on the plane
+        if (ny > 0.99) { tops++; CHECK(a.y == b.y && b.y == c.y); }
+        else { sides++; CHECK(std::fabs(ny) < 1e-3); }
+        // Faces look away from the block: the block's middle is behind every plane.
+        const double mx = (i < plain.polys.size() + 10) ? 500.0 : 650.0, mz = -300.0, my = (i < plain.polys.size() + 10) ? 50.0 : 90.0;
+        CHECK(nx * mx + ny * my + nz * mz + p.dist < 0.0);
+    }
+    CHECK(tops == 4 && sides == 16);
+}
+
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
-    LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); PlacementIsPurposeful(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
+    LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); PlacementIsPurposeful(); BlocksAreBakedIntoTheCollision(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
