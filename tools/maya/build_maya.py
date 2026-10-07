@@ -205,16 +205,39 @@ def build():
             vi=me.loops[li].vertex_index;uv.data[li].uv=(vi%9/8,vi//9/3)
     o=bpy.data.objects.new('bangs',me);bpy.context.collection.objects.link(o);finish(o,'head',sm,h)
     ball('nose',(0,-.106,1.22),(.013,.018,.019),'head',sm,s)
+    def shoe(x,label):
+        # A real little shoe: rounded toe box, ankle collar, heel, a pale sole and a white sock cuff above it.
+        st=[(.052,.028,.030,.046),(.030,.034,.037,.050),(.000,.038,.034,.046),(-.030,.040,.028,.038),(-.060,.040,.024,.031),(-.085,.032,.019,.025),(-.100,.016,.012,.021)]
+        n=10;verts=[];faces=[]
+        for yy,rx,rz,cz in st:
+            for k in range(n):
+                a=2*math.pi*k/n;verts.append((x+rx*math.sin(a),yy,cz+rz*math.cos(a)*(1 if math.cos(a)>0 else .55)))
+        for r in range(len(st)-1):
+            for k in range(n):
+                a=r*n+k;b=r*n+(k+1)%n;faces.append((a,b,b+n,a+n))
+        faces.append(tuple(reversed(range(n))));faces.append(tuple((len(st)-1)*n+k for k in range(n)))
+        me=bpy.data.meshes.new('shoe');me.from_pydata(verts,[],faces);uv=me.uv_layers.new()
+        for poly in me.polygons:
+            for li in poly.loop_indices:uv.data[li].uv=(.5,.5)
+        o=bpy.data.objects.new('shoe',me);bpy.context.collection.objects.link(o);finish(o,'foot'+label,sm,blue)
+        box('sole',(x,-.020,.010),(.086,.168,.020),'foot'+label,sm,paper)
+        box('shoe toe cap',(x,-.082,.030),(.062,.040,.016),'foot'+label,sm,dark)
+        body('sock',[(.135,.036,.036,x,0),(.100,.037,.037,x,0),(.062,.034,.036,x,0)],'foot'+label,sm,paper,10,[{'shin'+label:1},{'shin'+label:.5,'foot'+label:.5},{'foot'+label:1}])
     for side,label in ((-1,'R'),(1,'L')):
         x=side*.078
         body('leg',[(.08,.024,.027,x,0),(.20,.034,.038,x,-.001),(.315,.030,.032,x,-.002),(.345,.033,.037,x,-.007),(.378,.035,.037,x,-.003),(.49,.046,.046,x,0),(.66,.051,.047,x,0)],'leg'+label,sm,s,10,[{'shin'+label:1},{'shin'+label:1},{'shin'+label:.85,'leg'+label:.15},{'shin'+label:.5,'leg'+label:.5},{'shin'+label:.15,'leg'+label:.85},{'leg'+label:1},{'leg'+label:1}])
-        ball('shoe',(x,-.024,.052),(.048,.080,.035),'foot'+label,sm,blue)
+        shoe(x,label)
         x=side*.206
-        ball('palm',(x,-.006,.697),(.029,.017,.032),'hand'+label,sm,s)
-        ball('thumb',(x-side*.026,-.009,.702),(.010,.012,.021),'hand'+label,sm,s)
+        ball('palm',(x,-.006,.700),(.029,.016,.028),'hand'+label,sm,s)
+        # Thumb: three tapering segments angled down, forward and inward from the palm's heel.
+        body('thumb',[(.704,.0115,.0105,x-side*.020,-.012),(.690,.0105,.0095,x-side*.027,-.019),(.675,.0090,.0085,x-side*.031,-.028),(.662,.0070,.0070,x-side*.033,-.035),(.655,.0030,.0030,x-side*.033,-.038)],'hand'+label,sm,s,6)
         for i in range(4):
             bone='indexR' if label=='R' and i==3 else 'curlR' if label=='R' else 'handL'
-            ball('fingers',(x+(i-1.5)*.012,-.006,.667),(.007,.010,.022-abs(i-1.5)*.003),bone,sm,s)
+            j=3-i if label=='R' else i                 # 0 = index finger beside the thumb, 3 = little finger
+            fx=x+(i-1.5)*.0125;L=(.050,.056,.050,.040)[j];r=(.0088,.0090,.0085,.0075)[j];c=(.012,.010,.012,.015)[j]
+            z0=.682;ky=-.006
+            rings=[(z0,r*1.05,r*.95,fx,ky),(z0-L*.38,r,r*.92,fx,ky-.004),(z0-L*.40,r*.93,r*.88,fx,ky-.005),(z0-L*.70,r*.85,r*.82,fx,ky-.012-c*.4),(z0-L*.72,r*.82,r*.80,fx,ky-.013-c*.5),(z0-L*.97,r*.62,r*.62,fx,ky-.022-c),(z0-L,r*.30,r*.30,fx,ky-.024-c)]
+            body('finger',rings,bone,sm,s,6)
     box('tablet',(0,-.235,.81),(.25,.018,.17),'tablet',sm,dark)
     scr=box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',scm)
     for poly in scr.data.polygons:   # the picture covers the whole front, the rest of the thin slab is plain
