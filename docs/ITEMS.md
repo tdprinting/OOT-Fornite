@@ -10,6 +10,7 @@ Generated from the source. *Model* = the game's own 3D item model (as dropped lo
 | Kokiri Sword | Weapon | real | real | yes | Fast melee |
 | Master Sword | Weapon | real | real | yes | Strong melee |
 | Biggoron's Sword | Weapon | real | real | yes | Heavy melee, long reach |
+| Gilded Sword | Weapon | ours (Blender) | drawn | yes (our model) | The strongest sword: longer reach and a harder hit than the Master Sword |
 | Megaton Hammer | Weapon | real | real | yes | Slow, huge melee hit |
 | Slingshot | Weapon | real | real | yes | Weak, long-range |
 | Fairy Bow | Weapon | real | real | yes | Strong, long-range |

@@ -180,6 +180,16 @@ static void CombatMath() {
     CHECK(KindOf(ItemId::Hookshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
     for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
+    // The Gilded Sword is the strongest sword: it reaches further and hits harder than the Master Sword, one-handed, Legendary only, and found as loot.
+    const WeaponStats gilded = WeaponOf(ItemId::GildedSword), master = WeaponOf(ItemId::MasterSword);
+    CHECK(gilded.damage > master.damage && gilded.range > master.range && !gilded.ranged && !IsTwoHanded(ItemId::GildedSword));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::MasterSword, Rarity::Legendary));
+    CHECK(WeaponDps(ItemId::GildedSword, Rarity::Legendary) > WeaponDps(ItemId::BiggoronSword, Rarity::Epic));
+    CHECK(InPool(ItemId::GildedSword) && DefOf(ItemId::GildedSword).minRarity == Rarity::Legendary && DefOf(ItemId::GildedSword).maxRarity == Rarity::Legendary);
+    bool found = false;
+    Rng rng(77);
+    for (int i = 0; i < 4000 && !found; i++) { ItemId it; if (PickItem(rng, Rarity::Legendary, &it) && it == ItemId::GildedSword) found = true; }
+    CHECK(found);
 }
 static void AttackRules() {
     Simulation sim = Duel(1, {0, 0}, {50, 0});
@@ -508,8 +518,8 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 89 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
-    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 17 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
+    CHECK(kItemCount >= 80 && kPoolItemCount == 90 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 18 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
     CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 22 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
@@ -2979,12 +2989,12 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame)));   // nothing below the ground (the glider's origin is its handle bar, not the ground)
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;
@@ -2998,6 +3008,7 @@ static void CustomMeshes() {
             if (static_cast<MeshKind>(k) == MeshKind::Pillar) CHECK(mx[1] > 190 && mx[1] < 215 && mx[0] - mn[0] < 100);
             if (static_cast<MeshKind>(k) == MeshKind::Golem) CHECK(mx[1] > 250 && mx[1] < 300 && mx[0] - mn[0] > 200 && mx[0] - mn[0] < 280 && m.Triangles() >= 100);
             if (static_cast<MeshKind>(k) == MeshKind::Glider) CHECK(mn[1] > -15 && mn[1] < 5 && mx[1] > 70 && mx[1] < 110 && mx[0] - mn[0] > 230 && mx[0] - mn[0] < 300);   // the handle bar is the origin; the wing is above it
+            if (static_cast<MeshKind>(k) == MeshKind::GildedSword) CHECK(mx[0] > 5500 && mx[0] < 6500 && mn[0] < -1000 && mx[1] - mn[1] < 2600);   // grip at the origin, blade along +X in limb units
             if (static_cast<MeshKind>(k) == MeshKind::Dragon) CHECK(mx[0] - mn[0] > 700 && mx[2] - mn[2] > 800 && m.Triangles() >= 150);
             if (static_cast<MeshKind>(k) == MeshKind::Projectile) CHECK(mx[2] - mn[2] > 15 && mx[2] - mn[2] < 130 && m.Triangles() >= 12);
             if (static_cast<MeshKind>(k) == MeshKind::Platform) CHECK(mx[0] - mn[0] >= 150 && mx[0] - mn[0] < 170 && mx[1] > 59.0f * static_cast<float>(variant % 3 + 1) && mx[1] < 64.0f * static_cast<float>(variant % 3 + 1));

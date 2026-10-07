@@ -44,7 +44,7 @@ enum class ItemId : uint8_t {
     ForestMedallion, FireMedallion, WaterMedallion, SpiritMedallion, ShadowMedallion, LightMedallion,
     KokiriEmerald, GoronRuby, ZoraSapphire,
     // ---- special variants of weapons
-    TripleSlingshot, GiantsHammer, HomingBombchus,
+    TripleSlingshot, GiantsHammer, HomingBombchus, GildedSword,
     // ---- the starting sword and the economy: never found as random loot (see InPool), given at the start, found in rocks and bushes, and
     // dropped by players who are eliminated
     BasicSword, Rupees, ArrowAmmo, SeedAmmo, BombAmmo, BombchuAmmo, NutAmmo,
@@ -181,6 +181,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::TripleSlingshot, "Triple Slingshot", kWeapon, rU, rE, "Fires three seeds at once: close up they all land"},
     {ItemId::GiantsHammer, "Giant's Hammer", kWeapon, rE, rL, "A huge slow slam that hits everyone around the target"},
     {ItemId::HomingBombchus, "Homing Bombchus", kWeapon, rE, rL, "Purple bombchus that chase their target down"},
+    {ItemId::GildedSword, "Gilded Sword", kWeapon, rL, rL, "The strongest sword: longer reach and a harder hit than the Master Sword"},
     // starting sword and economy
     {ItemId::BasicSword, "Basic Sword", kWeapon, rC, rC, "Your starting sword: weak, but it never runs out"},
     {ItemId::Rupees, "Rupees", kInstant, rC, rC, "Money: hire helpers who follow and fight for you"},

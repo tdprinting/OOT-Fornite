@@ -36,6 +36,7 @@ constexpr WeaponStats WeaponOf(ItemId id) {
         case ItemId::KokiriSword:   return {0.8f, 90, 0.6f, false};
         case ItemId::MasterSword:   return {1.5f, 100, 0.6f, false};
         case ItemId::BiggoronSword: return {2.0f, 120, 1.1f, false};
+        case ItemId::GildedSword:   return {1.9f, 115, 0.7f, false}; // Majora's Mask's strongest sword: one-handed like the Master Sword, but a longer blade and a harder hit
         case ItemId::MegatonHammer: return {2.5f, 110, 1.3f, false};
         case ItemId::Slingshot:     return {0.5f, 800, 0.8f, true};
         case ItemId::Boomerang:     return {0.6f, 500, 1.0f, true};

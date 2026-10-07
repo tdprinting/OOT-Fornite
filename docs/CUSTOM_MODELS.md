@@ -71,3 +71,20 @@ each hand's position as it draws him), so he always holds the grips (the glider 
 - **Previews:** `python3.11 tools/glider/render_previews.py [folder]` renders four views (CPU, no graphics card needed).
 - The live wing (cloth physics, human players only) is built from the same corner points, so it always fits the frame; with cloth off, and on bots, the
   still wing from the .blend is drawn instead.
+
+## The Gilded Sword (built in, made in Blender)
+
+Majora's Mask's strongest sword, modelled fresh in the Ocarina of Time style: `assets/gilded_sword/gilded_sword.blend` (also `gilded_sword.glb`) has three
+objects, all low poly with flat colour blocks and no textures: `GildedBlade` (a long blade of gold and silver diamonds narrowing to a point, 40 triangles),
+`GildedHilt` (a red grip with gold bands, a pale crystal pommel and a silver guard with four curled tendrils) and `GildedScabbard` (dark leather with silver
+bands and a gold tip, drawn over the blade when the sword is stowed). The grip is the origin and the blade runs along +X. The game reads it from
+`shared/gilded_sword_model.h`, which is generated, and builds it as `MeshKind::GildedSword` (variant 0: blade and hilt; variant 1: hilt and scabbard).
+
+- **Rebuild everything from code:** `python3.11 tools/gilded_sword/build_gilded_sword.py` (needs `pip install bpy==4.2.0`). It writes the .blend and .glb.
+- **After changing the .blend by hand** (or the build script): `python3.11 tools/gilded_sword/export_gilded_sword.py` regenerates `shared/gilded_sword_model.h`
+  (points in the game's limb units, colours with a fixed light baked in). Keep the object names `GildedBlade`, `GildedHilt`, `GildedScabbard`.
+- **Previews:** `python3.11 tools/gilded_sword/render_previews.py [folder]` renders the sword from four sides and in its scabbard.
+- **In the game** it uses the Master Sword's own moves, sounds and hit trail (so it swings exactly like it). Patch `0023-royale-custom-sword-hook.patch` adds one
+  hook (`OnPlayerCustomSword`) to Link's hand and sheath limbs: for a player holding the Gilded Sword the hand makes an empty fist, the sheath is drawn without
+  the Master Sword in it, and the mod draws the sword in the hand (`OnPlayerCustomSword` in `RoyaleMod.cpp`; gold glints while it swings) or on the back in its
+  scabbard. How it sits is set by the `kGilded...` constants just above that function. On the ground it is drawn by `DrawItemModel` (`kGidGilded`).
