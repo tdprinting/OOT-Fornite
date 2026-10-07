@@ -37,6 +37,8 @@ jobs:
           ./scripts/apply_logo.sh
           echo "#define ROYALE_BUILD_VERSION \"0.${{ github.run_number }}\"" > mod/Royale/build_version.h
           cat mod/Royale/build_version.h
+      - name: Check renderer shader batching and material texture state
+        run: python3 scripts/test_surface_renderer_state.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
