@@ -73,6 +73,14 @@ int main() {
         const float inverse[4]={-book.q[0],-book.q[1],-book.q[2],book.q[3]};M::Rotate(inverse,relative,local);
         assert(std::fabs(local[2]-24.5f)<.25f && std::fabs(local[0])<12.5f && std::fabs(local[1]-84)<9);
     }
+    // While a tap/drag highlight is visible, the extended index fingertip meets it.
+    for(int f=0;f<M::InfoOf(M::kTablet).frames;f++) {
+        M::Pose p;M::SampleClip(M::kTablet,f/M::InfoOf(M::kTablet).fps,p);
+        if(p.bone[boneOf("tablet_cursor")].t[1]<-100)continue;
+        const float tip[3]={-18.8f,64.95f,.6f},cursor[3]={0,85,25.2f};float a[3],b[3];point(p,boneOf("indexR"),tip,a);point(p,boneOf("tablet_cursor"),cursor,b);
+        float d=0;for(int k=0;k<3;k++)d+=(a[k]-b[k])*(a[k]-b[k]);
+        assert(d<2.0f*2.0f);
+    }
     M::Animator a;a.Play(M::kTablet);a.Update(.1f);a.Play(M::kWalk);a.Update(.1f);M::Pose p;a.Evaluate(p);
     for(const auto& bone:p.bone)for(float q:bone.q)assert(std::isfinite(q));
     std::cout<<"Maya: all batches, rig transforms, fifteen clips, child scale and expressions, prop visibility and transitions passed\n";

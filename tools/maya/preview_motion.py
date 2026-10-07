@@ -12,7 +12,8 @@ bpy.ops.object.light_add(type='AREA',location=(1,-3,4));bpy.context.object.data.
 scene.world=bpy.data.worlds.new('Preview');scene.world.use_nodes=True;scene.world.node_tree.nodes['Background'].inputs[0].default_value=(.18,.22,.30,1)
 scene.render.engine='BLENDER_EEVEE';scene.render.resolution_x=320;scene.render.resolution_y=400;scene.render.resolution_percentage=100
 face=next(n for n in bpy.data.materials['MayaFace'].node_tree.nodes if n.type=='TEX_IMAGE')
-for clip in ('walk','wave','giggle','draw','tablet','cheer'):
+selected=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else ('walk','wave','giggle','draw','tablet','cheer')
+for clip in selected:
     T=next(c[1] for c in P.CLIPS if c[0]==clip)
     rig.animation_data.action=bpy.data.actions[clip]
     for i in range(12):

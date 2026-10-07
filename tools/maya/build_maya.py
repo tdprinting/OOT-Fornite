@@ -172,10 +172,13 @@ def build():
         x=side*.206
         ball('palm',(x,-.006,.697),(.029,.017,.032),'hand'+label,sm,s)
         ball('thumb',(x-side*.026,-.009,.702),(.010,.012,.021),'hand'+label,sm,s)
-        for i in range(4):ball('fingers',(x+(i-1.5)*.012,-.006,.667),(.007,.010,.022-abs(i-1.5)*.003),'hand'+label,sm,s)
+        for i in range(4):
+            bone='indexR' if label=='R' and i==3 else 'curlR' if label=='R' else 'handL'
+            ball('fingers',(x+(i-1.5)*.012,-.006,.667),(.007,.010,.022-abs(i-1.5)*.003),bone,sm,s)
     box('tablet',(0,-.235,.81),(.25,.018,.17),'tablet',sm,dark)
     box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',sm,cyan)
     for i in range(3):box('screen block',(-.06+i*.06,-.25,.79+i*.025),(.05,.003,.04),'tablet',sm,blue)
+    box('tablet touch highlight',(0,-.252,.85),(.014,.003,.014),'tablet_cursor',sm,paper)
     box('sketchbook',(0,-.23,.80),(.25,.025,.18),'draw',sm,paper)
     for i in range(3):box('drawing line',(-.06+i*.04,-.245,.80),(.013,.005,.10),'draw',sm,cyan)
     box('pencil',(.12,-.23,.86),(.015,.015,.15),'pencil',sm,gold)
@@ -199,7 +202,8 @@ def build():
     ad=bpy.data.armatures.new('MayaRig');rig=bpy.data.objects.new('MayaRig',ad);bpy.context.collection.objects.link(rig)
     bpy.context.view_layer.objects.active=rig;mesh.select_set(False);rig.select_set(True);bpy.ops.object.mode_set(mode='EDIT')
     anchors={'root':(0,0,0),'pelvis':(0,0,.66),'torso':(0,0,.77),'head':(0,0,1.12),'ponytail':(0,.085,1.29),'legL':(.078,0,.66),'legR':(-.078,0,.66),'shinL':(.078,0,.35),'shinR':(-.078,0,.35),'footL':(.078,0,.07),'footR':(-.078,0,.07),'armL':(.145,0,1.04),'armR':(-.145,0,1.04),'forearmL':(.201,0,.884),'forearmR':(-.201,0,.884),'handL':(.206,0,.723),'handR':(-.206,0,.723)}
-    anchors.update({n:(0,0,0) for n in ('tablet','draw','pizza','scooter','learn','pencil')})
+    anchors.update({'indexR':(-.188,-.006,.685),'curlR':(-.206,-.006,.685)})
+    anchors.update({n:(0,0,0) for n in ('tablet','draw','pizza','scooter','learn','pencil','tablet_cursor')})
     anchors.update({'wheelF':(0,-.21,.06),'wheelR':(0,.21,.06)})
     for n,p in anchors.items():
         b=ad.edit_bones.new(n);b.head=p;b.tail=Vector(p)+Vector((0,0,.10))
@@ -212,6 +216,7 @@ def build():
         elif n.startswith('foot'):parent='shin'+n[-1]
         elif n.startswith('forearm'):parent='arm'+n[-1]
         elif n.startswith('hand'):parent='forearm'+n[-1]
+        elif n in ('indexR','curlR'):parent='handR'
         elif n.startswith('wheel'):parent='scooter'
         if parent:b.parent=ad.edit_bones[parent]
     bpy.ops.object.mode_set(mode='OBJECT');mesh.parent=rig;mod=mesh.modifiers.new('Armature','ARMATURE');mod.object=rig
@@ -231,15 +236,16 @@ def build():
     rig.animation_data.action=bpy.data.actions['idle'];scene.frame_set(0)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(OUT,'maya.blend'),compress=True)
     bpy.ops.export_scene.gltf(filepath=os.path.join(OUT,'maya.glb'),export_format='GLB',export_animations=True,export_animation_mode='ACTIONS',export_force_sampling=True)
-    # Review image is deliberately separate from the exportable character scene.
-    bpy.ops.object.camera_add(location=(2,-3,1.8));cam=bpy.context.object;cam.rotation_euler=(Vector((0,0,.67))-cam.location).to_track_quat('-Z','Y').to_euler();cam.data.type='ORTHO';cam.data.ortho_scale=1.65;scene.camera=cam
-    bpy.ops.object.light_add(type='AREA',location=(1,-3,4));bpy.context.object.data.energy=500;bpy.context.object.data.shape='DISK';bpy.context.object.data.size=5
-    scene.world=bpy.data.worlds.new('Preview');scene.world.use_nodes=True;scene.world.node_tree.nodes['Background'].inputs[0].default_value=(.18,.22,.30,1)
-    scene.render.engine='BLENDER_EEVEE';scene.render.resolution_x=650;scene.render.resolution_y=800;scene.render.resolution_percentage=100
-    scene.render.filepath=os.path.join(OUT,'maya-preview.png');bpy.ops.render.render(write_still=True)
-    scene.render.resolution_x=400;scene.render.resolution_y=500
-    for clip in ('tablet','draw','pizza','scooter','learn','wave','cheer','giggle','hop','talk'):
-        rig.animation_data.action=bpy.data.actions[clip];scene.frame_set(18)
-        face_node=next(n for n in fm.node_tree.nodes if n.type=='TEX_IMAGE');face_node.image=face_images[FACES.index(P.face_for(clip,18/FPS,next(c[1] for c in CLIPS if c[0]==clip)))]
-        scene.render.filepath=os.path.join(OUT,'maya-'+clip+'-preview.png');bpy.ops.render.render(write_still=True)
+    if '--no-preview' not in sys.argv:
+        # Review image is deliberately separate from the exportable character scene.
+        bpy.ops.object.camera_add(location=(2,-3,1.8));cam=bpy.context.object;cam.rotation_euler=(Vector((0,0,.67))-cam.location).to_track_quat('-Z','Y').to_euler();cam.data.type='ORTHO';cam.data.ortho_scale=1.65;scene.camera=cam
+        bpy.ops.object.light_add(type='AREA',location=(1,-3,4));bpy.context.object.data.energy=500;bpy.context.object.data.shape='DISK';bpy.context.object.data.size=5
+        scene.world=bpy.data.worlds.new('Preview');scene.world.use_nodes=True;scene.world.node_tree.nodes['Background'].inputs[0].default_value=(.18,.22,.30,1)
+        scene.render.engine='BLENDER_EEVEE';scene.render.resolution_x=650;scene.render.resolution_y=800;scene.render.resolution_percentage=100
+        scene.render.filepath=os.path.join(OUT,'maya-preview.png');bpy.ops.render.render(write_still=True)
+        scene.render.resolution_x=400;scene.render.resolution_y=500
+        for clip in ('tablet','draw','pizza','scooter','learn','wave','cheer','giggle','hop','talk'):
+            rig.animation_data.action=bpy.data.actions[clip];scene.frame_set(18)
+            face_node=next(n for n in fm.node_tree.nodes if n.type=='TEX_IMAGE');face_node.image=face_images[FACES.index(P.face_for(clip,18/FPS,next(c[1] for c in CLIPS if c[0]==clip)))]
+            scene.render.filepath=os.path.join(OUT,'maya-'+clip+'-preview.png');bpy.ops.render.render(write_still=True)
 if __name__=='__main__':build()

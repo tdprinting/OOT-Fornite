@@ -168,7 +168,7 @@ def main():
     o.append("")
     o.append("constexpr int kBoneCount = %d;" % len(bones))
     o.append("inline constexpr const char* kBoneNames[kBoneCount] = { %s };" % ", ".join('"%s"' % b for b in bones))
-    o.append("inline constexpr bool kBoneIsProp[kBoneCount] = { %s };" % ", ".join("true" if b in ("tablet", "draw", "pizza", "scooter", "learn", "pencil", "wheelF", "wheelR") else "false" for b in bones))
+    o.append("inline constexpr bool kBoneIsProp[kBoneCount] = { %s };" % ", ".join("true" if b in ("tablet", "draw", "pizza", "scooter", "learn", "pencil", "tablet_cursor", "wheelF", "wheelR") else "false" for b in bones))
     o.append("")
     o.append("// A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).")
     o.append("struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };")
