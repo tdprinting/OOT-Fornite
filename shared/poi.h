@@ -912,4 +912,37 @@ inline std::vector<Circle> PoiClearings(const std::vector<Poi>& pois) {
     return out;
 }
 
+// A camp: a chest set in a loose ring of rocks and bushes a little way outside a town, open on the town's side, so a place has a stash just beyond
+// its edge instead of chests lying in the open. `perTown` is how many each place gets; a camp needs level ground, clear of everything built and
+// well apart from any other chest. They are ordinary props, so the bots path round them.
+inline void AddCamps(PoiLayout& out, uint64_t seed, Circle map, const Ground& ground, int perTown = 1) {
+    Rng rng(seed ^ 0x63616D70ull); // "camp"
+    const float pi = 3.14159265f;
+    std::vector<Vec2> chests = out.lootSpots;
+    for (const ChestSite& s : out.sites) chests.push_back(s.pos);
+    for (const Poi& poi : out.pois) {
+        if (poi.radius >= 580.0f) continue;   // the keep in the middle has its own mound
+        for (int made = 0, tries = 0; made < perTown && tries < 24; tries++) {
+            const float a = static_cast<float>(rng.Unit() * 2.0 * pi), d = poi.radius + 230.0f + 160.0f * static_cast<float>(rng.Unit());
+            const Vec2 at = {poi.center.x + std::cos(a) * d, poi.center.z + std::sin(a) * d};
+            if (Distance(at, map.center) > map.radius - 400.0f || !ground.Level(at, 0.2f)) continue;
+            bool ok = true;
+            for (int k = 0; ok && k < 6; k++) ok = ground.Level({at.x + std::cos(k * pi / 3.0f) * 120.0f, at.z + std::sin(k * pi / 3.0f) * 120.0f}, 0.45f);
+            for (const Poi& other : out.pois) ok = ok && Distance(at, other.center) > other.radius + 170.0f;
+            for (const Vec2& q : chests) ok = ok && Distance(at, q) > 380.0f;
+            for (const Prop& p : out.props) ok = ok && Distance(at, p.pos) > PropRadius(p.kind) + 140.0f;
+            if (!ok) continue;
+            // The ring is open towards the town: rocks and bushes on the far half only.
+            for (int k = 0; k < 5; k++) {
+                const float turn = a + pi * (0.35f + 1.3f * static_cast<float>(k) / 4.0f), r = (k % 2 == 0) ? 95.0f : 130.0f;
+                out.props.push_back({{at.x + std::cos(turn) * r, at.z + std::sin(turn) * r}, k % 2 == 0 ? PropKind::Rock : PropKind::Bush,
+                                     static_cast<uint16_t>(rng.Below(0x10000))});
+            }
+            out.sites.push_back({at, 0});
+            chests.push_back(at);
+            made++;
+        }
+    }
+}
+
 } // namespace royale

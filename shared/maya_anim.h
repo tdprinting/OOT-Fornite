@@ -49,6 +49,8 @@ inline float ClipSeconds(int clip) {
     return static_cast<float>(c.loops ? c.frames : c.frames - 1) / c.fps;
 }
 
+inline void PreserveJointLinks(Pose& p);
+
 // The pose `seconds` into a clip: loops wrap round, one-shots hold their last frame.
 inline void SampleClip(int clip, float seconds, Pose& out) {
     const ClipInfo& c = InfoOf(clip);
@@ -67,6 +69,7 @@ inline void SampleClip(int clip, float seconds, Pose& out) {
     }
     const float k = std::clamp(f - static_cast<float>(a), 0.0f, 1.0f);
     for (int i = 0; i < kBoneCount; i++) out.bone[i] = Mix(FrameXform(c.firstFrame + a, i), FrameXform(c.firstFrame + b, i), k);
+    PreserveJointLinks(out);
 }
 
 inline void BlendPoses(const Pose& a, const Pose& b, float k, Pose& out) {
@@ -79,6 +82,17 @@ inline void Rotate(const float q[4], const float v[3], float out[3]) {
     out[0] = v[0] + q[3] * tx + (q[1] * tz - q[2] * ty);
     out[1] = v[1] + q[3] * ty + (q[2] * tx - q[0] * tz);
     out[2] = v[2] + q[3] * tz + (q[0] * ty - q[1] * tx);
+}
+
+// Keep connected joints attached during frame interpolation and cross-fades.
+// Global skinning transforms otherwise lerp joint offsets through the body,
+// shortening the long arms and making a lowering elbow bend unnaturally.
+inline void PreserveJointLinks(Pose& p) {
+    for (int b=0;b<kBoneCount;b++) if(kKeepJointLink[b] && kBoneParents[b]>=0) {
+        const auto& parent=p.bone[kBoneParents[b]];float target[3],rotated[3];
+        Rotate(parent.q,kBoneHeads[b],target);Rotate(p.bone[b].q,kBoneHeads[b],rotated);
+        for(int k=0;k<3;k++)p.bone[b].t[k]=target[k]+parent.t[k]-rotated[k];
+    }
 }
 
 // Where a vertex ends up in a pose, and which way its normal (unit length) then points.
@@ -140,6 +154,7 @@ struct Animator {
             float k = std::clamp(fade / fadeLen, 0.0f, 1.0f);
             k = k * k * (3.0f - 2.0f * k);
             BlendPoses(old, out, k, out);
+            PreserveJointLinks(out);
         }
     }
 };
@@ -152,6 +167,20 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
         SkinVertex(p, kVerts[i], pos, nrm);
         for (int k = 0; k < 3; k++) { mn[k] = std::min(mn[k], pos[k]); mx[k] = std::max(mx[k], pos[k]); }
     }
+}
+
+// Author-defined expression beats, plus independent half/closed/half blinks.
+constexpr float kWorldScale = .41f; // about 56 units tall; young Link is about 60.
+constexpr float kFocusHeight = 49.2f;
+inline int Expression(int clip, float seconds, float clock) {
+    const auto& info=InfoOf(clip);
+    float f=std::isfinite(seconds) ? seconds*info.fps : 0;
+    if (info.loops) { f=std::fmod(f,static_cast<float>(info.frames)); if (f<0) f+=info.frames; }
+    else f=std::clamp(f,0.0f,static_cast<float>(info.frames-1));
+    int face=kFrameFaces[info.firstFrame+std::clamp(static_cast<int>(f),0,static_cast<int>(info.frames)-1)];
+    float blink=std::isfinite(clock) ? std::fmod(std::max(0.0f,clock),4.37f) : 0.0f;
+    if (face!=kFaceGiggle && blink>3.10f && blink<3.29f) return blink<3.15f || blink>3.24f ? kFaceHalf : kFaceShut;
+    return face;
 }
 
 } // namespace maya

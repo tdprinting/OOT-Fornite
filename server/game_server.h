@@ -5,6 +5,8 @@
 #include "sim.h"
 #include "../shared/sandbox_layout.h"
 #include "../shared/convergence_layout.h"
+#include "../shared/island_anchors.h"
+#include "../shared/placement.h"
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -101,23 +103,35 @@ class GameServer {
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
         sim.match.SetMapId(mapId);
         const bool sandboxMap = ClampMap(mapId) == kSandboxMapIndex;   // the test map is laid out by hand (shared/sandbox_layout.h)
-        PoiLayout layout = sandboxMap ? GenerateSandboxLayout(seed) : convergenceMap ? GenerateConvergenceLayout(valid) : GeneratePois(seed, map, poiCount, valid, mapId);
-        pois = layout.pois;
-        if (!sandboxMap && !convergenceMap) {
-        const float areaShare = (std::min)(1.9f, (map.radius * map.radius) / (4000.0f * 4000.0f));   // a small map gets fewer rocks and bushes, a big one more
-        const int sceneryWanted = (std::max)(220, static_cast<int>(static_cast<float>(propCount) * (std::min)(1.8f, areaShare * 1.4f)));
-        // The towns, walls and climbs come first and must all fit, so the scenery gets what is left of the budget.
-        // Loose scenery stays off the towns' streets.
-        const std::vector<Circle> clearings = PoiClearings(layout.pois);
-        props = GenerateProps(seed, map, (std::min)(sceneryWanted, (std::max)(120, kMaxProps - static_cast<int>(layout.props.size()) - 420)), valid, &clearings);
-        // Boulder formations, stone outposts, climbs out in the open and chests hidden behind boulders, spread out over the whole map.
-        GenerateWilds(layout, seed, map, props, layout.lootSpots, 4 + static_cast<int>(map.radius / 700.0f), 12 + static_cast<int>(map.radius / 250.0f), valid,
-                      2 + static_cast<int>(map.radius / 650.0f), 2 + static_cast<int>(map.radius / 1100.0f));
-        props.insert(props.end(), layout.props.begin(), layout.props.end()); // the buildings, caves and climbs are scenery too
-        if (props.size() > static_cast<size_t>(kMaxProps)) props.resize(kMaxProps);
-        } else {
+        PoiLayout layout;
+        std::shared_ptr<LootPlan> plan;
+        if (sandboxMap) {
+            layout = GenerateSandboxLayout(seed);
             props = layout.props;
+        } else if (convergenceMap) {
+            layout = GenerateConvergenceLayout(valid);
+            props = layout.props;
+            const Ground ground(valid, height);
+            // The map's authored buildings and walls are the anchors (a chest beside each, on its far side); its districts are not "towns" to keep clear of.
+            const AnchorExtraFn authored = [](const Circle& m, std::vector<LootAnchor>& anchors, std::vector<Circle>&) {
+                auto add = [&](float x, float z, float half) {
+                    const float dx = x - m.center.x, dz = z - m.center.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+                    anchors.push_back({{x, z}, AnchorKind::Scenery, {dx / d, dz / d}, half + 70.0f});
+                };
+                for (const auto& b : convergence::kBuildings) add(b.x, b.z, (std::max)(b.halfWidth, b.halfDepth));
+                for (const auto& o : convergence::kObstacles) add((o.x0 + o.x1) * 0.5f, (o.z0 + o.z1) * 0.5f, 0.5f * (std::max)(o.x1 - o.x0, o.z1 - o.z0));
+            };
+            plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
+        } else {
+            // Camps, scenery in clusters, formations, outposts, climbs, lookouts: each tied to the ground and to each other (shared/placement.h).
+            AnchorExtraFn island;
+            if (ClampMap(mapId) == kFortniteMapIndex) island = fortnite::AddIslandAnchors;   // the Fortnite Map's oaks and cliff slabs hold chests too
+            MapPlacement placed = PlaceMap(seed, map, mapId, poiCount, propCount, valid, height, island);
+            layout = std::move(placed.layout);
+            props = std::move(placed.props);
+            plan = std::make_shared<LootPlan>(std::move(placed.plan));
         }
+        pois = layout.pois;
         broken.assign(props.size(), false);
         sim.bots.SetProps(props);
         sim.match.SetLootSpots(layout.lootSpots);
@@ -158,6 +172,7 @@ class GameServer {
         } else {
             sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
             sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
+            if (plan) sim.match.SetLootPlan(*plan);
             sim.match.RegenerateLoot(lootCount);
         }
         for (uint32_t id : humans) sim.match.AddHuman(id);
@@ -263,6 +278,7 @@ class GameServer {
 
     Simulation& Sim() { return sim; }
     const std::vector<Poi>& Pois() const { return pois; }
+    const std::vector<Prop>& Props() const { return props; }
     // How well bots play. Survives Reconfigure (which rebuilds the simulation).
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; sim.bots.SetDifficulty(d); }
     // The host's weather choices; they apply to the next match (and survive Reconfigure).

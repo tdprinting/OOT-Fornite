@@ -4,6 +4,7 @@
 #include "game_server.h"
 #include "loopback.h"
 #include "../../shared/fortnite_map.h"
+#include "lobby_pets.h"
 #include <cstdio>
 #include <memory>
 
@@ -1194,6 +1195,11 @@ static void SceneIsRelayedBetweenPlayers() {
     PlayerNet seenOfA, seenOfB;
     CHECK(b.Sample(1, seenOfA) && seenOfA.scene == 0x43);
     CHECK(a.Sample(2, seenOfB) && seenOfB.scene == 0x51);
+    for(const auto& area:royale::lobby::kAreas) {
+        a.SendInput(10,20,30,0,0,static_cast<uint8_t>(area.scene));
+        rig.Run(.5f);
+        CHECK(b.Sample(1,seenOfA) && seenOfA.scene==area.scene);
+    }
 }
 
 static void BotsReportTheFieldScene() {
@@ -1401,7 +1407,7 @@ static void ReconfigureRebuildsTheLobbyWorld() {
 
     for (GameClient* g : {&a, &b}) {
         CHECK(g->Map().radius == 800 && g->Map().center.x == 500);
-        CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 120);   // 120 scattered, plus a chest for each spot in the buildings
+        CHECK(g->Loot().size() == rig.M().Loot().size() && g->Loot().size() >= 15);   // chests go beside scenery now (at most a fifth of the 120 in the open), plus a chest for each spot in the buildings
         CHECK(!g->Pois().empty() && g->Props().size() > 100 && g->Pois().size() == rig.server.Pois().size());
         for (const Poi& poi : g->Pois()) CHECK(Distance(poi.center, real.center) <= 800.01f && poi.name < kPoiNameTotal);
         bool eventSeen = false;

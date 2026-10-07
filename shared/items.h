@@ -120,7 +120,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::DinsFire, "Din's Fire", kAbility, rR, rL, "Fire burst around you"},
     {ItemId::FaroresWind, "Farore's Wind", kAbility, rE, rL, "Mark a spot, then jump back to it"},
     {ItemId::NayrusLove, "Nayru's Love", kAbility, rE, rL, "Invulnerable for 4 seconds"},
-    {ItemId::Hookshot, "Hookshot", kAbility, rR, rE, "Pull the player in front of you to you"},
+    {ItemId::Hookshot, "Hookshot", kWeapon, rU, rE, "B shoots the chain: reels the player in front of you to you and stuns them"},
     {ItemId::Longshot, "Longshot", kAbility, rE, rL, "Pull from much farther away"},
     {ItemId::LensOfTruth, "Lens of Truth", kAbility, rU, rE, "See every player for 10 seconds"},
     {ItemId::MagicBeans, "Magic Beans", kAbility, rC, rR, "Heal over time for 10 seconds"},
@@ -138,7 +138,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
-    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kAbility, rU, rL, "Launches you high into the air; no fall damage until you land"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kWeapon, rC, rL, "B throws it: a shockwave that hurts and stuns everyone around the target"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
@@ -400,7 +400,6 @@ constexpr AbilityDef AbilityOf(ItemId id) {
         case ItemId::DinsFire:         return {14, {{{T::AoeDamage, 350, 1.6f, 0}}}};
         case ItemId::FaroresWind:      return {25, {{{T::MarkAndReturn, 0, 0, 20}}}};
         case ItemId::NayrusLove:       return {28, {{{T::Invulnerable, 0, 0, 4}}}};
-        case ItemId::Hookshot:         return {10, {{{T::PullTarget, 900, 0, 1.0f}}}};
         case ItemId::Longshot:         return {8, {{{T::PullTarget, 1500, 0, 1.2f}}}};
         case ItemId::LensOfTruth:      return {30, {{{T::RevealAll, 0, 0, 10}}}};
         case ItemId::MagicBeans:       return {40, {{{T::Regen, 0, 0.2f, 10}}}};
@@ -418,7 +417,6 @@ constexpr AbilityDef AbilityOf(ItemId id) {
         case ItemId::NocturneOfShadow: return {30, {{{T::RandomTeleport}}}};
         case ItemId::RequiemOfSpirit:  return {26, {{{T::StunNearby, 700, 0, 1.0f}, {T::AoeDamage, 700, 0.6f, 0}}}};
         case ItemId::PreludeOfLight:   return {26, {{{T::Heal, 0, 1.0f, 0}, {T::Invulnerable, 0, 0, 1.5f}}}};
-        case ItemId::ShockwaveGrenade: return {12, {{{T::Launch, 0, 520, 1.0f}}}};
         default:                       return {};
     }
 }
@@ -427,13 +425,12 @@ constexpr AbilityDef AbilityOf(ItemId id) {
 constexpr float AbilityMagic(ItemId id) {
     switch (id) {
         case ItemId::DinsFire: return 30;        case ItemId::FaroresWind: return 20;     case ItemId::NayrusLove: return 40;
-        case ItemId::Hookshot: return 10;        case ItemId::Longshot: return 12;        case ItemId::LensOfTruth: return 25;
+        case ItemId::Longshot: return 12;        case ItemId::LensOfTruth: return 25;
         case ItemId::MagicBeans: return 20;      case ItemId::FairyOcarina: return 15;    case ItemId::OcarinaOfTime: return 15;
         case ItemId::ZeldasLullaby: return 20;   case ItemId::EponasSong: return 15;      case ItemId::SariasSong: return 20;
         case ItemId::SunsSong: return 25;        case ItemId::SongOfTime: return 45;      case ItemId::SongOfStorms: return 30;
         case ItemId::MinuetOfForest: return 20;  case ItemId::BoleroOfFire: return 25;    case ItemId::SerenadeOfWater: return 25;
         case ItemId::NocturneOfShadow: return 20; case ItemId::RequiemOfSpirit: return 35; case ItemId::PreludeOfLight: return 30;
-        case ItemId::ShockwaveGrenade: return 20;
         default: return 0;
     }
 }
