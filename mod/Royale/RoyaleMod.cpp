@@ -7196,6 +7196,7 @@ struct DeathUi {
     bool card = true;           // the death card is up (until Spectate)
     int focus = 0;              // the card's button with the controller's focus: 0 Spectate, 1 Leave
     uint16_t body = 0;          // your body (a corpse id), 0 for none
+    bool spectated = false;     // Spectate was chosen once (the card can come back with B, and then keeps whom you watch)
 };
 DeathUi gDeath;
 
@@ -7251,6 +7252,13 @@ bool MatchUiInput(Input& in, const royale::HudState& hud) {
     const bool card = gDeath.active && gDeath.card && IsLive(hud), end = EndScreenUp(hud);
     if (!card && !end) {
         gUiPad = {};
+        if (gDeath.active && IsLive(hud) && (in.press.button & BTN_B)) {   // spectating: B brings the death card (and its Leave) back
+            gDeath.card = true;
+            gDeath.focus = 0;
+            in.press.button &= ~BTN_B; in.cur.button &= ~BTN_B;
+            UiSfx(NA_SE_SY_DECIDE);
+            return true;
+        }
         if (hud.state == royale::MatchState::Ending && !gEnd.open && (in.press.button & BTN_DUP)) {   // bring the results back
             gEnd.open = true;
             gEnd.at = ImGui::GetTime() - kEndPanelDelay;
@@ -7385,9 +7393,11 @@ void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const
         const float by = pa.y + pad + tileH + 14.0f * scale, bh = 50.0f * scale, bw = (pw - pad * 2 - gap) * 0.5f;
         if (UiButton(dl, font, scale, ImVec2(pa.x + pad, by), ImVec2(pa.x + pad + bw, by + bh), "Spectate", gDeath.focus == 0, true, a)) {
             gDeath.card = false;
-            gSpectateTarget = kSpectateSelf;
-            for (const auto& st : gSession.Puppets()) if (st.alive && st.id == gDeath.killer) gSpectateTarget = st.id;   // whoever got you
-            if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
+            if (!gDeath.spectated) {   // the first time: whoever got you
+                gDeath.spectated = true;
+                for (const auto& st : gSession.Puppets()) if (st.alive && st.id == gDeath.killer) gSpectateTarget = st.id;
+                if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
+            }
         }
         if (UiButton(dl, font, scale, ImVec2(pb.x - pad - bw, by), ImVec2(pb.x - pad, by + bh), "Leave match", gDeath.focus == 1, true, a)) {
             gSession.Leave();
@@ -7411,7 +7421,13 @@ void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const
         if (UiButton(dl, font, scale, ba, bb, side == 0 ? "<" : ">", false, true)) CycleSpectate(side == 0 ? -1 : 1);
     }
     std::string under = IsLive(h) ? std::to_string(h.alive) + " still standing   |   you placed #" + std::to_string(gDeath.place) : "The match is over";
-    UiTextCentred(dl, font, 15.0f * scale, cx, b.y + 6.0f * scale, kUi.grey, under + "   |   D-pad Left / Right to switch");
+    UiTextCentred(dl, font, 15.0f * scale, cx, b.y + 6.0f * scale, kUi.grey, under + "   |   D-pad Left / Right to switch", ds.x - 32.0f * scale);
+    if (IsLive(h)) {   // the card again: your numbers, and Leave
+        const std::string label = "Options (B)";
+        const float w = UiTextW(font, 18.0f * scale, label) + 28.0f * scale;
+        const ImVec2 oa(cx - w * 0.5f, b.y + 30.0f * scale), ob(oa.x + w, oa.y + 38.0f * scale);
+        if (UiButton(dl, font, scale, oa, ob, label, false, true)) { gDeath.card = true; gDeath.focus = 0; }
+    }
 }
 
 // Step 4: the end screen, after Fortnite's. A slanted banner with your place (and a crown for a win), then two pages: the summary (your match
