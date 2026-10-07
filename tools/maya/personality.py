@@ -8,7 +8,12 @@ from mathutils import Euler, Vector, Quaternion, Matrix
 sys.path.insert(0,os.path.join(os.path.dirname(__file__),'../lilo'))
 import build_lilo as B
 FACES=('smile','half','shut','giggle','oh','talk','focus','wink')
-CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.0,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False),('sit',6.4,True),('sleep',6.0,True)]]
+CLIPS=[(n,T,loop,None) for n,T,loop in [('idle',5.8,True),('walk',1.0,True),('run',.8,True),('wave',3.2,False),('tablet',6,True),('draw',6.4,True),('pizza',5.6,True),('scooter',3,True),('learn',6.2,True),('cheer',3.6,False),('talk',5.2,True),('giggle',3.8,True),('hop',1.4,False),('fidget',5.4,True),('point',2.6,False),('sit',6.4,True),('sleep',6.0,True),('videochat',3.8,False)]]
+SCREENS=('building','mom','momtalk','fart')
+SCREEN_W,SCREEN_H=32,20
+VIDEOCHAT_FART=2.6      # the call's mom lets one go (the screen turns green)
+VIDEOCHAT_DROP=3.25     # last moment the tablet is in her hands; the game throws it as a physics object from here
+VIDEOCHAT_RELEASE=3.28  # first frame without the prop
 TAU=2*math.pi
 mix=B.mix
 
@@ -75,6 +80,51 @@ def paint_face(px,py,kind,skin,hair):
         if kind=='smile' and abs(x-16)<4 and abs(y-(curve-.7))<.5:c=(.98,.94,.85)
     return B.quant5(B.jitter(c,px,py,23,.012))
 
+def paint_screen(px,py,kind):
+    """The tablet's picture, 32x20: a pixel-building toy, and a cartoon mom on a video call (an original drawing, not a photo)."""
+    x=px+.5;y=py+.5
+    if kind=='building':
+        c=mix((.40,.68,.92),(.70,.86,.96),y/20)
+        if y>14:c=(.34,.62,.28) if (px//2+py//2)%2 else (.30,.56,.25)
+        if 6<=x<12 and 10<=y<14.5:c=(.80,.22,.18)
+        if 12<=x<18.5 and 7<=y<14.5:c=(.20,.36,.78)
+        if 19<=x<26 and 11<=y<14.5:c=(.93,.76,.22)
+        if ellipse(x,y,27,4,2.2,2.2)<1:c=(1,.9,.35)
+        return B.quant5(B.jitter(c,px,py,31,.01))
+    c=mix((.12,.42,.50),(.08,.28,.38),y/20)
+    shirt=(.88,.36,.56);skin=(.80,.58,.42);hair=(.16,.09,.06)
+    if ellipse(x,y+.5,16,19,11.5,7.5)<1:c=shirt
+    if abs(x-16)<2 and 13<y<16:c=skin                                   # neck
+    puffed=kind=='fart'
+    if ellipse(x,y,16,8.6,5.4+(.7 if puffed else 0),6.0+(.5 if puffed else 0))<1:c=skin if not puffed else mix(skin,(.60,.74,.35),.35)
+    if ellipse(x,y,16,5.4,5.9,4.4)<1 and y<6.6:c=hair
+    if ellipse(x,y,16,1.7,2.2,1.6)<1:c=hair                              # her bun
+    for ex in (13.4,18.6):
+        if kind=='fart':
+            if ellipse(x,y,ex,8.3,1.7,1.9)<1:c=(.96,.96,.92)
+            if ellipse(x,y,ex,8.6,.7,.8)<1:c=(.1,.06,.04)
+            if abs(x-ex)<1.8 and abs(y-5.9)<.45:c=hair                  # eyebrows shot up
+        else:
+            if ellipse(x,y,ex,8.4,.75,1.0)<1:c=(.12,.07,.05)
+    for bx in (11.2,20.8):
+        if ellipse(x,y,bx,10.6,1.6,1.1)<1:c=mix(c,(.92,.42,.42),.5)
+    if kind=='mom' and abs(x-16)<2.6 and abs(y-(12.0+.9*(1-((x-16)/2.8)**2)))<.5:c=(.55,.22,.20)
+    if kind=='momtalk' and ellipse(x,y,16,12.1,1.9,1.3)<1:c=(.45,.12,.12)
+    if kind=='fart' and ellipse(x,y,16,12.2,1.2,1.5)<1:c=(.35,.10,.10)
+    if kind=='fart':
+        for cx,cy,rx,ry in ((16,17,11,4.8),(7,13.5,4.2,3.2),(25,13.5,4.4,3.4),(12,10,2.6,2.1),(21,10.5,2.8,2.2),(16,14,5,3)):
+            k=ellipse(x,y,cx,cy,rx,ry)
+            if k<1:c=mix((.46,.70,.20),(.66,.84,.34),(x*7+y*3)%5/5) if k>.45 else (.58,.78,.28)
+    if y<1.6:c=(.07,.07,.09)
+    if y<1.6 and 2<x<4:c=(.25,.78,.35)
+    return B.quant5(B.jitter(c,px,py,37,.01))
+
+def screen_for(name,t):
+    if name!='videochat':return 'building'
+    if t<.5:return 'building'
+    if t<VIDEOCHAT_FART:return ('mom','momtalk')[int(t*4)%2]
+    return 'fart'
+
 def face_for(name,t,T):
     if name=='giggle':return 'giggle' if .55<t%T<2.8 else 'smile'
     if name=='talk':return ('smile','talk','oh','talk','smile')[int(t*6)%5]
@@ -85,6 +135,7 @@ def face_for(name,t,T):
     if name in ('draw','learn'):return 'focus' if t<T*.68 else 'smile'
     if name=='pizza':return 'talk' if 2.2<t<3.1 and int(t*8)%2 else 'smile'
     if name=='point':return 'oh' if .7<t<1.7 else 'smile'
+    if name=='videochat':return 'smile' if t<.7 else ('talk','smile','talk','giggle')[int(t*5)%4] if t<2.65 else 'oh'
     if name=='sleep':return 'half' if 2.1<t<2.3 else 'shut'
     if name=='sit':return 'half' if 4.4<t<4.65 else 'giggle' if 2.5<t<3.2 else 'smile'
     return 'smile'
@@ -97,7 +148,7 @@ def animate(rig,name,t,T):
     def move(n,xyz):
         r=rig.data.bones[n].matrix_local.to_3x3();rig.pose.bones[n].location=r.inverted()@Vector(xyz)
     for pb in rig.pose.bones:pb.rotation_mode='QUATERNION';pb.rotation_quaternion=(1,0,0,0);pb.location=(0,0,0)
-    for prop in ('tablet','draw','pizza','scooter','learn','pencil','tablet_cursor'):move(prop,(0,0,0 if (prop==name or prop=='pencil' and name=='draw') else -3))
+    for prop in ('tablet','draw','pizza','scooter','learn','pencil','tablet_cursor'):move(prop,(0,0,0 if (prop==name or prop=='pencil' and name=='draw' or prop=='tablet' and name=='videochat' and t<VIDEOCHAT_RELEASE) else -3))
     # Breathing, wrist relaxation and a trailing ponytail persist through every activity.
     rot('torso',x=.012*math.sin(ph));rot('head',z=.055*math.sin(ph+.2))
     rot('handL',x=.07,y=-.06);rot('handR',x=.05,y=.08)
@@ -229,6 +280,14 @@ def animate(rig,name,t,T):
             delighted=env(t,3.55,3.9,4.65,5.2);rot('head',x=.51*(1-delighted)-.035*delighted,y=-.05*delighted)
             rot('torso',x=.05*(1-delighted));rot('curlR',x=.9)
             rot('torso',x=.018+delighted*.025);move('root',(0,0,.012*delighted*max(0,math.sin(t*8))))
+        elif name=='videochat':
+            talk=env(t,.7,1.0,2.6,2.75)
+            rot('head',x=.05+.05*math.sin(t*5.2)*talk,z=.09*math.sin(t*2.7)*talk,y=.04*math.sin(t*3.9)*talk)
+            rot('torso',x=.03+.015*math.sin(t*5.2)*talk,z=.04*math.sin(t*2.7)*talk)
+            recoil=env(t,2.65,3.0,3.7,3.8)            # she rocks back from the cloud, and stumbles away
+            rot('head',x=.05-.34*recoil);rot('torso',x=.03-.32*recoil)
+            for label,sign in (('L',1),('R',-1)):
+                rot('leg'+label,x=(.30 if label=='L' else .06)*recoil);rot('shin'+label,x=.10*recoil);rot('foot'+label,x=-.10*recoil)
         elif name=='draw':
             stroke=env(t,.3,.65,4.1,4.7)
             rot('forearmR',x=-.85+.08*math.sin(t*6)*stroke,z=.075*math.sin(t*9)*stroke)
@@ -327,6 +386,23 @@ def animate(rig,name,t,T):
             turn=env(t,3.1,3.35,3.7,4.1)
             right=Vector((.127,.009,-.010)).lerp(Vector((-.025,-.018,.015)),turn)
             grip('R',center+R@right)
+    elif name=='videochat':
+        tt=min(t,VIDEOCHAT_DROP)
+        raise_=smooth(tt/.7);recoil=env(tt,2.65,3.0,3.7,3.8)
+        R=Euler((.93-.62*raise_+.18*recoil+.02*math.sin(tt*6),.02*math.sin(tt*4),.02*math.sin(tt*3.1)),'XYZ').to_matrix()@Euler((0,0,math.pi),'XYZ').to_matrix()
+        center=Vector((0,-.15-.10*raise_-.07*recoil,.80+.22*raise_+.004*math.sin(tt*9)))
+        if t<VIDEOCHAT_RELEASE:put('tablet',Vector((0,-.235,.85)),center,R)
+        grip('L',center+R@Vector((-.127,.009,-.010)))
+        grip('R',center+R@Vector((.127,.009,-.010)))
+        # Let go: the grip's last solution swings up and out in fright.
+        let=smooth((t-VIDEOCHAT_DROP)/.35)
+        if let>0:
+            for label,sign in (('L',1),('R',-1)):
+                for bn,(ex,ey,ez) in (('arm',(-.20,-sign*2.25,0)),('forearm',(-.35,0,0)),('hand',(-.10,0,sign*.2))):
+                    pb=rig.pose.bones[bn+label];r=rig.data.bones[pb.name].matrix_local.to_3x3()
+                    target=(r.inverted()@Euler((ex,ey,ez),'XYZ').to_matrix()@r).to_quaternion()
+                    pb.rotation_quaternion=pb.rotation_quaternion.slerp(target,let)
+            bpy.context.view_layer.update()
     elif name=='draw':
         R=Euler((1.15,-.04,.035*math.sin(ph)),'XYZ').to_matrix()@Euler((0,0,math.pi),'XYZ').to_matrix();center=Vector((.005,-.185,.85))
         put('draw',(0,-.23,.84),center,R)

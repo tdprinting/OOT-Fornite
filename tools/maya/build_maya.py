@@ -68,8 +68,9 @@ def build():
     cloth=image('cloth',64,32,cloth_pixel)
     colors=[skin,hair,(.18,.27,.61),(.10,.11,.15),(.92,.65,.24),(.23,.60,.75),(.96,.94,.85),(.79,.20,.16)]
     atlas=image('skin',64,32,lambda x,y: BL.quant5(BL.jitter(colors[x//8],x,y,17,.012)))
+    screen_images=[image('screen_'+n,P.SCREEN_W,P.SCREEN_H,lambda x,y,n=n:P.paint_screen(x,y,n)) for n in P.SCREENS]
     face_images=[image('face_'+n,32,32,lambda x,y,n=n:face(x,y,n)) for n in FACES]
-    cm=material('Cloth',cloth);sm=material('Skin',atlas);fm=material('Face',face_images[0])
+    cm=material('Cloth',cloth);sm=material('Skin',atlas);fm=material('Face',face_images[0]);scm=material('Screen',screen_images[0])
     region=lambda n:(n/8+.005,.02,.115,.96)
     s=region(0);h=region(1);blue=region(2);dark=region(3);gold=region(4);cyan=region(5);paper=region(6);red=region(7)
     # Child proportions: approximately six head lengths, slender limbs and real joints.
@@ -215,8 +216,12 @@ def build():
             bone='indexR' if label=='R' and i==3 else 'curlR' if label=='R' else 'handL'
             ball('fingers',(x+(i-1.5)*.012,-.006,.667),(.007,.010,.022-abs(i-1.5)*.003),bone,sm,s)
     box('tablet',(0,-.235,.81),(.25,.018,.17),'tablet',sm,dark)
-    box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',sm,cyan)
-    for i in range(3):box('screen block',(-.06+i*.06,-.25,.79+i*.025),(.05,.003,.04),'tablet',sm,blue)
+    scr=box('pixel building screen',(0,-.247,.81),(.22,.004,.14),'tablet',scm)
+    for poly in scr.data.polygons:   # the picture covers the whole front, the rest of the thin slab is plain
+        front=poly.normal.y<-.5
+        for li in poly.loop_indices:
+            vx=scr.data.vertices[scr.data.loops[li].vertex_index].co
+            scr.data.uv_layers.active.data[li].uv=((vx.x/.22+.5),(vx.z-.74)/.14) if front else (0,0)
     box('tablet touch highlight',(0,-.252,.85),(.014,.003,.014),'tablet_cursor',sm,paper)
     box('sketchbook',(0,-.23,.80),(.25,.025,.18),'draw',sm,paper)
     for i in range(3):box('drawing line',(-.06+i*.04,-.245,.80),(.013,.005,.10),'draw',sm,cyan)
@@ -271,6 +276,7 @@ def build():
             for pb in rig.pose.bones:
                 pb.keyframe_insert('rotation_quaternion',frame=f);pb.keyframe_insert('location',frame=f)
         act['maya_faces']=expressions
+        act['maya_screens']=[P.SCREENS.index(P.screen_for(name,f/FPS)) for f in range(frames_of(seconds,loops))]
         act['maya_fps']=FPS
         track=rig.animation_data.nla_tracks.new();track.name=name;track.strips.new(name,0,act);track.mute=True
     rig.animation_data.action=bpy.data.actions['idle'];scene.frame_set(0)

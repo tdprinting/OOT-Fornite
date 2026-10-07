@@ -21,3 +21,9 @@ From the repository root: `blender -b --python tools/maya/build_maya.py`, then `
 ## Real voice
 
 Two user-confirmed Maya-only playful responses from the supplied family recording are included as mono 16 kHz PCM16 WAVs. The opening adult line and surrounding adult speech are excluded. Clips have light background-noise cleanup, fades and matched levels without pitch or speed changes. They play on greeting, conversation and happy reactions through a dedicated mixer voice, with cooldowns, game-volume support and a voice toggle. Switching pets, leaving a scene or disabling voice stops playback. The original MOV and its metadata are not included. Rebuild the game header with `python scripts/make_maya_sounds.py`; `sounds/manifest.json` records the selected source intervals.
+
+## Video call
+A hobby, `videochat`: she holds the tablet up to her face and chats with her mom (an original cartoon face, not a photo, on the tablet's own picture: `maya_screen_*.png`, 32x20, four pictures). About 2.6 s in, mom lets a big one go through the screen: the picture turns green, a cloud pours out, the game plays the fart recording and she rocks back. At 3.25 s the tablet leaves her hands and becomes a physics object (`shared/tablet_physics.h`: a thin box that tumbles, bounces on its corners and settles on the floor), she bolts away from the cloud, watches it thin out and walks back for the tablet. The cloud is cosmetic only (nothing the server damages with).
+
+## Cloth physics on hair
+Her two-joint ponytail (and Avriella's tuft) follow how they move and turn plus the wind, using the same springs as Link's cap (`shared/tail_swing.h`), scaled by the Cloth physics setting.

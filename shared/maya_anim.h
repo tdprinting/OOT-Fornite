@@ -6,6 +6,7 @@
 // two nearest frames; an Animator cross-fades from one clip to the next so changes of mood never snap. A vertex follows one or two bones.
 #include "maya_model.h"
 #include "tail_swing.h"
+#include "tablet_physics.h"
 #include <algorithm>
 #include <cmath>
 
@@ -174,6 +175,10 @@ inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
 // Ground covered per walk/run cycle (game units at kWorldScale), from the clips' leg swing; the game plays them at speed/stride so feet do not skate.
 constexpr float kWalkStride = 37.7f;
 constexpr float kRunStride = 54.7f;
+// The video-chat scene (clip kVideochat): the call's mom lets one go at kVideoChatFartTime, the tablet leaves her hands at kVideoChatDropTime (the game
+// takes over as a physics object from there) and she bolts at kVideoChatFleeTime. The tablet's middle in model units (rest pose, game axes).
+constexpr float kVideoChatFartTime = 2.6f, kVideoChatDropTime = 3.25f, kVideoChatFleeTime = 3.7f;
+constexpr float kTabletCenter[3] = {0.0f, 85.0f, 23.5f};
 constexpr float kWorldScale = .41f; // about 56 units tall; young Link is about 60.
 constexpr float kFocusHeight = 49.2f;
 inline int Expression(int clip, float seconds, float clock) {
@@ -185,6 +190,15 @@ inline int Expression(int clip, float seconds, float clock) {
     float blink=std::isfinite(clock) ? std::fmod(std::max(0.0f,clock),4.37f) : 0.0f;
     if (face!=kFaceGiggle && blink>3.10f && blink<3.29f) return blink<3.15f || blink>3.24f ? kFaceHalf : kFaceShut;
     return face;
+}
+
+// Which picture the tablet shows `seconds` into a clip.
+inline int ScreenFor(int clip, float seconds) {
+    const auto& info = InfoOf(clip);
+    float f = std::isfinite(seconds) ? seconds * info.fps : 0;
+    if (info.loops) { f = std::fmod(f, static_cast<float>(info.frames)); if (f < 0) f += info.frames; }
+    else f = std::clamp(f, 0.0f, static_cast<float>(info.frames - 1));
+    return kFrameScreens[info.firstFrame + std::clamp(static_cast<int>(f), 0, static_cast<int>(info.frames) - 1)];
 }
 
 // The ponytail's two joints bent by the cloth springs (royale::TailTracker). `strength` is the player's cloth setting (0 = off). Positive fore trails

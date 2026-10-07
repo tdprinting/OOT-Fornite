@@ -11,7 +11,7 @@
 #define assert(expr) do { if (!(expr)) { std::cerr << "Maya validation failed: " << #expr << " at " << __LINE__ << "\n"; std::exit(1); } } while (0)
 int main() {
     namespace M = royale::maya;
-    static_assert(M::kClipCount==17 && M::kFaceCount==8);
+    static_assert(M::kClipCount==18 && M::kFaceCount==8);
     assert(royale::kMayaCompanionLineCount==14);
     for (const auto& batch:M::kBatches) {
         assert(batch.vertCount>0 && batch.vertCount<=32);
@@ -97,6 +97,19 @@ int main() {
         assert(n>0 && zm/n<zr/n-.1f);
         A::Pose off=rest;A::ApplyTuft(off,tr.spring,0.0f);assert(off.bone[5].q[0]==rest.bone[5].q[0] && off.bone[5].t[2]==rest.bone[5].t[2]);
     }
+    // The video-chat scene: the tablet is in her hands until the drop, the screen turns to the fart picture, and a dropped tablet settles flat.
+    {
+        int tb=M::BoneByName("tablet");assert(tb>=0);
+        M::Pose early,late;M::SampleClip(M::kVideochat,M::kVideoChatDropTime-.05f,early);M::SampleClip(M::kVideochat,M::kVideoChatDropTime+.1f,late);
+        assert(early.bone[tb].t[1]>-100 && late.bone[tb].t[1]<-100);
+        assert(M::ScreenFor(M::kVideochat,0.1f)==M::kScreenBuilding && M::ScreenFor(M::kVideochat,M::kVideoChatFartTime+.3f)==M::kScreenFart);
+        assert(M::ScreenFor(M::kTablet,1.0f)==M::kScreenBuilding);
+        assert(M::kVideoChatFartTime<M::kVideoChatDropTime && M::kVideoChatDropTime<M::kVideoChatFleeTime && M::kVideoChatFleeTime<M::ClipSeconds(M::kVideochat)+.2f);
+        royale::TabletBody b;b.p[1]=14;b.v[0]=40;b.v[1]=25;b.w[0]=7;b.w[2]=-3;
+        auto floor=[](float,float){return 0.0f;};
+        for(int i=0;i<1200&&!b.asleep;i++){b.Step(1/120.0f,floor);assert(b.LowestCorner()>-1.0f);}
+        assert(b.asleep && b.p[1]<2.0f && b.p[1]>0.2f);   // lying flat, on the floor
+    }
     // Every hobby reveals exactly its own prop; walking parks all five.
     const int clips[]={M::kTablet,M::kDraw,M::kPizza,M::kScooter,M::kLearn};
     const char* names[]={"tablet","draw","pizza","scooter","learn"};
@@ -149,5 +162,5 @@ int main() {
     }
     M::Animator a;a.Play(M::kTablet);a.Update(.1f);a.Play(M::kWalk);a.Update(.1f);M::Pose p;a.Evaluate(p);
     for(const auto& bone:p.bone)for(float q:bone.q)assert(std::isfinite(q));
-    std::cout<<"Maya: all batches, rig transforms, all seventeen clips, child scale and expressions, prop visibility and transitions passed\n";
+    std::cout<<"Maya: all batches, rig transforms, all eighteen clips, child scale and expressions, prop visibility and transitions passed\n";
 }

@@ -19,6 +19,7 @@ from mathutils import Matrix, Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, HERE)
+import personality as P  # noqa: E402
 import build_maya  # noqa: E402  (the clip list and texture sizes live there)
 
 BLEND = os.path.join(ROOT, "assets", "maya", "maya.blend")
@@ -70,9 +71,9 @@ def main():
     normals = me.corner_normals
     mat_tex = []
     for m in me.materials:
-        mat_tex.append("face" if "Face" in m.name else "cloth" if "Cloth" in m.name else "skin")
+        mat_tex.append("screen" if "Screen" in m.name else "face" if "Face" in m.name else "cloth" if "Cloth" in m.name else "skin")
     tex_size = {"cloth": (build_maya.CLOTH_W, build_maya.CLOTH_H), "skin": (build_maya.SKIN_W, build_maya.SKIN_H),
-                "face": (build_maya.FACE_W, build_maya.FACE_H)}
+                "face": (build_maya.FACE_W, build_maya.FACE_H), "screen": (P.SCREEN_W, P.SCREEN_H)}
 
     def corner(li, vi, mat):
         w, h = tex_size[mat_tex[mat]]
@@ -125,6 +126,8 @@ def main():
     cloth_bytes = rgba5551(list(cloth.pixels), cloth.size[0], cloth.size[1])
     skin_bytes = rgba5551(list(skin.pixels), skin.size[0], skin.size[1])
     face_bytes = [rgba5551(list(f.pixels), f.size[0], f.size[1]) for f in faces]
+    screens = [bpy.data.images["maya_screen_%s" % n] for n in P.SCREENS]
+    screen_bytes = [rgba5551(list(f.pixels), f.size[0], f.size[1]) for f in screens]
 
     # ---- animation ---------------------------------------------------------------------------------------------------------
     for tr in rig.animation_data.nla_tracks:
@@ -133,9 +136,11 @@ def main():
     clips = []
     pose_values = []
     expression_values = []
+    screen_values = []
     for name, seconds, loops, _ in build_maya.CLIPS:
         act = bpy.data.actions[name]
         expression_values += list(act["maya_faces"])
+        screen_values += list(act["maya_screens"])
         rig.animation_data.action = act
         frames = build_maya.frames_of(seconds, loops)
         first = len(pose_values) // 7 // len(bones)
@@ -176,7 +181,7 @@ def main():
     o.append("inline constexpr bool kKeepJointLink[kBoneCount] = { %s };" % ", ".join("true" if n in links else "false" for n in bones))
     o.append("// A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).")
     o.append("struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };")
-    o.append("enum Texture : uint8_t { kCloth = 0, kSkin = 1, kFace = 2 };")
+    o.append("enum Texture : uint8_t { kCloth = 0, kSkin = 1, kFace = 2, kScreen = 3 };")
     o.append("// A batch: up to 32 vertices loaded together and the triangles drawn from them (indices are within the batch).")
     o.append("struct Batch { Texture texture; uint16_t firstVert; uint8_t vertCount; uint16_t firstTri; uint16_t triCount; };")
     o.append("")
@@ -186,7 +191,7 @@ def main():
     o.append("};")
     o.append("constexpr int kBatchCount = %d;" % len(batches))
     o.append("inline constexpr Batch kBatches[kBatchCount] = {")
-    o.append(fmt_rows(["{%s, %d, %d, %d, %d}" % ({"face": "kFace", "cloth": "kCloth", "skin": "kSkin"}[mat_tex[b["mat"]]], b["first"], b["count"], b["tris_first"],
+    o.append(fmt_rows(["{%s, %d, %d, %d, %d}" % ({"face": "kFace", "cloth": "kCloth", "skin": "kSkin", "screen": "kScreen"}[mat_tex[b["mat"]]], b["first"], b["count"], b["tris_first"],
                                                 b["tris_count"]) for b in batches], 4))
     o.append("};")
     o.append("constexpr int kTriCount = %d;" % len(tris))
@@ -212,6 +217,16 @@ def main():
         o.append("  },")
     o.append("};")
     o.append("")
+    o.append("// The tablet's pictures (a toy and four frames of a video call), %dx%d." % (P.SCREEN_W, P.SCREEN_H))
+    o.append("constexpr int kScreenW = %d, kScreenH = %d;" % (P.SCREEN_W, P.SCREEN_H))
+    o.append("enum Screen : uint8_t { %s, kScreenCount };" % ", ".join("kScreen%s" % n.capitalize() for n in P.SCREENS))
+    o.append("alignas(8) inline constexpr uint8_t kScreenTex[kScreenCount][kScreenW * kScreenH * 2] = {")
+    for fb in screen_bytes:
+        o.append("  {")
+        o.append(fmt_rows(["0x%02X" % b for b in fb], 32, "    "))
+        o.append("  },")
+    o.append("};")
+    o.append("")
     o.append("// Animation clips, in the order of build_maya.CLIPS.")
     o.append("enum Clip : uint8_t { %s, kClipCount };" % ", ".join("k%s" % n.capitalize() for n, _, _, _, _ in clips))
     o.append("struct ClipInfo { const char* name; uint16_t frames; float fps; bool loops; uint16_t firstFrame; };")
@@ -221,6 +236,9 @@ def main():
     o.append("constexpr int kFrameCount = %d;" % (len(pose_values) // 7 // len(bones)))
     o.append("inline constexpr uint8_t kFrameFaces[kFrameCount] = {")
     o.append(fmt_rows([str(v) for v in expression_values],32))
+    o.append("};")
+    o.append("inline constexpr uint8_t kFrameScreens[kFrameCount] = {")
+    o.append(fmt_rows([str(v) for v in screen_values], 32))
     o.append("};")
     o.append("constexpr float kPosFrac = %.1ff;   // bone offsets are in 1/%d units" % (POS_FRAC, POS_FRAC))
     o.append("// Per frame, per bone: rotation quaternion x, y, z, w (x32767) and offset x, y, z (x kPosFrac). A vertex v at rest goes to q*v + offset.")
