@@ -1228,6 +1228,9 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::ItemGet: return AnimSeq(RA(demo_get_itemB), false);
         case Anim::OpenChest: return AnimSeq(player != nullptr && player->ageProperties != nullptr ? player->ageProperties->unk_98 : RA(demo_Tbox_open), false);
         case Anim::Jump: return AnimSeq(RA(normal_run_jump), false).Add(RA(normal_landing));
+        case Anim::Swim: return AnimSeq(RA(swimer_swim), true);          // a bot swimming (the strokes the game gives a swimmer)
+        case Anim::Tread: return AnimSeq(RA(swimer_swim_wait), true);    // and treading water
+        case Anim::Climb: return AnimSeq(RA(normal_Fclimb_upL), true);   // hand over hand up a cliff or an ivy wall
         case Anim::Hurt: return AnimSeq(RA(normal_front_shit), false);
         case Anim::Dead: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));
         case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
