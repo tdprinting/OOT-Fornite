@@ -99,11 +99,11 @@ def build():
     def upper_body():
         # Shared boundary vertices stitch the sleeves to the torso; no shoulder balls,
         # overlapping tubes or gaps. All joints use at most two skinning influences.
-        profiles=[(.755,.125,.090),(.83,.140,.095),(.95,.150,.100),(1.04,.150,.075),(1.09,.055,.047)]
+        profiles=[(.690,.127,.092),(.83,.140,.095),(.95,.150,.100),(1.04,.150,.075),(1.09,.055,.047)]
         n=12;verts=[];polys=[];weights=[];uvs=[];mats=[]
         for z,rx,ry in profiles:
             for k in range(n):
-                a=k*2*math.pi/n;verts.append(Vector((rx*math.sin(a),-ry*math.cos(a),z)));weights.append({'torso':1})
+                a=k*2*math.pi/n;verts.append(Vector((rx*math.sin(a),-ry*math.cos(a),z)));weights.append({'torso':.5,'pelvis':.5} if z<.7 else {'torso':1})
         def quad(idx,mat,uv):polys.append(idx);mats.append(mat);uvs.append(uv)
         for row in range(len(profiles)-1):
             for k in range(n):
