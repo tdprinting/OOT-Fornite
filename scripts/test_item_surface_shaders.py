@@ -4,14 +4,13 @@ Extracts the extension from the renderer patch, so this cannot accidentally test
 a separate copy of the material shader. Requires glslangValidator in PATH.
 """
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 patch = (root/'patches/libultraship/0003-item-surface-maps.patch').read_text()
-sections = patch.split('diff --git ')
+sections = patch.split('diff --git ')[1:]
 
 def additions(suffix):
     section = next(s for s in sections if s.splitlines()[0].endswith(suffix))
@@ -43,5 +42,8 @@ with tempfile.TemporaryDirectory(prefix='surface-shaders-') as scratch:
             frag += ('outputColor = texel;' if alpha else 'outputColor = vec4(texel, 1.0);')+'\n}\n'
             v, f = dest/'material.vert', dest/'material.frag'
             v.write_text(vert); f.write_text(frag)
-            subprocess.run([validator, '-l', str(v), str(f)], check=True, capture_output=True)
+            result = subprocess.run([validator, '-l', str(v), str(f)], capture_output=True, text=True)
+            if result.returncode:
+                print(result.stdout, result.stderr)
+                raise SystemExit(result.returncode)
             print(f'GLSL {version}, alpha={alpha}: compiled and linked')

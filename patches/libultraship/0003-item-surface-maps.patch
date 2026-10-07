@@ -69,7 +69,7 @@ diff --git a/src/graphic/Fast3D/gfx_cc.cpp b/src/graphic/Fast3D/gfx_cc.cpp
      cc_features->opt_2cyc = (shader_id1 & SHADER_OPT(_2CYC)) != 0;
      cc_features->opt_alpha_threshold = (shader_id1 & SHADER_OPT(ALPHA_THRESHOLD)) != 0;
      cc_features->opt_invisible = (shader_id1 & SHADER_OPT(INVISIBLE)) != 0;
-+    cc_features->opt_surface_map = (shader_id1 & SHADER_OPT(SURFACE_MAP)) != 0;
++    cc_features->opt_surface_map = (shader_id1 & SHADER_OPT(SURFACE_MAP)) != 0 && !(shader_id1 & SHADER_OPT(USE_SHADER));
      cc_features->opt_grayscale = (shader_id1 & SHADER_OPT(GRAYSCALE)) != 0;
 
      cc_features->clamp[0][0] = shader_id1 & SHADER_OPT(TEXEL0_CLAMP_S);
@@ -116,7 +116,7 @@ diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
 +    const uint8_t* data;
 +    uint32_t width, height;
 +    bool operator<(const SurfaceTextureKey& rhs) const {
-+        return std::tuple(data, width, height) < std::tuple(rhs.data, rhs.width, rhs.height);
++        return std::tuple(uintptr_t(data), width, height) < std::tuple(uintptr_t(rhs.data), rhs.width, rhs.height);
 +    }
 +};
 +static std::map<SurfaceTextureKey, uint32_t> surface_textures;
@@ -403,7 +403,7 @@ diff --git a/src/graphic/Fast3D/shaders/opengl/default.shader.fs b/src/graphic/F
 +                    @{texture}(uSurfaceHeight, uv + vec2(stepUV.x,0)).r - @{texture}(uSurfaceHeight, uv - vec2(stepUV.x,0)).r,
 +                    @{texture}(uSurfaceHeight, uv + vec2(0,stepUV.y)).r - @{texture}(uSurfaceHeight, uv - vec2(0,stepUV.y)).r);
 +                vec2 detail = mapped.xy * vSurfaceLight.w - slope * vSurfaceColor.w;
-+                vec3 perturbed = normalize(T * detail.x + B * detail.y + N * max(0.1, mapped.z));
++                vec3 perturbed = normalize(T * detail.x + B * detail.y + N * mix(1.0, max(0.1, mapped.z), clamp(vSurfaceLight.w, 0.0, 1.0)));
 +                // Relight by a ratio, keeping the original albedo, other lights and
 +                // combine modes. Zero strengths and a flat map preserve old shading.
 +                vec3 sun = max(vec3(0), vSurfaceColor.rgb);
