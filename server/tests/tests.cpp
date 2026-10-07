@@ -2847,6 +2847,68 @@ static void IslandPuddles() {
     CHECK(land > 10000 && steepInland * 100 < land);   // under one percent of the inland is too steep to stand on
 }
 
+
+// Snow that is walked in: a footprint is a smooth dent (deepest in the middle, a low rim just outside, nothing far away, no creases), the deepest pit
+// wins where prints overlap, prints fill in over time, a hard landing digs a bigger crater than a soft one, feet alternate sides of the line walked,
+// and the new puddle, snow and bank meshes are smooth (soft rim alpha on the puddle, no step at the edge of the snow, lip that stands above the ground).
+static void SnowDeformation() {
+    namespace gp = royale::ground;
+    const gp::Dent d = {100.0f, 50.0f, 0.7f, 11.0f, 6.5f, 8.0f};
+    CHECK(std::fabs(gp::DentChange(d, 100.0f, 50.0f) + 8.0f) < 1e-4f);                  // the full depth at its middle
+    CHECK(gp::DentChange(d, 100.0f + gp::DentReach(d) + 1.0f, 50.0f) == 0.0f);        // nothing outside its reach
+    float lowest = 0.0f, highest = 0.0f, prev = 0.0f, worstStep = 0.0f;
+    for (int i = 0; i <= 400; i++) {   // walk straight through it, along its long axis: the change must be continuous
+        const float lx = -gp::DentReach(d) * 1.1f + i * (gp::DentReach(d) * 2.2f / 400.0f);
+        const float c = gp::DentChange(d, d.x + lx * std::cos(d.yaw), d.z + lx * std::sin(d.yaw));
+        lowest = std::min(lowest, c); highest = std::max(highest, c);
+        if (i > 0) worstStep = std::max(worstStep, std::fabs(c - prev));
+        prev = c;
+    }
+    CHECK(lowest < -7.9f && highest > 1.0f && highest < 0.5f * 8.0f && worstStep < 0.5f);   // a pit, a low rim, no jumps
+    // the dent is turned: along its axis it is longer than across it
+    const float along = gp::DentChange(d, d.x + 9.0f * std::cos(d.yaw), d.z + 9.0f * std::sin(d.yaw));
+    const float across = gp::DentChange(d, d.x - 9.0f * std::sin(d.yaw), d.z + 9.0f * std::cos(d.yaw));
+    CHECK(along < across - 1.0f);
+    // two prints on top of each other dig no deeper than one; a trail keeps a ridge between prints
+    const gp::Dent two[2] = {d, d};
+    CHECK(std::fabs(gp::DentsChange(two, 2, d.x, d.z) - gp::DentChange(d, d.x, d.z)) < 1e-4f);
+    const gp::Dent trail[2] = {{0, 0, 0, 11, 6.5f, 8}, {40, 0, 0, 11, 6.5f, 8}};
+    CHECK(gp::DentsChange(trail, 2, 20.0f, 0.0f) > -1.0f && gp::DentsChange(trail, 2, 0.0f, 0.0f) < -7.0f);
+    // prints fill in
+    CHECK(gp::DentLeft(0.0f, 30.0f) > 0.999f && gp::DentLeft(30.0f, 30.0f) < 0.001f && gp::DentLeft(10.0f, 30.0f) > gp::DentLeft(20.0f, 30.0f));
+    // feet alternate and sit either side of the line walked (walking along +x, the feet are offset along z)
+    float lx, lz, rx, rz;
+    gp::FootprintAt(10.0f, 0.0f, 1.0f, 0.0f, 1, 5.0f, &lx, &lz);
+    gp::FootprintAt(10.0f, 0.0f, 1.0f, 0.0f, -1, 5.0f, &rx, &rz);
+    CHECK(lx == 10.0f && rx == 10.0f && std::fabs(lz - 5.0f) < 1e-5f && std::fabs(rz + 5.0f) < 1e-5f);
+    // a landing: none when soft, bigger and deeper the harder
+    CHECK(gp::CraterFor(100.0f, 1.0f).radius == 0.0f);
+    const gp::Crater c1 = gp::CraterFor(500.0f, 1.0f), c2 = gp::CraterFor(1400.0f, 1.0f);
+    CHECK(c1.radius > 20.0f && c2.radius > c1.radius && c2.depth > c1.depth && gp::CraterFor(500.0f, 2.0f).radius > c1.radius * 1.9f);
+    // the pile's profile falls to nothing at the edge with no slope there, the bank is a smooth bump on the water's edge
+    CHECK(gp::PileProfile(1.0f) == 0.0f && gp::PileProfile(0.0f) == 1.0f && gp::PileProfile(0.98f) < 0.01f);
+    CHECK(gp::BankHeight(1.0f, 3.0f) == 3.0f && gp::BankHeight(1.5f, 3.0f) < 0.01f && gp::BankHeight(0.5f, 3.0f) < 0.01f);
+    // the meshes: puddles fade out at their rim and are opaque inside, the snow is a fine surface with no step at its edge, the bank stands above the ground
+    for (uint32_t shape = 0; shape < gp::kPuddleShapes; shape++) {
+        const MeshData puddle = BuildMesh(MeshKind::Ground, gp::kPuddleFirst + shape), bank = BuildMesh(MeshKind::Ground, gp::kBankFirst + shape);
+        int clear = 0, solid = 0;
+        for (const auto& v : puddle.v) { clear += v.a == 0; solid += v.a == 255; }
+        CHECK(clear > 50 && solid > 200 && puddle.Triangles() > 250);
+        float mn[3], mx[3];
+        bank.Bounds(mn, mx);
+        CHECK(bank.Triangles() > 200 && mx[1] > 3.0f && mx[1] < 4.0f);
+    }
+    for (uint32_t v = gp::kPileFirst; v < gp::kDriftFirst + gp::kDriftShapes; v++) {
+        const MeshData snow = BuildMesh(MeshKind::Ground, v);
+        float mn[3], mx[3];
+        snow.Bounds(mn, mx);
+        CHECK(snow.Triangles() > 300 && mn[1] > -0.01f && mx[1] > 10.0f);
+        int lowCorners = 0;
+        for (const auto& p : snow.v) lowCorners += p.y < 0.05f;
+        CHECK(lowCorners >= 60);   // the outer ring lies on the ground: the edge is flush, not a wall
+    }
+}
+
 static void BouldersAndFormations() {
     // Six shapes in five maps' stone: each the height its shape says (so standing on top matches what you see), within the triangle
     // budget, and each map's stone a different colour.
@@ -4486,7 +4548,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); SnowDeformation(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
