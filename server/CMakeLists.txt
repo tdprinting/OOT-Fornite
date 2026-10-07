@@ -35,6 +35,10 @@ endforeach()
 add_executable(royale_balance tools/balance_sim.cpp)
 target_link_libraries(royale_balance royale_net)
 
+# Placement preview: lays a map out as a match does and dumps it; tools/maps/placement_preview.py draws it. Run: royale_placement_preview 5 1 out.txt
+add_executable(royale_placement_preview tools/placement_preview.cpp)
+target_link_libraries(royale_placement_preview royale_net)
+
 add_executable(royale_graphics_tests tests/graphics_tests.cpp)
 target_link_libraries(royale_graphics_tests PRIVATE royale_core)
 add_test(NAME royale_graphics_tests COMMAND royale_graphics_tests)
