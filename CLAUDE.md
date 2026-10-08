@@ -1,1 +1,1 @@
-Follow @AGENTS.md. Start at `mod/Royale/FEATURES.md`; load only task-relevant files. Keep explanations brief and clear.
+Follow @AGENTS.md. Read `START-HERE.md` once before editing; use `mod/Royale/FEATURES.md` to locate relevant code.
