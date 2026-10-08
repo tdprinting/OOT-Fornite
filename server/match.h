@@ -9,6 +9,7 @@
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
 #include "../shared/kingdom_data.h"
+#include "../shared/riftlands_data.h"
 #include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
@@ -1340,6 +1341,10 @@ class Match {
             }
             if (mapId == kKingdomMapIndex) {
                 for (const auto& region : kingdom::kRegions)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
+            if (mapId == kRiftlandsMapIndex) {
+                for (const auto& region : riftlands::kBossSites)
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
             b.home = b.pos = at;

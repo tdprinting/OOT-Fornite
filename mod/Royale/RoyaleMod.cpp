@@ -33,6 +33,12 @@
 #include "kingdom_layout.h"
 #include "kingdom_model.h"
 #include "kingdom_surface_maps.h"
+#include "riftlands_layout.h"
+#include "riftlands_model.h"
+namespace royale { namespace riftlands {
+using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
+using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
+} }
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"

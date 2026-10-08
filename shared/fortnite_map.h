@@ -5,6 +5,7 @@
 #include "boss_arena.h"
 #include "convergence_data.h"
 #include "kingdom_data.h"
+#include "riftlands_data.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -67,6 +68,10 @@ inline void UseTerrainForMap(int mapId) {
         gHeightData = kingdom::kHeights; gColourData = kingdom::kColours; gCoverData = kingdom::kCover;
         gSpawnX = 2000.0f; gSpawnZ = 1100.0f;
     }
+    if (mapId == 11) {   // Hyrule Riftlands (map.h kRiftlandsMapIndex)
+        gHeightData = riftlands::kHeights; gColourData = riftlands::kColours; gCoverData = riftlands::kCover;
+        gSpawnX = 0.0f; gSpawnZ = 1500.0f;
+    }
 }
 inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
 
@@ -81,9 +86,13 @@ inline bool GroundHeight(float x, float z, float* y) {
     if (y) *y = u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
     return true;
 }
+inline float WaterHeightAt(float x,float z) {
+    if(gTerrainMapId==11) for(const auto& b:riftlands::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
+    return static_cast<float>(kWaterY);
+}
 inline bool IsWaterAt(float x, float z) {
     float y;
-    return GroundHeight(x, z, &y) && y < static_cast<float>(kWaterY);
+    return GroundHeight(x, z, &y) && y < WaterHeightAt(x,z);
 }
 // How steep the ground is at (x, z): the up part of its triangle's normal (1 is flat). 0 outside the map.
 inline float GroundUp(float x, float z) {
@@ -146,6 +155,16 @@ inline Mesh BuildCollision() {
     if (gTerrainMapId == 8) {   // Hyrule Kingdom: the ground and every building in one baked mesh, with a surface per triangle
         for (const auto& v : kingdom::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
         for (const auto& p : kingdom::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
+        m.lo = m.hi = m.verts.front();
+        for (const auto& v : m.verts) {
+            m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
+            m.hi = {std::max(m.hi.x,v.x),std::max(m.hi.y,v.y),std::max(m.hi.z,v.z)};
+        }
+        return m;
+    }
+    if (gTerrainMapId == 11) {   // Hyrule Riftlands: the ground and every building in one baked mesh, with a surface per triangle
+        for (const auto& v : riftlands::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : riftlands::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
         m.lo = m.hi = m.verts.front();
         for (const auto& v : m.verts) {
             m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
@@ -235,7 +254,7 @@ inline DrawVert FineVertex(int fi, int fj) {   // fine vertex (fi, fj), 0..kFine
     const float h00 = static_cast<float>(VertexHeight(ci, cj)), h10 = static_cast<float>(VertexHeight(ci + 1, cj));
     const float h01 = static_cast<float>(VertexHeight(ci, cj + 1)), h11 = static_cast<float>(VertexHeight(ci + 1, cj + 1));
     float y = u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
-    y = std::max(y, static_cast<float>(kSeabedY));
+    if(gTerrainMapId!=11) y = std::max(y, static_cast<float>(kSeabedY)); // Riftlands uses the same rendered and physical bed
     const uint8_t* c = &gColourData[(static_cast<size_t>(fj) * (kFine + 1) + fi) * 3];
     return { Round16(-kHalfX + kCellX * fi / kSub), Round16(y), Round16(-kHalfZ + kCellZ * fj / kSub), c[0], c[1], c[2] };
 }

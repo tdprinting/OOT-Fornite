@@ -861,7 +861,7 @@ inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const Placem
     PoiLayout out;
     Rng rng(seed ^ 0x706F69ull); // "poi"
     // The names, shuffled for this match.
-    const int nameBase = ClampMap(mapId) * kNamesPerMap;
+    const int nameBase = PoiNameBase(ClampMap(mapId));
     uint8_t names[kNamesPerMap];
     for (int i = 0; i < kNamesPerMap; i++) names[i] = static_cast<uint8_t>(nameBase + i);
     for (int i = kNamesPerMap - 1; i > 1; i--) std::swap(names[i], names[1 + rng.Below(static_cast<uint32_t>(i))]); // name 0 stays the landmark's

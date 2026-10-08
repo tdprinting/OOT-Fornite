@@ -67,7 +67,7 @@ target_link_libraries(royale_water_tests PRIVATE royale_core)
 add_test(NAME royale_water_tests COMMAND royale_water_tests)
 
 # Authored map collision and navigation must be tested by CI, not only manually.
-foreach(t convergence_tests kingdom_tests)
+foreach(t convergence_tests kingdom_tests riftlands_tests)
     add_executable(royale_${t} tests/${t}.cpp)
     target_link_libraries(royale_${t} PRIVATE royale_core)
     if(MSVC)
@@ -77,7 +77,7 @@ foreach(t convergence_tests kingdom_tests)
 endforeach()
 
 # Keep assert-based checks active in optimized local test builds too.
-foreach(t boss_arena_tests war_table_tests tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests)
+foreach(t boss_arena_tests war_table_tests tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests riftlands_tests)
     if(MSVC)
         target_compile_options(royale_${t} PRIVATE /UNDEBUG)
     else()

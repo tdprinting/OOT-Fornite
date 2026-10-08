@@ -146,9 +146,10 @@ class HouseStyle:
         self.tint, self.window, self.climb, self.surf = tint, window, climb, surf
 
 def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish=True, loot=True, name='house', roof_rise=None,
-          roof_deck=False, floor_y=None, footing=True):
+          roof_deck=False, floor_y=None, footing=True, door_width=None, stair_width=None, stair_landing=False, alternate_stairs=False):
     """An enterable building: stone footing, walls with doorways front and back, windows, upper floors reached by an inside ramp,
     and a roof (pitched, or flat with a parapet and a ramp up to it). Everything you can bump into is scene collision."""
+    door = DOOR if door_width is None else float(door_width)
     st = style or HouseStyle()
     x,z = clear_site(w,x,z,W,D,yaw,name)
     f = Frame(x, z, yaw)
@@ -169,34 +170,37 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
                 end_y = H(ex, ez) - 3
                 if abs(y0 - end_y) / run <= 0.55: break
                 run += 40.0
-            w.ramp(dx, dz, ex, ez, DOOR + 40, y0, end_y, st.base, base=min(end_y, gy) - 60)
-            w.walkways.append((dx, dz, ex, ez, (DOOR + 40) / 2, y0, end_y))
+            w.ramp(dx, dz, ex, ez, door + 40, y0, end_y, st.base, base=min(end_y, gy) - 60)
+            w.walkways.append((dx, dz, ex, ez, (door + 40) / 2, y0, end_y))
     w.buildings.append((x, z, W / 2 + 15, D / 2 + 15, y0, yaw))
+    for side in ((1, -1) if back_door else (1,)):
+        px, pz = f.p(0, side * (D / 2 + 1))
+        w.doors.append((px, pz, y0, name))
     w.interior.append(_aabb(f, W, D, y0 - 5, y0 + storeys * STOREY + 10))
     climb_edge = (1,) if st.climb else ()
     for k in range(storeys):
         yb = y0 + k * STOREY; yt = yb + STOREY
         if k == 0:
             if back_door:
-                w.prism(f.outline(wall_c(W, D, DOOR, WALL, -1)), yb, yt, st.wall, surf=st.surf, climb=climb_edge)
-                w.prism(f.outline(wall_c(W, D, DOOR, WALL, 1)), yb, yt, st.wall, surf=st.surf)
+                w.prism(f.outline(wall_c(W, D, door, WALL, -1)), yb, yt, st.wall, surf=st.surf, climb=climb_edge)
+                w.prism(f.outline(wall_c(W, D, door, WALL, 1)), yb, yt, st.wall, surf=st.surf)
             else:
-                w.prism(f.outline(wall_u(W, D, DOOR, WALL)), yb, yt, st.wall, surf=st.surf, climb=(1,) if st.climb else ())
+                w.prism(f.outline(wall_u(W, D, door, WALL)), yb, yt, st.wall, surf=st.surf, climb=(1,) if st.climb else ())
             for side in ((1, -1) if back_door else (1,)):
                 lx, lz = 0, side * (D / 2 - WALL / 2)
                 # the lintel over the doorway (drawn; nobody reaches it) and the door frame
                 px, pz = f.p(lx, lz)
-                w.box(px, yb + DOOR_H, pz, DOOR + 4, STOREY - DOOR_H, WALL, st.wall, yaw, col='none')
+                w.box(px, yb + DOOR_H, pz, door + 4, STOREY - DOOR_H, WALL, st.wall, yaw, col='none')
                 for sx in (-1, 1):
-                    qx, qz = f.p(sx * (DOOR / 2 + 8), side * (D / 2 + 1))
+                    qx, qz = f.p(sx * (door / 2 + 8), side * (D / 2 + 1))
                     w.box(qx, yb, qz, 18, DOOR_H + 10, WALL + 6, st.trim, yaw, col='none')
                 qx, qz = f.p(0, side * (D / 2 + 1))
-                w.box(qx, yb + DOOR_H, qz, DOOR + 34, 18, WALL + 6, st.trim, yaw, col='none')
+                w.box(qx, yb + DOOR_H, qz, door + 34, 18, WALL + 6, st.trim, yaw, col='none')
         else:
             # Upper storey: one wide opening onto the front (jump down, or shoot out of it)
-            w.prism(f.outline(wall_u(W, D, DOOR, WALL)), yb, yt, st.wall, surf=st.surf, climb=climb_edge)
+            w.prism(f.outline(wall_u(W, D, door, WALL)), yb, yt, st.wall, surf=st.surf, climb=climb_edge)
             px, pz = f.p(0, D / 2 - WALL / 2)
-            w.box(px, yb + DOOR_H, pz, DOOR + 4, STOREY - DOOR_H, WALL, st.wall, yaw, col='none')
+            w.box(px, yb + DOOR_H, pz, door + 4, STOREY - DOOR_H, WALL, st.wall, yaw, col='none')
         # windows on the sides and back, inside and out
         for sx in (-1, 1):
             for lz in np.linspace(-D / 2 + 110, D / 2 - 110, max(1, int((D - 140) / 260))):
@@ -209,8 +213,9 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
         w.prism(f.outline(rect(0, 0, W + 8, D + 8)), yt - 14, yt, st.trim, col='none', top=False)
     top = y0 + storeys * STOREY
     # Floors between storeys, with the stairwell hole along the left wall, and the ramps up
-    ramp_w = 120
+    ramp_w = 120 if stair_width is None else float(stair_width)
     for k in range(1, storeys + (1 if st.roof_kind == 'flat' else 0)):
+        sf=Frame(x,z,yaw+(math.pi if alternate_stairs and k%2==0 else 0))
         yb = y0 + k * STOREY
         run = max(STOREY / 0.68, 300)
         z0 = -D / 2 + WALL + 20; z1 = z0 + run
@@ -219,7 +224,7 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
         surface = 'wood' if not last else 'stone'
         if z1 > D / 2 - WALL - 40:
             # Two flights around a corner, entirely inside the room, with a landing.
-            rw=60.0 if min(W,D)<420 else 80.0; hw=W/2-WALL; hd=D/2-WALL
+            rw=(60.0 if min(W,D)<420 else 80.0) if stair_width is None else float(stair_width); hw=W/2-WALL; hd=D/2-WALL
             lx=-hw+rw/2+5; bz=-hd+rw/2+5
             start_z=hd-20; middle_z=bz+rw/2; end_x=hw-rw-10
             first_run=start_z-middle_z; second_run=end_x-(lx+rw/2)
@@ -227,23 +232,41 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
             if slope>0.68: raise ValueError('Room too small for walkable stairs: '+name)
             mid_y=yb-STOREY+slope*first_run
             floor=[(-hw+rw+10,hd),(hw,hd),(hw,-hd),(end_x,-hd),(end_x,-hd+rw+10),(-hw+rw+10,-hd+rw+10)]
-            w.prism(f.outline(floor),yb-20,yb,material,surf=surface,top_mat=st.floor)
-            ax,az=f.p(lx,start_z); bx,bzz=f.p(lx,middle_z)
+            w.prism(sf.outline(floor),yb-20,yb,material,surf=surface,top_mat=st.floor)
+            ax,az=sf.p(lx,start_z); bx,bzz=sf.p(lx,middle_z)
             w.ramp(ax,az,bx,bzz,rw,yb-STOREY,mid_y,st.floor,surf='wood',base=yb-STOREY)
 
-            mx,mz=f.p(lx,bz); w.box(mx,mid_y-20,mz,rw,20,rw,st.floor,yaw,surf='wood')
-            ax,az=f.p(lx+rw/2,bz); bx,bzz=f.p(end_x,bz)
+            mx,mz=sf.p(lx,bz); w.box(mx,mid_y-20,mz,rw,20,rw,st.floor,yaw,surf='wood')
+            ax,az=sf.p(lx+rw/2,bz); bx,bzz=sf.p(end_x,bz)
             w.ramp(ax,az,bx,bzz,rw,mid_y,yb,st.floor,surf='wood',base=mid_y-20)
 
         else:
-            hole = slab_notched(W - 2 * WALL, D - 2 * WALL, -(W / 2 - WALL), -(W / 2 - WALL) + ramp_w + 10, z0 - 10, z1 + 10)
-            w.prism(f.outline(hole), yb - 20, yb, material, surf=surface, top_mat=st.floor)
-            ax, az = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z1)
-            bx, bz = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z0)
-            w.ramp(ax, az, bx, bz, ramp_w, yb - STOREY, yb, st.floor, surf='wood', base=yb - STOREY)
+            exit_x=-(W/2-WALL)+ramp_w+10+(150 if stair_landing else 0)
+            hole = slab_notched(W - 2 * WALL, D - 2 * WALL, -(W / 2 - WALL), exit_x, z0 - 10, z1 + 10)
+            w.prism(sf.outline(hole), yb - 20, yb, material, surf=surface, top_mat=st.floor)
+            ax, az = sf.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z1)
+            bx, bz = sf.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z0)
+            if stair_landing:
+                # Short physical faces keep baked wall heights local where the
+                # side landing crosses this flight; no navigation rule changes.
+                pieces=math.ceil(run/30)
+                for segment in range(pieces):
+                    t0,t1=segment/pieces,(segment+1)/pieces
+                    w.ramp(ax+(bx-ax)*t0,az+(bz-az)*t0,ax+(bx-ax)*t1,az+(bz-az)*t1,ramp_w,
+                           yb-STOREY+STOREY*t0,yb-STOREY+STOREY*t1,st.floor,surf='wood',base=yb-STOREY)
+            else:
+                w.ramp(ax, az, bx, bz, ramp_w, yb - STOREY, yb, st.floor, surf='wood', base=yb - STOREY)
+            if stair_landing:
+                # A broad side exit reaches the loft before the narrow back strip.
+                # The same enlarged notch leaves real headroom above the exit.
+                stop_z=z0+65;start_y=yb-STOREY*65/run
+                sx,sz=sf.p(-(W/2-WALL)+ramp_w/2+5,stop_z)
+                ex,ez=sf.p(exit_x+40,stop_z)
+                w.ramp(sx,sz,ex,ez,ramp_w,start_y,yb,st.floor,surf='wood',base=yb-70)
             # Upper routes come from collision; these walkways must not replace the lower floor.
-            px, pz = f.p(-(W / 2 - WALL) + ramp_w + 12, (z0 + z1) / 2)
-            w.box(px, yb, pz, 8, 70, z1 - z0, st.trim, yaw, col='none')
+            rail_z0=z0+65+ramp_w/2 if stair_landing else z0
+            px, pz = sf.p(exit_x+2, (rail_z0 + z1) / 2)
+            w.box(px, yb, pz, 8, 70, z1 - rail_z0, st.trim, sf.yaw, col='none')
     # The roof
     if st.roof_kind == 'gable':
         rise = roof_rise if roof_rise is not None else 0.5 * W
