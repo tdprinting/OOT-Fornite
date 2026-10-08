@@ -40,6 +40,11 @@ bool LiveAndAlive(const royale::HudState& h) {
     return gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch) && h.haveSelf && h.selfAlive;
 }
 
+bool VictoryWalk(const royale::HudState& h) {
+    return gSession.Joined() && h.state == royale::MatchState::Ending &&
+        h.haveSelf && h.selfAlive && h.winnerId == h.selfId;
+}
+
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity); // below, with the chests
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // below, with the sign
 void PlayOneShot(int kind);

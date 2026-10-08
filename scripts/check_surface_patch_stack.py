@@ -5,18 +5,34 @@ checks the stack can be reversed; no engine build or downloaded SDK is required.
 """
 from pathlib import Path
 import re
+import os
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-engine = root/'third_party/Shipwright-Android'
+engine = Path(os.environ.get('ROYALE_ENGINE_SOURCE', str(root/'third_party/Shipwright-Android')))
 for repo, folder in ((engine, root/'patches'), (engine/'libultraship', root/'patches/libultraship')):
     patches = sorted(folder.glob('*.patch'))
     # Android Java patches contain mixed historical line endings. Their real
     # checkout is checked by the APK build; here check the native renderer stack.
-    texts = [''.join('diff --git '+section for section in p.read_text().split('diff --git ')[1:]
-                     if not section.startswith('a/Android/')) for p in patches]
-    paths = {n for t in texts for n in re.findall(r'^--- a/(.+)$', t, re.M)}
+    texts = []
+    for patch in patches:
+        source = patch.read_text()
+        # Some historical patches are plain unified diffs, without diff --git.
+        # Normalize file sections so no hook/render changes silently go unchecked.
+        headers = list(re.finditer(r'^--- (?:a/[^\n]+|/dev/null)\n\+\+\+ b/([^\n]+)\n',source,re.M))
+        sections = []
+        for i, header in enumerate(headers):
+            name = header.group(1).split('\t',1)[0]
+            if name.startswith('Android/'): continue
+            end = headers[i+1].start() if i+1<len(headers) else len(source)
+            section = source[header.start():end]
+            section = re.sub(r'\ndiff --git [^\n]*\n(?:index [^\n]*\n|new file mode [^\n]*\n)*$', '\n',section)
+            mode = 'new file mode 100644\n' if section.startswith('--- /dev/null') else ''
+            sections.append('diff --git a/'+name+' b/'+name+'\n'+mode+section)
+        assert headers, f'No patch sections parsed: {patch.name}'
+        texts.append(''.join(sections))
+    paths = {n.split('\t',1)[0] for t in texts for n in re.findall(r'^--- a/(.+)$', t, re.M)}
     with tempfile.TemporaryDirectory(prefix='item-patch-check-', dir=root.parent) as scratch:
         dest = Path(scratch)
         assert dest.resolve().parent == root.parent.resolve()
@@ -28,10 +44,28 @@ for repo, folder in ((engine, root/'patches'), (engine/'libultraship', root/'pat
             p.write_bytes(old.stdout.replace(b'\r\n', b'\n'))
         for patch, text in zip(patches, texts):
             if not text.strip(): continue
+            # Retain the last valid stack state even if the next patch fails.
+            snapshot = root/'war-table-compile/pinned-engine'
+            if repo.name == 'libultraship': snapshot = snapshot/'libultraship'
+            for name in paths:
+                if (dest/name).is_file():
+                    target = snapshot/name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((dest/name).read_bytes())
             # Feed LF patches through stdin, retaining strict context matching used by apply_patches.sh.
             print('Checking', patch.name, flush=True)
             subprocess.run(['git', '-C', str(dest), 'apply', '--unsafe-paths', '--whitespace=nowarn', '-'],
                            input=text.encode(), check=True)
+        # Keep only patched files for read-only local syntax checks. Headers in
+        # this overlay precede the sibling source's include paths.
+        snapshot = root/'war-table-compile/pinned-engine'
+        if repo.name == 'libultraship': snapshot = snapshot/'libultraship'
+        for name in paths:
+            p = dest/name
+            if p.is_file():
+                target = snapshot/name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(p.read_bytes())
         for patch, text in reversed(list(zip(patches, texts))):
             if not text.strip(): continue
             subprocess.run(['git', '-C', str(dest), 'apply', '-R', '--unsafe-paths', '--whitespace=nowarn', '-'],

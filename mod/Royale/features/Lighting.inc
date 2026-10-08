@@ -21,8 +21,8 @@ ShadowKindInfo gShadowKinds[kShadowKinds] = {
     { "ShadowAllies", "Allies and pets (Maya, Lilo, the cat, Avriella, hired allies)", true },
     { "ShadowBosses", "Mini bosses and bosses", true },
     { "ShadowCarts", "Carts", true },
-    { "ShadowProps", "Rocks, boulders and standing stones", false },
-    { "ShadowChests", "Chests and loot on the ground", false },
+    { "ShadowProps", "Rocks, boulders and standing stones", true },
+    { "ShadowChests", "Chests and loot on the ground", true },
 };
 
 struct ShadowConfig {
@@ -357,6 +357,7 @@ struct ShadowMapState {
     float cover = 0.0f;         // 0 in the open, 1 under a roof (no sun shadow), eased
     uint32_t coverAt = 0;
     int size = 0;
+    float softness = -1.0f;
     std::vector<uint8_t> map;
 };
 std::unordered_map<uint64_t, std::unique_ptr<ShadowMapState>> gShadowMaps;
@@ -506,6 +507,45 @@ bool CoveredFrom(PlayState* play, const sh::V3& at, const sh::V3& toward) {
     return BgCheck_EntityLineTest1(&play->colCtx, &a, &b, &hit, &poly, true, true, true, true, &bgId) != 0;
 }
 
+// Fixed global work caps: actual collision triangles never bridge missing floors or steps.
+int gShadowReceiverProbes = 0, gShadowReceiverTriangles = 0;
+bool MeasureShadowReceiver(PlayState* play, const sh::MapFrame& f, int grid, std::vector<sh::V3>& vertices) {
+    vertices.clear();
+    struct Hit { CollisionPoly* poly; s32 bgId; };
+    Hit hits[121]; int hitCount = 0;
+    const int steps = std::clamp(grid + 1, 2, sh::kMaxGrid + 1);
+    for (int j = 0; j <= steps; ++j) {
+        for (int i = 0; i <= steps; ++i) {
+            if (gShadowReceiverProbes >= sh::kReceiverProbeBudget) return !vertices.empty();
+            ++gShadowReceiverProbes;
+            Vec3f probe = { f.cx - f.half + 2.0f * f.half * i / steps, f.groundY + 3.0f,
+                            f.cz - f.half + 2.0f * f.half * j / steps };
+            CollisionPoly* poly = nullptr; s32 bgId = BGCHECK_SCENE;
+            const float y = BgCheck_EntityRaycastFloor3(&play->colCtx, &poly, &bgId, &probe);
+            if (!poly || y <= BGCHECK_Y_MIN + 1.0f || y > f.groundY + 3.0f) continue;
+            bool seen = false;
+            for (int h = 0; h < hitCount; ++h) if (hits[h].poly == poly && hits[h].bgId == bgId) { seen = true; break; }
+            if (seen) continue;
+            hits[hitCount++] = { poly, bgId };
+            Vec3f world[3];
+            // The helper reads dyna.vtxList, already transformed by the collision system.
+            CollisionPoly_GetVerticesByBgId(poly, bgId, &play->colCtx, world);
+            sh::V3 tri[3], clipped[12];
+            for (int k = 0; k < 3; ++k) tri[k] = { world[k].x, world[k].y, world[k].z };
+            const int n = sh::ClipReceiver(f, tri, clipped);
+            for (int k = 1; k + 1 < n; ++k) {
+                if (gShadowReceiverTriangles >= sh::kReceiverTriangleBudget ||
+                    vertices.size() / 3 >= sh::kReceiverTrianglesPerMap) return !vertices.empty();
+                const sh::V3 ab = sh::Sub(clipped[k], clipped[0]), ac = sh::Sub(clipped[k + 1], clipped[0]);
+                if (std::fabs(ab.x * ac.z - ab.z * ac.x) < 0.01f) continue;
+                vertices.push_back(clipped[0]); vertices.push_back(clipped[k]); vertices.push_back(clipped[k + 1]);
+                ++gShadowReceiverTriangles;
+            }
+        }
+    }
+    return !vertices.empty();
+}
+
 // One shadow: paint (or reuse) its map, then lay it on the ground.
 bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const sh::ShadowLight& light, float alpha, const sh::Settings& set, int slot, bool farAway) {
     const uint64_t id = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(s.key)) << 2) | static_cast<uint64_t>(lightIndex & 3);
@@ -514,7 +554,7 @@ bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
     ShadowMapState& m = *st;
     const uint32_t frame = play->state.frames;
     const float soft = gShadowCfg.softness / 100.0f;
-    const bool fresh = m.seen + 2 < frame || m.size != set.mapSize;
+    const bool fresh = m.seen + 2 < frame || m.size != set.mapSize || m.softness != soft;
     m.seen = frame;
     // Repaint when it moves or animates (far ones only every few frames), or when the light turns.
     const bool turned = sh::Dot(m.frame.toward, light.toward) < 0.9995f;
@@ -524,6 +564,7 @@ bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
     if (fresh || ((s.moving || moved || turned) && due)) {
         m.frame = sh::PlanMap(s.caps, s.n, light.toward, s.floorY, soft);
         m.size = set.mapSize;
+        m.softness = soft;
         m.map.resize(static_cast<size_t>(m.size) * m.size);
         sh::Rasterize(m.frame, s.caps, s.n, soft, m.map.data(), m.size);
         m.painted = frame;
@@ -534,36 +575,26 @@ bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
 
     // The ground under it.
     const sh::MapFrame& f = m.frame;
-    GroundPatch g;
-    if (!MeasurePatch(play, f.cx, f.cz, f.half, set.grid, f.groundY + 30.0f, &g)) return false;
-    const int V = g.cols + 1, count = V * (g.rows + 1);
+    std::vector<sh::V3> receiver;
+    if (!MeasureShadowReceiver(play, f, set.grid, receiver)) return false;
+    const int count = static_cast<int>(receiver.size());
     Vtx* v = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * count));
     if (v == nullptr) return false;
-    // Vertices relative to the middle of the map: the frames the game blends in between slide the whole shadow along with its caster.
-    const float ox = g.ix0 * g.cell, oz = g.iz0 * g.cell;
     const float mx = f.cx, my = f.groundY, mz = f.cz;
-    const float lift = 1.5f + 0.04f * g.cell;   // a hair over the ground; more on a coarse mesh, whose straight squares can cut under a bump
-    for (int j = 0; j <= g.rows; j++)
-        for (int i = 0; i <= g.cols; i++) {
-            const float x = ox + i * g.cell, z = oz + j * g.cell;
-            float y = g.y[j * V + i];
-            const bool none = y <= kNoFloor;
-            if (none) y = f.groundY;
-            float su, tv;
-            sh::MapUV(f, x, y, z, &su, &tv);
-            const float a = none ? 0.0f : alpha * sh::LedgeFade(y, f.groundY);
-            Vtx& o = v[j * V + i];
-            o.v.ob[0] = static_cast<s16>(std::lround(x - mx));
-            o.v.ob[1] = static_cast<s16>(std::lround(y - my + lift));
-            o.v.ob[2] = static_cast<s16>(std::lround(z - mz));
-            o.v.flag = 0;
-            // Texture coordinates in texels (S10.5), clamped well inside the renderer's 16 bits.
-            o.v.tc[0] = static_cast<s16>(std::lround(std::clamp(su * m.size, -500.0f, 500.0f) * 32.0f));
-            o.v.tc[1] = static_cast<s16>(std::lround(std::clamp(tv * m.size, -500.0f, 500.0f) * 32.0f));
-            o.v.cn[0] = o.v.cn[1] = o.v.cn[2] = 255;
-            o.v.cn[3] = static_cast<u8>(std::clamp(a * 255.0f, 0.0f, 255.0f));
-        }
-    if (!GfxHasRoom(play, 24 + g.rows * (4 + g.cols))) return false;
+    for (int i = 0; i < count; ++i) {
+        const auto& p = receiver[i];
+        float su, tv; sh::MapUV(f, p.x, p.y, p.z, &su, &tv);
+        Vtx& o = v[i];
+        o.v.ob[0] = static_cast<s16>(std::lround(p.x - mx));
+        o.v.ob[1] = static_cast<s16>(std::lround(p.y - my + 1.5f));
+        o.v.ob[2] = static_cast<s16>(std::lround(p.z - mz));
+        o.v.flag = 0;
+        o.v.tc[0] = static_cast<s16>(std::lround(std::clamp(su * m.size, 0.0f, float(m.size)) * 32.0f));
+        o.v.tc[1] = static_cast<s16>(std::lround(std::clamp(tv * m.size, 0.0f, float(m.size)) * 32.0f));
+        o.v.cn[0] = o.v.cn[1] = o.v.cn[2] = 255;
+        o.v.cn[3] = static_cast<u8>(std::clamp(alpha * sh::HeightFade(f.groundY - p.y) * 255.0f, 0.0f, 255.0f));
+    }
+    if (!GfxHasRoom(play, 24 + count / 3 + (count + 29) / 30)) return false;
     int shift = 4;
     while ((1 << shift) < m.size) shift++;
     FrameInterpolation_RecordOpenChild(s.key, 0x5AD0 + lightIndex);
@@ -574,7 +605,13 @@ bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
     Matrix_Translate(mx, my, mz, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     CLOSE_DISPS(play->state.gfxCtx);
-    DrawPatch(play, v, g.cols, g.rows);
+    OPEN_DISPS(play->state.gfxCtx);
+    for (int first = 0; first < count; first += 30) {
+        const int batch = std::min(30, count - first);
+        gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v + first), batch, 0);
+        for (int k = 0; k < batch; k += 3) gSP1Triangle(POLY_XLU_DISP++, k, k + 1, k + 2, 0);
+    }
+    CLOSE_DISPS(play->state.gfxCtx);
     FrameInterpolation_RecordCloseChild();
     return true;
 }
@@ -671,6 +708,7 @@ void DrawShadowsAndLights(PlayState* play) {
 
     // Reserve a separate allowance for casters, so light pools cannot starve the local shadow.
     gShadowFloor.BeginFrame(frame, 256);
+    gShadowReceiverProbes = gShadowReceiverTriangles = 0;
     // The shadows.
     static std::vector<ShadowSource> sources;
     GatherShadowSources(play, sources, set.range);

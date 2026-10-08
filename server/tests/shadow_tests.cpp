@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+#include <limits>
 using namespace royale::shadows;
 void require(bool ok, const char* what) { if (!ok) { std::cerr << "shadow test failed: " << what << "\n"; std::exit(1); } }
 
@@ -114,6 +115,46 @@ int main() {
         require(s2 < s1 && std::fabs(t1 - t2) < 1e-4f, "raised ground looks up the map further from the light");
         require(LedgeFade(0, 0) == 1.0f && LedgeFade(100, 0) == 0.0f, "no shadow on ground far above or below");
         require(RangeFade(0, 1000) == 1.0f && RangeFade(1000, 1000) == 0.0f && RangeFade(900, 1000) > 0.0f, "range fade");
+    }
+    // Raster AA survives zero softness and subtexel movement; physical blur still stretches at low sun.
+    {
+        Capsule c{{0, 0, 0}, {0, 0, 0}, 0.3f};
+        MapFrame f{0, 0, 12, 0, {0, 1, 0}};
+        std::fill(map.begin(), map.end(), uint8_t{0});
+        Rasterize(f, &c, 1, 0, map.data(), 32);
+        require(Coverage(map, 1) > 0, "subtexel hard caster survives between pixel centres");
+        require(Penumbra(10, 20, -1) == 0, "negative softness safely clamps");
+        c = {{0, 60, 0}, {0, 60, 0}, 10};
+        const V3 t = Norm({std::sqrt(1 - kMinElevation * kMinElevation), kMinElevation, 0});
+        const MapFrame g = PlanMap(&c, 1, t, 0, 2, 1000);
+        require(g.half > (c.r + Penumbra(c.r, 60, 2)) / t.y, "low sun map pads the stretched penumbra");
+    }
+    // Receivers keep actual triangles; clipping cannot invent connecting faces across holes or steps.
+    {
+        MapFrame f{0, 0, 10, 0, Norm({1, 1, 0})};
+        V3 out[12];
+        V3 roof[3] = {{-5, 20, -5}, {5, 20, -5}, {0, 20, 5}};
+        require(ClipReceiver(f, roof, out) == 0, "above-caster roof rejected without depth masking");
+        V3 floor[3] = {{-30, -10, -30}, {30, -10, -30}, {0, -10, 30}};
+        const int n = ClipReceiver(f, floor, out);
+        require(n >= 3 && n <= 9, "sloped projected footprint bounded polygon");
+        for (int i = 0; i < n; ++i) {
+            float u, v; MapUV(f, out[i].x, out[i].y, out[i].z, &u, &v);
+            require(u >= -1e-5f && u <= 1.00001f && v >= -1e-5f && v <= 1.00001f, "receiver clips in projected UV space");
+            require(std::fabs(out[i].y + 10) < 1e-4f, "clipping preserves actual floor plane");
+        }
+        V3 missing[3] = {{0, std::numeric_limits<float>::quiet_NaN(), 0}, {1, 0, 0}, {0, 0, 1}};
+        require(ClipReceiver(f, missing, out) == 0, "missing floor cannot become a connecting triangle");
+        MapFrame overhead{0, 0, 10, 0, {0, 1, 0}};
+        V3 lowerStep[3] = {{-5, -30, -5}, {0, -30, -5}, {-5, -30, 0}};
+        V3 upperStep[3] = {{1, 0, 1}, {5, 0, 1}, {1, 0, 5}};
+        require(ClipReceiver(overhead, lowerStep, out) == 3 && out[0].y == -30, "lower step stays its own plane");
+        require(ClipReceiver(overhead, upperStep, out) == 3 && out[0].y == 0, "upper step stays its own plane");
+        V3 abyss[3] = {{-5, -500, -5}, {5, -500, -5}, {0, -500, 5}};
+        require(ClipReceiver(f, abyss, out) == 0, "deep floor bounded before conversion to game vertices");
+        require(kReceiverProbeBudget == 256 && kReceiverTrianglesPerMap <= kReceiverTriangleBudget,
+                "receiver work has fixed global and per-map caps");
+        require(Preset(Quality::Low).mapSize == 32 && Preset(Quality::Low).maxMaps == 4, "Low performance caps unchanged");
     }
     // Link's body: valid joints give capsules of sensible size; zeros (never drawn) are rejected.
     {

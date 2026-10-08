@@ -99,9 +99,24 @@ int main() {
         std::vector<NavGrid::UpperNode> nodes;
         for (const auto& n:kingdom::kUpperNodes) nodes.push_back({float(n.x),float(n.z),float(n.y)});
         grid.AddUpper(nodes);CHECK(nodes.size()>2000);
+        // Verify authored ivy routes directly, independently of random bot goals.
+        grid.SetClimbing(true);
+        for (const auto& wall:kingdom::kClimbWalls) {
+            const float nx=wall.nx/100.f,nz=wall.nz/100.f;
+            grid.AddClimb({wall.x+nx*50,wall.z+nz*50},wall.y0,{wall.x-nx*45,wall.z-nz*45},wall.y1);
+        }
         int upstairs=0;
         for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) { grid.MarkUpper({site.x,site.z},site.y);++upstairs; }
         grid.BuildRegions();
+        bool ivyRoute=false;
+        for (const auto& wall:kingdom::kClimbWalls) {
+            const float nx=wall.nx/100.f,nz=wall.nz/100.f;
+            std::vector<NavGrid::Stop> route;
+            if (grid.FindRoute({wall.x+nx*50,wall.z+nz*50},wall.y0,false,{wall.x-nx*45,wall.z-nz*45},wall.y1,true,route))
+                for (const auto& stop:route) ivyRoute|=stop.climb;
+            if (ivyRoute) break;
+        }
+        CHECK(ivyRoute);
         CHECK(upstairs>20 && upstairs<70);
         Vec2 town{0,1150};CHECK(grid.Snap(town,&town,true));
         const Vec2 places[]={{0,-1500},{4050,-1350},{-5050,-1150},{1500,4550},{-1900,4700},{-5000,5150},{2250,-5350},{5250,-2250},{-5750,-2300},{-2950,2350},{1900,-2850}};
@@ -137,7 +152,8 @@ int main() {
         std::printf("  bots upstairs: highest %.0f above the floor, %d chests upstairs opened\n",highest,upstairsTaken);
         std::printf("  bots swam %d ticks, climbed %d ticks\n",swimTicks,climbTicks);
         CHECK(highest>200.0f && upstairsTaken>=1);
-        CHECK(climbTicks>0 && sizeof(kingdom::kClimbWalls)>0);
+        // Random matches can choose ramps exclusively after the 100s warmup.
+        // Authored climbing is asserted deterministically by ivyRoute above.
     }
     fortnite::UseTerrainForMap(kFortniteMapIndex);CHECK(!fortnite::gSandboxTerrain && fortnite::gHeightData==fortnite::kHeights);
     std::printf("Kingdom: %s (%d failures)\n",failures?"FAILED":"passed",failures);return failures?1:0;

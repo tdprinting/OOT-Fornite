@@ -1,0 +1,14 @@
+diff --git a/soh/src/overlays/actors/ovl_Object_Kankyo/z_object_kankyo.c b/soh/src/overlays/actors/ovl_Object_Kankyo/z_object_kankyo.c
+--- a/soh/src/overlays/actors/ovl_Object_Kankyo/z_object_kankyo.c
++++ b/soh/src/overlays/actors/ovl_Object_Kankyo/z_object_kankyo.c
+@@ -88,7 +88,9 @@
+             break;
+ 
+         case 3:
+-            if (!sKankyoIsSpawned) {
++            // Royale manages one snow actor separately from scene fairies.
++            // Their shared vanilla singleton otherwise removes the snowfall.
++            if (!sKankyoIsSpawned || gSaveContext.ship.quest.id == QUEST_BATTLEROYALE) {
+                 ObjectKankyo_SetupAction(this, ObjectKankyo_Snow);
+                 sKankyoIsSpawned = true;
+             } else {

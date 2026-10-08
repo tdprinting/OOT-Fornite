@@ -332,6 +332,7 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::HopR: return AnimSeq(RA(fighter_Rside_jump), false).Add(RA(fighter_Rside_jump_end));
         case Anim::Backflip: return AnimSeq(RA(fighter_backturn_jump), false).Add(RA(fighter_backturn_jump_end));
         case Anim::Guard:
+            if (player != nullptr && player->currentShield == PLAYER_SHIELD_NONE) return AnimSeq(RA(normal_wait), true);
             if (grip == Grip::TwoHand || grip == Grip::Hammer) return AnimSeq(RA(fighter_defense_long), false).Add(RA(fighter_defense_long_wait), true);
             return AnimSeq(RA(anchor_waitR2defense), false).Add(RA(anchor_waitR_defense_wait), true);
         case Anim::ItemGet: return AnimSeq(RA(demo_get_itemB), false);
@@ -345,7 +346,7 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
         case Anim::SideR: return AnimSeq(SideStepFor(grip, false), true);
         case Anim::Back: return AnimSeq(grip == Grip::Bow || grip == Grip::Hook ? SideStepFor(grip, false) : RA(anchor_back_walk), true);
-        case Anim::Stance: return AnimSeq(StanceFor(grip), true);
+        case Anim::Stance: return AnimSeq(grip == Grip::OneHand && player != nullptr && player->currentShield == PLAYER_SHIELD_NONE ? RA(normal_wait) : StanceFor(grip), true);
         case Anim::Emote1: return AnimSeq(RA(demo_bikkuri), false);     // startled: "Wow!"
         case Anim::Emote2: return AnimSeq(RA(demo_jibunmiru), false);   // looks at his own hands
         case Anim::Emote3: return AnimSeq(RA(demo_kaoage), false).Add(RA(demo_kaoage_wait), true);   // looks up
@@ -1090,6 +1091,8 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
 // The player being drawn right now if what they hold is the Gilded Sword (the game's sword limbs ask the mod to draw it: OnPlayerCustomSword).
 const Player* gGildedPlayer = nullptr;
 
+void DrawVictoryCrown(PlayState* play, const Player* player, uint16_t id);
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
@@ -1099,6 +1102,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
     gGildedPlayer = st != nullptr && st->weapon == royale::ItemId::GildedSword ? reinterpret_cast<const Player*>(actor) : nullptr;
     Player_Draw(actor, play);
+    if (st != nullptr) DrawVictoryCrown(play,reinterpret_cast<const Player*>(actor),st->id);
     gGildedPlayer = nullptr;
     if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
     gSaveContext.equips.buttonItems[0] = original;

@@ -56,4 +56,8 @@ assets/chuchu/*.blend1
 /build-chuchu-tests/
 
 /build/
+/war-table-check-output.log
+assets/scenery/*.blend1
+assets/victory/*.blend1
 assets/maps/hyrule_riftlands/*.blend1
+

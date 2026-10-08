@@ -1018,6 +1018,7 @@ u8 RealItemFor(royale::ItemId w) {
         case ItemId::Bombs: return ITEM_BOMB;
         case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
         case ItemId::DekuNuts: return ITEM_NUT;
+        case ItemId::Hookshot: return ITEM_HOOKSHOT;
         default: return ITEM_NONE;
     }
 }
@@ -1064,13 +1065,14 @@ royale::ItemId WornGear(const royale::HudState& hud, royale::GearSlot slot) {
     return (hud.inv.gearMask & (1 << i)) ? static_cast<royale::ItemId>(hud.inv.gear[i].item) : royale::ItemId::Count;
 }
 void SyncLocalDress(Player* player, const royale::HudState& hud) {
-    gLocalDress.on = gSession.Joined() && IsLive(hud) && hud.selfAlive && InField();
+    gLocalDress.on = (LiveAndAlive(hud) || VictoryWalk(hud)) && InField();
     gSelfInvulnLeft = hud.invulnLeft;
     if (!gLocalDress.on) return;
     gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
     gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
     gLocalDress.weapon = hud.weapon;
     const s8 shield = hud.hasShield ? PlayerShieldFor(hud.shield) : PLAYER_SHIELD_NONE;
+    if (!hud.hasShield) player->stateFlags1 &= ~PLAYER_STATE1_SHIELDING;
     if (player->currentShield != shield && !(player->stateFlags1 & PLAYER_STATE1_SHIELDING)) {
         Inventory_ChangeEquipment(EQUIP_TYPE_SHIELD, static_cast<u16>(shield));   // the pause screen and the game's own checks agree (put back after the match)
         player->currentShield = shield;
@@ -1129,9 +1131,9 @@ void HoldFuse(Player* player) {
 }
 int gUseRetry = 0;
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
-    ApplyItemCvars(gSession.Joined() && IsLive(hud));
+    ApplyItemCvars(gSession.Joined() && (IsLive(hud) || VictoryWalk(hud)));
     SyncLocalDress(player, hud);
-    const bool on = LiveAndAlive(hud) && InField() && !gSkydiving && gEmote.id < 0;
+    const bool on = (LiveAndAlive(hud) || VictoryWalk(hud)) && InField() && !gSkydiving && gEmote.id < 0;
     if (!on) {
         if (gLocalLookApplied && !(gSession.Joined() && IsLive(hud))) { gSaveContext.equips.buttonItems[0] = gSavedButtonItem0; gLocalLookApplied = false; gLocalWeaponShown = static_cast<royale::ItemId>(255); }
         return;
@@ -1247,6 +1249,9 @@ void OnPlayerUpdate() {
     if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
         LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
         if (player->skelAnime.animation != (void*)hang) LinkAnimation_PlayLoop(gPlayState, &player->skelAnime, hang);
+        // Load the hanging joints before Link and his glider sample the hands;
+        // the normal falling update can replace the animation every frame.
+        LinkAnimation_Update(gPlayState, &player->skelAnime);
     }
     UpdateEmote(player, hud);
     // Safety net: a living player in a live match is never invisible (the flag is set only for emotes and eliminated spectators).
@@ -1273,7 +1278,7 @@ void OnPlayerUpdate() {
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
     bool dead = hud.haveSelf && !hud.selfAlive && (IsLive(hud) || hud.state == royale::MatchState::Ending);
-    if (IsLive(hud) && hud.haveSelf) {
+    if ((IsLive(hud) || VictoryWalk(hud)) && hud.haveSelf) {
         if (!gHealthOverridden) {
             // Remember the player's real values so they can be put back afterwards (see RestoreHealth).
             gSavedCapacity = gSaveContext.healthCapacity;

@@ -12,6 +12,8 @@
 | Storm wall, sky, fog, wind, tornado | `Atmosphere.inc` |
 | Flying items and projectiles | `Projectiles.inc` |
 | HUD, weather controls, item icons, emote wheel | `Hud.inc` |
+| Original OoT heart/shield/magic textures | `OotVitals.inc` |
+| Winner's wearable crown | `VictoryCrown.inc` |
 | Logo, banners, chest/boss/hit effects | `Effects.inc` |
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
@@ -35,6 +37,9 @@
 Existing focused files: `RoyaleSession.h` (network lifecycle), `RoyaleBosses.h` (boss presentation), `RoyaleLobbyFish.h` (aquarium), `RoyaleLobbyPets.h` (lobby pets), `RoyaleWarTable.h` (native menu). Server rules: `server/match.h`; bots: `server/bot.h`; network: `shared/protocol.h` and `client/game_client.h`. Generated asset arrays are not authoring sources.
 
 ## Focused workflow
+
+Native menu: start at `war_table/INDEX.md` for rendering, input, controls or save work.
+Actual asset relief: `shared/asset_relief.h` and `patches/libultraship/0006-source-texture-relief.patch`.
 
 1. Find the feature here. Search its file: `rg -n "symbol" mod/Royale/features/Water.inc`.
 2. Read the function and immediate dependencies. Do not preload every feature, generated header, engine source, or historical design doc.
