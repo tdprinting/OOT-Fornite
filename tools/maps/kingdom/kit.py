@@ -33,6 +33,37 @@ class Frame:
     def dir(self, lx, lz):
         return (lx * self.c - lz * self.s, lx * self.s + lz * self.c)
 
+def roofs_overlap(a, b):
+    """Conservative OBB overlap, including eaves, in game x/z coordinates."""
+    def corners(q):
+        x,z,hw,hd,yaw=q
+        return Frame(x,z,yaw).outline(rect(0,0,2*hw,2*hd))
+    A, B = corners(a), corners(b)
+    for polygon in (A,B):
+        for i in range(4):
+            x,z=polygon[i]; xx,zz=polygon[(i+1)%4]
+            nx,nz=zz-z,x-xx
+            aa=[nx*x+nz*z for x,z in A]; bb=[nx*x+nz*z for x,z in B]
+            if max(aa)<=min(bb) or max(bb)<=min(aa): return False
+    return True
+
+def clear_site(w, x, z, W, D, yaw, name):
+    # Keep the same houses in their neighbourhoods; only resolve intersecting eaves.
+    managed = name.startswith(('Clock Town house','Kakariko house','Snowpeak cabin','Ordon house','Gerudo house')) or name in ('Ranch house','Lab tower','Kakariko lookout')
+    if not managed: return x,z
+    obstacles=[(bx,bz,hw+35,hd+35,ba) for bx,bz,hw,hd,fy,ba in w.buildings]
+    if name.startswith('Ordon house'):
+        obstacles.append((-5700,5900,260,260,math.atan2(-700,-750)))
+    if name.startswith('Kakariko house'):
+        obstacles.append((4130,-790,230,230,0))
+    for radius in range(0,1001,25):
+        for k in range(16 if radius else 1):
+            a=2*math.pi*k/16
+            px,pz=x+radius*math.cos(a),z+radius*math.sin(a)
+            candidate=(px,pz,W/2+50,D/2+50,yaw)
+            if not any(roofs_overlap(candidate,b) for b in obstacles): return px,pz
+    raise ValueError('No clear building site for '+name)
+
 STOREY = 270
 WALL = 26
 DOOR = 160
@@ -118,6 +149,7 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
     """An enterable building: stone footing, walls with doorways front and back, windows, upper floors reached by an inside ramp,
     and a roof (pitched, or flat with a parapet and a ramp up to it). Everything you can bump into is scene collision."""
     st = style or HouseStyle()
+    x,z = clear_site(w,x,z,W,D,yaw,name)
     f = Frame(x, z, yaw)
     lo, hi = ground_range(x, z, W + 60, D + 60, yaw)
     y0 = (hi + 14) if floor_y is None else floor_y
@@ -129,9 +161,15 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
         dx, dz = f.p(0, side * (D / 2 + 15))
         gy = H(dx, dz)
         if y0 - gy > 25:
-            run = max(70, (y0 - gy) / 0.55)
-            ex, ez = f.p(0, side * (D / 2 + 15 + run))
-            w.ramp(dx, dz, ex, ez, DOOR + 40, y0, H(ex, ez) - 5, st.base, base=min(H(ex, ez), gy) - 60)
+            # Find the landing on the actual baked terrain; keep the full ramp walkable.
+            run = 70.0
+            for _ in range(40):
+                ex, ez = f.p(0, side * (D / 2 + 15 + run))
+                end_y = H(ex, ez) - 3
+                if abs(y0 - end_y) / run <= 0.55: break
+                run += 40.0
+            w.ramp(dx, dz, ex, ez, DOOR + 40, y0, end_y, st.base, base=min(end_y, gy) - 60)
+            w.walkways.append((dx, dz, ex, ez, (DOOR + 40) / 2, y0, end_y))
     w.buildings.append((x, z, W / 2 + 15, D / 2 + 15, y0, yaw))
     w.interior.append(_aabb(f, W, D, y0 - 5, y0 + storeys * STOREY + 10))
     climb_edge = (1,) if st.climb else ()
@@ -175,17 +213,36 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
         yb = y0 + k * STOREY
         run = max(STOREY / 0.68, 300)
         z0 = -D / 2 + WALL + 20; z1 = z0 + run
-        if z1 > D / 2 - WALL - 40:   # too short a room: turn the ramp along the back wall instead
-            run = min(run, W - 2 * WALL - 60)
-        hole = slab_notched(W - 2 * WALL, D - 2 * WALL, -(W / 2 - WALL), -(W / 2 - WALL) + ramp_w + 10, z0 - 10, z1 + 10)
         last = k == storeys
-        w.prism(f.outline(hole), yb - 20, yb, st.floor if not last else st.base, surf='wood' if not last else 'stone', top_mat=st.floor)
-        ax, az = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z1)
-        bx, bz = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z0)
-        w.ramp(ax, az, bx, bz, ramp_w, yb - STOREY, yb, st.floor, surf='wood', base=yb - STOREY)
-        # a railing along the stairwell (drawn)
-        px, pz = f.p(-(W / 2 - WALL) + ramp_w + 12, (z0 + z1) / 2)
-        w.box(px, yb, pz, 8, 70, z1 - z0, st.trim, yaw, col='none')
+        material = st.floor if not last else st.base
+        surface = 'wood' if not last else 'stone'
+        if z1 > D / 2 - WALL - 40:
+            # Two flights around a corner, entirely inside the room, with a landing.
+            rw=60.0 if min(W,D)<420 else 80.0; hw=W/2-WALL; hd=D/2-WALL
+            lx=-hw+rw/2+5; bz=-hd+rw/2+5
+            start_z=hd-20; middle_z=bz+rw/2; end_x=hw-rw-10
+            first_run=start_z-middle_z; second_run=end_x-(lx+rw/2)
+            slope=STOREY/(first_run+second_run)
+            if slope>0.68: raise ValueError('Room too small for walkable stairs: '+name)
+            mid_y=yb-STOREY+slope*first_run
+            floor=[(-hw+rw+10,hd),(hw,hd),(hw,-hd),(end_x,-hd),(end_x,-hd+rw+10),(-hw+rw+10,-hd+rw+10)]
+            w.prism(f.outline(floor),yb-20,yb,material,surf=surface,top_mat=st.floor)
+            ax,az=f.p(lx,start_z); bx,bzz=f.p(lx,middle_z)
+            w.ramp(ax,az,bx,bzz,rw,yb-STOREY,mid_y,st.floor,surf='wood',base=yb-STOREY)
+
+            mx,mz=f.p(lx,bz); w.box(mx,mid_y-20,mz,rw,20,rw,st.floor,yaw,surf='wood')
+            ax,az=f.p(lx+rw/2,bz); bx,bzz=f.p(end_x,bz)
+            w.ramp(ax,az,bx,bzz,rw,mid_y,yb,st.floor,surf='wood',base=mid_y-20)
+
+        else:
+            hole = slab_notched(W - 2 * WALL, D - 2 * WALL, -(W / 2 - WALL), -(W / 2 - WALL) + ramp_w + 10, z0 - 10, z1 + 10)
+            w.prism(f.outline(hole), yb - 20, yb, material, surf=surface, top_mat=st.floor)
+            ax, az = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z1)
+            bx, bz = f.p(-(W / 2 - WALL) + ramp_w / 2 + 5, z0)
+            w.ramp(ax, az, bx, bz, ramp_w, yb - STOREY, yb, st.floor, surf='wood', base=yb - STOREY)
+            # Upper routes come from collision; these walkways must not replace the lower floor.
+            px, pz = f.p(-(W / 2 - WALL) + ramp_w + 12, (z0 + z1) / 2)
+            w.box(px, yb, pz, 8, 70, z1 - z0, st.trim, yaw, col='none')
     # The roof
     if st.roof_kind == 'gable':
         rise = roof_rise if roof_rise is not None else 0.5 * W
@@ -243,6 +300,7 @@ def spiral_tower(w, x, z, size, height, yaw=0.0, wall='castle_stone', floor='cob
                  cap='spire', clock=False, y0=None, far=True):
     """A square hollow tower: a doorway at the foot, ramps spiralling up the inside walls to a look-out floor at the top under a roof.
     One outside face is covered in ivy and can be climbed straight up."""
+    x,z = clear_site(w,x,z,size,size,yaw,name)
     f = Frame(x, z, yaw)
     lo, hi = ground_range(x, z, size + 40, size + 40, yaw)
     y0 = hi + 12 if y0 is None else y0

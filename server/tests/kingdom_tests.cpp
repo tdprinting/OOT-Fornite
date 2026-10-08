@@ -67,6 +67,11 @@ int main() {
     // Drawing data: batches stay inside the vertex array, textures exist and are 128 x 128 RGBA5551 with explicit big-endian bytes.
     static_assert(sizeof(kingdom::kTextures[0])==128*128*2,"one 128 x 128 RGBA5551 texture");
     for (const auto& batch:kingdom::kBatches) {
+        for (size_t i=batch.first; i<batch.first+batch.count; ++i) {
+            const auto& v=kingdom::kDrawVertices[i];
+            const float dx=float(v.x)-batch.x,dy=float(v.y)-batch.y,dz=float(v.z)-batch.z;
+            CHECK(dx*dx+dy*dy+dz*dz <= float(batch.radius)*batch.radius);
+        }
         CHECK(batch.count%3==0 && batch.first+batch.count<=sizeof(kingdom::kDrawVertices)/sizeof(kingdom::kDrawVertices[0]));
         CHECK(batch.texture<sizeof(kingdom::kTextures)/sizeof(kingdom::kTextures[0]) && batch.reach>=4000);
     }

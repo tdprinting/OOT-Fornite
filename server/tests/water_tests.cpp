@@ -6,6 +6,23 @@
 using namespace royale::water;
 void require(bool ok, const char* what) { if (!ok) { std::cerr << "water test failed: " << what << "\n"; std::exit(1); } }
 int main() {
+    for (float amp : {0.0f, 0.8f, 1.9f}) for (float chop : {0.0f, 0.5f, 1.0f}) {
+        PreparedSwell prepared(42.0f, amp, chop);
+        for (int i = 0; i < 200; ++i) {
+            const float x = i * 73.0f - 7000, z = i * 51.0f - 6000;
+            const auto p = prepared.Sample(x, z);
+            float h = 0, ox = 0, oz = 0;
+            const float q = SwellSteepness(amp, chop);
+            for (const auto& w : kSwell) {
+                const float k = kTau/w.length, dx = std::cos(w.angle), dz = std::sin(w.angle);
+                const float phase = k*(dx*x + dz*z) - k*w.speed*42.0f;
+                h += w.amp*amp*std::sin(phase);
+                ox += q*w.amp*amp*dx*std::cos(phase); oz += q*w.amp*amp*dz*std::cos(phase);
+            }
+            require(std::fabs(p.h-h)<0.001f && std::fabs(p.ox-ox)<0.001f && std::fabs(p.oz-oz)<0.001f,
+                    "prepared swell preserves the original wave geometry");
+        }
+    }
     // The swell: unit normals, crests that never loop over, heights within the waves' total, nothing at zero amplitude.
     float total = 0.0f;
     for (const GerstnerWave& w : kSwell) total += w.amp;
