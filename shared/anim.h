@@ -21,6 +21,9 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         OpenChest = 29,   // kicks a chest open
                         Jump = 30,        // a jump (C-Up)
                         Emote6 = 31, Emote7 = 32, Emote8 = 33,   // the emote wheel's newer gestures (older clients draw them as Idle)
+                        Swim = 34,        // swimming strokes (bots; older clients draw them as Idle)
+                        Tread = 35,       // treading water
+                        Climb = 36,       // going up a cliff or an ivy wall, hand over hand
                         Count };
 
 // The moves that dodge like a roll does: the server gives them the same moment of safety.

@@ -106,14 +106,21 @@ struct StormPhaseDef {
     float damagePerSec;      // hearts per second outside the safe zone
 };
 
+// Overall damage dials, applied in Match::Damage on top of everything else. 1.0 = the raw numbers in combat.h, boss.h, vehicle.h.
+constexpr float kPlayerDamageScale = 0.85f; // anything a player or bot does to another player (weapons, splash, burns, spells, allies, carts they drive)
+constexpr float kBossDamageScale = 0.75f;   // mini bosses and the major boss
+constexpr float kHazardDamageScale = 0.75f; // nobody's fault: lightning, crashes, Lilo's cloud (not the storm, which has its own table below)
+
 constexpr int kStormPhaseCount = 6;
 constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
-    {55, 55, 0.60f, 0.5f},
-    {45, 45, 0.38f, 1.0f},
-    {35, 40, 0.22f, 1.5f},
-    {28, 35, 0.12f, 2.0f},
-    {20, 30, 0.05f, 3.0f},
-    {0, 22, 0.00f, 5.0f},
+    // Time to lose all 7 starting hearts standing outside (big map): 35 s, 17 s, 10 s, 7 s, 4.7 s, 3.5 s. Early storm is a nudge you can
+    // run out of; late storm still kills, but a potion buys you real time. The shrinks are a little slower than before so there is time to run.
+    {55, 65, 0.60f, 0.2f},
+    {45, 55, 0.38f, 0.4f},
+    {35, 45, 0.22f, 0.7f},
+    {28, 38, 0.12f, 1.0f},
+    {20, 32, 0.05f, 1.5f},
+    {0, 25, 0.00f, 2.0f},
 }};
 
 } // namespace royale

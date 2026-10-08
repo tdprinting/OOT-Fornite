@@ -57,19 +57,19 @@ struct BossDef {
 };
 
 constexpr BossDef kBossDefs[] = {
-    {"Stalfos", "Bones That Won't Stay Down", 16.0f, 0.8f, 1.5f, 72.0f, 1.0f, 3, Traverse::Leap, 0.0f},
-    {"Magma Dodongo", "Molten Roller of the Crater", 22.0f, 1.0f, 1.4f, 58.0f, 1.15f, 4, Traverse::Roll, 0.0f},
-    {"White Wolfos", "Howler of the Ice Cavern", 28.0f, 1.2f, 1.3f, 88.0f, 1.3f, 5, Traverse::Leap, 0.0f},
-    {"Moss Lizalfos", "Lurker in the Grass", 20.0f, 0.9f, 1.5f, 76.0f, 1.1f, 3, Traverse::Climb, 0.0f},
-    {"Big Octo", "Spinning Terror of the Deep", 24.0f, 1.0f, 1.4f, 70.0f, 1.2f, 4, Traverse::Swim, 0.0f},
-    {"Dead Hand", "Horror at the Bottom of the Well", 26.0f, 1.1f, 1.3f, 50.0f, 1.25f, 4, Traverse::Burrow, 0.0f},
-    {"Iron Knuckle", "Golden Guard of the Colossus", 22.0f, 1.0f, 1.4f, 55.0f, 1.15f, 4, Traverse::Leap, 0.0f},
+    {"Stalfos", "Bones That Won't Stay Down", 16.0f, 0.8f, 1.7f, 66.0f, 1.0f, 3, Traverse::Leap, 0.0f},
+    {"Magma Dodongo", "Molten Roller of the Crater", 22.0f, 1.0f, 1.6f, 55.0f, 1.15f, 4, Traverse::Roll, 0.0f},
+    {"White Wolfos", "Howler of the Ice Cavern", 28.0f, 1.2f, 1.5f, 80.0f, 1.3f, 5, Traverse::Leap, 0.0f},
+    {"Moss Lizalfos", "Lurker in the Grass", 20.0f, 0.9f, 1.7f, 70.0f, 1.1f, 3, Traverse::Climb, 0.0f},
+    {"Big Octo", "Spinning Terror of the Deep", 24.0f, 1.0f, 1.6f, 66.0f, 1.2f, 4, Traverse::Swim, 0.0f},
+    {"Dead Hand", "Horror at the Bottom of the Well", 26.0f, 1.1f, 1.5f, 48.0f, 1.25f, 4, Traverse::Burrow, 0.0f},
+    {"Iron Knuckle", "Golden Guard of the Colossus", 22.0f, 1.0f, 1.6f, 52.0f, 1.15f, 4, Traverse::Leap, 0.0f},
     // The major bosses: damage is per attack; they have their own attacks (see below).
-    {"Volvagia", "Subterranean Lava Dragon", 80.0f, 1.0f, 3.0f, 150.0f, 2.4f, 9, Traverse::Burrow, 380.0f},
-    {"Morpha", "Giant Aquatic Amoeba", 80.0f, 1.0f, 3.0f, 120.0f, 2.4f, 9, Traverse::Submerge, 70.0f},
-    {"Phantom Ganon", "Evil Spirit from Beyond", 80.0f, 1.0f, 3.0f, 160.0f, 2.4f, 9, Traverse::Warp, 360.0f},
-    {"Bongo Bongo", "Phantom Shadow Beast", 80.0f, 1.0f, 3.0f, 130.0f, 2.4f, 9, Traverse::Vanish, 260.0f},
-    {"Twinrova", "Sorceress Sisters", 80.0f, 1.0f, 3.0f, 190.0f, 2.4f, 9, Traverse::Fly, 430.0f},
+    {"Volvagia", "Subterranean Lava Dragon", 80.0f, 1.0f, 3.4f, 135.0f, 2.4f, 9, Traverse::Burrow, 380.0f},
+    {"Morpha", "Giant Aquatic Amoeba", 80.0f, 1.0f, 3.4f, 110.0f, 2.4f, 9, Traverse::Submerge, 70.0f},
+    {"Phantom Ganon", "Evil Spirit from Beyond", 80.0f, 1.0f, 3.4f, 140.0f, 2.4f, 9, Traverse::Warp, 360.0f},
+    {"Bongo Bongo", "Phantom Shadow Beast", 80.0f, 1.0f, 3.4f, 120.0f, 2.4f, 9, Traverse::Vanish, 260.0f},
+    {"Twinrova", "Sorceress Sisters", 80.0f, 1.0f, 3.4f, 160.0f, 2.4f, 9, Traverse::Fly, 430.0f},
     {"Red ChuChu", "Blazing Jelly Giant", 20.0f, 0.8f, 1.5f, 65.0f, 1.15f, 3, Traverse::Leap, 0.0f},
     {"Green ChuChu", "Vanishing Forest Jelly", 22.0f, 0.8f, 1.6f, 72.0f, 1.15f, 3, Traverse::Burrow, 0.0f},
     {"Yellow ChuChu", "Crackling Jelly Giant", 24.0f, 0.9f, 1.7f, 62.0f, 1.2f, 4, Traverse::Leap, 0.0f},
@@ -85,7 +85,8 @@ constexpr int kMaxBosses = 8;
 constexpr float kBossAggroRange = 450.0f;    // how close a player has to be to be noticed
 constexpr float kBossLeash = 1100.0f;        // how far from its home it will chase before giving up
 constexpr float kBossReach = 105.0f;         // how far it reaches with a smash
-constexpr float kBossWindupSeconds = 0.55f;  // it rears back this long before a blow lands (the animation shows it)
+constexpr float kBossWindupSeconds = 0.7f;   // it rears back this long before a blow lands (the animation shows it): time to roll or raise a shield
+constexpr float kBossInterruptShare = 0.08f; // a blow this share of its health (a Master Sword hit is 9% of a Stalfos) knocks a mini boss out of its wind-up
 constexpr float kBossBodyRadius = 70.0f;     // players hit it from this much further than a plain range check
 constexpr int kPointsPerBossKill = 400;      // for landing the last hit
 

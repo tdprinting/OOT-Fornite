@@ -4,6 +4,7 @@
 #include "game_server.h"
 #include "loopback.h"
 #include "../../shared/fortnite_map.h"
+#include "lobby_pets.h"
 #include <cstdio>
 #include <memory>
 
@@ -1020,6 +1021,8 @@ static void ReliableEventsSurviveLoss() {
     rig.Run(120.0f);                            // bots loot and fight; humans stand still and get hunted
     rig.network.Advance(2.0f);
     rig.Run(2.0f);
+    rig.network.Advance(1.0f);                  // let what is still in flight arrive, without the server making more (a bot can grab loot on the last tick)
+    for (auto& c : rig.clients) c->Update(kDt);
     // Every client's loot table must equal the server's, even though 30% of snapshots were lost.
     for (GameClient* g : {&a, &b, &c}) {
         CHECK(g->Loot().size() == rig.M().Loot().size());
@@ -1198,6 +1201,11 @@ static void SceneIsRelayedBetweenPlayers() {
     PlayerNet seenOfA, seenOfB;
     CHECK(b.Sample(1, seenOfA) && seenOfA.scene == 0x43);
     CHECK(a.Sample(2, seenOfB) && seenOfB.scene == 0x51);
+    for(const auto& area:royale::lobby::kAreas) {
+        a.SendInput(10,20,30,0,0,static_cast<uint8_t>(area.scene));
+        rig.Run(.5f);
+        CHECK(b.Sample(1,seenOfA) && seenOfA.scene==area.scene);
+    }
 }
 
 static void BotsReportTheFieldScene() {

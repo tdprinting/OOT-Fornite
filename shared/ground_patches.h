@@ -29,7 +29,7 @@ constexpr int kMaxMembers = 12;          // seeds in one patch (the rest, a rare
 
 // Ground mesh variants (shared/ground_model.h): the first of each kind and how many shapes it has.
 constexpr uint32_t kPuddleFirst = 0, kPuddleShapes = 4, kIceOffset = 4, kPileFirst = 8, kPileShapes = 4, kDriftFirst = 12, kDriftShapes = 4,
-                   kFrostFirst = 16, kFrostShapes = 2, kLeafFirst = 18, kLeafShapes = 3, kPetalFirst = 21, kPetalShapes = 2;
+                   kFrostFirst = 16, kFrostShapes = 2, kLeafFirst = 18, kLeafShapes = 3, kPetalFirst = 21, kPetalShapes = 2, kBankFirst = 23, kBankShapes = 4;   // banks: the lip of mud round a puddle, one per puddle shape
 
 inline uint32_t Hash(int a, int b, int salt) {
     uint32_t h = static_cast<uint32_t>(a) * 374761393u + static_cast<uint32_t>(b) * 668265263u + static_cast<uint32_t>(salt) * 2246822519u + 0x9E3779B9u;
@@ -149,6 +149,9 @@ inline uint32_t MeshVariant(const Patch& p, bool frozen) {
     }
 }
 
+// The mud bank that goes with a puddle (the same outline as the puddle's own shape).
+inline uint32_t BankVariant(const Patch& p) { return kBankFirst + p.shape % kBankShapes; }
+
 // The seeds and the patches built from them. `Probe` is the game's say on the ground:
 //     int probe(Kind, int cx, int cz, Seed& seed)     1 the ground takes it (the seed may be changed), 0 it does not, -1 not measured yet.
 // Lead() gives 1 and the patch when the cell leads one, 0 when it does not, and -1 when something needed was not measured yet (ask again later).
@@ -247,6 +250,74 @@ private:
         return n.depth;
     }
 };
+
+
+// ---- pressing snow down ---------------------------------------------------------------------------------------------------------------------
+// Whoever walks through snow leaves footprints, and whoever lands in it (a jump, a fall, the skydive) leaves a crater. Each is a Dent: an ellipse
+// (`len` along the way they were going, `wid` across it, half-extents) where the snow is pressed down by `depth` units at the middle and rises in a
+// low rim of pushed-aside snow just outside it. DentChange() says how much a point's height changes; the game moves the snow mesh's vertices by it.
+struct Dent { float x, z, yaw, len, wid, depth; };   // `depth` already includes how much of the dent has filled in again
+
+constexpr float kDentRim = 1.7f;        // how far the rim reaches, as a multiple of the dent's half-extents
+constexpr float kDentBerm = 0.30f;      // how high the rim is, as a fraction of the depth
+
+inline float DentReach(const Dent& d) { return std::max(d.len, d.wid) * kDentRim; }
+
+// Height change at the ground point (wx, wz) from one dent: -depth at its middle, 0 at its edge, a gentle bump of kDentBerm * depth just outside it,
+// and 0 again at kDentRim times its size. Smooth everywhere (no creases), so a footprint reads as a soft print, not a stamped square.
+inline float DentChange(const Dent& d, float wx, float wz) {
+    const float ex = wx - d.x, ez = wz - d.z, c = std::cos(d.yaw), s = std::sin(d.yaw);
+    const float lx = (ex * c + ez * s) / d.len, lz = (-ex * s + ez * c) / d.wid;
+    const float q = std::sqrt(lx * lx + lz * lz);
+    if (q >= kDentRim) return 0.0f;
+    if (q < 1.0f) { const float t = 1.0f - q; return -d.depth * t * t * (3.0f - 2.0f * t); }
+    const float t = (q - 1.0f) / (kDentRim - 1.0f), sn = std::sin(3.14159265f * t);
+    return d.depth * kDentBerm * sn * sn;
+}
+
+// The combined change of many dents: the deepest pit wins (two footprints on top of each other do not dig twice as deep) and the highest rim
+// wins, so a trail of prints keeps a ridge between them instead of piling up.
+inline float DentsChange(const Dent* d, int n, float wx, float wz) {
+    float pit = 0.0f, rim = 0.0f;
+    for (int i = 0; i < n; i++) {
+        const float c = DentChange(d[i], wx, wz);
+        if (c < pit) pit = c; else if (c > rim) rim = c;
+    }
+    return pit + rim;
+}
+
+// How much of a dent is left `age` seconds after it was made when it lasts `life` seconds (1 fresh, 0 filled in): eases out, so a print sags in
+// at first and fades slowly at the end.
+inline float DentLeft(float age, float life) {
+    const float t = 1.0f - std::clamp(age / std::max(0.01f, life), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Footprints: where the next print goes. Feet alternate left and right of the line walked (`side` is +1 or -1), `half` apart from it.
+inline void FootprintAt(float x, float z, float dirx, float dirz, int side, float half, float* ox, float* oz) {
+    *ox = x - dirz * half * static_cast<float>(side);
+    *oz = z + dirx * half * static_cast<float>(side);
+}
+
+// A fall's crater: how big and how deep a landing from `fallSpeed` (units per second, positive down) digs, 0 for a landing too soft to leave one.
+struct Crater { float radius = 0, depth = 0; };
+inline Crater CraterFor(float fallSpeed, float size) {
+    Crater c;
+    if (fallSpeed < 260.0f) return c;
+    const float k = std::clamp((fallSpeed - 260.0f) / 900.0f, 0.0f, 1.0f);
+    c.radius = (26.0f + 34.0f * k) * size;
+    c.depth = (7.0f + 9.0f * k) * size;
+    return c;
+}
+
+// The height of a snow pile's surface across its width (0 at its rim to 1 at its middle) for the mesh and for anything that has to agree with it.
+inline float PileProfile(float q) { q = std::clamp(q, 0.0f, 1.0f); const float t = 1.0f - q * q; return t * std::sqrt(t); }
+
+// A puddle's bank: how high the lip of mud around the water stands, in units, `q` of the way from the middle (1 = the water's edge).
+inline float BankHeight(float q, float height) {
+    const float x = (q - 1.0f) / 0.11f;
+    return height * std::exp(-x * x);
+}
 
 } // namespace ground
 } // namespace royale

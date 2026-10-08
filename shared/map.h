@@ -69,7 +69,15 @@ inline const char* const kPoiNames[] = {
     "Royal Ruins", "Royal Pavilion", "Lantern Jetty", "Caravan Colonnade",
     "Old Mill", "Forest Trail", "Quarry Road", "Snow Pass",
     "Ranch Gate", "Market Gardens", "Spirit Road", "Graveyard Chapel",
-    "West Watch", "East Watch", "South Causeway", "Coastal Walk",};
+    "West Watch", "East Watch", "South Causeway", "Coastal Walk",
+    // Hyrule Kingdom: the authored map. Its landmarks are real places, so they keep their real names.
+    "Hyrule Castle",     "Clock Town",     "Lake Hylia Stilts",     "Lakeside Lab",
+    "Gerudo Ruins",     "Snowpeak Lodge",     "Death Mountain",     "Kakariko Village",
+    "Kokiri Forest",     "Lon Lon Ranch",     "Temple Ruins",     "Ordon Docks",
+    "Zora's Falls",     "Great Hylia Bridge",     "Castle Bridge",     "Hyrule Field",
+    "Windmill Hill",     "Kakariko Graveyard",     "Deku Tree Hollow",     "Blossom Oasis",
+    "Frozen Pond",     "Goron Lookout",     "Fairy Fountain",     "Lighthouse Point",
+};
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
 // the centre of the walkable ground and a radius that holds most of it. The host's game still measures the live scene when a match starts.
@@ -104,6 +112,9 @@ constexpr MapDef kMaps[] = {
     {"Sandbox", "A test arena with ramps, cliffs, water, a loot plaza and a button for everything", 0x51, {{0.0f, 0.0f}, 3300.0f}, 3400.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
     {"Hyrule Convergence", "An open world of furnished villages, royal spires and seven themed miniboss regions", 0x51, {{0.0f, 0.0f}, 6500.0f}, 6600.0f, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    // Hyrule Kingdom is authored in Blender (tools/maps/kingdom): castle, Clock Town, a lake village, woods, desert and snow peaks, every building enterable.
+    {"Hyrule Kingdom", "The main map: Hyrule Castle, Clock Town, Lake Hylia, Kokiri Forest, the Gerudo ruins and Death Mountain, with every house open to walk into", 0x51, {{0.0f, 0.0f}, 6500.0f}, 6600.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
@@ -174,11 +185,14 @@ inline constexpr const char* kMayaCompanionLines[kMayaCompanionLineCount] = {
 constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 constexpr int kSandboxMapIndex = 6;   // the test map (it has the island's terrain machinery, with its own ground)
 constexpr int kConvergenceMapIndex = 7;
+constexpr int kKingdomMapIndex = 8;      // Hyrule Kingdom: its own number, so no other map changes
 constexpr int kPlayableMapCount = kMapCount - 1;
 constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && id != kSandboxMapIndex; }
-constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex || id == kConvergenceMapIndex; }
+constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex || id == kConvergenceMapIndex || id == kKingdomMapIndex; }
+// The maps built by hand in Blender: their ground, collision, buildings and loot sites come from shared/<name>_data.h, and nothing is scattered over them.
+constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
-static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7, "preserve network map IDs");
+static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7 && kKingdomMapIndex == 8, "preserve network map IDs");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
 constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
 

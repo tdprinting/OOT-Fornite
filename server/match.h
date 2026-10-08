@@ -6,6 +6,7 @@
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
+#include "../shared/kingdom_data.h"
 #include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
@@ -357,6 +358,7 @@ class Match {
         if (clock < p->dmgTakenUntil) mult *= p->dmgTakenMult;
         if (clock < p->adultUntil) mult *= kAdultTaken;
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
+        if (kind != DamageKind::Storm) mult *= IsBossId(attacker) ? kBossDamageScale : attacker == kNoPlayer ? kHazardDamageScale : kPlayerDamageScale;
         hearts *= mult;
 
         // The shield bar takes the hit first (the storm goes straight through it).
@@ -458,13 +460,28 @@ class Match {
 
     // Whether `t` has its shield up towards `from` against this weapon.
     static bool Guards(const PlayerState& t, Vec2 from, const WeaponStats& w) {
-        if (t.anim != static_cast<uint8_t>(Anim::Guard) || !t.hasShield || IsTwoHanded(t.weapon.item)) return false;
         if (w.effect == WeaponEffect::PierceShield || (w.splashRadius > 0 && w.ranged)) return false;
+        return Guards(t, from);
+    }
+    static bool Guards(const PlayerState& t, Vec2 from) {
+        if (t.anim != static_cast<uint8_t>(Anim::Guard) || !t.hasShield || IsTwoHanded(t.weapon.item)) return false;
         const float face = static_cast<float>(t.rot) * (3.14159265f / 32768.0f);
         float off = std::atan2(from.x - t.pos.x, from.z - t.pos.z) - face;
         while (off > 3.14159265f) off -= 6.2831853f;
         while (off < -3.14159265f) off += 6.2831853f;
         return std::fabs(off) <= kGuardHalfAngle;
+    }
+
+    // A blow from something that is not a player's weapon (a boss's swing or charge, a helper's strike) follows the same rules a player's does, so a
+    // fight feels the same whoever it is against: a roll goes through it, a shield's own worth comes off it, and a raised shield facing it takes most of
+    // what is left. Returns true if it hurt (false: dodged). The ones that are explosions, breath or magic don't use this (shields don't stop those).
+    bool Blow(PlayerState& victim, Vec2 from, float hearts, uint32_t attacker) {
+        if (!victim.alive || clock < victim.rollUntil) return false;
+        float amount = hearts;
+        if (victim.hasShield) amount *= 1.0f - ShieldReduction(victim.shield.item, victim.shield.rarity);
+        if (Guards(victim, from)) amount *= 1.0f - kGuardBlock;
+        Damage(victim.id, amount, attacker, DamageKind::Normal);
+        return true;
     }
 
     // A shot, throw or lob that had nothing in reach (the arrow, seed, bomb or bombchu still flies on the player's own screen): it spends the ammo and the
@@ -908,10 +925,8 @@ class Match {
         PlayerState* t = Find(targetId);
         if (!t || !t->alive || t->id == a.owner) return false;
         act.x = t->pos.x; act.z = t->pos.z; events.push_back(act);
-        if (clock < t->rollUntil || clock < t->invulnUntil) return true;      // dodged or protected: the swing still happened
-        float dmg = def.damage;
-        if (t->hasShield) dmg *= 1.0f - ShieldReduction(t->shield.item, t->shield.rarity);
-        Damage(t->id, dmg, owner->id, DamageKind::Normal);
+        if (clock < t->invulnUntil) return true;                              // protected: the swing still happened
+        Blow(*t, a.pos, def.damage, owner->id);                               // a roll dodges it, a shield and a guard take their share
         return true;
     }
 
@@ -1286,6 +1301,10 @@ class Match {
                 for (const auto& region : convergence::kRegions)
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
+            if (mapId == kKingdomMapIndex) {
+                for (const auto& region : kingdom::kRegions)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
             b.home = b.pos = at;
             // One third of guards draw from the new jelly pool; retain every original guard.
             if (rng.Below(3) == 0) b.kind = static_cast<BossKind>(static_cast<int>(BossKind::ChuRed) + rng.Below(5));
@@ -1337,6 +1356,10 @@ class Match {
         a->damageDealt += dealt;
         b->target = attackerId; // whoever hurts it is who it comes for
         b->lostTargetAt = clock;
+        if (b->windupUntil >= 0.0f && r.damage >= b->maxHealth * kBossInterruptShare && !IsDragonKind(b->kind)) {   // a heavy blow knocks a mini boss out of its wind-up
+            b->windupUntil = -1.0f;
+            b->attackReadyAt = (std::max)(b->attackReadyAt, clock + 0.8f);
+        }
         MatchEvent e{MatchEvent::Type::Damaged};
         e.a = bossId; e.b = attackerId; e.amount = r.damage; e.health = (std::max)(0.0f, b->health);
         events.push_back(e);
@@ -1571,6 +1594,7 @@ class Match {
             s.applied = true;
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
+                if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast
                 if (s.lightning || s.style == StrikeStyle::Bolt) {
                     Damage(p.id, s.damage, s.by, DamageKind::Normal);
                     const MiniBoss* source = FindBoss(s.by);
@@ -1723,7 +1747,7 @@ class Match {
             if (!p.alive || clock < p.invulnUntil || Distance(p.pos, b.pos) > radius) continue;
             if (std::find(b.hitThisMove.begin(), b.hitThisMove.end(), p.id) != b.hitThisMove.end()) continue;
             b.hitThisMove.push_back(p.id);
-            Damage(p.id, damage, b.id);
+            if (!Blow(p, b.pos, damage, b.id)) continue;                  // rolled clean through it
             if (p.alive && stun > 0 && !TotalsOf(p).stunImmune) { p.stunUntil = (std::max)(p.stunUntil, clock + stun); p.dirty = true; }
         }
     }
@@ -1898,7 +1922,7 @@ class Match {
             default: break;
         }
         if (started) {
-            b.specialReadyAt = clock + busy + 6.0f + static_cast<float>(rng.Unit()) * 3.0f;
+            b.specialReadyAt = clock + busy + 7.0f + static_cast<float>(rng.Unit()) * 3.0f;   // a breather after each trick
             b.attackReadyAt = (std::max)(b.attackReadyAt, clock + busy + def.cooldown * 0.5f);
             b.moves++;
         }
@@ -1931,8 +1955,8 @@ class Match {
                 for (auto& p : players) {
                     if (!p.alive || clock < p.invulnUntil) continue;
                     if (Distance(p.pos, b.pos) > kBossReach + 40.0f || std::fabs(OffFacing(b, p.pos)) > 1.25f) continue;
-                    Damage(p.id, def.damage, b.id);
-                    if (p.alive && IsChuKind(b.kind)) {
+                    const bool landed = Blow(p, b.pos, def.damage, b.id);
+                    if (landed && p.alive && IsChuKind(b.kind)) {
                         Strike touch; touch.by = b.id; touch.style = ChuStyle(b.kind);
                         ApplyStyle(p, touch);
                     }

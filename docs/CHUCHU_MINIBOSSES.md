@@ -1,6 +1,6 @@
 # ChuChu mini bosses
 
-Five original Blender models inspired by the supplied Wind Waker reference join the mini boss pool. A seeded one-in-three draw at each guard spot selects one of the five ChuChus, retaining the original guards and major bosses. All five can also be spawned individually from the existing Sandbox boss menu. Existing boss IDs remain stable; protocol 27 requires all peers to update together.
+Five original Blender models inspired by the supplied Wind Waker reference join the mini boss pool. A seeded one-in-three draw at each guard spot selects one of the five ChuChus, retaining the original guards and major bosses. All five can also be spawned individually from the existing Sandbox boss menu. Existing boss IDs remain stable; protocol 29 requires all peers to update together.
 
 | Variant | Signature behavior | Battle royale elemental adaptation | Counter |
 |---|---|---|---|
