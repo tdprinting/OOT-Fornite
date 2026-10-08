@@ -1,0 +1,527 @@
+{
+  "schema_version": 1,
+  "title": "Hyrule Riftlands scenery prop catalog",
+  "date": "2026-10-08",
+  "author": "Astra",
+  "status": "design_only_not_implemented",
+  "scale": {
+    "link_height_units_reported": 56,
+    "door_width_units_preserve": 160,
+    "door_height_units_preserve": 215,
+    "buggy_route_width_units_preserve": 340,
+    "coordinate_source": "Blender Z up; exporter converts to game X east Y up Z south",
+    "note": "H proportions are visual targets. Runtime camera, avatar and existing collision contract govern final dimensions."
+  },
+  "assets": [
+    {
+      "id": "crown_cistern",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.6,
+        1.8,
+        1.25
+      ],
+      "near_triangle_target": [
+        450,
+        650
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "crown_standard",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        0.85,
+        0.85,
+        2.8
+      ],
+      "near_triangle_target": [
+        24,
+        36
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "crown_planter",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.5,
+        0.75,
+        0.68
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "quarry_sled",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.2,
+        1.25,
+        1.15
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "quarry_forge",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.8,
+        1.8,
+        2.0
+      ],
+      "near_triangle_target": [
+        550,
+        800
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "quarry_gong",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.8,
+        0.65,
+        2.4
+      ],
+      "near_triangle_target": [
+        32,
+        56
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "kakariko_well",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.7,
+        1.7,
+        2.2
+      ],
+      "near_triangle_target": [
+        480,
+        650
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "kakariko_cart",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.9,
+        1.05,
+        1.2
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "kakariko_notice",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.8,
+        0.5,
+        1.9
+      ],
+      "near_triangle_target": [
+        32,
+        56
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "deku_cradle",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        3.0,
+        1.6,
+        1.65
+      ],
+      "near_triangle_target": [
+        480,
+        700
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "deku_granary",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.55,
+        1.55,
+        2.0
+      ],
+      "near_triangle_target": [
+        48,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "deku_lantern",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        0.8,
+        0.7,
+        2.1
+      ],
+      "near_triangle_target": [
+        24,
+        40
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "lake_skiff",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.8,
+        1.2,
+        1.05
+      ],
+      "near_triangle_target": [
+        450,
+        650
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "lake_netrack",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.2,
+        0.85,
+        1.9
+      ],
+      "near_triangle_target": [
+        36,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "lake_bollard",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        0.8,
+        0.8,
+        1.6
+      ],
+      "near_triangle_target": [
+        24,
+        40
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "ranch_wagon",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.5,
+        1.5,
+        1.4
+      ],
+      "near_triangle_target": [
+        420,
+        600
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "ranch_milkstand",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.1,
+        1.3,
+        1.85
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "ranch_trough",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.3,
+        0.7,
+        1.25
+      ],
+      "near_triangle_target": [
+        36,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "spirit_stall",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.6,
+        1.7,
+        2.0
+      ],
+      "near_triangle_target": [
+        48,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "spirit_screen",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.7,
+        0.75,
+        1.55
+      ],
+      "near_triangle_target": [
+        420,
+        600
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "spirit_urn",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.25,
+        1.25,
+        1.5
+      ],
+      "near_triangle_target": [
+        36,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "frost_woodcrib",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.3,
+        1.15,
+        1.35
+      ],
+      "near_triangle_target": [
+        350,
+        500
+      ],
+      "tier": "primary_focal",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "frost_bell",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.4,
+        1.0,
+        2.2
+      ],
+      "near_triangle_target": [
+        36,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "frost_sled",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.2,
+        1.1,
+        0.85
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "primary_support",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "temple_window",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        3.0,
+        1.0,
+        1.35
+      ],
+      "near_triangle_target": [
+        550,
+        800
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "waystone",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        0.85,
+        0.65,
+        1.4
+      ],
+      "near_triangle_target": [
+        24,
+        40
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "fairy_basin",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        2.0,
+        2.0,
+        0.75
+      ],
+      "near_triangle_target": [
+        40,
+        60
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "match_opaque_body_with_static_collision_preserve_openings",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "falls_marker",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.5,
+        0.7,
+        1.7
+      ],
+      "near_triangle_target": [
+        48,
+        60
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "lab_gauge",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        0.65,
+        0.55,
+        2.0
+      ],
+      "near_triangle_target": [
+        24,
+        32
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    },
+    {
+      "id": "grave_memorial",
+      "dimension_order": "width_depth_height",
+      "dimensions_link_height": [
+        1.1,
+        0.6,
+        1.5
+      ],
+      "near_triangle_target": [
+        32,
+        48
+      ],
+      "tier": "optional_landmark",
+      "collision_policy": "small_details_visual_only_or_honest_narrow_base",
+      "appearance_and_placement_source": "prop-design-brief.md",
+      "implementation_status": "design_only"
+    }
+  ]
+}

@@ -33,6 +33,7 @@ class World:
         self.floor_patches = []        # (x, z, radius, y)
         self.loot = []                 # (x, y, z, name)
         self.markers = []              # dicts
+        self.doors = []                # authoring audit: house entrances (x,z,floor,name)
         self.group = 'Architecture'
         self.far = False               # big landmarks: drawn from far away
         self.tint = (1.0, 1.0, 1.0)

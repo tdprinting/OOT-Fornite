@@ -172,6 +172,9 @@ def house(w, x, z, W, D, yaw=0.0, storeys=1, style=None, back_door=True, furnish
             w.ramp(dx, dz, ex, ez, DOOR + 40, y0, end_y, st.base, base=min(end_y, gy) - 60)
             w.walkways.append((dx, dz, ex, ez, (DOOR + 40) / 2, y0, end_y))
     w.buildings.append((x, z, W / 2 + 15, D / 2 + 15, y0, yaw))
+    for side in ((1, -1) if back_door else (1,)):
+        px, pz = f.p(0, side * (D / 2 + 1))
+        w.doors.append((px, pz, y0, name))
     w.interior.append(_aabb(f, W, D, y0 - 5, y0 + storeys * STOREY + 10))
     climb_edge = (1,) if st.climb else ()
     for k in range(storeys):

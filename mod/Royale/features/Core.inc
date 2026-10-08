@@ -533,6 +533,7 @@ bool BlocksAreBaked();   // the climbing blocks are in the island's collision (s
 // The maps built by hand in Blender (shared/convergence_data.h, shared/kingdom_data.h): everything on them is baked, nothing is scattered.
 bool OnAuthoredTerrain() { return OnIsland() && royale::IsAuthoredMap(royale::fortnite::gTerrainMapId); }
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
+bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kRiftlandsMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
@@ -546,6 +547,12 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         float lootY;
         if (outY) *outY = royale::KingdomLootHeightAt({x,z},&lootY) ? lootY : royale::KingdomGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kRiftlandsMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::RiftlandsLootHeightAt({x,z},&lootY) ? lootY : royale::RiftlandsGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -644,7 +651,7 @@ float gMeasuredRadius = 0;
 
 // Water is no place for a chest or a spawn: the surface is above the floor under it.
 bool UnderWater(float x, float z, float floorY) {
-    if (OnIsland()) return std::fabs(x) < royale::fortnite::kHalfX && std::fabs(z) < royale::fortnite::kHalfZ && floorY + 15.0f < royale::fortnite::kWaterY;   // one sheet over it all
+    if (OnIsland()) return std::fabs(x) < royale::fortnite::kHalfX && std::fabs(z) < royale::fortnite::kHalfZ && floorY + 15.0f < royale::fortnite::WaterHeightAt(x,z);
     float surface = 0;
     WaterBox* box = nullptr;
     return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
@@ -669,6 +676,7 @@ bool HazardFloorAt(float x, float z) {
 bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
+    if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
