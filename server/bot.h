@@ -1462,6 +1462,23 @@ class BotController {
             return;
         }
 
+        // Helpers are real combatants. A nearby threatening Bokoblin can be fought by bots too.
+        const BossHelper* helper=nullptr;
+        float helperDistance=330.0f;
+        for (const auto& h:m.Helpers()) {
+            const float d=Distance(h.pos,p.pos);
+            if (h.alive && h.mode!=BokoMode::Flee && d<helperDistance && (!nav || nav->LineClear(p.pos,h.pos))) { helper=&h;helperDistance=d; }
+        }
+        if (helper && p.health>=2.4f && EffectiveDps(p.weapon)>=1.0f && tune.hunt && (!foe || dist>180.0f)) {
+            const WeaponStats w=Match::StatsOf(p);
+            p.rot=FaceAngle(p.pos,helper->pos);
+            if (helperDistance>w.range*.75f+kBokoBodyRadius) Steer(m,p,mem,helper->pos,dt,1.0f);
+            if (helperDistance<=w.range*1.1f+kBokoBodyRadius) BotAttack(m,p,mem,helper->id,rng.Unit()<mem.skill);
+            if (BokoAttacking(helper->mode) && helperDistance<130.0f)
+                Advance(m,p,p.pos.x-helper->pos.x,p.pos.z-helper->pos.z,kRunSpeed*dt);
+            return;
+        }
+
         // Mini bosses: a weak bot keeps well away from them; a strong, healthy one goes after them for the loot (unless a player is on top of it).
         const MiniBoss* boss = NearestBoss(m, p, 650.0f);
         for (const MiniBoss& b : m.Bosses()) { // the dragon notices from much further off, so bots watch for it further off too

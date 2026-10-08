@@ -316,6 +316,7 @@ bool gHitMarkerKill = false;
 float gHurtAmount = 0.0f;
 
 bool KnownPosition(uint16_t id, float* x, float* z) {
+    if (gSession.Client() && royale::IsHelperId(id)) for (const auto& h:gSession.Client()->Helpers()) if (h.Id()==id && h.hp>0) { *x=h.x;*z=h.z;return true; }
     for (const auto& st : gSession.Puppets()) if (st.id == id) { *x = st.x; *z = st.z; return true; }
     if (gSession.Client() && royale::IsBossId(id)) for (const auto& bn : gSession.Client()->Bosses()) if (royale::kBossIdBase + bn.index == id) { *x = bn.x; *z = bn.z; return true; }
     if (CartTargetAt(id, x, z)) return true;
@@ -438,6 +439,9 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
     if (self) {
         Player* me = GET_PLAYER(gPlayState);
         pos = me->actor.world.pos;
+    } else if (royale::IsHelperId(id)) {
+        auto it=gBokoblins.find(id); if (it==gBokoblins.end() || !it->second.actor) return;
+        actor=it->second.actor;pos=actor->world.pos;height=35.0f;
     } else if (royale::IsBossId(id)) {
         auto it = gBosses.find(id);
         if (it == gBosses.end() || it->second.actor == nullptr || it->second.fade < 0.2f) return;   // out of sight: nothing to hit

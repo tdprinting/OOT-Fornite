@@ -48,7 +48,18 @@ jobs:
       - name: Install the Android SDK/NDK pieces the fork asks for
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.0.10792818" "cmake;3.31.5" "platforms;android-33" "platforms;android-31"
+          # A truncated NDK download can fail before compilation. Retry with a fresh installer cache.
+          for attempt in 1 2 3; do
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.0.10792818" "cmake;3.31.5" "platforms;android-33" "platforms;android-31"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Android SDK installation failed after three attempts"
+              exit 1
+            fi
+            rm -rf "$ANDROID_HOME/.temp"
+            sleep "$((attempt * 5))"
+          done
       - name: Build the release APK (arm64-v8a)
         working-directory: third_party/Shipwright-Android/Android
         env:

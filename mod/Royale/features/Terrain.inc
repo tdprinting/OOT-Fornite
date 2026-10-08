@@ -601,6 +601,10 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
         }
+        else if (auto b=gBokoblinOf.find(locked); b!=gBokoblinOf.end()) {
+            id=static_cast<uint16_t>(b->second);edge=royale::kBokoBodyRadius;
+            if (!KnownPosition(id,&tx,&tz)) id=0;
+        }
         if (id != 0) {
             const float d = std::hypot(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) - edge;
             if (d <= range * 1.05f) { *outDist = (std::max)(0.0f, d); return id; }
@@ -629,6 +633,15 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
             if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
         }
+    }
+    if (gSession.Client()) for (const auto& h:gSession.Client()->Helpers()) {
+        if (!h.hp) continue;
+        const float dx=h.x-player->actor.world.pos.x,dz=h.z-player->actor.world.pos.z;
+        const float d=std::hypot(dx,dz)-royale::kBokoBodyRadius;
+        if (d>range*1.05f) continue;
+        const s16 off=static_cast<s16>(static_cast<s16>(std::atan2(dx,dz)*(32768.0f/3.14159265f))-player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off))>0x2000 && d>40.0f) continue;
+        if (d<bestDist) { bestDist=d;best=static_cast<uint16_t>(h.Id()); }
     }
     // Carts: from their sides too (a cart is about a Link and a half wide and two long). People go first: a cart only counts when it is clearly nearer.
     for (const CartTarget& ct : CartTargets()) {
@@ -1349,6 +1362,7 @@ void ReportEvents(const royale::HudState& hud) {
     for (const royale::ClientEvent& e : gSession.DrainEvents()) {
         auto nameOf = [&](uint16_t id) -> std::string {
             for (const auto& r : hud.roster) if (r.id == id) return r.name;
+            if (royale::IsHelperId(id)) return std::string("a Bokoblin");
             if (royale::IsBossId(id)) return std::string("a mini boss");
             if (royale::IsVehicleId(id)) return std::string("a cart");
             return royale::BotName(id);

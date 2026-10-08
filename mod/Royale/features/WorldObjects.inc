@@ -370,5 +370,6 @@ void ClearProps() {
     for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
 }
 
+#include "RoyaleBokoblins.h"
 #include "RoyaleBosses.h"   // the bosses: mini bosses, the major boss of each map, their effects
 

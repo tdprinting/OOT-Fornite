@@ -34,7 +34,7 @@
 | Dynamic lighting, shadows, graphics menu registration | `Lighting.inc` |
 | Engine collision exports and native menu bridge | `EngineBridge.inc` |
 
-Existing focused files: `RoyaleSession.h` (network lifecycle), `RoyaleBosses.h` (boss presentation), `RoyaleLobbyFish.h` (aquarium), `RoyaleLobbyPets.h` (lobby pets), `RoyaleWarTable.h` (native menu). Server rules: `server/match.h`; bots: `server/bot.h`; network: `shared/protocol.h` and `client/game_client.h`. Generated asset arrays are not authoring sources.
+Existing focused files: `RoyaleSession.h` (network lifecycle), `RoyaleBosses.h` (boss presentation), `RoyaleBokoblins.h` (miniboss helper model, targeting, animation and rock rendering), `RoyaleLobbyFish.h` (aquarium), `RoyaleLobbyPets.h` (lobby pets), `RoyaleWarTable.h` (native menu). Server rules: `server/match.h`; bots: `server/bot.h`; network: `shared/protocol.h` and `client/game_client.h`. Generated asset arrays are not authoring sources.
 
 ## Focused workflow
 

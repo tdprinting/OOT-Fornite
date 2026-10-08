@@ -3,6 +3,7 @@
 #include "../shared/ally.h"
 #include "../shared/anim.h"
 #include "../shared/boss.h"
+#include "../shared/bokoblin.h"
 #include "../shared/boss_arena.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
@@ -146,6 +147,21 @@ struct MiniBoss {
     Vec2 swoopAt = {};
     uint32_t target = 0xFFFFFFFFu;
     float lostTargetAt = 0;
+};
+
+struct BossHelper {
+    uint32_t id = 0, boss = 0, target = kNoPlayer;
+    HelperKind kind = HelperKind::Bokoblin;
+    Vec2 home = {}, pos = {}, aim = {}, from = {};
+    int16_t rot = 0;
+    float health = kBokoHealth, y = 0;
+    bool alive = true, resolved = false, rockActive = false;
+    BokoMode mode = BokoMode::Idle;
+    float modeAt = 0, readyAt = 0, rockAt = 0, repathAt = 0;
+    uint8_t action = 0, moves = 0, personality = 0;
+    Vec2 rockFrom = {}, rockTo = {}, pathGoal = {};
+    std::vector<Vec2> path;
+    size_t pathIdx = 0;
 };
 
 // A blast that lands at a marked spot a moment after it is announced (the dragon's fireballs, meteors and swoop).
@@ -337,6 +353,7 @@ class Match {
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
+                TickHelpers(dt);
                 TickVehicles(dt);
                 if (!sandbox && Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;
@@ -364,7 +381,7 @@ class Match {
         if (clock < p->dmgTakenUntil) mult *= p->dmgTakenMult;
         if (clock < p->adultUntil) mult *= kAdultTaken;
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
-        if (kind != DamageKind::Storm) mult *= IsBossId(attacker) ? kBossDamageScale : attacker == kNoPlayer ? kHazardDamageScale : kPlayerDamageScale;
+        if (kind != DamageKind::Storm) mult *= (IsBossId(attacker) || IsHelperId(attacker)) ? kBossDamageScale : attacker == kNoPlayer ? kHazardDamageScale : kPlayerDamageScale;
         hearts *= mult;
 
         // The shield bar takes the hit first (the storm goes straight through it).
@@ -508,6 +525,7 @@ class Match {
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
+        if (IsHelperId(targetId)) return AttackHelper(attackerId, targetId, hit, style);
         if (IsBossId(targetId)) return AttackBoss(attackerId, targetId, hit);
         if (IsVehicleId(targetId)) return AttackVehicle(attackerId, targetId, hit);
         PlayerState* a = Find(attackerId);
@@ -1295,6 +1313,7 @@ class Match {
 
     void SpawnBosses() {
         bosses.clear();
+        helpers.clear();
         Rng rng(seed ^ 0x626F7373ull); // "boss"
         std::vector<Vec2> spots = bossSpots;
         for (size_t i = spots.size(); i > 1; i--) std::swap(spots[i - 1], spots[rng.Below(static_cast<uint32_t>(i))]);
@@ -1333,8 +1352,11 @@ class Match {
             if (rng.Below(3) == 0) b.kind = static_cast<BossKind>(static_cast<int>(BossKind::ChuRed) + rng.Below(5));
             b.maxHealth = b.health = BossOf(b.kind).health;
             bosses.push_back(b);
+            SpawnHelpers(b);
         }
     }
+
+    #include "boss_helpers.inc"
 
     AttackResult AttackBoss(uint32_t attackerId, uint32_t bossId, bool hit) {
         AttackResult r;
@@ -2515,15 +2537,16 @@ class Match {
             b.specialReadyAt = clock + 6.0f;
         }
         bosses.push_back(b);
+        if (!major) SpawnHelpers(b);
         MatchEvent e{MatchEvent::Type::BossSpawned};
         e.a = b.id; e.x = at.x; e.z = at.z;
         events.push_back(e);
         return true;
     }
-    void SandboxClearBosses() { for (auto& b : bosses) { b.alive = false; b.health = 0; } }
+    void SandboxClearBosses() { helpers.clear(); for (auto& b : bosses) { b.alive = false; b.health = 0; } }
     bool SandboxClearArena(uint32_t player) {
         if(!SandboxLive() || !IsBossArena(mapId) || !Find(player)) return false;
-        bosses.clear();
+        bosses.clear(); helpers.clear();
         strikes.erase(std::remove_if(strikes.begin(),strikes.end(),[](const Strike& s){return IsBossId(s.by);}),strikes.end());
         loot.erase(std::remove_if(loot.begin(),loot.end(),[&](const LootEntry& l){return Distance(l.spawn.pos,sandboxRoom.center)>sandboxRoom.radius;}),loot.end());
         SandboxRevive(player);SandboxHeal(player);SandboxTeleport(player,arena::kSpawn);
@@ -2916,6 +2939,7 @@ class Match {
     std::vector<Vec2> lootSpots;
     std::vector<Vec2> bossSpots;
     std::vector<MiniBoss> bosses;
+    std::vector<BossHelper> helpers;
     std::vector<Strike> strikes;
     std::vector<FartCloud> fartClouds;
     std::map<uint32_t, float> lastFartCloud;   // when each player last started a cloud

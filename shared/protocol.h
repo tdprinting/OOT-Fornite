@@ -3,6 +3,7 @@
 #include "bytes.h"
 #include "loot.h"
 #include "boss.h"
+#include "bokoblin.h"
 #include "poi.h"
 #include "skins.h"
 #include "storm.h"
@@ -23,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 33; // 33: Riftlands ordinary building/furniture scale and collision. 32: Hyrule Riftlands map set. Peers must update together.
+constexpr uint16_t kProtocolVersion = 34; // 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -392,6 +393,30 @@ struct BossNet {
     }
 };
 
+// Server-authored helper pose and action age. Rock endpoints preserve visible, dodgeable flight.
+struct HelperNet {
+    uint8_t index = 0, boss = 0, kind = 0, mode = 0, hp = 255, action = 0, personality = 0;
+    float x = 0, z = 0, age = 0;
+    int16_t rot = 0, y = 0;
+    bool rock = false;
+    float rockAge = 0, fromX = 0, fromZ = 0, toX = 0, toZ = 0;
+    uint32_t Id() const { return kHelperIdBase + index; }
+    void Write(ByteWriter& w) const {
+        w.U8(index); w.U8(boss); w.U8(kind); w.U8(mode); w.U8(hp); w.U8(action); w.U8(personality);
+        w.F32(x); w.F32(z); w.F32(age); w.I16(rot); w.I16(y); w.U8(rock ? 1 : 0);
+        if (rock) { w.F32(rockAge); w.F32(fromX); w.F32(fromZ); w.F32(toX); w.F32(toZ); }
+    }
+    bool Read(ByteReader& r) {
+        index=r.U8(); boss=r.U8(); kind=r.U8(); mode=r.U8(); hp=r.U8(); action=r.U8(); personality=r.U8();
+        x=r.F32(); z=r.F32(); age=r.F32(); rot=r.I16(); y=r.I16(); const auto f=r.U8(); rock=f!=0;
+        if (rock) { rockAge=r.F32(); fromX=r.F32(); fromZ=r.F32(); toX=r.F32(); toZ=r.F32(); }
+        return r.ok && index<kMaxHelpers && boss<kMaxBosses && kind<static_cast<uint8_t>(HelperKind::Count) &&
+            mode<static_cast<uint8_t>(BokoMode::Count) && personality<3 && f<=1 && Finite(x) && Finite(z) &&
+            Finite(age) && age>=0 && age<=3600 && y>=0 && y<=100 &&
+            (!rock || (Finite(rockAge) && rockAge>=0 && rockAge<=0.8f && Finite(fromX) && Finite(fromZ) && Finite(toX) && Finite(toZ)));
+    }
+};
+
 // A hireable ally as clients see it.
 struct AllyNet {
     uint8_t index = 0;
@@ -443,6 +468,7 @@ struct Snapshot {
     uint8_t epoch = 0;       // bumped whenever the server teleports this client (match start); inputs with an old epoch are ignored
     uint8_t lobbyLeft = 255; // seconds until the lobby starts the match by itself; 255 when the timer is off
     std::vector<PlayerNet> players; // first entry is always the receiving client
+    std::vector<HelperNet> helpers;
     std::vector<BossNet> bosses;    // the mini bosses near this client
     std::vector<AllyNet> allies;    // the hireable allies near this client
     std::vector<VehicleNet> vehicles;   // the carts near this client (and the one it is in)
@@ -452,6 +478,8 @@ struct Snapshot {
         for (const auto& p : players) p.Write(w);
         w.U8(static_cast<uint8_t>(bosses.size()));
         for (const auto& b : bosses) b.Write(w);
+        w.U8(static_cast<uint8_t>(helpers.size()));
+        for (const auto& h : helpers) h.Write(w);
         w.U8(static_cast<uint8_t>(allies.size()));
         for (const auto& a : allies) a.Write(w);
         w.U8(static_cast<uint8_t>(vehicles.size()));
@@ -467,6 +495,10 @@ struct Snapshot {
         if (nb > static_cast<size_t>(kMaxBosses)) return false;
         bosses.assign(nb, {});
         for (auto& b : bosses) if (!b.Read(r)) return false;
+        const size_t nh = r.U8();
+        if (nh > static_cast<size_t>(kMaxHelpers)) return false;
+        helpers.assign(nh, {});
+        for (auto& h : helpers) if (!h.Read(r)) return false;
         const size_t na = r.U8();
         if (na > static_cast<size_t>(kAllyCount)) return false;
         allies.assign(na, {});
