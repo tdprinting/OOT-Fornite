@@ -18,7 +18,7 @@ Validation commands:
 - `cmake -S server -B build`, `cmake --build build`, `ctest --test-dir build --output-on-failure`. Kingdom and Convergence suites are now registered with CTest.
 - `python tools/maps/kingdom/export.py` regenerates all edited map data.
 
-Protocol 30 requires all multiplayer peers to update together.
+Protocol 31 requires all multiplayer peers to update together.
 
 Device checks still required: walk into both entrances of slope-side houses, climb interiors and land on roofs, swim along shores in all water detail settings, rotate the camera near water and walls, switch island maps, and compare frame time/memory during a long match. Offline geometry and CPU tests do not establish an Odin frame-rate improvement or eliminate every visual issue in the recordings.
 

@@ -29,7 +29,7 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
     return nearest;
 }
 int main() {
-    CHECK(kMapCount==9 && kKingdomMapIndex==8 && IsPlayableMap(kKingdomMapIndex) && IsIslandMap(kKingdomMapIndex) && IsAuthoredMap(kKingdomMapIndex));
+    CHECK(kMapCount==11 && kKingdomMapIndex==8 && IsPlayableMap(kKingdomMapIndex) && IsIslandMap(kKingdomMapIndex) && IsAuthoredMap(kKingdomMapIndex));
     CHECK(std::string(MapOf(kKingdomMapIndex).name)=="Hyrule Kingdom" && MapOf(kKingdomMapIndex).scene==kHyruleFieldScene);   // Hyrule Field's scene, so its song plays
     CHECK(std::string(kPoiNames[kKingdomMapIndex*kNamesPerMap])=="Hyrule Castle");
     fortnite::UseTerrainForMap(kKingdomMapIndex);

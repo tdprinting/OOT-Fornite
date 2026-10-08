@@ -23,7 +23,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 30; // 30: refined Kingdom terrain and permanent pillar collision. 29: ChuChu boss kinds and combat rules. 28: Hyrule Kingdom. 27: Gilded Sword item IDs. Peers must update together.
+constexpr uint16_t kProtocolVersion = 31; // 31: refined Kingdom terrain and permanent pillar collision. 30: boss test arenas. 29: ChuChu boss kinds and combat rules. 28: Hyrule Kingdom. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;

@@ -77,6 +77,10 @@ inline const char* const kPoiNames[] = {
     "Zora's Falls",     "Great Hylia Bridge",     "Castle Bridge",     "Hyrule Field",
     "Windmill Hill",     "Kakariko Graveyard",     "Deku Tree Hollow",     "Blossom Oasis",
     "Frozen Pond",     "Goron Lookout",     "Fairy Fountain",     "Lighthouse Point",
+    // Mini Boss Arena (only the first three names are transmitted).
+    "Mini Boss Arena", "Armory", "Spawn Pad",
+    // Main Boss Arena (only the first three names are transmitted).
+    "Main Boss Arena", "Armory", "Spawn Pad",
 };
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
@@ -116,6 +120,10 @@ constexpr MapDef kMaps[] = {
     // Hyrule Kingdom is authored in Blender (tools/maps/kingdom): castle, Clock Town, a lake village, woods, desert and snow peaks, every building enterable.
     {"Hyrule Kingdom", "The main map: Hyrule Castle, Clock Town, Lake Hylia, Kokiri Forest, the Gerudo ruins and Death Mountain, with every house open to walk into", 0x51, {{0.0f, 0.0f}, 6500.0f}, 6600.0f, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    {"Mini Boss Arena", "Flat, clear ground for testing each mini boss", 0x51, {{0,0},3200}, 3200, Theme::Meadow,
+     {BossKind::Stone,BossKind::Moss},BossKind::DragonForest},
+    {"Main Boss Arena", "A large enclosed arena for one main boss at a time", 0x51, {{0,0},4200}, 4200, Theme::Meadow,
+     {BossKind::Stone,BossKind::Moss},BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
@@ -186,15 +194,21 @@ constexpr int kMapCount = sizeof(kMaps) / sizeof(kMaps[0]);
 constexpr int kSandboxMapIndex = 6;   // the test map (it has the island's terrain machinery, with its own ground)
 constexpr int kConvergenceMapIndex = 7;
 constexpr int kKingdomMapIndex = 8;      // Hyrule Kingdom: its own number, so no other map changes
-constexpr int kPlayableMapCount = kMapCount - 1;
-constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && id != kSandboxMapIndex; }
-constexpr bool IsIslandMap(int id) { return id == 5 || id == kSandboxMapIndex || id == kConvergenceMapIndex || id == kKingdomMapIndex; }
+constexpr int kMiniBossArenaIndex = 9;
+constexpr int kMainBossArenaIndex = 10;
+constexpr bool IsBossArena(int id) { return id==kMiniBossArenaIndex || id==kMainBossArenaIndex; }
+constexpr bool IsTestMap(int id) { return id==kSandboxMapIndex || IsBossArena(id); }
+constexpr int PoiNameBase(int id) { return id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
+constexpr int PoiNameCount(int id) { return IsBossArena(id)?3:kNamesPerMap; }
+constexpr int kPlayableMapCount = kMapCount - 3;
+constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && !IsTestMap(id); }
+constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex; }
 // The maps built by hand in Blender: their ground, collision, buildings and loot sites come from shared/<name>_data.h, and nothing is scattered over them.
 constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
 static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7 && kKingdomMapIndex == 8, "preserve network map IDs");
-static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount * kNamesPerMap, "16 point of interest names per map");
-constexpr int kPoiNameTotal = kMapCount * kNamesPerMap;
+static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount*kNamesPerMap-2*(kNamesPerMap-3), "regular maps have 24 names; boss arenas have 3");
+constexpr int kPoiNameTotal = sizeof(kPoiNames)/sizeof(kPoiNames[0]);
 
 constexpr int ClampMap(int id) { return id >= 0 && id < kMapCount ? id : 0; }
 constexpr const MapDef& MapOf(int id) { return kMaps[ClampMap(id)]; }

@@ -2353,8 +2353,8 @@ static void MapsHaveTheirOwnNamesAndBosses() {
         const Circle map = {{0, 0}, m.fallback.radius};
         const PoiLayout layout = GeneratePois(12 + id, map, 16, nullptr, id);
         CHECK(layout.pois.size() >= 3);
-        for (const Poi& p : layout.pois) CHECK(p.name >= id * kNamesPerMap && p.name < (id + 1) * kNamesPerMap);
-        CHECK(layout.pois[0].name == id * kNamesPerMap);
+        for (const Poi& p : layout.pois) CHECK(p.name >= PoiNameBase(id) && p.name < PoiNameBase(id)+PoiNameCount(id));
+        CHECK(layout.pois[0].name == PoiNameBase(id));
         // The bosses a match spawns are the ones that suit the place, never a dragon.
         Match match(5, map, 10);
         match.SetMapId(id);
