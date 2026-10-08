@@ -117,6 +117,8 @@ int main() {
         GameServer server(host,5,MapOf(0).fallback,40);server.SetBossCount(3);
         CHECK(server.SelectMap(kKingdomMapIndex));server.SetPlayerLimit(30);server.Sim().match.AddHuman(1);
         CHECK(server.StartMatch());
+        // This regression measures navigation, independently of the random boss combat pool.
+        server.Sim().match.SandboxClearBosses();
         float highest=0;float elapsed=0;int swimTicks=0,climbTicks=0;
         while (elapsed<420.0f && server.Sim().match.State()!=MatchState::Ending) {
             server.Sim().Tick(kDt);elapsed+=kDt;
