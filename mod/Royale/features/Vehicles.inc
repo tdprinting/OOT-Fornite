@@ -12,7 +12,7 @@ struct EmoteState {
 };
 EmoteState gEmote;
 
-bool CanEmote(const royale::HudState& hud) { return LiveAndAlive(hud) && InField() && !gSkydiving; }
+bool CanEmote(const royale::HudState& hud) { return (LiveAndAlive(hud) || VictoryWalk(hud)) && InField() && !gSkydiving; }
 
 void LocalLink_Draw(Actor* actor, PlayState* play);
 bool LocalDressOn();   // below, with the held weapon
@@ -109,6 +109,7 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
     DrawLocalDressed(player, play, !emote);
+    DrawVictoryCrown(play,player,gSession.Hud().selfId);
 }
 
 // The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons

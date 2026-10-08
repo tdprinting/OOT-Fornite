@@ -138,13 +138,16 @@ diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
 diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
 --- a/soh/src/code/z_play.c
 +++ b/soh/src/code/z_play.c
-@@ -1325,7 +1325,10 @@
+@@ -1325,7 +1325,13 @@
                         play->state.gfxCtx);
  }
  
 +extern int Royale_NativeMenuHideHud(void);
  void Play_DrawOverlayElements(PlayState* play) {
-+    if (Royale_NativeMenuHideHud()) return;
++    if (Royale_NativeMenuHideHud()) {
++        Message_Draw(play); // Hiding adventure HUD must not hide NPC dialogue.
++        return;
++    }
 +
      if ((play->pauseCtx.state != 0) || (play->pauseCtx.debugState != 0)) {
          KaleidoScopeCall_Draw(play);

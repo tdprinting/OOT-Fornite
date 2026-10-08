@@ -5,18 +5,17 @@ Graphics page, "Shadows and lights" (Debug switch `Shadows`). Code: `RoyaleMod.c
 
 ## Shadows
 
-The game's renderer cannot draw the scene a second time from the sun (a real shadow map), and a phone could not afford it. So every object
+This feature uses inexpensive capsule shadows instead of rendering the scene again from the light. Every object
 that casts a shadow is described by a few capsules, the way many modern games do character shadows:
 
-- Link (yours, other players, bots and fallen bodies): 16 capsules built from the joints the game records each time it draws a Link
+- Link (yours, other players, bots and fallen bodies): 15 capsules built from the joints the game records each time it draws a Link
   (`Player::bodyPartsPos`): legs, arms, hips, body, neck, head, feet and the tip of the cap. The shadow swings with every step and sword swing.
 - Allies and pets, mini bosses: an upright capsule. Major bosses: a big body round their middle wherever they fly.
 - Carts: three capsules along the cart. Boulders, rocks and standing stones: one each. Chests: a box; loot: a small ball.
 
 Each frame those capsules are projected along the light onto the ground under the object and painted into a small greyscale map (16, 32 or 64
 pixels). Overlaps keep the darkest value, so an arm over the body never makes a darker blotch. Edges soften with height above the ground (a
-foot gives a sharp edge, a raised hand a soft one), and tall things cast lighter shadows. The map is laid on the ground as a small mesh that
-follows the floor (heights from the game's collision, cached on a world lattice), in a deep cool indigo rather than black, so the grass still
+foot gives a sharp edge, a raised hand a soft one), and tall things cast lighter shadows. The map is laid on actual collision triangles found by bounded floor probes, in a deep cool indigo rather than black, so the grass still
 reads under it, Ocarina of Time style.
 
 The light: the sun the sky draws (`SkyLightNow`, same direction as the sky's sun), so shadows turn and stretch through the match; low suns are
@@ -50,8 +49,7 @@ fixed late-morning sun they were baked with.
 Your own Link always gets a shadow first, then the nearest. "Fine-tune the quality" exposes each number. Also: darkness, soft edges, which kinds
 of object cast, dynamic lights on or off, and the Kingdom sun.
 
-Default kinds: your Link, other players and bots, allies and pets, bosses and carts are on; rocks and boulders, and chests and loot, are off
-(they are many, and the game's round shadow suits them).
+Default kinds: Link, other players and bots, allies and pets, bosses, carts, rocks, boulders, standing stones, chests and loot are on. Existing saved kind switches retain their values. All kinds share the same map budget; your Link remains first.
 
 ## What to check on a device
 
@@ -59,3 +57,13 @@ Never run in game yet (compiles with gcc and clang against the fork; the maths i
 the evening and check the shadow sits under Link's feet and points away from the sun; run and jump (the shadow follows and lightens);
 stand under a Kingdom roof on Medium (no sun shadow); throw a bomb at night (Link lit orange, a glow on the ground, a second shadow on Medium);
 "Graphics memory (layers)" should show the "Shadows and light" layer with nothing left out; and compare frame rate on Low and Off.
+
+## Current receiver and smoothing upgrade
+
+Raster edges have a minimum pixel coverage filter independent of physical softness. Zero physical softness remains finite and antialiased; low-sun bounds include the stretched penumbra. Changing softness repaints cached stationary maps.
+
+Shadows now discover, deduplicate and clip actual collision triangles in projected texture space. Dynamic collision vertices come from `CollisionPoly_GetVerticesByBgId`, which reads the engine's transformed dynamic vertex list. Independent triangles cannot create artificial faces over missing floors, steps or gaps. Lower terrain remains visible beyond the previous 62-unit ledge fade, with a distance fade and a 420-unit descent limit. Geometry above the caster's reference floor plus three units is clipped conservatively, since the single capsule map does not provide per-capsule depth masking.
+
+Receiver work is capped at 256 floor probes and 512 emitted triangles globally per frame, and 48 triangles per map. Low remains 32 pixels and four maps. If no usable receiver geometry is emitted, the actor keeps its native round shadow. Light pools retain the cached lattice mesh.
+
+Limitations: probes can miss small triangles between sample points. Each probe finds only its highest eligible floor, so stacked floors are not exhaustively discovered. Elevated receivers above the caster base remain unsupported; this is not a complete scene shadow map or wall-shadow system. Coverage, triangle joins, moving-platform alignment and performance still need device verification. Unit tests cover raster filtering, low-sun padding, projected clipping, rejected elevated/missing floors, independent step planes and fixed budget values.

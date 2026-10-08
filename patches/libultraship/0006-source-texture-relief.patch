@@ -1,0 +1,172 @@
+diff --git a/include/libultraship/surface_map.h b/include/libultraship/surface_map.h
+--- a/include/libultraship/surface_map.h
++++ b/include/libultraship/surface_map.h
+@@ -8,5 +8,6 @@
+     const uint8_t* height;
+     uint32_t width, heightPixels;
+     float normalStrength, bumpStrength, uvScale;
++    uint8_t fromDiffuse;
+     float sunDirection[3], sunColor[3], ambientColor[3];
+ } GfxSurfaceMap;
+diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
+--- a/src/graphic/Fast3D/gfx_pc.cpp
++++ b/src/graphic/Fast3D/gfx_pc.cpp
+@@ -1,6 +1,7 @@
+ #define NOMINMAX
+ 
+ #include <math.h>
++#include "asset_relief.h"
+ #include <cmath>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -133,6 +134,24 @@
+     }
+ };
+ static std::map<SurfaceTextureKey, uint32_t> surface_textures;
++static void gfx_bind_surface_textures(const GfxSurfaceMap*, uint32_t = G_TX_WRAP, uint32_t = G_TX_WRAP);
++struct AssetReliefEntry { std::shared_ptr<Fast::Texture> source; royale::relief::Maps maps; };
++using AssetReliefKey = std::tuple<const Fast::Texture*,const uint8_t*,const uint8_t*,unsigned>;
++static std::map<AssetReliefKey,AssetReliefEntry> asset_relief_maps;
++static const royale::relief::Maps* gfx_asset_relief(unsigned tile) {
++    const auto& t=g_rdp.loaded_texture[g_rdp.texture_tile[tile].tmem_index].raw_tex_metadata.resource;
++    if(!t || !t->ImageData) return nullptr;
++    bool pal=t->Type==Fast::TextureType::Palette4bpp || t->Type==Fast::TextureType::Palette8bpp;
++    const uint8_t* p0=pal?g_rdp.palettes[0]:nullptr;const uint8_t* p1=pal?g_rdp.palettes[1]:nullptr;
++    unsigned bank=pal?g_rdp.texture_tile[tile].palette:0;
++    AssetReliefKey key{t.get(),p0,p1,bank};auto found=asset_relief_maps.find(key);
++    if(found==asset_relief_maps.end()) {
++        if(asset_relief_maps.size()>=128)return nullptr;
++        auto maps=royale::relief::FromTexture(t->ImageData,t->ImageDataSize,t->Width,t->Height,static_cast<int>(t->Type),p0,p1,bank);
++        found=asset_relief_maps.emplace(key,AssetReliefEntry{t,std::move(maps)}).first;
++    }
++    return found->second.maps.normal.empty()?nullptr:&found->second.maps;
++}
+ 
+ 
+ static struct GfxWindowManagerAPI* gfx_wapi;
+@@ -1606,6 +1625,9 @@
+     // Unsupported backends and custom shaders retain their original vertex layout.
+     bool use_surface = surface_map && !shader.enabled && !is_rect &&
+                        (g_rsp.geometry_mode & G_LIGHTING) && strcmp(gfx_rapi->get_name(), "OpenGL") == 0;
++    GfxSurfaceMap derived_surface{};
++    const GfxSurfaceMap* active_surface=surface_map;
++    int source_tile=-1;
+     if (use_surface) cc_options |= SHADER_OPT(SURFACE_MAP);
+     ColorCombinerKey key;
+     key.combine_mode = g_rdp.combine_mode;
+@@ -1628,9 +1650,18 @@
+             const auto& resource = g_rdp.loaded_texture[g_rdp.texture_tile[tile].tmem_index].raw_tex_metadata.resource;
+             if (!resource) continue;
+             const std::string& path = resource->GetInitData()->Path;
++            if(source_tile<0)source_tile=static_cast<int>(tile);
+             if (path.find("Hand") != std::string::npos || path.find("Fist") != std::string::npos ||
+                 path.find("Tunic") != std::string::npos || path.find("Sheath") != std::string::npos)
+                 use_surface = false;
++        }
++        if(use_surface && surface_map->fromDiffuse) {
++            const auto* maps=source_tile<0?nullptr:gfx_asset_relief(source_tile);
++            if(!maps)use_surface=false; // untextured blades keep their original flat paint
++            else {
++                derived_surface=*surface_map;derived_surface.normal=maps->normal.data();derived_surface.height=maps->bump.data();
++                derived_surface.width=maps->width;derived_surface.heightPixels=maps->height;active_surface=&derived_surface;
++            }
+         }
+         int attributes = 1 + use_fog + use_grayscale + features.num_inputs;
+         for (int t = 0; t < 2; ++t) if (features.used_textures[t]) attributes += 3;
+@@ -1752,6 +1783,11 @@
+             !std::isfinite(v_arr[i]->w)) {
+             return;
+         }
++    }
++    if(use_surface) {
++        if(source_tile>=0 && surface_map->fromDiffuse)
++            gfx_bind_surface_textures(active_surface,g_rdp.texture_tile[source_tile].cms,g_rdp.texture_tile[source_tile].cmt);
++        else gfx_bind_surface_textures(active_surface);
+     }
+     const size_t tri_start = buf_vbo_len;
+ 
+@@ -1911,8 +1947,17 @@
+                             fabsf(v1->surfaceNormal[2] + v2->surfaceNormal[2] + v3->surfaceNormal[2]) };
+             int axis = an[0] > an[1] ? 0 : 1;
+             if (an[2] > an[axis]) axis = 2;
+-            const float uv[2] = { sv->surfacePosition[(axis + 1) % 3] * surface_map->uvScale,
++            float uv[2] = { sv->surfacePosition[(axis + 1) % 3] * surface_map->uvScale,
+                                   sv->surfacePosition[(axis + 2) % 3] * surface_map->uvScale };
++            if(surface_map->fromDiffuse && source_tile>=0) {
++                const auto& tile=g_rdp.texture_tile[source_tile];float u=sv->u/32.0f,v=sv->v/32.0f;
++                if(tile.shifts)u*=tile.shifts<=10?1.f/(1<<tile.shifts):float(1<<(16-tile.shifts));
++                if(tile.shiftt)v*=tile.shiftt<=10?1.f/(1<<tile.shiftt):float(1<<(16-tile.shiftt));
++                u-=tile.uls/4.f;v-=tile.ult/4.f;
++                if((g_rdp.other_mode_h&(3U<<G_MDSFT_TEXTFILT))!=G_TF_POINT){u+=.5f;v+=.5f;}
++                int slot=source_tile-g_rdp.first_tile_index;
++                uv[0]=u/std::max(1u,tex_width[slot]);uv[1]=v/std::max(1u,tex_height[slot]);
++            }
+             for (int k = 0; k < 3; ++k) buf_vbo[buf_vbo_len++] = sv->surfacePosition[k];
+             buf_vbo[buf_vbo_len++] = uv[0];
+             for (int k = 0; k < 3; ++k) buf_vbo[buf_vbo_len++] = sv->surfaceNormal[k];
+@@ -3074,6 +3119,35 @@
+     return shader_ids.size() - 1;
+ }
+ 
++static void gfx_bind_surface_textures(const GfxSurfaceMap* map,uint32_t cms,uint32_t cmt) {
++    static const uint8_t* lastNormal=nullptr;static const uint8_t* lastHeight=nullptr;
++    static uint32_t lastW=0,lastH=0,lastS=~0u,lastT=~0u;
++    if(lastNormal==map->normal && lastHeight==map->height && lastW==map->width && lastH==map->heightPixels && lastS==cms && lastT==cmt)return;
++    gfx_flush();lastNormal=map->normal;lastHeight=map->height;lastW=map->width;lastH=map->heightPixels;lastS=cms;lastT=cmt;
++    // RGBA keeps upload byte order identical on Windows and Android. Units 6/7
++    // are private material samplers and do not invalidate the colour texture cache.
++    static const uint8_t flatNormal[] = { 128, 128, 255, 255 };
++    static const uint8_t flatHeight[] = { 128, 128, 128, 255 };
++    for (int i = 0; i < 2; ++i) {
++        const uint8_t* data = i == 0 ? map->normal : map->height;
++        const bool flat = data == nullptr;
++        if (flat) data = i == 0 ? flatNormal : flatHeight;
++        SurfaceTextureKey key { data, flat ? 1u : map->width, flat ? 1u : map->heightPixels };
++        auto it = surface_textures.find(key);
++        if (it == surface_textures.end()) {
++            const uint32_t id = gfx_rapi->new_texture();
++            gfx_rapi->select_texture(6 + i, id);
++            gfx_rapi->upload_texture(data, key.width, key.height);
++            it = surface_textures.emplace(key, id).first;
++        }
++        gfx_rapi->select_texture(6 + i, it->second);
++        gfx_rapi->set_sampler_parameters(6 + i, true, cms, cmt);
++    }
++    // Framebuffer helpers bind textures on the active unit. Never leave a
++    // private material sampler active for subsequent scene/UI operations.
++    if (gfx_rapi->reset_texture_unit) gfx_rapi->reset_texture_unit();
++}
++
+ bool gfx_surface_map_handler(F3DGfx** cmd0) {
+     gfx_flush(); // Descriptors and texture bindings must never change in a batch.
+     surface_map = reinterpret_cast<const GfxSurfaceMap*>((*cmd0)->words.w1);
+@@ -3083,28 +3157,7 @@
+         surface_map = nullptr;
+         return false;
+     }
+-    // RGBA keeps upload byte order identical on Windows and Android. Units 6/7
+-    // are private material samplers and do not invalidate the colour texture cache.
+-    static const uint8_t flatNormal[] = { 128, 128, 255, 255 };
+-    static const uint8_t flatHeight[] = { 128, 128, 128, 255 };
+-    for (int i = 0; i < 2; ++i) {
+-        const uint8_t* data = i == 0 ? surface_map->normal : surface_map->height;
+-        const bool flat = data == nullptr;
+-        if (flat) data = i == 0 ? flatNormal : flatHeight;
+-        SurfaceTextureKey key { data, flat ? 1u : surface_map->width, flat ? 1u : surface_map->heightPixels };
+-        auto it = surface_textures.find(key);
+-        if (it == surface_textures.end()) {
+-            const uint32_t id = gfx_rapi->new_texture();
+-            gfx_rapi->select_texture(6 + i, id);
+-            gfx_rapi->upload_texture(data, key.width, key.height);
+-            it = surface_textures.emplace(key, id).first;
+-        }
+-        gfx_rapi->select_texture(6 + i, it->second);
+-        gfx_rapi->set_sampler_parameters(6 + i, true, G_TX_WRAP, G_TX_WRAP);
+-    }
+-    // Framebuffer helpers bind textures on the active unit. Never leave a
+-    // private material sampler active for subsequent scene/UI operations.
+-    if (gfx_rapi->reset_texture_unit) gfx_rapi->reset_texture_unit();
++    if(!surface_map->fromDiffuse)gfx_bind_surface_textures(surface_map);
+     return false;
+ }
+ 

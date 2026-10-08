@@ -54,6 +54,7 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     const float size = hanger != nullptr ? std::max(0.3f, hanger->actor.scale.y / 0.01f) : 1.0f;
     static std::unordered_map<uint32_t, Vec3f> lastGrip;   // per glider: hands' offset from his position
     Vec3f grip = { x, y + 20.0f * size, z };   // (before he has been drawn once: roughly where hands hanging from a ledge are)
+    float gripScale = 0.7f * size;
     if (auto it = lastGrip.find(scheme); it != lastGrip.end()) grip = { x + it->second.x, y + it->second.y, z + it->second.z };
     if (hanger != nullptr) {
         const Vec3f& l = hanger->bodyPartsPos[PLAYER_BODYPART_L_HAND];
@@ -63,6 +64,10 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
             grip = { mx, my, mz };
             if (lastGrip.size() > 48) lastGrip.clear();
             lastGrip[scheme] = { mx - x, my - y, mz - z };
+            const float span = std::sqrt((l.x-r.x)*(l.x-r.x)+(l.y-r.y)*(l.y-r.y)+(l.z-r.z)*(l.z-r.z));
+            const float handle = royale::glider_model::kGripInner + royale::glider_model::kGripOuter;
+            if (span > 10.0f * size && span < 80.0f * size)
+                gripScale = std::clamp(span / handle, 0.4f * size, 1.4f * size);
         }
     }
     Matrix_Translate(grip.x, grip.y, grip.z, MTXMODE_NEW);
@@ -71,7 +76,7 @@ void DrawGliderAt(PlayState* play, float x, float y, float z, s16 yaw, float rol
     Matrix_RotateX((diving ? 0.5f : 0.1f) + std::sin(t * 2.3f + scheme * 1.7f) * 0.025f, MTXMODE_APPLY); // nose down for a dive
     // Smaller than the model, and flatter so the wing sits just over his head with short struts: it hangs on his hands, not high above him.
     // The scale is about the bar, so the grips stay in his hands (the live cloth wing is drawn in this same space, so it shrinks with the frame).
-    Matrix_Scale(0.7f * size, 0.58f * size, 0.7f * size, MTXMODE_APPLY);
+    Matrix_Scale(gripScale, 0.58f * size, 0.7f * size, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);

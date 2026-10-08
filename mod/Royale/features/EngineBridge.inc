@@ -94,7 +94,9 @@ namespace {
 #include "RoyaleWarTable.h"
 }
 
-extern "C" int Royale_NativeMenuIsOpen(void) { return WarMenuOpen() || EndScreenUp(gSession.Hud()); }
+// The recap uses the gameplay overlay, not WarDraw. Isolating it would clear the
+// world and call a painter that deliberately draws nothing when the menu is shut.
+extern "C" int Royale_NativeMenuIsOpen(void) { return WarMenuOpen(); }
 extern "C" int Royale_NativeMenuHideHud(void) { return WarMenuOpen() || gSession.Joined(); }
 extern "C" int Royale_NativeMenuAllowSfx(u16 id) {
     if (!gMenuAudioMuted.load(std::memory_order_relaxed)) return true;

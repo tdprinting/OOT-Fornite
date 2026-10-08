@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
-lus = root/'third_party/Shipwright-Android/libultraship'
+lus = Path(os.environ.get('ROYALE_ENGINE_SOURCE',str(root/'third_party/Shipwright-Android')))/'libultraship'
 
 def extract(text, start):
     begin = text.index(start)
@@ -27,7 +27,8 @@ def extract(text, start):
 pc = (lus/'src/graphic/Fast3D/gfx_pc.cpp').read_text()
 gl = (lus/'src/graphic/Fast3D/gfx_opengl.cpp').read_text()
 lookup = extract(pc, 'static struct ShaderProgram* gfx_lookup_or_create_shader_program(')
-handler = extract(pc, 'bool gfx_surface_map_handler(')
+prototype = next(line for line in pc.splitlines() if line.startswith('static void gfx_bind_surface_textures(') and line.endswith(';'))
+handler = prototype+'\n'+extract(pc, 'static void gfx_bind_surface_textures(const GfxSurfaceMap* map,')+'\n'+extract(pc, 'bool gfx_surface_map_handler(')
 reset = extract(gl, 'static void gfx_opengl_reset_texture_unit(')
 key = extract(pc, 'struct SurfaceTextureKey {')+';'
 header = (lus/'include/libultraship/surface_map.h').read_text()

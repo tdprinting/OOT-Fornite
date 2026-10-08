@@ -115,6 +115,7 @@ void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dL
     draw->material.normalStrength = normals / 100.0f;
     draw->material.bumpStrength = bumps / 100.0f;
     draw->material.uvScale = scale;
+    draw->material.fromDiffuse = 1; // derive maps from the active original texture, with its UVs
     const auto& lighting = play->envCtx.lightSettings;
     for (int k = 0; k < 3; ++k) {
         draw->material.sunDirection[k] = lighting.light1Dir[k] / 127.0f;

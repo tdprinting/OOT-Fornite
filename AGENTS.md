@@ -2,6 +2,8 @@
 
 For a new session, read `START-HERE.md` once before editing.
 
+Use one primary agent by default. Start subagents only when explicitly requested for a task. If `../AGENTS.md` exists, apply its shared project preferences alongside these checkout instructions.
+
 - Before substantial work, briefly state the approach and why. Keep updates and replies clear, concise, and free of repetition.
 - Start with `mod/Royale/FEATURES.md`; read only the relevant feature and dependencies. Verify the branch and preserve existing edits.
 - Use scoped `rg` searches and small source ranges. `.rgignore` excludes bulky search results; use explicit paths or `--no-ignore` when needed. Preserve useful comments.

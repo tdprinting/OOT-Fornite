@@ -89,6 +89,9 @@ void Reef_Draw(Actor* actor, PlayState* play) {
 Vec3s gReefCollisionVtx[8];
 CollisionPoly gReefCollisionPoly[12];
 SurfaceType gReefSurfaces[1] = {{{0,2}}};
+// Surface zero references camera entry zero. Landing on the dynamic floor makes
+// the camera query this table; a null table can crash in func_80041A4C.
+CamData gReefCamera[1] = {};
 CollisionHeader gReefCollisionHeader;
 void BuildReefCollision() {
     namespace R=royale::reef;
@@ -108,6 +111,8 @@ void BuildReefCollision() {
     gReefCollisionHeader.numVertices=8;gReefCollisionHeader.vtxList=gReefCollisionVtx;
     gReefCollisionHeader.numPolygons=12;gReefCollisionHeader.polyList=gReefCollisionPoly;
     gReefCollisionHeader.surfaceTypeList=gReefSurfaces;
+    gReefCollisionHeader.cameraDataList=gReefCamera;
+    gReefCollisionHeader.cameraDataListLen=1;
 }
 void Reef_Init(Actor* actor, PlayState* play) {
     actor->shape.shadowScale=0;actor->shape.yOffset=0;
