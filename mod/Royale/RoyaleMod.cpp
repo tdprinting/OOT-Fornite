@@ -21,6 +21,7 @@
 #include "maya_sounds.h"
 #include "maya_phone.h"
 #include "cart_model.h"
+#include "chuchu_model.h"
 #include "gilded_sword_icon.h"
 #include "gilded_sword_surface.h"
 #include "logo_data.h"
@@ -13103,7 +13104,7 @@ void RunSandboxCommands(const royale::HudState& hud) {
                 break;
             case SandboxCmd::ClearBots: m->SandboxClearBots(); break;
             case SandboxCmd::FreezeBots: if (royale::BotController* bots = gSession.SandboxBots()) bots->SetFrozen(c.a != 0); break;
-            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(c.a >= static_cast<int>(royale::BossKind::DragonFire) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
+            case SandboxCmd::Boss: if (!m->SandboxBoss(static_cast<royale::BossKind>(c.a), ahead(royale::IsMajorKind(static_cast<royale::BossKind>(c.a)) ? 900.0f : 600.0f))) Say("Too many bosses: clear them first"); break;
             case SandboxCmd::ClearBosses: m->SandboxClearBosses(); break;
             case SandboxCmd::Give: m->SandboxGive(self, static_cast<royale::ItemId>(c.a), static_cast<royale::Rarity>(c.b)); break;
             case SandboxCmd::Heal: m->SandboxHeal(self); break;

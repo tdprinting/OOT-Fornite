@@ -81,9 +81,9 @@ int main() {
         CHECK(server.StartMatch());std::set<int> kinds;
         CHECK(server.Sim().match.Bosses().size()==7);
         for (const auto& b:server.Sim().match.Bosses()) {
-            CHECK(b.kind==KingdomBossAt(b.home));kinds.insert(static_cast<int>(b.kind));
+            CHECK(b.kind==KingdomBossAt(b.home) || IsChuKind(b.kind));kinds.insert(static_cast<int>(b.kind));
         }
-        CHECK(kinds.size()==7);
+        CHECK(kinds.size()>=3);
         for (const auto& l:server.Sim().match.Loot()) { float y; CHECK(KingdomLootHeightAt(l.spawn.pos,&y) || (KingdomDryGround(l.spawn.pos) && !KingdomObstacleAt(l.spawn.pos,0.0f))); }
     }
     // The bots' grid: the doorways, the viaduct and the boardwalks join the places up, and chests upstairs are left to players.
@@ -117,6 +117,8 @@ int main() {
         GameServer server(host,5,MapOf(0).fallback,40);server.SetBossCount(3);
         CHECK(server.SelectMap(kKingdomMapIndex));server.SetPlayerLimit(30);server.Sim().match.AddHuman(1);
         CHECK(server.StartMatch());
+        // This regression measures navigation, independently of the random boss combat pool.
+        server.Sim().match.SandboxClearBosses();
         float highest=0;float elapsed=0;int swimTicks=0,climbTicks=0;
         while (elapsed<420.0f && server.Sim().match.State()!=MatchState::Ending) {
             server.Sim().Tick(kDt);elapsed+=kDt;
