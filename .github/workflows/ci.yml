@@ -8,6 +8,15 @@ on:
   pull_request:
 
 jobs:
+  mod-layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          ./scripts/link_mod.sh
+          python3 scripts/check_mod_layout.py --copied third_party/Shipwright-Android/soh/soh/Enhancements/Royale
+          python3 scripts/test_water_draw_buffers.py
+
   android-ndk:
     runs-on: ubuntu-latest
     steps:

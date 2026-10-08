@@ -4,12 +4,13 @@ Usage: python scripts/test_water_draw_buffers.py [C++ compiler, default c++]
 """
 from pathlib import Path
 import argparse, os, subprocess, tempfile
+from mod_source import read_mod_source
 root = Path(__file__).resolve().parents[1]
 ap = argparse.ArgumentParser()
 ap.add_argument("compiler", nargs="?", default="c++")
 ap.add_argument("--source", type=Path, default=root / "mod/Royale/RoyaleMod.cpp")
 a = ap.parse_args()
-source = a.source.read_text()
+source = read_mod_source(a.source)
 loop = source.split("    auto drawFine = [&](const Vtx* arr) {", 1)[1].split("    };", 1)[0]
 call = source.split("// pass 1: the water", 1)[1].split("// pass 2:", 1)[0]
 call = next(line.strip() for line in call.splitlines() if "drawFine(" in line)
