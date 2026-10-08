@@ -487,9 +487,8 @@ ImU32 RealIconTint(royale::ItemId id) {
 }
 
 // Loads an icon on first use. nullptr (no icon, or not loadable) means "draw the fallback".
-void* RealIcon(royale::ItemId id) {
+void* HudAssetTexture(const char* name, const char* directory) {
     static std::unordered_map<std::string, bool> loaded;
-    const char* name = RealIconName(id);
     if (name == nullptr) return nullptr;
     auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
     auto it = loaded.find(name);
@@ -497,8 +496,7 @@ void* RealIcon(royale::ItemId id) {
         bool ok = false;
         try {
             const std::string n = name;
-            const std::string dir = n.rfind("gQuestIcon", 0) == 0 ? "icon_item_24_static" : (n.rfind("gHeart", 0) == 0 || n.rfind("gRupee", 0) == 0) ? "parameter_static" : "icon_item_static";
-            const std::string path = "__OTR__textures/" + dir + "/" + n;
+            const std::string path = "__OTR__textures/" + std::string(directory) + "/" + n;
             auto res = Ship::Context::GetInstance()->GetResourceManager()->LoadResource(path, true);
             if (res != nullptr) {
                 gui->LoadGuiTexture(std::string("royale:") + name, path, ImVec4(1, 1, 1, 1));
@@ -508,6 +506,15 @@ void* RealIcon(royale::ItemId id) {
         it = loaded.emplace(name, ok).first;
     }
     return it->second ? (void*)gui->GetTextureByName(std::string("royale:") + name) : nullptr;
+}
+
+void* RealIcon(royale::ItemId id) {
+    const char* name = RealIconName(id);
+    if (name == nullptr) return nullptr;
+    const std::string n = name;
+    const char* directory = n.rfind("gQuestIcon", 0) == 0 ? "icon_item_24_static" :
+        (n.rfind("gHeart", 0) == 0 || n.rfind("gRupee", 0) == 0) ? "parameter_static" : "icon_item_static";
+    return HudAssetTexture(name, directory);
 }
 
 // ---- item icons ------------------------------------------------------------------------------------------------------------

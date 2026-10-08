@@ -87,6 +87,14 @@ class BotController {
 
     void Step(Match& m, float dt) {
         const MatchState state = m.State();
+        if (state == MatchState::Ending) {
+            if (const PlayerState* winner = m.Winner(); winner && winner->isBot) {
+                PlayerState* bot = m.Find(winner->id);
+                bot->anim = EmoteAnim(5); // the prize held overhead: "Victory!"
+                bot->dirty = true;
+            }
+            return;
+        }
         if (state != MatchState::Countdown && state != MatchState::Drop && state != MatchState::InMatch) return;
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
         m.BeginNavigationTick();

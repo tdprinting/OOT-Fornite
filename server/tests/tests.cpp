@@ -3089,12 +3089,12 @@ static void CustomMeshes() {
     for (int k = 0; k < static_cast<int>(MeshKind::Count); k++) {
         for (uint32_t variant = 0; variant < kMeshVariants; variant++) {
             const MeshData m = BuildMesh(static_cast<MeshKind>(k), variant);
-            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
+            CHECK(!m.v.empty() && m.v.size() % 3 == 0 && m.Triangles() >= 12 && m.Triangles() <= (k == static_cast<int>(MeshKind::Glider) ? 520u : k == static_cast<int>(MeshKind::Scenery) ? 600u : k == static_cast<int>(MeshKind::GildedSword) ? 500u : k == static_cast<int>(MeshKind::VictoryCrown) ? 600u : 420u));   // (the glider is a Blender model with more parts) a few dozen triangles: chunky, and cheap to draw
             float mn[3], mx[3];
             m.Bounds(mn, mx);
             bool finite = true;
             for (const auto& p : m.v) finite &= std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
+            CHECK(finite && (mn[1] >= -0.01f || k == static_cast<int>(MeshKind::Glider) || k == static_cast<int>(MeshKind::GliderFrame) || k == static_cast<int>(MeshKind::GildedSword) || k == static_cast<int>(MeshKind::VictoryCrown)));   // nothing below the ground (the glider's origin is its handle bar, the sword's its grip)
             const MeshData again = BuildMesh(static_cast<MeshKind>(k), variant);
             bool same = again.v.size() == m.v.size();
             for (size_t i = 0; same && i < m.v.size(); i++) same = again.v[i].x == m.v[i].x && again.v[i].r == m.v[i].r;

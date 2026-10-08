@@ -14,32 +14,19 @@ class SurfaceMapsTest(unittest.TestCase):
         self.assertEqual(n, bytes((128, 128, 255, 255))*64)
         self.assertEqual(b, bytes((128, 128, 128, 255))*64)
 
-    def test_materials_are_valid_and_distinct(self):
-        outputs = []
+    def test_fallbacks_never_invent_texture_patterns(self):
         for name in maps.ITEMS:
-            normal, height = maps.encode_maps(maps.heights(name))
-            self.assertEqual(len(normal), maps.SIZE**2*4)
-            self.assertEqual(len(height), len(normal))
-            for i in range(0, len(normal), 4):
-                x, y, z = ((normal[i+k]/255*2-1) for k in range(3))
-                self.assertLess(abs(math.sqrt(x*x+y*y+z*z)-1), .015)
-                self.assertGreater(normal[i+2], 128)
-                self.assertEqual(normal[i+3], 255)
-            self.assertGreater(len(set(height[::4])), 2)
-            outputs.append(normal)
-        # Metal recipes may share a polish pattern; wood must differ clearly.
-        self.assertNotEqual(outputs[3], outputs[1])
-        self.assertNotEqual(outputs[5], outputs[4])
+            normal, bump = maps.encode_maps(maps.heights(name))
+            self.assertEqual(normal, bytes((128,128,255,255))*maps.SIZE**2)
+            self.assertEqual(bump, bytes((128,128,128,255))*maps.SIZE**2)
 
-    def test_sunlight_changes_relief_with_direction(self):
-        normal, _ = maps.encode_maps(maps.heights('deku_shield'))
-        x = [(normal[i]-128)/127 for i in range(0, len(normal), 4)]
-        z = [normal[i+2]/255*2-1 for i in range(0, len(normal), 4)]
-        east = [max(0, .8*a+.6*b) for a, b in zip(x, z)]
-        west = [max(0, -.8*a+.6*b) for a, b in zip(x, z)]
-        self.assertGreater(max(abs(a-b) for a, b in zip(east, west)), .1)
-        # No solar intensity means the relief contributes no sunlight at night.
-        self.assertEqual([0*a for a in east], [0*a for a in west])
+    def test_source_gradient_orientation(self):
+        # Actual diffuse decoding/smoothing is tested by royale_asset_relief_tests.
+        normal, _ = maps.encode_maps([[x/8 for x in range(8)] for y in range(8)])
+        i=(4*8+4)*4
+        self.assertLess(normal[i],128)
+        self.assertEqual(normal[i+1],128)
+        self.assertGreater(normal[i+2],128)
 
     def test_committed_header_matches_generator(self):
         header = (maps.ROOT/'shared/item_surface_maps.h').read_text()

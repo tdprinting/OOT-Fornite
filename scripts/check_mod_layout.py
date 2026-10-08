@@ -17,12 +17,15 @@ assert includes and len(includes) == len(set(includes)), "Missing or duplicate f
 assert set(includes) == expected, "Feature files and includes differ"
 assert not list((mod.parent / "features").glob("*.cpp")), "Features must not compile independently"
 copy_script = (root / "scripts/link_mod.sh").read_text()
+assert 'cp -R "$ROOT/mod/Royale/war_table" "$DEST/"' in copy_script, "Build omits native menu fragments"
 assert 'cp -R "$ROOT/mod/Royale/features" "$DEST/"' in copy_script, "Build omits features"
 expanded = read_mod_source(mod)
 if args.copied:
     assert read_mod_source(args.copied / "RoyaleMod.cpp") == expanded, "Copied implementation differs"
     for header in ("RoyaleLobbyFish.h", "RoyaleLobbyPets.h", "RoyaleWarTable.h"):
         assert (args.copied / header).read_bytes() == (mod.parent / header).read_bytes(), header
+    for fragment in (mod.parent / "war_table").glob("*.inc"):
+        assert (args.copied / "war_table" / fragment.name).read_bytes() == fragment.read_bytes(), fragment.name
     print("Engine copy matches source")
 if args.baseline:
     old = subprocess.check_output(

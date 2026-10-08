@@ -122,7 +122,7 @@ inline void Project(V3 p, V3 toward, float groundY, float* x, float* z) {
 struct MapFrame { float cx = 0, cz = 0, half = 0, groundY = 0; V3 toward{ 0, 1, 0 }; };
 
 // The soft edge a capsule's shadow gets at height `h` above the ground (world units on each side of the edge).
-inline float Penumbra(float r, float h, float softness) { return softness * (0.35f * r + 1.5f + 0.06f * std::max(0.0f, h)); }
+inline float Penumbra(float r, float h, float softness) { return std::max(0.0f, softness) * (0.35f * r + 1.5f + 0.06f * std::max(0.0f, h)); }
 
 // The shadows of tall things (a jumping player, a high branch) grow lighter the further they are from the ground.
 inline float HeightFade(float h) { return std::clamp(1.0f - std::max(0.0f, h) / 420.0f, 0.3f, 1.0f); }
@@ -142,7 +142,7 @@ inline MapFrame PlanMap(const Capsule* caps, int n, V3 toward, float groundY, fl
             const V3 p = e ? c.b : c.a;
             float x, z;
             Project(p, toward, groundY, &x, &z);
-            const float pad = c.r * stretch + Penumbra(c.r, p.y - groundY, softness) + 1.0f;
+            const float pad = (c.r + Penumbra(c.r, p.y - groundY, softness)) * stretch + 1.0f;
             lo[0] = std::min(lo[0], x - pad); hi[0] = std::max(hi[0], x + pad);
             lo[1] = std::min(lo[1], z - pad); hi[1] = std::max(hi[1], z + pad);
         }
@@ -179,9 +179,9 @@ inline void Rasterize(const MapFrame& f, const Capsule* caps, int n, float softn
         toM(pbx, pbz, &bu, &bv);
         const float du = bu - au, dv = bv - av;
         const float len2 = du * du + dv * dv;
-        const float maxSoft = Penumbra(c.r, std::max(ha, hb), softness);
+        const float maxSoft = std::max(Penumbra(c.r, std::max(ha, hb), softness), 0.707107f * texel);
         // The texels the capsule can touch (its projected box, padded by the stretched radius and the widest soft edge).
-        const float pad = c.r / slant + maxSoft + texel;
+        const float pad = (c.r + maxSoft) / slant + texel;
         const int ix0 = std::max(1, static_cast<int>((std::min(pax, pbx) - pad - x0) / texel));
         const int ix1 = std::min(size - 2, static_cast<int>((std::max(pax, pbx) + pad - x0) / texel) + 1);
         const int iz0 = std::max(1, static_cast<int>((std::min(paz, pbz) - pad - z0) / texel));
@@ -198,7 +198,8 @@ inline void Rasterize(const MapFrame& f, const Capsule* caps, int n, float softn
                 const float eu = u - (au + du * s), ev = v - (av + dv * s);
                 const float dist = std::sqrt(eu * eu + ev * ev);
                 const float h = ha + (hb - ha) * s;
-                const float soft = Penumbra(c.r, h, softness);
+                // Pixel coverage is separate from physical penumbra; hard shadows still antialias.
+                const float soft = std::max(Penumbra(c.r, h, softness), 0.707107f * texel);
                 if (dist >= c.r + soft) continue;
                 float k = std::clamp((c.r + soft - dist) / (2.0f * soft), 0.0f, 1.0f);
                 k = k * k * (3.0f - 2.0f * k);
@@ -216,6 +217,45 @@ inline void MapUV(const MapFrame& f, float x, float y, float z, float* s, float*
     Project({ x, y, z }, f.toward, f.groundY, &px, &pz);
     *s = (px - (f.cx - f.half)) / (2.0f * f.half);
     *t = (pz - (f.cz - f.half)) / (2.0f * f.half);
+}
+
+// Clip an actual collision triangle to the shadow footprint and below the caster base.
+// UV clipping preserves sloped geometry. Above-base receivers need per-capsule depth
+// masking, so reject those conservatively rather than painting shadows up onto roofs.
+constexpr int kReceiverProbeBudget = 256;
+constexpr int kReceiverTriangleBudget = 512;
+constexpr int kReceiverTrianglesPerMap = 48;
+inline int ClipReceiver(const MapFrame& f, const V3* triangle, V3* out) {
+    if (!(f.half > 0)) return 0;
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(triangle[i].x) || !std::isfinite(triangle[i].y) || !std::isfinite(triangle[i].z)) return 0;
+    V3 a[12], b[12];
+    std::copy(triangle, triangle + 3, a);
+    int n = 3;
+    for (int plane = 0; plane < 6 && n; ++plane) {
+        auto distance = [&](V3 p) {
+            float u, v; MapUV(f, p.x, p.y, p.z, &u, &v);
+            switch (plane) {
+                case 0: return u;
+                case 1: return 1.0f - u;
+                case 2: return v;
+                case 3: return 1.0f - v;
+                case 4: return f.groundY + 3.0f - p.y;
+                default: return p.y - (f.groundY - 420.0f);
+            }
+        };
+        int m = 0;
+        V3 prev = a[n - 1]; float dp = distance(prev);
+        for (int i = 0; i < n; ++i) {
+            const V3 cur = a[i]; const float dc = distance(cur);
+            if ((dp >= 0) != (dc >= 0)) b[m++] = Add(prev, Mul(Sub(cur, prev), dp / (dp - dc)));
+            if (dc >= 0) b[m++] = cur;
+            prev = cur; dp = dc;
+        }
+        n = m; std::copy(b, b + n, a);
+    }
+    std::copy(a, a + n, out);
+    return n;
 }
 
 // How much of the shadow shows on a piece of ground at height `y` when the map was planned at `groundY`: a shadow does not paint a cliff face far

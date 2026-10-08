@@ -985,8 +985,12 @@ void DriveRealWeather() {
         if (!snowManaged) Trace("weather: snow on");
         snowManaged = true;
         play->envCtx.unk_EE[3] = static_cast<u8>(wantSnow);
+        bool haveSnow = false;
+        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next)
+            if (a->id == ACTOR_OBJECT_KANKYO && a->params == 3 && a->update != nullptr) { haveSnow = true; break; }
         static int tryFrame = 0;
-        if (tryFrame++ % 40 == 0) Actor_Spawn(&play->actorCtx, play, ACTOR_OBJECT_KANKYO, 0, 0, 0, 0, 0, 0, 3, false);   // a second one removes itself
+        if (!haveSnow && tryFrame++ % 40 == 0)
+            Actor_Spawn(&play->actorCtx, play, ACTOR_OBJECT_KANKYO, 0, 0, 0, 0, 0, 0, 3, false);
     } else if (snowManaged) {
         play->envCtx.unk_EE[3] = 0;   // the flakes thin out by themselves
         if (play->envCtx.unk_EE[2] == 0) snowManaged = false;

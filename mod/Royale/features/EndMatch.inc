@@ -42,7 +42,7 @@ const UiStyle kUi = {
     IM_COL32(255, 200, 50, 255),   // gold medal
 };
 constexpr double kDeathCardDelay = 1.8;   // seconds of watching your body fall before the card comes up
-constexpr double kEndPanelDelay = 2.4;    // seconds of the big title alone before the end screen
+constexpr double kEndPanelDelay = 7.0;    // a visible victory lap before results take the controls
 
 bool IsLive(const royale::HudState& h);   // with the match's health, below
 
@@ -112,6 +112,7 @@ void StartEndScreen(const royale::HudState& h) {
     gEnd.open = true;
     gEnd.at = ImGui::GetTime();
     gEnd.focus = h.isHost ? 1 : 0;
+    if (h.winnerId != h.selfId && h.winnerId != royale::net::kNoPlayer16) gSpectateTarget = h.winnerId;
     if (h.winnerId == h.selfId && h.winnerId != royale::net::kNoPlayer16) Audio_PlayFanfare(NA_BGM_ITEM_GET);
 }
 
@@ -214,7 +215,7 @@ std::string UiThousands(int n) {
 // Steps 1 to 3: the moment you go down, the death card, and the spectating bar.
 void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     Feat("death screen");
-    const bool spectatingEnd = h.state == royale::MatchState::Ending && !gEnd.open && h.haveSelf && !h.selfAlive;
+    const bool spectatingEnd = h.state == royale::MatchState::Ending && (!gEnd.open || !EndScreenUp(h)) && h.haveSelf && !h.selfAlive;
     if (!(gDeath.active && IsLive(h)) && !spectatingEnd) return;
     const double now = ImGui::GetTime(), t = now - gDeath.at;
     // Your place: the player count may or may not have taken you off yet when the elimination arrives, so look again a moment later.
@@ -550,6 +551,14 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
     for (const auto& r : h.results) if (r.self) me = &r;
     const int place = me != nullptr && me->placement > 0 ? me->placement : won ? 1 : gDeath.place;
     const std::string winnerLine = won ? "You are the last one standing" : !h.winnerName.empty() ? "Winner: " + h.winnerName : "Nobody survived";
+    if (gEnd.open && t < kEndPanelDelay) {
+        // Keep the winner, their crown and their emote visible. The recap must
+        // not cover the world or capture movement during this celebration.
+        DrawEndBanner(dl, font, scale, cx, 65.0f * scale, place, won, 1.0f, 0.8f);
+        UiTextCentred(dl, font, 18.0f * scale, cx, 115.0f * scale, kUi.gold,
+            won ? "Take a victory lap! Hold C-Right to emote" : winnerLine, ds.x * 0.9f);
+        return;
+    }
 
     if (!gEnd.open) {   // kept spectating: a chip to bring the results back
         const std::string label = "Results (D-pad Up)";
@@ -719,23 +728,7 @@ void DrawOverlay() {
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
 
-    // Battle Royale vitals replace the adventure HUD with matching War Table panels.
-    {
-        using namespace royale::wartable::theme;
-        const float x=22*scale,y=22*scale,w=284*scale;
-        HudFrame(dl,{x,y},{x+w,y+117*scale},scale);
-        auto bar=[&](int row,const char* label,float value,float maximum,ImU32 color) {
-            const float top=y+(12+row*34)*scale;
-            char line[64];std::snprintf(line,sizeof(line),"%s  %.1f / %.1f",label,value,maximum);
-            text(x+12*scale,top,HudColor(Ink),14*scale,line);
-            const ImVec2 a(x+12*scale,top+19*scale),b(x+w-12*scale,top+26*scale);
-            dl->AddRectFilled(a,b,HudColor(Button));
-            dl->AddRectFilled(a,{a.x+(b.x-a.x)*std::clamp(value/std::max(0.01f,maximum),0.0f,1.0f),b.y},color);
-        };
-        bar(0,"HEALTH",h.selfHealth,h.maxHealth,IM_COL32(120,220,145,255));
-        bar(1,"SHIELD",h.inv.shield,royale::kMaxShield,HudColor(Focus));
-        bar(2,"MAGIC",h.magic,royale::kMaxMagic,HudColor(Gold));
-    }
+    DrawOotVitals(dl, scale, h);
     DrawStaminaBar(dl, ds, h);
 
     // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
