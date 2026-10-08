@@ -1,7 +1,7 @@
 {
-  "triangles": 95865,
-  "collision_vertices": 7437,
-  "collision_triangles": 11179,
+  "triangles": 95793,
+  "collision_vertices": 7357,
+  "collision_triangles": 11027,
   "buildings": 42,
   "walkways": 122,
   "loot_candidates": 84,

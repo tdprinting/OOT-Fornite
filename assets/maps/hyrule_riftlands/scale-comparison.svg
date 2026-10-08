@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 490">
+<rect width="1100" height="490" fill="#eef1e6"/>
+<g font-family="sans-serif" fill="#203d32"><text x="40" y="45" font-size="27">Riftlands / Adult Link scale check</text>
+<text x="40" y="77" font-size="16">Engine units; normal actor scale 0.01. The 1.35 multiplier is temporary Adult Power.</text>
+<text x="40" y="102" font-size="15">Green figure represents the 56-unit engine clearance, not the animated ROM mesh.</text>
+<path d="M40 405H1060" stroke="#809388"/>
+<rect x="70" y="298.6" width="65" height="106.39999999999999" rx="5" fill="#398564"/>
+<text x="70" y="286.6" font-size="17">56 units</text><text x="60" y="440" font-size="17">Adult clearance</text>
+<rect x="245" y="344.2" width="65" height="60.8" rx="5" fill="#b29164"/>
+<text x="245" y="332.2" font-size="17">32 units</text><text x="235" y="440" font-size="17">Table</text>
+<rect x="420" y="373.08" width="65" height="31.919999999999998" rx="5" fill="#b29164"/>
+<text x="420" y="361.08" font-size="17">16.8 units</text><text x="410" y="440" font-size="17">Stool</text>
+<rect x="595" y="344.2" width="65" height="60.8" rx="5" fill="#b29164"/>
+<text x="595" y="332.2" font-size="17">32 units</text><text x="585" y="440" font-size="17">Bed top</text>
+<rect x="770" y="275.8" width="65" height="129.2" rx="5" fill="#b29164"/>
+<text x="770" y="263.8" font-size="17">68 units</text><text x="760" y="440" font-size="17">Shelf</text>
+<rect x="945" y="139.0" width="65" height="266.0" rx="5" fill="#b29164"/>
+<text x="945" y="127.0" font-size="17">140 units</text><text x="935" y="440" font-size="17">Door</text>
+</g></svg>
