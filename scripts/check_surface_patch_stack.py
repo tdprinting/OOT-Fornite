@@ -28,12 +28,12 @@ for repo, folder in ((engine, root/'patches'), (engine/'libultraship', root/'pat
             p.write_bytes(old.stdout.replace(b'\r\n', b'\n'))
         for patch, text in zip(patches, texts):
             if not text.strip(): continue
-            # Feed LF patches through stdin for platform-independent verification.
+            # Feed LF patches through stdin, retaining strict context matching used by apply_patches.sh.
             print('Checking', patch.name, flush=True)
-            subprocess.run(['git', '-C', str(dest), 'apply', '--unsafe-paths', '--ignore-space-change', '--whitespace=nowarn', '-'],
+            subprocess.run(['git', '-C', str(dest), 'apply', '--unsafe-paths', '--whitespace=nowarn', '-'],
                            input=text.encode(), check=True)
         for patch, text in reversed(list(zip(patches, texts))):
             if not text.strip(): continue
-            subprocess.run(['git', '-C', str(dest), 'apply', '-R', '--unsafe-paths', '--ignore-space-change', '--whitespace=nowarn', '-'],
+            subprocess.run(['git', '-C', str(dest), 'apply', '-R', '--unsafe-paths', '--whitespace=nowarn', '-'],
                            input=text.encode(), check=True)
         print(f'{repo.name}: native changes in {len(patches)} patches apply and reverse cleanly')
