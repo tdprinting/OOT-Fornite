@@ -47,3 +47,5 @@ Actual asset relief: `shared/asset_relief.h` and `patches/libultraship/0006-sour
 4. Run `python scripts/check_mod_layout.py`. Water changes also use `python scripts/test_water_draw_buffers.py`; engine changes need `scripts/check_mod_compile.sh` or the Android game build. Source checks use `scripts/mod_source.py` to read the included implementation.
 
 The split reduces the amount of code an agent must read; it does not reduce compilation work or prove gameplay correctness. A later move to independent translation units requires explicit interfaces and separate validation.
+
+- Hyrule Riftlands map: `docs/HYRULE_RIFTLANDS.md`; authoring `tools/maps/riftlands/`; generated `shared/riftlands_*`; concept and prop specs `map-concepts/hyrule-riftlands/`.

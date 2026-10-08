@@ -6,6 +6,7 @@
 #include "../shared/sandbox_layout.h"
 #include "../shared/convergence_layout.h"
 #include "../shared/kingdom_layout.h"
+#include "../shared/riftlands_layout.h"
 #include "../shared/island_anchors.h"
 #include "../shared/placement.h"
 #include <algorithm>
@@ -79,6 +80,7 @@ class GameServer {
         lastValid = valid;
         lastHeight = height;
         const bool convergenceMap = ClampMap(mapId) == kConvergenceMapIndex;
+        const bool riftlandsMap = ClampMap(mapId) == kRiftlandsMapIndex;
         const bool kingdomMap = ClampMap(mapId) == kKingdomMapIndex;
         if (convergenceMap) {
             auto original = valid;
@@ -90,8 +92,14 @@ class GameServer {
             valid = [original](Vec2 p) { float y; return (KingdomLootHeightAt(p, &y) || (KingdomDryGround(p) && !KingdomObstacleAt(p, 0.0f))) && (!original || original(p)); };
             if (!height) height = [](Vec2 p, float* y) { float s; *y = KingdomLootHeightAt(p, &s) ? s : KingdomGroundHeight(p); return true; };
         }
+        if (riftlandsMap) {   // a chest site on an upper floor or a roof may stand inside a building's walls, so the site list is not filtered by obstacles
+            auto original = valid;
+            valid = [original](Vec2 p) { return RiftlandsPlacementValid(p) && (!original || original(p)); };
+            if (!height) height = [](Vec2 p, float* y) { float s; *y = RiftlandsLootHeightAt(p, &s) ? s : RiftlandsGroundHeight(p); return true; };
+        }
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
+        if(riftlandsMap) lootCount=84; // redistribute the authored candidates without increasing chest density
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
         // Prefer a storm whose six circle centres are all on walkable ground; give up after 200 tries and take the last one.
         uint64_t seed = baseSeed;
@@ -141,6 +149,18 @@ class GameServer {
                 }
             };
             plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
+        } else if (riftlandsMap) {
+            layout = GenerateRiftlandsLayout(valid);   // the chest sites are hand-placed in the map (tools/maps/riftlands); no scenery is generated
+            props = layout.props;
+            const Ground ground(valid, height);
+            // The rest of the chests go beside the map's buildings (on their far side from the middle) and at the foot of its cliffs.
+            const AnchorExtraFn authored = [](const Circle& m, std::vector<LootAnchor>& anchors, std::vector<Circle>&) {
+                for (const auto& b : riftlands::kBuildings) {
+                    const float dx = b.x - m.center.x, dz = b.z - m.center.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+                    anchors.push_back({{b.x, b.z}, AnchorKind::Scenery, {dx / d, dz / d}, (std::max)(b.halfWidth, b.halfDepth) + 70.0f});
+                }
+            };
+            plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
         } else {
             // Camps, scenery in clusters, formations, outposts, climbs, lookouts: each tied to the ground and to each other (shared/placement.h).
             AnchorExtraFn island;
@@ -156,10 +176,11 @@ class GameServer {
         sim.match.SetLootSpots(layout.lootSpots);
         sim.match.SetChestSites(layout.sites);
         sim.match.SetBossSpots(layout.bossSpots);
-        sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
+        if(riftlandsMap) { std::vector<Vec2> stations; for(const auto& p:riftlands::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
+        else sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
         // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
-        const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap || riftlandsMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
@@ -182,6 +203,20 @@ class GameServer {
                 }
                 for (const auto& site : kingdom::kLootSites)
                     if (site.y > KingdomGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
+            }
+            if (riftlandsMap) {   // the water bots swim, floors, ramps and roofs they climb to, ivy and cliffs they scale, and where the chests up there are
+                grid->AddWater(-227.0f, 30.0f, [](Vec2 p) { return std::fabs(p.x) < 7412.0f && std::fabs(p.z) < 7705.0f && RiftlandsTerrainHeight(p) < RiftlandsWaterY(p)-15.0f; });
+                for(const auto& pool:riftlands::kPools) grid->AddWater(pool.y,30.0f,[pool](Vec2 p) { return p.x>=pool.x0 && p.x<=pool.x1 && p.z>=pool.z0 && p.z<=pool.z1 && RiftlandsTerrainHeight(p)<pool.y-15.0f; });
+                grid->SetClimbing(true);
+                std::vector<NavGrid::UpperNode> nodes;
+                for (const auto& n : riftlands::kUpperNodes) nodes.push_back({static_cast<float>(n.x), static_cast<float>(n.z), static_cast<float>(n.y)});
+                grid->AddUpper(nodes);
+                for (const auto& cw : riftlands::kClimbWalls) {
+                    const float nx = cw.nx / 100.0f, nz = cw.nz / 100.0f;
+                    grid->AddClimb({cw.x + nx * 50.0f, cw.z + nz * 50.0f}, static_cast<float>(cw.y0), {cw.x - nx * 45.0f, cw.z - nz * 45.0f}, static_cast<float>(cw.y1));
+                }
+                for (const auto& site : riftlands::kLootSites)
+                    if (site.y > RiftlandsGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
             }
             grid->BuildRegions();
             sim.bots.SetNav(grid);
@@ -206,12 +241,13 @@ class GameServer {
             sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
             sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
             if (plan) sim.match.SetLootPlan(*plan);
-            sim.match.RegenerateLoot(lootCount);
+            sim.match.RegenerateLoot(riftlandsMap ? 0 : lootCount); // Riftlands uses its 84 authored candidates
         }
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
 
         net::EvMapConfig cfg;
+        if(riftlandsMap) { std::vector<Vec2> carts; for(const auto& p:riftlands::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
         cfg.mapId = static_cast<uint8_t>(mapId);
         cfg.map = map;
         cfg.stormEnds = sim.match.GetStorm().PhaseEnds();

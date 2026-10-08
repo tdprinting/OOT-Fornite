@@ -14,7 +14,7 @@ bool WaterSurfaceAt(float x, float z, float* y) {
     namespace fn = royale::fortnite;
     if (OnIsland()) {
         if (std::fabs(x) >= fn::kHalfX || std::fabs(z) >= fn::kHalfZ) return false;
-        *y = static_cast<float>(fn::kWaterY);
+        *y = OnRiftlandsTerrain() ? royale::RiftlandsWaterY({x,z}) : static_cast<float>(fn::kWaterY);
         return true;
     }
     float s = 0;
@@ -484,7 +484,7 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
                 float fy = 0;
                 if (WaterSurfaceAt(gi * cc, gj * cc, &c.surface) && RawFloorAt(gi * cc, gj * cc, &fy)) {
                     c.depth = c.surface - fy;
-                    if (island && !OnKingdomTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
+                    if (island && !OnKingdomTerrain() && !OnRiftlandsTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
                     c.have = c.depth > 1.0f;
                 }
                 it = gCausticCells.emplace(WaterCellKey(gi, gj), c).first;

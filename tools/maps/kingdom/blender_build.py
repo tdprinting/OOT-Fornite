@@ -55,11 +55,11 @@ def material(name, im, alpha=None, emission=0.0, interp='Linear'):
         nt.links.new(mul.outputs['Result'], bs.inputs['Emission Color'])
     return m
 
-def build_terrain(heights, T, n=385):
+def build_terrain(heights, T, n=385, clip_seabed=True):
     xs = np.linspace(-HALF_X, HALF_X, n); zs = np.linspace(-HALF_Z, HALF_Z, n)
     X, Z = np.meshgrid(xs, zs)
     Hh = terrain.grid_height(heights, X, Z)
-    Hd = np.maximum(Hh, WATER_Y - 40)   # the sea bed is drawn 40 under the water, like the game (kSeabedDrop)
+    Hd = np.maximum(Hh, WATER_Y - 40) if clip_seabed else Hh # Riftlands keeps the actual bed   # the sea bed is drawn 40 under the water, like the game (kSeabedDrop)
     col, cover = terrain.paint(X, Z, Hh)
     verts = [B((X.flat[i], Hd.flat[i], Z.flat[i])) for i in range(n * n)]
     faces = []
