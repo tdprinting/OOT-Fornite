@@ -6,9 +6,32 @@
 #include <string>
 #include <vector>
 #include "map.h"
+#include "combat.h"
 
 namespace royale::wartable {
-enum class Page { Play, Character, Settings, Guide, Join, Practice, Lobby, Pause, Tools, Results, Keyboard, Quit };
+namespace theme {
+constexpr uint32_t Panel=0x163871ED, Button=0x244F9EFF, Border=0x91B4D3FF;
+constexpr uint32_t Ink=0xF4E9CAFF, Muted=0xBCD7EEFF, Gold=0xC5A45DFF, Focus=0xD8F3FFFF;
+}
+struct LoadoutStats { float attack, defense; };
+inline LoadoutStats Loadout(ItemId item, Rarity rarity, bool ammo, float melee, float ranged,
+                            float taken, float shieldReduction, bool adult) {
+    const auto weapon=ActiveWeapon(item,ammo);
+    const float attack=weapon.damage*(ammo?RarityScale(rarity):1.0f)*(weapon.ranged?ranged:melee)*
+        (adult?kAdultDamage:1.0f)*kPlayerDamageScale;
+    const float defense=100.0f*(1.0f-taken*(1.0f-shieldReduction)*(adult?kAdultTaken:1.0f));
+    return {attack,std::clamp(defense,0.0f,100.0f)};
+}
+enum class Page { Play, Character, Settings, Guide, Join, Practice, Lobby, Pause, Tools, Results, Keyboard, Quit, Death };
+inline Page ActivePage(bool joined, bool connecting, bool lobby, bool ending, bool alive) {
+    if (!joined) return connecting ? Page::Lobby : Page::Play;
+    if (lobby) return Page::Lobby;
+    if (ending) return Page::Results;
+    return alive ? Page::Pause : Page::Death;
+}
+inline bool ShowDeathMenu(bool active, bool card, bool live, double seconds) {
+    return active && card && live && seconds >= 1.8;
+}
 struct Rect {
     float x = 0, y = 0, w = 0, h = 0;
     bool Contains(float px, float py) const { return px >= x && py >= y && px < x + w && py < y + h; }

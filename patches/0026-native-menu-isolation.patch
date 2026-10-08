@@ -1,0 +1,34 @@
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -1347,8 +1347,17 @@
+ // OOT Royale: the mod's sky pass (RoyaleMod.cpp, DrawBackdrop), drawn right after the game's own skybox and before the scene. NULL = none.
+ void (*gRoyaleBackdropDraw)(PlayState* play) = NULL;
+ 
++extern int Royale_NativeMenuIsOpen(void);
++extern void Royale_NativeMenuDraw(GameState* state);
+ void Play_Draw(PlayState* play) {
+     GraphicsContext* gfxCtx = play->state.gfxCtx;
++    // The menu is a dedicated render pass: never submit the hidden world or HUD.
++    // This also avoids inheriting scene render state or relying on a world draw hook.
++    if (Royale_NativeMenuIsOpen()) {
++        Royale_NativeMenuDraw(&play->state);
++        Camera_Finish(GET_ACTIVE_CAM(play));
++        return;
++    }
+     Lights* sp228;
+     Vec3f sp21C;
+ 
+diff --git a/soh/src/code/code_800F7260.c b/soh/src/code/code_800F7260.c
+--- a/soh/src/code/code_800F7260.c
++++ b/soh/src/code/code_800F7260.c
+@@ -124,7 +124,9 @@
+     }
+ }
+ 
++extern int Royale_NativeMenuAllowSfx(u16 sfxId);
+ void Audio_PlaySoundGeneral(u16 sfxId, Vec3f* pos, u8 token, f32* freqScale, f32* vol, s8* reverbAdd) {
++    if (!Royale_NativeMenuAllowSfx(sfxId)) return;
+     size_t i;
+     SoundRequest* req;
+ 

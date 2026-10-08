@@ -66,9 +66,9 @@ change('soh/src/code/z_player_lib.c',
 
 # Native overlay covers the world HUD while the War Table is open.
 change('soh/src/code/z_play.c', 'void Play_DrawOverlayElements(PlayState* play) {',
-'''extern int Royale_NativeMenuIsOpen(void);
+'''extern int Royale_NativeMenuHideHud(void);
 void Play_DrawOverlayElements(PlayState* play) {
-    if (Royale_NativeMenuIsOpen()) return;
+    if (Royale_NativeMenuHideHud()) return;
 ''')
 # A malformed dedicated save must remain untouched, with an error on our native screen.
 change('soh/soh/SaveManager.cpp',
