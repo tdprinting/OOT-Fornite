@@ -1,0 +1,16 @@
+{
+  "baseline_revision": "80df53d",
+  "mod_before": {
+    "chars": 1085305,
+    "lines": 17699
+  },
+  "claude_before": {
+    "chars": 667,
+    "label": "Previous workspace CLAUDE.md"
+  },
+  "claude_now": {
+    "chars": 181,
+    "label": "Short workspace CLAUDE.md"
+  },
+  "method": "Characters divided by four; scenario only, not billing tokens"
+}

@@ -8,6 +8,16 @@ on:
   pull_request:
 
 jobs:
+  mod-layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          ./scripts/link_mod.sh
+          python3 scripts/check_mod_layout.py --copied third_party/Shipwright-Android/soh/soh/Enhancements/Royale
+          python3 scripts/test_water_draw_buffers.py
+          python3 -m unittest discover -s tools/token_monitor -p 'test_*.py'
+
   android-ndk:
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +50,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y glslang-tools
           python3 scripts/test_item_surface_shaders.py
+      - name: Validate Kingdom authoring
+        run: |
+          python3 -m pip install numpy
+          python3 scripts/test_kingdom_authoring.py
+      - name: Validate water draw allocation bounds
+        run: python3 scripts/test_water_draw_buffers.py
       - name: Build and test with UBSan
         run: |
           cmake -S server -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \

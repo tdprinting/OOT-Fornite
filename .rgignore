@@ -1,0 +1,14 @@
+# Routine searches omit assets, dependencies, builds, and generated arrays.
+# Search an explicit path or use rg --no-ignore when these files are relevant.
+/third_party/
+/assets/
+/build/
+/build-*/
+/shared/*_model.h
+/shared/*_sounds.h
+/shared/convergence_data.h
+/shared/fortnite_map_data.h
+/shared/kingdom_data.h
+/shared/item_surface_maps.h
+/shared/kingdom_surface_maps.h
+/shared/war_table_assets.h

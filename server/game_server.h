@@ -57,8 +57,8 @@ class GameServer {
     // Test mode (see Match::SetSoloTest): no bots, and the match goes on with one player. Survives Reconfigure.
     void SetSoloTest(bool on) { soloTest = on; sim.match.SetSoloTest(on); }
     // The Sandbox test map (shared/sandbox_layout.h): used when the map chosen is the Sandbox. Survives Reconfigure.
-    void SetSandbox(bool on) { sandbox = on; sim.match.SetSandbox(on && ClampMap(mapId) == kSandboxMapIndex); }
-    bool Sandbox() const { return sandbox && ClampMap(mapId) == kSandboxMapIndex; }
+    void SetSandbox(bool on) { sandbox = on; sim.match.SetSandbox(on && IsTestMap(ClampMap(mapId))); }
+    bool Sandbox() const { return sandbox && IsTestMap(ClampMap(mapId)); }
     bool SoloTest() const { return soloTest; }
     // The lobby starts the match by itself after this many seconds (0 turns it off). The clock starts when the first player is here.
     void SetAutoStart(float seconds) { autoStartSec = seconds; if (seconds <= 0) lobbyElapsed = 0; }
@@ -109,11 +109,11 @@ class GameServer {
         sim.match.SetPlacementValidator(valid);
         // Scenery: the same list goes to every client, and the bots' navigation grid treats the solid ones as obstacles.
         sim.match.SetMapId(mapId);
-        const bool sandboxMap = ClampMap(mapId) == kSandboxMapIndex;   // the test map is laid out by hand (shared/sandbox_layout.h)
+        const bool sandboxMap = IsTestMap(ClampMap(mapId));   // the test map is laid out by hand (shared/sandbox_layout.h)
         PoiLayout layout;
         std::shared_ptr<LootPlan> plan;
         if (sandboxMap) {
-            layout = GenerateSandboxLayout(seed);
+            layout=IsBossArena(mapId)?GeneratePois(seed,map,3,valid,mapId):GenerateSandboxLayout(seed);
             props = layout.props;
         } else if (convergenceMap) {
             layout = GenerateConvergenceLayout(valid);
@@ -166,7 +166,7 @@ class GameServer {
         sim.match.SetPlayerLimit(playerLimit);
         sim.match.SetSoloTest(soloTest);
         sim.match.SetSandbox(sandboxMap && sandbox);
-        if (sandboxMap) { sim.match.SetSandboxSpawn(SandboxSpawn()); sim.match.SetSandboxLootRoom(SandboxLootRoom()); }
+        if (sandboxMap) { sim.match.SetSandboxSpawn(IsBossArena(mapId)?arena::kSpawn:SandboxSpawn()); sim.match.SetSandboxLootRoom(IsBossArena(mapId)?Circle{arena::kArmory,kSandboxLootRadius}:SandboxLootRoom()); }
         if (valid) {
             auto grid = std::make_shared<NavGrid>(map, valid, height);
             AddSceneryToNav(*grid, props);
@@ -198,7 +198,7 @@ class GameServer {
             sim.match.SetVehicleWorld(world);
         }
         if (sandboxMap) {   // four carts to start with (the host's panel adds more), and the loot plaza instead of scattered chests
-            sim.match.SetVehicleCount(vehicleCount < 0 ? 4 : vehicleCount);
+            sim.match.SetVehicleCount(IsBossArena(mapId)?0:(vehicleCount < 0 ? 4 : vehicleCount));
             sim.match.SetVehicleSpots(SandboxCartSpots());
             sim.match.SetSupplyDrops(true);
             sim.match.SandboxStockLoot();
@@ -272,7 +272,7 @@ class GameServer {
     // measures the real scene when the match starts and rebuilds it once more.
     bool SelectMap(int id) {
         if (sim.match.State() != MatchState::Lobby || id < 0 || id >= kMapCount) return false;
-        if (id == kSandboxMapIndex && !sandbox) return false;   // the test map is only for a sandbox game (its own menu button)
+        if (IsTestMap(id) && !sandbox) return false;   // the test map is only for a sandbox game (its own menu button)
         mapId = id;
         mapCircle = MapOf(id).fallback;
         return Reconfigure(mapCircle, nullptr, lastLootCount, FreshSeedOffset());

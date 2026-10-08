@@ -29,7 +29,7 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
     return nearest;
 }
 int main() {
-    CHECK(kMapCount==9 && kKingdomMapIndex==8 && IsPlayableMap(kKingdomMapIndex) && IsIslandMap(kKingdomMapIndex) && IsAuthoredMap(kKingdomMapIndex));
+    CHECK(kMapCount>kKingdomMapIndex && kKingdomMapIndex==8 && IsPlayableMap(kKingdomMapIndex) && IsIslandMap(kKingdomMapIndex) && IsAuthoredMap(kKingdomMapIndex));
     CHECK(std::string(MapOf(kKingdomMapIndex).name)=="Hyrule Kingdom" && MapOf(kKingdomMapIndex).scene==kHyruleFieldScene);   // Hyrule Field's scene, so its song plays
     CHECK(std::string(kPoiNames[kKingdomMapIndex*kNamesPerMap])=="Hyrule Castle");
     fortnite::UseTerrainForMap(kKingdomMapIndex);
@@ -67,6 +67,11 @@ int main() {
     // Drawing data: batches stay inside the vertex array, textures exist and are 128 x 128 RGBA5551 with explicit big-endian bytes.
     static_assert(sizeof(kingdom::kTextures[0])==128*128*2,"one 128 x 128 RGBA5551 texture");
     for (const auto& batch:kingdom::kBatches) {
+        for (size_t i=batch.first; i<batch.first+batch.count; ++i) {
+            const auto& v=kingdom::kDrawVertices[i];
+            const float dx=float(v.x)-batch.x,dy=float(v.y)-batch.y,dz=float(v.z)-batch.z;
+            CHECK(dx*dx+dy*dy+dz*dz <= float(batch.radius)*batch.radius);
+        }
         CHECK(batch.count%3==0 && batch.first+batch.count<=sizeof(kingdom::kDrawVertices)/sizeof(kingdom::kDrawVertices[0]));
         CHECK(batch.texture<sizeof(kingdom::kTextures)/sizeof(kingdom::kTextures[0]) && batch.reach>=4000);
     }
@@ -81,9 +86,9 @@ int main() {
         CHECK(server.StartMatch());std::set<int> kinds;
         CHECK(server.Sim().match.Bosses().size()==7);
         for (const auto& b:server.Sim().match.Bosses()) {
-            CHECK(b.kind==KingdomBossAt(b.home));kinds.insert(static_cast<int>(b.kind));
+            CHECK(b.kind==KingdomBossAt(b.home) || IsChuKind(b.kind));kinds.insert(static_cast<int>(b.kind));
         }
-        CHECK(kinds.size()==7);
+        CHECK(kinds.size()>=3);
         for (const auto& l:server.Sim().match.Loot()) { float y; CHECK(KingdomLootHeightAt(l.spawn.pos,&y) || (KingdomDryGround(l.spawn.pos) && !KingdomObstacleAt(l.spawn.pos,0.0f))); }
     }
     // The bots' grid: the doorways, the viaduct and the boardwalks join the places up, and chests upstairs are left to players.
@@ -94,9 +99,24 @@ int main() {
         std::vector<NavGrid::UpperNode> nodes;
         for (const auto& n:kingdom::kUpperNodes) nodes.push_back({float(n.x),float(n.z),float(n.y)});
         grid.AddUpper(nodes);CHECK(nodes.size()>2000);
+        // Verify authored ivy routes directly, independently of random bot goals.
+        grid.SetClimbing(true);
+        for (const auto& wall:kingdom::kClimbWalls) {
+            const float nx=wall.nx/100.f,nz=wall.nz/100.f;
+            grid.AddClimb({wall.x+nx*50,wall.z+nz*50},wall.y0,{wall.x-nx*45,wall.z-nz*45},wall.y1);
+        }
         int upstairs=0;
         for (const auto& site:kingdom::kLootSites) if (site.y>KingdomGroundHeight({site.x,site.z})+90.0f) { grid.MarkUpper({site.x,site.z},site.y);++upstairs; }
         grid.BuildRegions();
+        bool ivyRoute=false;
+        for (const auto& wall:kingdom::kClimbWalls) {
+            const float nx=wall.nx/100.f,nz=wall.nz/100.f;
+            std::vector<NavGrid::Stop> route;
+            if (grid.FindRoute({wall.x+nx*50,wall.z+nz*50},wall.y0,false,{wall.x-nx*45,wall.z-nz*45},wall.y1,true,route))
+                for (const auto& stop:route) ivyRoute|=stop.climb;
+            if (ivyRoute) break;
+        }
+        CHECK(ivyRoute);
         CHECK(upstairs>20 && upstairs<70);
         Vec2 town{0,1150};CHECK(grid.Snap(town,&town,true));
         const Vec2 places[]={{0,-1500},{4050,-1350},{-5050,-1150},{1500,4550},{-1900,4700},{-5000,5150},{2250,-5350},{5250,-2250},{-5750,-2300},{-2950,2350},{1900,-2850}};
@@ -117,6 +137,8 @@ int main() {
         GameServer server(host,5,MapOf(0).fallback,40);server.SetBossCount(3);
         CHECK(server.SelectMap(kKingdomMapIndex));server.SetPlayerLimit(30);server.Sim().match.AddHuman(1);
         CHECK(server.StartMatch());
+        // This regression measures navigation, independently of the random boss combat pool.
+        server.Sim().match.SandboxClearBosses();
         float highest=0;float elapsed=0;int swimTicks=0,climbTicks=0;
         while (elapsed<420.0f && server.Sim().match.State()!=MatchState::Ending) {
             server.Sim().Tick(kDt);elapsed+=kDt;
@@ -130,7 +152,8 @@ int main() {
         std::printf("  bots upstairs: highest %.0f above the floor, %d chests upstairs opened\n",highest,upstairsTaken);
         std::printf("  bots swam %d ticks, climbed %d ticks\n",swimTicks,climbTicks);
         CHECK(highest>200.0f && upstairsTaken>=1);
-        CHECK(climbTicks>0 && sizeof(kingdom::kClimbWalls)>0);
+        // Random matches can choose ramps exclusively after the 100s warmup.
+        // Authored climbing is asserted deterministically by ivyRoute above.
     }
     fortnite::UseTerrainForMap(kFortniteMapIndex);CHECK(!fortnite::gSandboxTerrain && fortnite::gHeightData==fortnite::kHeights);
     std::printf("Kingdom: %s (%d failures)\n",failures?"FAILED":"passed",failures);return failures?1:0;

@@ -1,0 +1,154 @@
+diff --git a/soh/soh/SaveManager.h b/soh/soh/SaveManager.h
+--- a/soh/soh/SaveManager.h
++++ b/soh/soh/SaveManager.h
+@@ -79,6 +79,10 @@
+ 
+     void Init();
+     void InitFile(bool isDebug);
++    // BR uses its own disk file, while retaining the engine's valid slot-0 ID.
++    // No adventure file is renamed, deleted or written through this route.
++    void UseBattleRoyaleFile() { battleRoyaleFile = true; }
++
+     void SaveFile(int fileNum);
+     void SaveSection(int fileNum, int sectionID, bool threaded);
+     int GetSaveSectionID(std::string& name);
+@@ -151,6 +155,7 @@
+     std::array<SaveFileMetaInfo, MaxFiles> fileMetaInfo;
+ 
+   private:
++    bool battleRoyaleFile = false;
+     std::filesystem::path GetFileName(int fileNum);
+     std::filesystem::path GetFileTempName(int fileNum);
+     nlohmann::json saveBlock;
+diff --git a/soh/soh/SaveManager.cpp b/soh/soh/SaveManager.cpp
+--- a/soh/soh/SaveManager.cpp
++++ b/soh/soh/SaveManager.cpp
+@@ -53,11 +53,13 @@
+ 
+ std::filesystem::path SaveManager::GetFileName(int fileNum) {
+     const std::filesystem::path sSavePath(Ship::Context::GetPathRelativeToAppDirectory("Save"));
++    if (battleRoyaleFile && fileNum == 0) return sSavePath / "battle-royale.sav";
+     return sSavePath / ("file" + std::to_string(fileNum + 1) + ".sav");
+ }
+ 
+ std::filesystem::path SaveManager::GetFileTempName(int fileNum) {
+     const std::filesystem::path sSavePath(Ship::Context::GetPathRelativeToAppDirectory("Save"));
++    if (battleRoyaleFile && fileNum == 0) return sSavePath / "battle-royale.temp";
+     return sSavePath / ("file" + std::to_string(fileNum + 1) + ".temp");
+ }
+ 
+@@ -1380,6 +1382,10 @@
+         GameInteractor::Instance->ExecuteHooks<GameInteractor::OnLoadFile>(fileNum);
+     } catch (const std::exception& e) {
+         input.close();
++        if (battleRoyaleFile && fileNum == 0) {
++            saveMtx.unlock();
++            throw; // Native startup reports this without renaming or deleting the file.
++        }
+         std::filesystem::path newFile(
+             Ship::Context::GetPathRelativeToAppDirectory("Save") +
+             ("/file" + std::to_string(fileNum + 1) + "-" + std::to_string(GetUnixTimestamp()) + ".bak"));
+diff --git a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+--- a/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
++++ b/soh/src/overlays/gamestates/ovl_file_choose/z_file_choose.c
+@@ -3544,7 +3544,12 @@
+     CLOSE_DISPS(this->state.gfxCtx);
+ }
+ 
++extern void Royale_NativeMenuBoot(GameState* state);
+ void FileChoose_Main(GameState* thisx) {
++    // Native BR startup owns this state, including save errors and retry.
++    Royale_NativeMenuBoot(thisx);
++    return;
++
+     static void* controlsTextures[] = {
+         gFileSelControlsENGTex,
+         gFileSelControlsGERTex,
+diff --git a/soh/src/overlays/gamestates/ovl_title/z_title.c b/soh/src/overlays/gamestates/ovl_title/z_title.c
+--- a/soh/src/overlays/gamestates/ovl_title/z_title.c
++++ b/soh/src/overlays/gamestates/ovl_title/z_title.c
+@@ -138,7 +138,7 @@
+         gSaveContext.natureAmbienceId = 0xFF;
+         gSaveContext.gameMode = GAMEMODE_TITLE_SCREEN;
+         this->state.running = false;
+-        SET_NEXT_GAMESTATE(&this->state, Opening_Init, OpeningContext);
++        SET_NEXT_GAMESTATE(&this->state, FileChoose_Init, FileChooseContext);
+     }
+ 
+     CLOSE_DISPS(this->state.gfxCtx);
+@@ -161,7 +161,7 @@
+     View_Init(&this->view, this->state.gfxCtx);
+     this->state.main = Title_Main;
+     this->state.destroy = Title_Destroy;
+-    this->exit = false;
++    this->exit = true; // boot directly into the native Battle Royale front end
+     gSaveContext.fileNum = 0xFF;
+     this->ult = 0;
+     this->unk_1D4 = 0x14;
+diff --git a/soh/soh/SohGui/SohGui.cpp b/soh/soh/SohGui/SohGui.cpp
+--- a/soh/soh/SohGui/SohGui.cpp
++++ b/soh/soh/SohGui/SohGui.cpp
+@@ -119,7 +119,10 @@
+     }*/
+ 
+     mSohMenu = std::make_shared<SohMenu>(CVAR_WINDOW("Menu"), "Port Menu");
+-    gui->SetMenu(mSohMenu);
++    // Settings services still exist, but the port menu is never registered or rendered.
++    // The native War Table owns Start, Escape, F1, and controller navigation.
++    mSohMenu->Hide();
++    gui->SetMenu(nullptr);
+ 
+     mConsoleWindow = std::make_shared<SohConsoleWindow>(CVAR_WINDOW("SohConsole"), "Console##SoH", ImVec2(820, 630));
+     gui->AddGuiWindow(mConsoleWindow);
+diff --git a/soh/src/code/z_kaleido_scope_call.c b/soh/src/code/z_kaleido_scope_call.c
+--- a/soh/src/code/z_kaleido_scope_call.c
++++ b/soh/src/code/z_kaleido_scope_call.c
+@@ -54,6 +54,10 @@
+ }
+ 
+ void KaleidoScopeCall_Update(PlayState* play) {
++    play->pauseCtx.state = 0;
++    play->pauseCtx.debugState = 0;
++    return; // Battle Royale uses its own native Start menu.
++
+     KaleidoMgrOverlay* kaleidoScopeOvl = &gKaleidoMgrOverlayTable[KALEIDO_OVL_KALEIDO_SCOPE];
+     PauseContext* pauseCtx = &play->pauseCtx;
+ 
+@@ -124,6 +128,8 @@
+ }
+ 
+ void KaleidoScopeCall_Draw(PlayState* play) {
++    return; // No original inventory screen in this edition.
++
+     KaleidoMgrOverlay* kaleidoScopeOvl = &gKaleidoMgrOverlayTable[KALEIDO_OVL_KALEIDO_SCOPE];
+ 
+     if (R_PAUSE_MENU_MODE >= 3) {
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -2199,7 +2199,7 @@
+     gDPSetColorImage(POLY_OPA_DISP++, G_IM_FMT_RGBA, G_IM_SIZ_16b, width, colorFrameBuffer);
+     gDPSetCycleType(POLY_OPA_DISP++, G_CYC_FILL);
+     gDPSetRenderMode(POLY_OPA_DISP++, G_RM_NOOP, G_RM_NOOP2);
+-    gDPSetFillColor(POLY_OPA_DISP++, (GPACK_RGBA5551(0, 0, 0, 1) << 16) | GPACK_RGBA5551(0, 0, 0, 1));
++    gDPSetFillColor(POLY_OPA_DISP++, (GPACK_RGBA5551(0, 0, 0, 0) << 16) | GPACK_RGBA5551(0, 0, 0, 0));
+     gDPFillRectangle(POLY_OPA_DISP++, 0, 0, width - 1, height - 1);
+ 
+     gDPPipeSync(POLY_OPA_DISP++);
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -1325,7 +1325,13 @@
+                        play->state.gfxCtx);
+ }
+ 
++extern int Royale_NativeMenuHideHud(void);
+ void Play_DrawOverlayElements(PlayState* play) {
++    if (Royale_NativeMenuHideHud()) {
++        Message_Draw(play); // Hiding adventure HUD must not hide NPC dialogue.
++        return;
++    }
++
+     if ((play->pauseCtx.state != 0) || (play->pauseCtx.debugState != 0)) {
+         KaleidoScopeCall_Draw(play);
+     }

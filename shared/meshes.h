@@ -4,6 +4,7 @@
 #include "boulder_texture.h"
 #include "scenery_model.h"
 #include "ground_model.h"
+#include "playtest_models.h"
 #include "props.h"
 #include "storm.h"
 #include <algorithm>
@@ -22,7 +23,7 @@ struct MeshVertex {
     uint8_t a = 255;   // opacity; only the see-through ground patches (soft rims) set it, everything else is solid
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, GildedSword, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, GildedSword, VictoryCrown, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -764,55 +765,26 @@ inline void Prism(Builder& b, float cx, float cz, float y0, float y1, float r0, 
     }
 }
 
-inline MeshData Tree(uint32_t variant) {
-    const int shape = static_cast<int>(variant % 4), season = static_cast<int>(variant / 4 % 4);
-    static const Rgb leaf[4] = {{104, 190, 70}, {50, 140, 52}, {214, 110, 36}, {88, 130, 90}};
-    static const Rgb leaf2[4] = {{130, 214, 84}, {70, 164, 60}, {232, 170, 50}, {110, 150, 112}};
-    const float snow = season == 3 ? 1.0f : 0.0f;
-    Builder b;
-    const Rgb bark = shape == 3 ? Rgb{226, 222, 212} : Rgb{104, 70, 40};
-    switch (shape) {
-        case 1: { // a pine: tall trunk, three stacked cones
-            Prism(b, 0, 0, 0, 120, 14, 9, 8, bark);
-            const Rgb green = season == 2 ? Rgb{60, 110, 60} : leaf[1];
-            const float heights[3] = {70, 150, 230}, radii[3] = {96, 72, 48};
-            for (int i = 0; i < 3; i++) {
-                const float y0 = heights[i], y1 = y0 + 110;
-                b.inside = {0, (y0 + y1) * 0.5f, 0};
-                for (int k = 0; k < 8; k++) {
-                    const float a0 = k / 8.0f * 6.2831853f, a1 = (k + 1) / 8.0f * 6.2831853f;
-                    const V3 q0 = {std::cos(a0) * radii[i], y0, std::sin(a0) * radii[i]}, q1 = {std::cos(a1) * radii[i], y0, std::sin(a1) * radii[i]};
-                    b.Tri(q0, q1, {0, y1, 0}, (snow > 0 && k % 2 == 0) ? Rgb{236, 242, 248} : (i % 2 ? Mix(green, leaf2[1], 0.4f) : green));
-                    b.Tri(q0, q1, {0, y0 - 6, 0}, Mix(green, Rgb{0, 0, 0}, 0.35f));
-                }
-            }
-            break;
-        }
-        case 2: { // a wide, round-crowned tree
-            Prism(b, 0, 0, 0, 110, 20, 14, 8, bark);
-            Blob(b, 0, 190, 0, 118, 86, 118, leaf[season], 710 + variant, snow);
-            Blob(b, 70, 150, 30, 76, 60, 76, leaf2[season], 720 + variant, snow);
-            Blob(b, -64, 160, -26, 80, 62, 80, leaf2[season], 730 + variant, snow);
-            break;
-        }
-        case 3: { // a slender birch: pale trunk, a light crown
-            Prism(b, 0, 0, 0, 170, 9, 6, 6, bark);
-            Prism(b, 0, 0, 40, 46, 9.6f, 9.6f, 6, {40, 36, 30});
-            Prism(b, 0, 0, 100, 106, 8.2f, 8.2f, 6, {40, 36, 30});
-            Blob(b, 0, 230, 0, 72, 90, 72, leaf2[season], 740 + variant, snow);
-            Blob(b, 26, 170, 18, 46, 50, 46, leaf[season], 750 + variant, snow);
-            break;
-        }
-        default: { // an oak
-            Prism(b, 0, 0, 0, 120, 18, 12, 8, bark);
-            Prism(b, 20, 0, 90, 150, 7, 5, 6, bark);   // a bough
-            Blob(b, 0, 200, 0, 96, 78, 96, leaf[season], 700 + variant, snow);
-            Blob(b, 64, 170, 20, 62, 52, 62, leaf2[season], 701 + variant, snow);
-            Blob(b, -56, 176, -24, 66, 54, 66, leaf2[season], 702 + variant, snow);
-            break;
-        }
+inline MeshData AuthoredMesh(const playtest_models::Vertex* vertices, size_t count, int season = 1) {
+    MeshData mesh;
+    mesh.v.reserve(count);
+    static const float tint[4][3] = {{1.3f,1.16f,.8f},{1,1,1},{2.5f,.85f,.35f},{.9f,.95f,1.1f}};
+    for (size_t i=0;i<count;++i) {
+        const auto& v=vertices[i];
+        const float k[3]={v.leaf?tint[season][0]:1,v.leaf?tint[season][1]:1,v.leaf?tint[season][2]:1};
+        mesh.v.push_back({v.x,v.y,v.z,static_cast<uint8_t>(std::min(255.f,v.r*k[0])),static_cast<uint8_t>(std::min(255.f,v.g*k[1])),static_cast<uint8_t>(std::min(255.f,v.b*k[2]))});
     }
-    return b.mesh;
+    return mesh;
+}
+inline MeshData Tree(uint32_t variant) {
+    using namespace playtest_models;
+    const int season=variant/4%4;
+    switch(variant%4) {
+        case 1:return AuthoredMesh(tree1,std::size(tree1),season);
+        case 2:return AuthoredMesh(tree2,std::size(tree2),season);
+        case 3:return AuthoredMesh(tree3,std::size(tree3),season);
+        default:return AuthoredMesh(tree0,std::size(tree0),season);
+    }
 }
 
 // ---- the lived-in world: small things scattered about each map and round its towns (drawn by the game layer near the player, purely for looks) ----
@@ -1333,6 +1305,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
         case MeshKind::Grenade: return mesh_detail::Grenade();
+        case MeshKind::VictoryCrown: return mesh_detail::AuthoredMesh(playtest_models::crown,std::size(playtest_models::crown));
         case MeshKind::GildedSword: return mesh_detail::GildedSwordMesh(variant);
         default: return {};
     }

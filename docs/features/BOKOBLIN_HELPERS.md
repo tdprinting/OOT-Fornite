@@ -1,0 +1,15 @@
+# Bokoblin miniboss helpers
+
+Status: implemented, merged with the current feature layout; desktop simulation and engine compile checks are recorded in the completion note. Device gameplay, visuals, sound balance and frame rate still need an Android playtest.
+
+Three helpers spawn on valid ground near each miniboss, including sandbox encounters. They share their boss's target, chase within its camp, swing clubs, jump at committed positions and throw visible stones that do not follow a moving target. Wind-ups can be interrupted. Rolling, shields and invulnerability use the existing combat rules. When the boss falls, survivors squeal and scatter for eight seconds. They never count as surviving players, player eliminations or boss kills. Defeated helpers leave a small rupee pickup, once. Clearing a sandbox arena also clears helpers. Navigation shares the main build's path-search budget.
+
+Their personalities have different timing: idle boasting/dancing, startled alert poses, an embarrassed stumble after a missed jump, hurt flinches and a comic collapse. Sound playback uses a dedicated mixer slot, respects SFX volume/menu mute and fades with distance; one helper effect plays at a time to keep groups quiet.
+
+Original assets: `assets/bokoblin/bokoblin.blend` and `.glb`, 958 triangles, 13 bones, 11 clips at 20 fps, 128×128 skin/cloth/face textures and eight synthesized mono 16 kHz effects. PNG previews are in the same folder. No downloaded game model or Nintendo recording is included. `tools/bokoblin/` rebuilds the assets and packed headers. The renderer uses LOADTILE for complete 128×128 RGBA5551 textures; the older LOADBLOCK command truncates large raw atlases.
+
+Code: `shared/bokoblin.h`, `server/boss_helpers.inc`, `server/match.h`, `shared/protocol.h`, `server/game_server.h`, `client/game_client.h`, `server/bot.h`, `mod/Royale/RoyaleBokoblins.h` and its callers in `features/WorldObjects.inc`, `Effects.inc`, `Vehicles.inc`, `Terrain.inc`, `SceneHooks.inc`. Protocol 32 requires all peers to update together. Model/audio and AI/replication tests live in `server/tests/bokoblin*_tests.cpp`.
+
+Research: [Nintendo's developer interview](https://www.nintendo.com/en-gb/Iwata-Asks/Iwata-Asks-The-Legend-of-Zelda-Skyward-Sword/Vol-3-The-Dense-Volcano-and-Enemy-Monsters/2-Enemies-with-a-Touch-of-Humanity/2-Enemies-with-a-Touch-of-Humanity-208301.html) describes lookout rock throws, interrupting a raised rock, expressive alerts and comical defeat reactions. [Zelda Wiki's Bokoblin entry](https://zeldawiki.wiki/wiki/Bokoblin) describes clubs, jumping attacks, ranged rocks and group calls across the series. This project adapts those ideas to its own balance; Bokoblins are a later-series addition interpreted in OoT's N64 style.
+
+Playtest: start a match or summon a miniboss in the miniboss test arena. Verify three helpers on reachable ground, lock-on/B attacks, dodging a swing/jump/stone, interruptions, shields, both host/join clients seeing the same actions, scattering on boss death and arena reset. Inspect textures, dead poses, sound levels and frame rate on the Odin 2 Portal.

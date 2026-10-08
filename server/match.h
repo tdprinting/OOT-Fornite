@@ -4,6 +4,7 @@
 #include "../shared/anim.h"
 #include "../shared/boss.h"
 #include "../shared/bokoblin.h"
+#include "../shared/boss_arena.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
@@ -318,7 +319,11 @@ class Match {
         return true;
     }
 
+    NavGrid::SearchContext& Navigation() { return navigation; }
+    void BeginNavigationTick() { navigation.budget.Reset(); navigationPrepared = true; }
     void Tick(float dt) {
+        if (!navigationPrepared) navigation.budget.Reset();
+        navigationPrepared = false;
         stateTime += dt;
         clock += dt;
         switch (state) {
@@ -914,6 +919,19 @@ class Match {
         const AllyDef& def = AllyOf(a.kind);
         PlayerState* owner = Find(a.owner);
         if (!owner || !owner->alive || clock < a.attackReadyAt) return false;
+        Vec2 targetPos; float targetY = 0, extra = 0;
+        if (IsBossId(targetId)) {
+            auto* boss = FindBoss(targetId); if (!boss || !boss->alive || BossHidden(boss->mode)) return false;
+            if (IsDragonKind(boss->kind) && boss->y > kDragonAirborneAbove && def.melee) return false;
+            targetPos = boss->pos; targetY = boss->y;
+            extra = IsDragonKind(boss->kind) ? kDragonBodyRadius : kBossBodyRadius;
+        } else {
+            auto* target = Find(targetId); if (!target || !target->alive || target->id == a.owner) return false;
+            targetPos = target->pos;
+            targetY = target->isBot && nav ? nav->FloorAt(target->pos) + target->y : target->y;
+        }
+        if (Distance(a.pos, targetPos) > def.range + extra) return false;
+        if (nav && !nav->SightClear(a.pos, nav->FloorAt(a.pos) + 45, targetPos, targetY + 45)) return false;
         a.attackReadyAt = clock + def.cooldown;
         a.actUntil = clock + 0.45f;
         MatchEvent act{MatchEvent::Type::AllyAction};
@@ -923,7 +941,11 @@ class Match {
                 if (b.id != targetId || !b.alive) continue;
                 if ((IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee) || BossHidden(b.mode)) return false;
                 act.x = b.pos.x; act.z = b.pos.z; events.push_back(act);
-                const float dmg = def.damage * (IsDragonKind(b.kind) ? 0.7f : 1.0f);
+                if (ChuCharged(b.kind, clock, BossDazed(b.mode)) && def.melee) return false;
+                if ((b.kind == BossKind::ChuYellow || b.kind == BossKind::ChuBlue) && !def.melee)
+                    StartMove(b, DragonMode::Stunned, 2.5f);
+                const float dmg = def.damage * (IsDragonKind(b.kind) ? 0.7f : 1.0f) *
+                    (b.kind == BossKind::ChuDark && !BossDazed(b.mode) ? 0.15f : 1.0f);
                 const float dealt = (std::min)(dmg, b.health);
                 b.health -= dmg;
                 owner->damageDealt += dealt;
@@ -1321,6 +1343,8 @@ class Match {
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
             b.home = b.pos = at;
+            // One third of guards draw from the new jelly pool; retain every original guard.
+            if (rng.Below(3) == 0) b.kind = static_cast<BossKind>(static_cast<int>(BossKind::ChuRed) + rng.Below(5));
             b.maxHealth = b.health = BossOf(b.kind).health;
             bosses.push_back(b);
             SpawnHelpers(b);
@@ -1347,10 +1371,25 @@ class Match {
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (!hit) return r;
+        // Projectile hits discharge electric jelly; close attacks during a charge shock the attacker.
+        if (ChuCharged(b->kind, clock, BossDazed(b->mode)) && !w.ranged) {
+            Damage(a->id, 0.45f, b->id);
+            if (!TotalsOf(*a).stunImmune) a->stunUntil = (std::max)(a->stunUntil, clock + 0.45f);
+            return r;
+        }
+        if ((b->kind == BossKind::ChuYellow || b->kind == BossKind::ChuBlue) && w.ranged)
+            StartMove(*b, DragonMode::Stunned, 2.5f);
+        if (b->kind == BossKind::ChuDark && a->weapon.item == ItemId::LightArrows && hadAmmo)
+            StartMove(*b, DragonMode::Stunned, 5.0f, DragonMode::Chase, 0.0f, 4);
+        if (IsChuKind(b->kind) && BossDazed(b->mode)) b->windupUntil = -1.0f;
         const GearTotals ag = TotalsOf(*a);
         r.damage = w.damage * static_cast<float>(Pellets(w, Distance(a->pos, b->pos))) * (hadAmmo ? RarityScale(a->weapon.rarity) : 1.0f) * (w.ranged ? ag.ranged : ag.melee) * (clock < a->adultUntil ? kAdultDamage : 1.0f);
         if (BossDazed(b->mode)) r.damage *= kBossStunnedTakes;                        // down or dazed: it takes extra
         else if (airborne) r.damage *= 0.75f;
+        if (b->kind == BossKind::ChuDark) {
+            if (!BossDazed(b->mode)) r.damage *= 0.15f;
+            else if (a->weapon.item == ItemId::MegatonHammer || a->weapon.item == ItemId::GiantsHammer) r.damage *= 2.0f;
+        }
         r.hit = true;
         const float dealt = (std::min)(r.damage, b->health);
         b->health -= r.damage;
@@ -1571,6 +1610,7 @@ class Match {
             p.dirty = true;
         };
         switch (s.style) {
+            case StrikeStyle::Bolt: hold(0.45f); break;
             case StrikeStyle::Fire: ApplyBurn(p, s.by, 3.0f, 0.3f); break;
             case StrikeStyle::Ice: if (!TotalsOf(p).stunImmune) { p.frozenUntil = (std::max)(p.frozenUntil, clock + 1.2f); p.dirty = true; } break;
             case StrikeStyle::Water: hold(0.6f); break;
@@ -1595,7 +1635,13 @@ class Match {
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast
-                if (s.lightning || s.style == StrikeStyle::Bolt) { Damage(p.id, s.damage, s.by, DamageKind::Normal); continue; }
+                if (s.lightning || s.style == StrikeStyle::Bolt) {
+                    Damage(p.id, s.damage, s.by, DamageKind::Normal);
+                    const MiniBoss* source = FindBoss(s.by);
+                    if (p.alive && source && IsChuKind(source->kind) && !TotalsOf(p).stunImmune)
+                        p.stunUntil = (std::max)(p.stunUntil, clock + 0.45f);
+                    continue;
+                }
                 const DamageKind kind = s.style == StrikeStyle::Fire ? DamageKind::Fire : (s.style == StrikeStyle::Rock ? DamageKind::Explosion : DamageKind::Normal);
                 Damage(p.id, s.damage, s.by, kind);
                 if (p.alive) ApplyStyle(p, s);
@@ -1649,11 +1695,13 @@ class Match {
             if (!onGround && def.traverse == Traverse::Climb) { b.mode = DragonMode::Climb; pace = speed * 0.75f; }   // up the wall, straight on
             else if (!onGround && def.traverse == Traverse::Swim) { b.aux = 1; pace = speed * 0.85f; }                 // through the water, straight on
             else if (!nav->LineClear(from, goal)) {
-                if (clock >= b.repathAt || Distance(b.pathGoal, goal) > 150.0f) {
+                if (clock >= b.repathAt) {
                     b.repathAt = clock + 0.7f;
                     b.pathGoal = goal;
                     b.pathIdx = 0;
-                    if (!nav->FindPath(b.pos, goal, b.path)) b.path.clear();
+                    if (!nav->FindPath(b.pos, goal, b.path, false, &navigation.workspace, &navigation.budget)) {
+                        b.path.clear(); if (navigation.workspace.deferred) b.repathAt = clock + 0.05f;
+                    }
                 }
                 while (b.pathIdx < b.path.size() && Distance(b.pos, b.path[b.pathIdx]) < NavGrid::kCell * 0.6f) b.pathIdx++;
                 if (b.pathIdx < b.path.size()) next = b.path[b.pathIdx];
@@ -1800,7 +1848,7 @@ class Match {
                 if (clock >= b.modeUntil) {
                     b.pos = b.to;
                     StartMove(b, DragonMode::Emerge, 0.6f);
-                    AddStrike(b.pos, 105.0f, def.damage, 0.5f, b.id, StrikeStyle::Shadow);   // it bursts up out of the ground under you
+                    AddStrike(b.pos, 105.0f, def.damage, 0.5f, b.id, IsChuKind(b.kind) ? ChuStyle(b.kind) : StrikeStyle::Shadow);
                 }
                 return true;
             }
@@ -1826,6 +1874,25 @@ class Match {
         bool started = false;
         float busy = 0.0f;
         switch (b.kind) {
+            case BossKind::ChuRed: case BossKind::ChuGreen: case BossKind::ChuYellow: case BossKind::ChuBlue: case BossKind::ChuDark:
+                if (d < 520.0f) {
+                    const StrikeStyle style = ChuStyle(b.kind);
+                    if (b.kind == BossKind::ChuGreen || b.kind == BossKind::ChuDark) {
+                        StartBurrow(b, SnapToGround(at), 1.2f); // flatten, disappear and rise underneath the target
+                        busy = 1.8f;
+                    } else if (b.kind == BossKind::ChuBlue || (b.kind == BossKind::ChuYellow && d < 200.0f)) {
+                        StartMove(b, DragonMode::Summon, 1.1f, DragonMode::Stunned, 1.0f);
+                        AddStrike(b.pos, 190.0f, def.damage, 0.9f, b.id, StrikeStyle::Bolt);
+                        if (b.kind == BossKind::ChuBlue) AddStrike(at, 110.0f, def.damage * 0.7f, 1.5f, b.id, StrikeStyle::Water);
+                        busy = 2.1f;
+                    } else {
+                        StartLeap(b, SnapToGround(at), true);
+                        AddStrike(b.to, 115.0f, def.damage, b.modeUntil - clock, b.id, style);
+                        busy = b.modeUntil - clock;
+                    }
+                    started = true;
+                }
+                break;
             case BossKind::Stone:   // Stalfos: a jump slash, landing where you stand
                 if (d > 170.0f && d < 520.0f) {
                     StartLeap(b, SnapToGround(at), true);
@@ -1906,6 +1973,8 @@ class Match {
 
     void TickMini(MiniBoss& b, float dt) {
         const BossDef def = BossOf(b.kind);
+        if (IsChuKind(b.kind) && (b.mode == DragonMode::Patrol || b.mode == DragonMode::Chase))
+            b.aux = ChuCharged(b.kind, clock, false) ? 1 : 0;
         if (TickMiniMove(b, dt)) return;
         // Notice the nearest player in range (the current target is kept while it stays in reach).
         PlayerState* target = Find(b.target);
@@ -1928,7 +1997,11 @@ class Match {
                 for (auto& p : players) {
                     if (!p.alive || clock < p.invulnUntil) continue;
                     if (Distance(p.pos, b.pos) > kBossReach + 40.0f || std::fabs(OffFacing(b, p.pos)) > 1.25f) continue;
-                    Blow(p, b.pos, def.damage, b.id);
+                    const bool landed = Blow(p, b.pos, def.damage, b.id);
+                    if (landed && p.alive && IsChuKind(b.kind)) {
+                        Strike touch; touch.by = b.id; touch.style = ChuStyle(b.kind);
+                        ApplyStyle(p, touch);
+                    }
                 }
             }
             return;
@@ -2466,6 +2539,19 @@ class Match {
         return true;
     }
     void SandboxClearBosses() { helpers.clear(); for (auto& b : bosses) { b.alive = false; b.health = 0; } }
+    bool SandboxClearArena(uint32_t player) {
+        if(!SandboxLive() || !IsBossArena(mapId) || !Find(player)) return false;
+        bosses.clear(); helpers.clear();
+        strikes.erase(std::remove_if(strikes.begin(),strikes.end(),[](const Strike& s){return IsBossId(s.by);}),strikes.end());
+        loot.erase(std::remove_if(loot.begin(),loot.end(),[&](const LootEntry& l){return Distance(l.spawn.pos,sandboxRoom.center)>sandboxRoom.radius;}),loot.end());
+        SandboxRevive(player);SandboxHeal(player);SandboxTeleport(player,arena::kSpawn);
+        auto* p=Find(player);p->attackReadyAt=clock;p->rollUntil=0;p->invulnUntil=clock+0.8f;
+        return true;
+    }
+    bool SandboxBossEncounter(BossKind kind, uint32_t player) {
+        if(static_cast<int>(kind)>=kBossKindCount || IsMajorKind(kind)!=(mapId==kMainBossArenaIndex)) return false;
+        return SandboxClearArena(player) && SandboxBoss(kind,arena::kBoss);
+    }
     // The loot plaza: every item in the game lying in rows, and chests along the back. Called when the map is built.
     void SandboxStockLoot() {
         loot.clear();
@@ -2853,6 +2939,8 @@ class Match {
     std::vector<FartCloud> fartClouds;
     std::map<uint32_t, float> lastFartCloud;   // when each player last started a cloud
     std::shared_ptr<const NavGrid> nav;
+    NavGrid::SearchContext navigation;
+    bool navigationPrepared = false;
     std::vector<AllyState> allies;
     std::vector<VehicleState> vehicles;
     std::vector<Vec2> vehicleSpots;

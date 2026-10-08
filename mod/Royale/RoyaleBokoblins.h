@@ -1,4 +1,4 @@
-// Included once inside RoyaleMod.cpp, after RoyaleBosses.h.
+// Included by features/WorldObjects.inc, after the GPU/floor helpers. Server state owns gameplay.
 void DrawBokoblinModel(PlayState* play, float x, float y, float z, float yaw, float scale, const royale::bokoblin::Pose& pose, int face) {
     GfxLayer layer(play, GfxLayerId::Characters);   // its thousands of vertices and commands go in the layer pool, not the game's buffer
     namespace A = royale::bokoblin;
@@ -39,7 +39,8 @@ void DrawBokoblinModel(PlayState* play, float x, float y, float z, float yaw, fl
         if (tex != loaded) {
             const uint8_t* data = tex == 0 ? A::kClothTex : tex == 1 ? A::kSkinTex : A::kFaceTex[tex - 2];
             const int w = tex == 0 ? A::kClothW : tex == 1 ? A::kSkinW : A::kFaceW, h = tex == 0 ? A::kClothH : tex == 1 ? A::kSkinH : A::kFaceH;
-            gDPLoadTextureBlock(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, G_TX_NOMIRROR | G_TX_CLAMP,
+            // LOADBLOCK clamps at 2048 texels. LOADTILE preserves the full 128x128 atlas in Shipwright.
+            gDPLoadTextureTile(POLY_OPA_DISP++, data, G_IM_FMT_RGBA, G_IM_SIZ_16b, w, h, 0, 0, w - 1, h - 1, 0, G_TX_NOMIRROR | G_TX_CLAMP,
                                 G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
             loaded = tex;
         }
@@ -121,6 +122,26 @@ void Bokoblin_Draw(Actor* actor, PlayState* play) {
     const int face=mode==royale::BokoMode::Hurt || mode==royale::BokoMode::Dead ? royale::bokoblin::kFaceHurt :
         mode==royale::BokoMode::Alert || mode==royale::BokoMode::Flee ? royale::bokoblin::kFaceAlarm : royale::bokoblin::kFaceGrin;
     DrawBokoblinModel(play,actor->world.pos.x,actor->world.pos.y,actor->world.pos.z,b.net.rot*(3.14159265f/32768.0f),0.72f,pose,face);
+    if (mode==royale::BokoMode::Throw && b.age<0.7f) {
+        const auto& hand=pose.bone[5];
+        const float rest[3]={-31.0f,29.0f,2.0f};float p[3];royale::bokoblin::Rotate(hand.q,rest,p);
+        for (int i=0;i<3;i++) p[i]=(p[i]+hand.t[i])*0.72f;
+        const float yaw=b.net.rot*(3.14159265f/32768.0f);
+        const GpuMesh* rock=GpuMeshFor(royale::MeshKind::Rock,0);
+        if (rock) {
+            GfxLayer layer(play,GfxLayerId::Characters);
+            OPEN_DISPS(play->state.gfxCtx);
+            Gfx_SetupDL_25Opa(play->state.gfxCtx);
+            gSPClearGeometryMode(POLY_OPA_DISP++,G_LIGHTING);
+            gDPSetCombineMode(POLY_OPA_DISP++,G_CC_SHADE,G_CC_SHADE);
+            Matrix_Translate(actor->world.pos.x+p[0]*std::cos(yaw)+p[2]*std::sin(yaw),actor->world.pos.y+p[1],
+                actor->world.pos.z-p[0]*std::sin(yaw)+p[2]*std::cos(yaw),MTXMODE_NEW);
+            Matrix_Scale(.23f,.23f,.23f,MTXMODE_APPLY);
+            gSPMatrix(POLY_OPA_DISP++,MATRIX_NEWMTX(play->state.gfxCtx),G_MTX_NOPUSH|G_MTX_LOAD|G_MTX_MODELVIEW);
+            gSPDisplayList(POLY_OPA_DISP++,const_cast<Gfx*>(rock->dl.data()));
+            CLOSE_DISPS(play->state.gfxCtx);
+        }
+    }
     // The stone visibly travels to the position committed by the server; it never homes in after release.
     if (b.net.rock && b.rockAge<=0.8f) {
         const float t=std::clamp(b.rockAge/0.8f,0.0f,1.0f);

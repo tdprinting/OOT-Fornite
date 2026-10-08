@@ -1,0 +1,58 @@
+diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
+--- a/src/graphic/Fast3D/gfx_pc.cpp
++++ b/src/graphic/Fast3D/gfx_pc.cpp
+@@ -210,6 +210,9 @@
+ static struct ShaderProgram* gfx_lookup_or_create_shader_program(uint64_t shader_id0, uint32_t shader_id1) {
+     struct ShaderProgram* prg = gfx_rapi->lookup_shader(shader_id0, shader_id1);
+     if (prg == NULL) {
++        // Compilation binds the new program and vertex stride. Draw queued
++        // triangles with their original layout before either one changes.
++        gfx_flush();
+         gfx_rapi->unload_shader(rendering_state.shader_program);
+         prg = gfx_rapi->create_and_load_new_shader(shader_id0, shader_id1);
+         rendering_state.shader_program = prg;
+@@ -3071,6 +3074,9 @@
+         gfx_rapi->select_texture(6 + i, it->second);
+         gfx_rapi->set_sampler_parameters(6 + i, true, G_TX_WRAP, G_TX_WRAP);
+     }
++    // Framebuffer helpers bind textures on the active unit. Never leave a
++    // private material sampler active for subsequent scene/UI operations.
++    if (gfx_rapi->reset_texture_unit) gfx_rapi->reset_texture_unit();
+     return false;
+ }
+
+diff --git a/src/graphic/Fast3D/gfx_rendering_api.h b/src/graphic/Fast3D/gfx_rendering_api.h
+--- a/src/graphic/Fast3D/gfx_rendering_api.h
++++ b/src/graphic/Fast3D/gfx_rendering_api.h
+@@ -71,6 +71,8 @@
+     void (*set_texture_filter)(FilteringMode mode);
+     FilteringMode (*get_texture_filter)();
+     void (*enable_srgb_mode)();
++    // Optional: return to the default colour unit after private texture uploads.
++    void (*reset_texture_unit)() = nullptr;
+ };
+
+ #endif
+diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.cpp
+--- a/src/graphic/Fast3D/gfx_opengl.cpp
++++ b/src/graphic/Fast3D/gfx_opengl.cpp
+@@ -611,6 +611,10 @@
+     glBindTexture(GL_TEXTURE_2D, texture_id);
+ }
+
++static void gfx_opengl_reset_texture_unit() {
++    glActiveTexture(GL_TEXTURE0);
++}
++
+ static void gfx_opengl_upload_texture(const uint8_t* rgba32_buf, uint32_t width, uint32_t height) {
+     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba32_buf);
+ }
+@@ -1094,6 +1098,7 @@
+                                           gfx_opengl_delete_texture,
+                                           gfx_opengl_set_texture_filter,
+                                           gfx_opengl_get_texture_filter,
+-                                          gfx_opengl_enable_srgb_mode };
++                                          gfx_opengl_enable_srgb_mode,
++                                          gfx_opengl_reset_texture_unit };
+
+ #endif

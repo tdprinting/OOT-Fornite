@@ -29,6 +29,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Fetch submodules (fork, its submodules, ENet)
         run: git submodule update --init --recursive --depth 1
+      - name: Verify native patches with strict context matching
+        run: python3 scripts/check_surface_patch_stack.py
       - name: Apply patches and copy the mod into the fork
         run: |
           ./scripts/apply_patches.sh
@@ -37,6 +39,8 @@ jobs:
           ./scripts/apply_logo.sh
           echo "#define ROYALE_BUILD_VERSION \"0.${{ github.run_number }}\"" > mod/Royale/build_version.h
           cat mod/Royale/build_version.h
+      - name: Check renderer shader batching and material texture state
+        run: python3 scripts/test_surface_renderer_state.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

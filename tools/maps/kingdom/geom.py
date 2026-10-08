@@ -114,6 +114,7 @@ class World:
               uv_scale=1.0, top=True, hookshot=False):
         """An upright prism over a plan outline [(x, z), ...] counter clockwise seen from above (any simple polygon).
         climb: indices of outline edges whose outside face is climbable (vines)."""
+        if col == 'prop' and y1 - y0 >= 110: col = 'static'
         pts = [(float(x), float(z)) for x, z in outline]
         if _area(pts) < 0: pts = pts[::-1]; climb = tuple((len(pts) - 2 - i) % len(pts) for i in climb)
         n = len(pts)
@@ -158,6 +159,7 @@ class World:
             self.props.append((min(A[0], B[0], C[0], D[0]), base, min(A[1], B[1], C[1], D[1]), max(A[0], B[0], C[0], D[0]), max(y0, y1), max(A[1], B[1], C[1], D[1]), self.group))
 
     def cylinder(self, cx, cz, r, y0, y1, mat, n=12, col='static', surf='stone', top=True, top_mat=None, r1=None, climb=False, uv_scale=1.0, bottom=False):
+        if col == 'prop' and y1 - y0 >= 110: col = 'static'
         r1 = r if r1 is None else r1
         s = (self.surface(surf, climb=climb) if col == 'static' else None)
         stop = self.surface(surf) if col == 'static' else None

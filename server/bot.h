@@ -5,6 +5,7 @@
 #include "match.h"
 #include "nav.h"
 #include <cmath>
+#include <array>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -53,13 +54,14 @@ class BotController {
 
     explicit BotController(uint64_t seed) : rng(seed ^ 0x626F74ull) {} // "bot"
 
-    void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); }
+    void SetNav(std::shared_ptr<const NavGrid> grid) { nav = std::move(grid); memory.clear(); allyMemory.clear(); lootBuckets.clear(); lootBucketCount = 0; }
     // The scenery, so bots cut bushes and break rocks for rupees and ammo the way players do. The server breaks the prop (SmashProp) for
     // each request DrainSmashes() hands it, and tells the bots about every prop anybody breaks (PropGone).
     void SetProps(std::vector<Prop> list) {
         props = std::move(list); propGone.assign(props.size(), false); smashes.clear();
         // What can be stood on, bucketed so a bot finds what is under it quickly (LiftAt).
-        stands.clear(); standBuckets.clear();
+        stands.clear(); standBuckets.clear(); propBuckets.clear();
+        for (size_t i = 0; i < props.size(); ++i) propBuckets[BucketKey(Bucket(props[i].pos.x), Bucket(props[i].pos.z))].push_back(i);
         for (const Prop& p : props) {
             if (PropRadius(p.kind) <= 0) continue;
             const float top = SceneryHeight(p);
@@ -85,11 +87,34 @@ class BotController {
 
     void Step(Match& m, float dt) {
         const MatchState state = m.State();
+        if (state == MatchState::Ending) {
+            if (const PlayerState* winner = m.Winner(); winner && winner->isBot) {
+                PlayerState* bot = m.Find(winner->id);
+                bot->anim = EmoteAnim(5); // the prize held overhead: "Victory!"
+                bot->dirty = true;
+            }
+            return;
+        }
         if (state != MatchState::Countdown && state != MatchState::Drop && state != MatchState::InMatch) return;
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
+        m.BeginNavigationTick();
         repathBudget = 8;
+        for (auto it = memory.begin(); it != memory.end();) {
+            auto* live = m.Find(it->first);
+            if (!live || !live->alive || !live->isBot) it = memory.erase(it); else ++it;
+        }
+        if (lootBucketCount != m.Loot().size()) {
+            lootBuckets.clear(); lootBucketCount = m.Loot().size();
+            for (size_t i = 0; i < lootBucketCount; ++i) {
+                const Vec2 at = m.Loot()[i].spawn.pos;
+                lootBuckets[BucketKey(Bucket(at.x), Bucket(at.z))].push_back(i);
+            }
+        }
         StepAllies(m, dt);
-        for (auto& p : m.Players()) {
+        auto& players = m.Players();
+        const size_t count = players.size(), first = count ? botTurn++ % count : 0;
+        for (size_t n = 0; n < count; ++n) {
+            auto& p = players[(first + n) % count];
             if (p.isBot && p.alive) {
                 if (frozen) continue;
                 Memory& air = Mem(p.id);
@@ -135,7 +160,21 @@ class BotController {
             auto walkTo = [&](Vec2 to, float speedScale) {
                 const float dx = to.x - a.pos.x, dz = to.z - a.pos.z;
                 if (std::hypot(dx, dz) < 1.0f) return;
-                if (Advance(m, a.pos, dx, dz, (std::min)(step * speedScale, std::hypot(dx, dz)))) a.moving = true;
+                auto& route = allyMemory[a.index];
+                Vec2 aim = to;
+                if (nav && !nav->LineClear(a.pos, to, true)) {
+                    if (m.Clock() >= route.retryAt) {
+                        route.retryAt = m.Clock() + 0.7f; route.goal = to; route.next = 0;
+                        auto& context = m.Navigation();
+                        if (!nav->FindPath(a.pos, to, route.path, true, &context.workspace, &context.budget)) {
+                            route.path.clear(); if (context.workspace.deferred) route.retryAt = m.Clock() + 0.05f;
+                        }
+                    }
+                    while (route.next < route.path.size() && Distance(a.pos, route.path[route.next]) < 30) ++route.next;
+                    if (route.next < route.path.size()) aim = route.path[route.next];
+                }
+                const float ax = aim.x-a.pos.x, az = aim.z-a.pos.z;
+                if (Advance(m, a.pos, ax, az, (std::min)(step * speedScale, std::hypot(ax, az)))) a.moving = true;
                 a.rot = FaceAngle(a.pos, to);
             };
             if (!owner) {
@@ -159,15 +198,16 @@ class BotController {
             for (const auto& p : m.Players()) {
                 if (!p.alive || p.id == owner->id || m.Invulnerable(p)) continue;
                 const float d = Distance(p.pos, a.pos);
-                if (d < best && Distance(p.pos, owner->pos) < kAllyLeash * 0.8f) { best = d; foeId = p.id; foePos = p.pos; }
+                if (d < best && Distance(p.pos, owner->pos) < kAllyLeash * 0.8f && (!nav || nav->SightClear(a.pos, nav->FloorAt(a.pos)+45, p.pos, EyeOf(p)))) { best = d; foeId = p.id; foePos = p.pos; }
             }
             for (const auto& b : m.Bosses()) {
                 if (!b.alive || (IsDragonKind(b.kind) && b.y > kDragonAirborneAbove && def.melee)) continue;
                 const float d = Distance(b.pos, a.pos) - (IsDragonKind(b.kind) ? kDragonBodyRadius : kBossBodyRadius) * 0.8f;
-                if (d < best && Distance(b.pos, owner->pos) < kAllyLeash * 0.8f) { best = d; foeId = b.id; foePos = b.pos; }
+                if (d < best && Distance(b.pos, owner->pos) < kAllyLeash * 0.8f && (!nav || nav->SightClear(a.pos, nav->FloorAt(a.pos)+45, b.pos, b.y+45))) { best = d; foeId = b.id; foePos = b.pos; }
             }
             const float ownerDist = Distance(owner->pos, a.pos);
             if (ownerDist > kAllyLeash * 2.0f) {   // left far behind: catch up in a flash, beside the owner
+                allyMemory.erase(a.index);
                 a.pos = {owner->pos.x + 90.0f, owner->pos.z + 60.0f};
                 if (!Walkable(a.pos)) a.pos = owner->pos;
                 continue;
@@ -261,7 +301,13 @@ class BotController {
         bool climbDestUpper = false;
         bool wasSwimming = false;
         Vec2 pathGoal = {};
-        float repathAt = 0;
+        float repathAt = 0, lastSearchAt = -100;
+        bool pathFailed = false;
+        float perceiveAt = 0;
+        struct FailedGoal { Vec2 at = {}; float until = -1; };
+        std::array<FailedGoal, 4> failedGoals;
+        size_t failedNext = 0;
+        float cartFailedUntil = -1;
         Vec2 progressPos = {};
         float progressAt = -1;
         float unstickUntil = 0;
@@ -335,6 +381,11 @@ class BotController {
     std::shared_ptr<const NavGrid> nav;
     std::unordered_map<uint32_t, Memory> memory;
     int repathBudget = 0;
+    size_t botTurn = 0;
+    std::unordered_map<int64_t, std::vector<size_t>> lootBuckets, propBuckets;
+    size_t lootBucketCount = 0;
+    struct AllyMemory { std::vector<Vec2> path; size_t next = 0; Vec2 goal = {}; float retryAt = 0; };
+    std::unordered_map<uint32_t, AllyMemory> allyMemory;
     std::vector<Prop> props;                          // the scenery (SetProps)
     std::vector<bool> propGone;                       // broken by somebody, or about to be by a bot
     std::vector<std::pair<uint32_t, size_t>> smashes; // bot id, prop index: waiting for the server to break them
@@ -345,6 +396,21 @@ class BotController {
     static int Bucket(float v) { return static_cast<int>(std::floor(v / kBucket)); }
     static int64_t BucketKey(int bx, int bz) { return static_cast<int64_t>((static_cast<uint64_t>(static_cast<uint32_t>(bx)) << 32) | static_cast<uint32_t>(bz)); }
 
+    template<typename F> void Nearby(const std::unordered_map<int64_t, std::vector<size_t>>& buckets, Vec2 at, float radius, F f) const {
+        for (int x = Bucket(at.x-radius); x <= Bucket(at.x+radius); ++x)
+            for (int z = Bucket(at.z-radius); z <= Bucket(at.z+radius); ++z) {
+                auto it = buckets.find(BucketKey(x,z));
+                if (it != buckets.end()) for (size_t i : it->second) f(i);
+            }
+    }
+    static bool FailedGoal(const Memory& mem, Vec2 goal, float now) {
+        for (const auto& bad : mem.failedGoals) if (now < bad.until && Distance(goal, bad.at) < 120) return true;
+        return false;
+    }
+    static void RememberFailure(Memory& mem, Vec2 goal, float now) {
+        mem.failedGoals[mem.failedNext++ % mem.failedGoals.size()] = {goal, now + 4};
+        mem.lootIdx = -1; mem.haveCover = false; mem.hasWander = false;
+    }
     Memory& Mem(uint32_t id) {
         auto it = memory.find(id);
         if (it == memory.end()) {
@@ -749,13 +815,18 @@ class BotController {
             float goalY = 0;
             const bool toUp = nav->UpperGoal(goal, &goalY);
             const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
-            if ((mem.routeIdx >= mem.route.size() || goalMoved || m.Clock() >= mem.repathAt) && repathBudget > 0) {
+            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
-                mem.pathGoal = goal;
+                mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
                 mem.routeIdx = 0;
                 mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
                 const float startY = mem.upper ? mem.levelY : nav->FloorAt(p.pos);
-                if (!nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route)) mem.route.clear();
+                auto& context = m.Navigation();
+                mem.pathFailed = !nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route, &context.workspace, &context.budget);
+                if (mem.pathFailed) {
+                    mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
+                    if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
+                }
             }
             while (mem.routeIdx < mem.route.size() && Distance(p.pos, mem.route[mem.routeIdx].p) < NavGrid::kCell * 0.45f) mem.routeIdx++;
             if (mem.routeIdx < mem.route.size()) {
@@ -769,13 +840,17 @@ class BotController {
             }
         } else if (nav && Distance(p.pos, goal) > NavGrid::kCell * 1.2f) {
             const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
-            const bool needPath = mem.pathIdx >= mem.path.size() || goalMoved;
-            if ((needPath || m.Clock() >= mem.repathAt) && repathBudget > 0) {
+            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
-                mem.pathGoal = goal;
+                mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
                 mem.pathIdx = 0;
                 mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
-                if (!nav->FindPath(p.pos, goal, mem.path, true)) mem.path.clear(); // unreachable: fall back to walking straight at it
+                auto& context = m.Navigation();
+                mem.pathFailed = !nav->FindPath(p.pos, goal, mem.path, true, &context.workspace, &context.budget);
+                if (mem.pathFailed) {
+                    mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
+                    if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
+                }
             }
             while (mem.pathIdx < mem.path.size() && Distance(p.pos, mem.path[mem.pathIdx]) < NavGrid::kCell * 0.6f) mem.pathIdx++;
             if (mem.pathIdx < mem.path.size()) aim = mem.path[mem.pathIdx];
@@ -997,27 +1072,31 @@ class BotController {
     // unless something clearly better turns up, so bots don't dither between two piles.
     int ChooseLoot(const Match& m, const PlayerState& p, Memory& mem, const Circle& soon) {
         const auto& loot = m.Loot();
-        if (mem.lootIdx >= 0 && (static_cast<size_t>(mem.lootIdx) >= loot.size() || loot[mem.lootIdx].taken)) mem.lootIdx = -1;
+        if (mem.lootIdx >= 0 && (static_cast<size_t>(mem.lootIdx) >= loot.size() || loot[mem.lootIdx].taken || FailedGoal(mem, loot[mem.lootIdx].spawn.pos, m.Clock()))) mem.lootIdx = -1;
         if (m.Clock() < mem.lootEvalAt && mem.lootIdx >= 0) return mem.lootIdx;
         if (m.Clock() < mem.lootEvalAt) return -1;
-        mem.lootEvalAt = m.Clock() + 0.5f;
+        mem.lootEvalAt = m.Clock() + 0.45f + 0.15f * std::fmod(p.id * 0.6180339f, 1.0f);
 
         const float radius = kSearchRadius * (0.8f + mem.greed);
         const Circle safe = {soon.center, soon.radius * 0.95f};
         int best = -1;
         float bestScore = 0, currentScore = 0;
-        for (size_t i = 0; i < loot.size(); i++) {
-            if (loot[i].taken) continue;
+        Nearby(lootBuckets, p.pos, radius * 2.4f, [&](size_t i) {
+            if (loot[i].taken) return;
             const LootSpawn& s = loot[i].spawn;
+            if (FailedGoal(mem, s.pos, m.Clock())) return;
             const float d = Distance(p.pos, s.pos);
-            if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) continue;
-            if (nav && !nav->Connected(p.pos, s.pos, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN())) continue;   // a chest upstairs or on an island with no way up is not for the bots
+            if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) return;
+            if (nav && !nav->Connected(p.pos, s.pos, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN())) return;   // a chest upstairs or on an island with no way up is not for the bots
             const float value = LootValue(p, s) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
-            if (value <= 0) continue;
-            const float score = value * (0.6f + mem.greed) / (d + 150.0f);
+            if (value <= 0) return;
+            const float climbCost = nav ? std::max(0.0f, nav->StandHeight(s.pos) - FeetAt(p.pos)) * 2.0f : 0;
+            const float travelCost = d * (nav && nav->Swimming(s.pos) ? 2.2f : 1.0f) + climbCost;
+            if (!m.GetStorm().SafeZoneAt(m.StormTime() + travelCost / kRunSpeed + 3).Contains(s.pos)) return;
+            const float score = value * (0.6f + mem.greed) / (travelCost + 150.0f);
             if (static_cast<int>(i) == mem.lootIdx) currentScore = score;
             if (score > bestScore) { bestScore = score; best = static_cast<int>(i); }
-        }
+        });
         if (mem.lootIdx >= 0 && bestScore < currentScore * 1.3f) return mem.lootIdx;
         mem.lootIdx = best;
         return best;
@@ -1223,18 +1302,20 @@ class BotController {
         const float foeEye = EyeOf(foe);
         float best = 1e9f;
         auto consider = [&](Vec2 spot) {
-            if (!nav->Standable(spot) || Distance(spot, foe.pos) < 220.0f) return;
+            if (!nav->Standable(spot) || Distance(spot, foe.pos) < 220.0f || FailedGoal(mem, spot, now) ||
+                !nav->Connected(p.pos, spot, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN()) ||
+                m.GetStorm().DamagePerSecond(spot, m.StormTime() + 3) > 0) return;
             if (Sees(spot, FeetAt(spot) + 45.0f, foe.pos, foeEye)) return;
-            const float d = Distance(p.pos, spot);
+            const float d = Distance(p.pos, spot) * (nav->LineClear(p.pos, spot, true) ? 1.0f : 1.6f);
             if (d < best) { best = d; mem.cover = spot; mem.haveCover = true; }
         };
-        for (size_t i = 0; i < props.size(); i++) {
+        Nearby(propBuckets, p.pos, 520, [&](size_t i) {
             const Prop& pr = props[i];
-            if (propGone[i] || PropRadius(pr.kind) <= 0 || SceneryHeight(pr) < 60.0f || Distance(p.pos, pr.pos) > 520.0f) continue;
+            if (propGone[i] || PropRadius(pr.kind) <= 0 || SceneryHeight(pr) < 60.0f || Distance(p.pos, pr.pos) > 520.0f) return;
             const float dx = pr.pos.x - foe.pos.x, dz = pr.pos.z - foe.pos.z, len = (std::max)(1.0f, std::hypot(dx, dz));
             const float off = PropRadius(pr.kind) + 50.0f;
             consider({pr.pos.x + dx / len * off, pr.pos.z + dz / len * off});
-        }
+        });
         if (nav->HasHeights()) {   // over the brow of a hill, behind a ridge
             for (int k = 0; k < 8; k++) {
                 const float a = static_cast<float>(k) * 0.785398f;
@@ -1284,13 +1365,19 @@ class BotController {
         }
 
         // Perceive. Taking damage alerts the bot and widens its senses for a few seconds.
-        if (p.health < mem.lastHealth - 0.12f) mem.alertUntil = now + 5.0f;
+        if (p.health < mem.lastHealth - 0.12f) { mem.alertUntil = now + 5.0f; mem.perceiveAt = 0; }
         mem.lastHealth = p.health;
         float sight = tune.sight * (now < mem.alertUntil ? 1.5f : 1.0f);
         sight *= SightMult(m.CurrentWeather());   // fog, sandstorms and heavy weather hide people
         if (m.Revealing(p)) sight = 1e9f;
 
-        PlayerState* foe = ChooseTarget(m, p, mem, sight, m.Revealing(p));
+        PlayerState* foe = m.Find(mem.target);
+        if (foe && (!foe->alive || Distance(p.pos, foe->pos) > sight ||
+            (!m.Revealing(p) && Distance(p.pos, foe->pos) > 250 && !CanSee(p, *foe)))) foe = nullptr;
+        if (now >= mem.perceiveAt) {
+            foe = ChooseTarget(m, p, mem, sight, m.Revealing(p));
+            mem.perceiveAt = now + 0.12f + 0.04f * std::fmod(p.id * 0.6180339f, 1.0f);
+        }
         if (foe && m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds() && now >= mem.alertUntil) foe = nullptr;   // nobody wants a fight yet
         if (foe) {
             if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
@@ -1303,7 +1390,8 @@ class BotController {
             mem.lastSeen = foe->pos;
             mem.lastSeenAt = now;
         } else {
-            mem.target = kNoPlayer;
+            mem.prevFoeAt = -1;
+            if (now - mem.lastSeenAt > 0.8f) mem.target = kNoPlayer;
         }
         // A new target isn't engaged until the reaction time has passed (they can still be fled from).
         const bool engaged = foe && now - mem.acquiredAt >= mem.reaction;
@@ -1381,7 +1469,7 @@ class BotController {
             const float d=Distance(h.pos,p.pos);
             if (h.alive && h.mode!=BokoMode::Flee && d<helperDistance && (!nav || nav->LineClear(p.pos,h.pos))) { helper=&h;helperDistance=d; }
         }
-        if (helper && (!foe || dist>180.0f)) {
+        if (helper && p.health>=2.4f && EffectiveDps(p.weapon)>=1.0f && tune.hunt && (!foe || dist>180.0f)) {
             const WeaponStats w=Match::StatsOf(p);
             p.rot=FaceAngle(p.pos,helper->pos);
             if (helperDistance>w.range*.75f+kBokoBodyRadius) Steer(m,p,mem,helper->pos,dt,1.0f);
@@ -1487,6 +1575,7 @@ class BotController {
             for (auto& o : m.Players()) {
                 if (&o == &p || !o.alive) continue;
                 const float d = Distance(p.pos, o.pos);
+                if (d > sight || (!m.Revealing(p) && d > 250 && !CanSee(p, o)) || FailedGoal(mem, o.pos, now)) continue;
                 if (d < nearestDist) { nearestDist = d; nearest = &o; }
             }
             if (nearest && nearestDist > 250.0f) {
@@ -1504,7 +1593,7 @@ class BotController {
                 const float a = static_cast<float>(rng.Unit() * 6.283185307179586);
                 const float d = soon.radius * 0.5f * std::sqrt(static_cast<float>(rng.Unit()));
                 pick = {soon.center.x + d * std::cos(a), soon.center.z + d * std::sin(a)};
-                if (Standable(pick)) { mem.wander = {pick.x - soon.center.x, pick.z - soon.center.z}; break; }
+                if (Standable(pick) && !FailedGoal(mem, pick, now) && (!nav || nav->Connected(p.pos, pick))) { mem.wander = {pick.x - soon.center.x, pick.z - soon.center.z}; break; }
             }
             mem.hasWander = true;
         }
@@ -1772,11 +1861,15 @@ class BotController {
         // Follow a path over open ground (a cart is too wide for the gaps a bot squeezes through), easing round its corners.
         Vec2 aim = goal;
         if (!prey && nav && toGoal > NavGrid::kCell * 3.0f) {
-            if ((mem.cartPathIdx >= mem.cartPath.size() || now >= mem.cartRepathAt) && repathBudget > 0) {
+            if (now >= mem.cartRepathAt && now >= mem.cartFailedUntil && repathBudget > 0) {
                 repathBudget--;
                 mem.cartRepathAt = now + 3.0f;
                 mem.cartPathIdx = 0;
-                if (!nav->FindPath(at, goal, mem.cartPath, false)) mem.cartPath.clear();
+                auto& context = m.Navigation();
+                if (!nav->FindPath(at, goal, mem.cartPath, false, &context.workspace, &context.budget)) {
+                    mem.cartPath.clear(); mem.cartFailedUntil = now + (context.workspace.deferred ? 0.05f : 2.0f);
+                    mem.cartRepathAt = mem.cartFailedUntil;
+                }
             }
             while (mem.cartPathIdx < mem.cartPath.size() && Distance(at, mem.cartPath[mem.cartPathIdx]) < 140.0f) mem.cartPathIdx++;
             if (mem.cartPathIdx < mem.cartPath.size()) aim = mem.cartPath[mem.cartPathIdx];
@@ -1820,6 +1913,8 @@ class BotController {
         const WeaponStats w = Match::StatsOf(p);
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
         if (m.Invulnerable(foe)) return; // don't waste a swing
+        // Hearing/reveal may identify someone behind cover; it does not make a shot pass through terrain.
+        if (nav && !CanSee(p, foe)) return;
         float chance = mem.skill * (w.ranged ? 1.0f - 0.35f * (dist / w.range) : 1.0f);
         // A moving target across the line of fire is harder to hit; a good shot leads it, a poor one doesn't.
         if (w.ranged && dist > 1.0f) {
@@ -1831,8 +1926,7 @@ class BotController {
         if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
         if (nav) {   // the ground: a shot into a rock or a hill is wasted, a sword can't reach up a ledge, and it is easier to shoot down than up
             const float up = EyeOf(foe) - EyeOf(p);
-            if (w.ranged && !CanSee(p, foe)) chance *= 0.2f;
-            else if (!w.ranged && std::fabs(up) > NavGrid::kClimbUp + 40.0f) chance *= 0.15f;
+            if (!w.ranged && std::fabs(up) > NavGrid::kClimbUp + 40.0f) chance *= 0.15f;
             else if (w.ranged && up < -60.0f) chance += 0.08f;
         }
         BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance), dist);

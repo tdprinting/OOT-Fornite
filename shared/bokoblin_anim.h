@@ -140,7 +140,7 @@ struct Animator {
     }
 };
 
-// The box around the whole posed model (for tests and for placing her name).
+// The box around the whole posed model (for tests and for placing its name).
 inline void PoseBounds(const Pose& p, float mn[3], float mx[3]) {
     for (int i = 0; i < 3; i++) { mn[i] = 1e30f; mx[i] = -1e30f; }
     for (int i = 0; i < kVertCount; i++) {

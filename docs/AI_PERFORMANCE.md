@@ -1,0 +1,15 @@
+# AI and frame performance
+
+The host runs its server in the game process. This change reduces repeated searches and allocation churn without lowering simulation frequency or removing terrain traversal.
+
+Navigation retains one search workspace per Match, with generation stamps and a reusable heap and reconstruction buffers. The shared allowance is 32,768 expanded nodes and 12 nontrivial searches per simulation tick; bots additionally cap their requests at eight. Direct dry routes do not consume A* work. Bot iteration rotates each tick. Failed goals are remembered for four seconds; budget deferrals retry on a later tick and do not mark a goal unreachable. Bosses and allies use the same allowance. Complex searches are bounded, not resumable; a deferred query starts again when serviced. Current Kingdom traversal is covered by a full simulated match regression.
+
+Bots validate their current foe every tick, stagger full target selection to approximately 6–8 Hz and remember target identity through brief occlusion without using its hidden position to aim. Nearby loot and cover props use spatial buckets. Loot scores include climb/swim travel cost and the safe zone at estimated arrival; failed goals are skipped. Allies path around obstacles, and the server checks range and sight before their attacks can deal damage.
+
+The ripple field sleeps after height and velocity remain negligible for half a second. Impulses wake it. Fixed-step damping coefficients are precomputed. Rain excites water cells only. Sleeping fields do not copy their buffers during recentering.
+
+Shadows use a fixed 8,192-slot terrain cache and frame query allowances (64 for light pools, 256 for casters). Cache expiration is staggered; changed dynamic collision changes the keys only for nearby samples. Missing samples defer a dynamic patch, retaining the original round shadow until a complete patch can be drawn. Detailed capsule/floor gathering runs for selected candidates only. Low-quality nonlocal moving maps refresh on alternating frames; the local player refreshes each frame. Persistent texture maps use their actual quality resolution. The frame upload textures remain double buffered. Scene changes request arena trimming; memory is replaced only when the retired half is reused, preserving the other in-flight half.
+
+Validation: `royale_performance_tests` covers workspace reuse, budget exhaustion, dry-route shortcuts, water/ledge/cliff transitions, abandoned unreachable loot, authoritative ally checks, bounded cache queries/invalidation and ripple sleep/wake. `royale_kingdom_tests` exercises authored-map traversal. Run all tests through CTest. `royale_performance_bench` reports isolated path cost and allocation requests after warmup; those figures are not device FPS or resident-memory measurements.
+
+Device verification remains necessary: compare the same map/weather/camera with 0, 8, 16 and 31 bots; check frame-time spikes, water interactions, moving platforms, local/remote shadows and repeated scene changes. CPU benchmarks cannot validate GPU overdraw, controller feel or visual transitions.

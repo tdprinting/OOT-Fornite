@@ -110,7 +110,7 @@ class RoyaleSession {
     // Start a match server on `port` and join it as the host's own player (through 127.0.0.1, like everyone else).
     // `soloTest` makes it a test environment on the selected map: no bots, no lobby timer, and the match goes on with one player.
     // `sandbox` makes it the Sandbox test map (shared/sandbox_layout.h): a solo test with no countdown and a button for every feature.
-    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false, bool sandbox = false) {
+    bool Host(uint16_t port, const std::string& playerName, std::string* error = nullptr, bool soloTest = false, bool sandbox = false, int testMap = kSandboxMapIndex) {
         Leave();
         std::string err;
         hostTransport = net::ENetTransport::Host(port, kMaxPlayers, &err);
@@ -130,7 +130,7 @@ class RoyaleSession {
         }
         if (sandbox) {
             server->SetSandbox(true);
-            server->SelectMap(kSandboxMapIndex);
+            server->SelectMap(IsTestMap(testMap)?testMap:kSandboxMapIndex);
         } else {
             const int map = selectedMap;
             if (map != 0) server->SelectMap(map);

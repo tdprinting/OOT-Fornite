@@ -37,7 +37,9 @@ void HelperWalk(BossHelper& h, Vec2 goal, float speed, float dt) {
     if (nav && !nav->LineClear(h.pos,goal)) {
         if (clock>=h.repathAt || Distance(goal,h.pathGoal)>120.0f) {
             h.pathGoal=goal; h.repathAt=clock+0.8f; h.pathIdx=0;
-            if (!nav->FindPath(h.pos,goal,h.path)) h.path.clear();
+            if (!nav->FindPath(h.pos,goal,h.path,false,&navigation.workspace,&navigation.budget)) {
+                h.path.clear(); if (navigation.workspace.deferred) h.repathAt=clock+0.05f;
+            }
         }
         // Do not skip a corner until the following segment is clear from our actual position.
         while (h.pathIdx<h.path.size() && Distance(h.pos,h.path[h.pathIdx])<25.0f &&
