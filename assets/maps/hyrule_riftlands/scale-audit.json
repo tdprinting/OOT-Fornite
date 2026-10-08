@@ -1,0 +1,37 @@
+{
+  "normal_actor_scale": 0.01,
+  "adult_ceiling_clearance": 56,
+  "adult_wall_radius": 18,
+  "adult_power_scale": 1.35,
+  "ordinary_storey": 170,
+  "ordinary_door_height": 140,
+  "door_width_preserved_for_navigation": 240,
+  "furniture": {
+    "table": {
+      "width": 60.0,
+      "height": 32.0,
+      "depth": 36.0
+    },
+    "stool": {
+      "width": 14.4,
+      "height": 16.8,
+      "depth": 12.47
+    },
+    "bed": {
+      "width": 44.0,
+      "height": 32.0,
+      "depth": 78.4
+    },
+    "shelf": {
+      "width": 56.0,
+      "height": 68.0,
+      "depth": 16.0
+    },
+    "barrel": {
+      "width": 25.2,
+      "height": 32.0,
+      "depth": 25.2
+    }
+  },
+  "note": "56 is the engine Adult Link ceiling-check height, not a measured animated mesh bounding box. No ROM model is bundled."
+}

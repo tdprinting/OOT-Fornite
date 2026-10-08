@@ -54,6 +54,10 @@ jobs:
         run: |
           python3 -m pip install numpy
           python3 scripts/test_kingdom_authoring.py
+      - name: Validate Riftlands map integration and packed assets
+        run: |
+          python3 tools/maps/riftlands/scale_audit.py
+          python3 scripts/test_riftlands_integration.py
       - name: Validate water draw allocation bounds
         run: python3 scripts/test_water_draw_buffers.py
       - name: Build and test with UBSan

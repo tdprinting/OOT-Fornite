@@ -34,7 +34,7 @@
 | Dynamic lighting, shadows, graphics menu registration | `Lighting.inc` |
 | Engine collision exports and native menu bridge | `EngineBridge.inc` |
 
-Existing focused files: `RoyaleSession.h` (network lifecycle), `RoyaleBosses.h` (boss presentation), `RoyaleLobbyFish.h` (aquarium), `RoyaleLobbyPets.h` (lobby pets), `RoyaleWarTable.h` (native menu). Server rules: `server/match.h`; bots: `server/bot.h`; network: `shared/protocol.h` and `client/game_client.h`. Generated asset arrays are not authoring sources.
+Existing focused files: `RoyaleSession.h` (network lifecycle), `RoyaleBosses.h` (boss presentation), `RoyaleBokoblins.h` (miniboss helper model, targeting, animation and rock rendering), `RoyaleLobbyFish.h` (aquarium), `RoyaleLobbyPets.h` (lobby pets), `RoyaleWarTable.h` (native menu). Server rules: `server/match.h`; bots: `server/bot.h`; network: `shared/protocol.h` and `client/game_client.h`. Generated asset arrays are not authoring sources.
 
 ## Focused workflow
 
@@ -47,3 +47,5 @@ Actual asset relief: `shared/asset_relief.h` and `patches/libultraship/0006-sour
 4. Run `python scripts/check_mod_layout.py`. Water changes also use `python scripts/test_water_draw_buffers.py`; engine changes need `scripts/check_mod_compile.sh` or the Android game build. Source checks use `scripts/mod_source.py` to read the included implementation.
 
 The split reduces the amount of code an agent must read; it does not reduce compilation work or prove gameplay correctness. A later move to independent translation units requires explicit interfaces and separate validation.
+
+- Hyrule Riftlands map: `docs/HYRULE_RIFTLANDS.md`; authoring `tools/maps/riftlands/`; generated `shared/riftlands_*`; concept and prop specs `map-concepts/hyrule-riftlands/`.

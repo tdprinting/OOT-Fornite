@@ -160,7 +160,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -223,6 +223,18 @@ float GameVolume(bool music) {
 
 // The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
 // when somebody doing it is near: louder the closer they are.
+void PlayBokoblinSound(int clip, float x, float z) {
+    namespace S=royale::bokoblin_snd;
+    if (clip<0 || clip>=S::kClipCount || !gPlayState || !VoiceDone(kVoiceBokoblin)) return;
+    Player* player=GET_PLAYER(gPlayState);
+    const float d=std::hypot(player->actor.world.pos.x-x,player->actor.world.pos.z-z);
+    const float volume=GameVolume(false)*0.55f*std::clamp(1.0f-d/1000.0f,0.0f,1.0f);
+    if (volume<0.01f) return;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    if (!cache[clip]) cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoiceBokoblin,cache[clip],false,S::kRate,false,volume);
+}
+
 void StopChickenMusic() { StopVoice(kVoiceChicken); }
 
 void UpdateChickenMusic() {

@@ -258,6 +258,126 @@ void DrawKingdomStructures(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+void DrawRiftlandsStructures(PlayState* play) {
+    if (!OnRiftlandsTerrain()) return;
+    namespace km = royale::riftlands;
+    struct BatchCache {
+        std::vector<Vtx> baked, lit;
+        std::vector<Gfx> bakedList, litList;
+        uint32_t seen = 0;
+    };
+    constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
+    static std::vector<BatchCache> cache(kBatchCount);
+    const uint32_t frame = play->state.frames;
+    // Free geometry after 180 unseen game frames; never touch the two frames the renderer may still use.
+    for (auto& c : cache) if ((!c.baked.empty() || !c.lit.empty()) && frame - c.seen > 180) c = BatchCache{};
+    auto batchList = [&](size_t i, bool lighting) -> Gfx* {
+        auto& c = cache[i]; c.seen = frame;
+        auto& vertices = lighting ? c.lit : c.baked;
+        auto& list = lighting ? c.litList : c.bakedList;
+        const auto& batch = km::kBatches[i];
+        if (vertices.empty()) {
+            vertices.resize(batch.count);
+            for (size_t k = 0; k < batch.count; ++k) {
+                const auto& v = km::kDrawVertices[batch.first + k];
+                auto& dst = vertices[k].v;
+                dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
+                dst.tc[0] = v.s; dst.tc[1] = v.t;
+                if (lighting) {
+                    vertices[k].n.n[0] = v.nx; vertices[k].n.n[1] = v.ny; vertices[k].n.n[2] = v.nz;
+                    vertices[k].n.a = 255;
+                } else { dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255; }
+            }
+            list.resize(batch.count / 3 + batch.count / 30 + 3);
+            Gfx* p = list.data();
+            for (uint32_t first = 0; first < batch.count; first += 30) {
+                const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
+                gSPVertex(p++, reinterpret_cast<uintptr_t>(&vertices[first]), n, 0);
+                for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
+            }
+            gSPEndDisplayList(p++);
+            list.resize(static_cast<size_t>(p - list.data()));
+        }
+        return list.data();
+    };
+    const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
+    const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
+    struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
+    Rig* rig = (normalPercent > 0 || bumpPercent > 0) ? static_cast<Rig*>(FrameAlloc(play, sizeof(Rig))) : nullptr;
+    const bool relief = rig != nullptr;
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0, 0, 0, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
+    int loaded = -1;
+    auto loadTexture = [&](int texture) {
+        if (loaded == texture) return;
+        gDPLoadTextureTile(POLY_OPA_DISP++, km::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, km::kTextureSize, km::kTextureSize, 0, 0, km::kTextureSize - 1, km::kTextureSize - 1, 0,
+            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
+        loaded = texture;
+    };
+    // a chunk is 1853 x 1926 units across: test its far corner, not its middle
+    auto inReach = [&](const km::Batch& batch) {
+        const Vec3f eye = play->view.eye;
+        const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
+        if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
+        const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
+        const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
+        return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
+    };
+    for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
+        const auto& batch = km::kBatches[i];
+        if ((batch.surface && relief) || !inReach(batch)) continue;
+        if (!GfxHasRoom(play, 20)) break;
+        loadTexture(batch.texture);
+        gSPDisplayList(POLY_OPA_DISP++, batchList(i, false));
+    }
+    if (relief) {   // the lit, relief-mapped faces, one surface class at a time
+        {
+            // The baked light, as a game light: a sky ambient and a sun from the south east late in the morning (tools/maps/kingdom/geom.py SUN).
+            // With "the sun lights the buildings" on (Graphics > Shadows and lights) it is the sun or the moon of this moment instead.
+            float sunDir[3] = { -57.0f / 127.0f, 99.0f / 127.0f, -55.0f / 127.0f }, sunCol[3] = { 107.0f / 255.0f, 104.0f / 255.0f, 98.0f / 255.0f };
+            float ambCol[3] = { 148.0f / 255.0f, 148.0f / 255.0f, 148.0f / 255.0f };
+            if (BuildingSunOn()) BuildingSunNow(sunDir, sunCol, ambCol);
+            auto c8 = [](float v) { return static_cast<u8>(std::clamp(v * 255.0f, 0.0f, 255.0f)); };
+            auto d8 = [](float v) { return static_cast<s8>(std::clamp(v * 127.0f, -127.0f, 127.0f)); };
+            const Lights1 base = gdSPDefLights1(c8(ambCol[0]), c8(ambCol[1]), c8(ambCol[2]), c8(sunCol[0]), c8(sunCol[1]), c8(sunCol[2]), d8(sunDir[0]), d8(sunDir[1]), d8(sunDir[2]));
+            rig->lights = base;
+            for (int c = 0; c < km::kSurfaceClasses; ++c) {
+                GfxSurfaceMap& m = rig->maps[c];
+                m = {};
+                m.normal = km::kSurfaceNormal[c];
+                m.height = km::kSurfaceBump[c];
+                m.width = m.heightPixels = km::kSurfaceSize;
+                m.normalStrength = normalPercent / 100.0f;
+                m.bumpStrength = bumpPercent / 100.0f;
+                m.uvScale = 1.0f / km::kSurfaceUnits[c];
+                for (int k = 0; k < 3; ++k) { m.sunDirection[k] = sunDir[k]; m.sunColor[k] = sunCol[k]; m.ambientColor[k] = ambCol[k]; }
+            }
+            gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+            gSPSetLights1(POLY_OPA_DISP++, rig->lights);
+            for (int c = 1; c <= km::kSurfaceClasses; ++c) {
+                bool started = false;
+                for (size_t i = 0; i < kBatchCount; ++i) {
+                    const auto& batch = km::kBatches[i];
+                    if (batch.surface != c || !inReach(batch)) continue;
+                    if (!GfxHasRoom(play, 20)) break;
+                    if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
+                    loadTexture(batch.texture);
+                    gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
+                }
+                if (started) gSPSurfaceMap(POLY_OPA_DISP++, 0);
+            }
+            gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
+        }
+    }
+    gSPTexture(POLY_OPA_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
@@ -308,6 +428,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
     DrawConvergenceStructures(play);
     DrawKingdomStructures(play);
+    DrawRiftlandsStructures(play);
 }
 
 int FortniteActorId() {
@@ -480,6 +601,10 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
         }
+        else if (auto b=gBokoblinOf.find(locked); b!=gBokoblinOf.end()) {
+            id=static_cast<uint16_t>(b->second);edge=royale::kBokoBodyRadius;
+            if (!KnownPosition(id,&tx,&tz)) id=0;
+        }
         if (id != 0) {
             const float d = std::hypot(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) - edge;
             if (d <= range * 1.05f) { *outDist = (std::max)(0.0f, d); return id; }
@@ -508,6 +633,15 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
             if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
         }
+    }
+    if (gSession.Client()) for (const auto& h:gSession.Client()->Helpers()) {
+        if (!h.hp) continue;
+        const float dx=h.x-player->actor.world.pos.x,dz=h.z-player->actor.world.pos.z;
+        const float d=std::hypot(dx,dz)-royale::kBokoBodyRadius;
+        if (d>range*1.05f) continue;
+        const s16 off=static_cast<s16>(static_cast<s16>(std::atan2(dx,dz)*(32768.0f/3.14159265f))-player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off))>0x2000 && d>40.0f) continue;
+        if (d<bestDist) { bestDist=d;best=static_cast<uint16_t>(h.Id()); }
     }
     // Carts: from their sides too (a cart is about a Link and a half wide and two long). People go first: a cart only counts when it is clearly nearer.
     for (const CartTarget& ct : CartTargets()) {
@@ -1235,6 +1369,7 @@ void ReportEvents(const royale::HudState& hud) {
     for (const royale::ClientEvent& e : gSession.DrainEvents()) {
         auto nameOf = [&](uint16_t id) -> std::string {
             for (const auto& r : hud.roster) if (r.id == id) return r.name;
+            if (royale::IsHelperId(id)) return std::string("a Bokoblin");
             if (royale::IsBossId(id)) return std::string("a mini boss");
             if (royale::IsVehicleId(id)) return std::string("a cart");
             return royale::BotName(id);

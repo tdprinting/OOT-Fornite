@@ -401,7 +401,7 @@ void OnGameFrameUpdate() {
     Feat("other players"); ReconcilePuppets(hud.state);
     Feat("loot"); if (DebugOn(kDbgLoot)) ReconcileLoot(hud);
     Feat("props"); if (DebugOn(kDbgProps)) ReconcileProps(hud);
-    Feat("bosses"); ReconcileBosses(hud);
+    Feat("bosses"); ReconcileBosses(hud); ReconcileBokoblins(hud);
     Feat("between updates");
     WarGameUpdate();
 }
@@ -417,6 +417,8 @@ void OnSceneInit(int16_t) {
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
     StopMayaVoice();
+    StopVoice(kVoiceBokoblin);
+    gBokoblins.clear(); gBokoblinOf.clear();
     gMayaCompanion = MayaCompanionState{};
     gLobbyPetGroup=royale::lobby::Group{};
     gActorOf.clear();

@@ -1,0 +1,10 @@
+{
+  "collision_vertices": 10748,
+  "collision_triangles": 17551,
+  "high_vertices": 2558,
+  "draw_vertices": 527013,
+  "batches": 700,
+  "upper_nodes": 6176,
+  "obstacles": 2690,
+  "props": 456
+}
