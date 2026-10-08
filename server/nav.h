@@ -130,6 +130,55 @@ class NavGrid {
     struct UpperNode { float x, z, y; };
     // One stop of a route: where, and how high the feet are there.
     struct Stop { Vec2 p; float y; bool upper; bool climb; };
+    // Owned by the simulation, never by a shared/const grid. Retained storage
+    // and generation stamps avoid clearing or allocating a grid on every query.
+    struct SearchBudget {
+        int expansions = 32768, searches = 12;
+        void Reset() { expansions = 32768; searches = 12; }
+    };
+    struct SearchWorkspace {
+        struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
+        std::vector<float> cost;
+        std::vector<int> parent;
+        std::vector<uint8_t> via;
+        std::vector<uint32_t> stamp;
+        std::vector<Node> heap;
+        std::vector<Stop> rawRoute;
+        std::vector<Vec2> rawPath;
+        uint32_t generation = 0;
+        int expanded = 0;
+        bool deferred = false;
+        void Begin(size_t n) {
+            cost.resize(n); parent.resize(n); via.resize(n); stamp.resize(n, 0);
+            if (++generation == 0) { std::fill(stamp.begin(), stamp.end(), 0); generation = 1; }
+            heap.clear(); rawRoute.clear(); rawPath.clear(); expanded = 0; deferred = false;
+        }
+        void Touch(size_t i) {
+            if (stamp[i] == generation) return;
+            stamp[i] = generation; cost[i] = 1e18f; parent[i] = -1; via[i] = 0;
+        }
+        float& Cost(size_t i) { Touch(i); return cost[i]; }
+        int& Parent(size_t i) { Touch(i); return parent[i]; }
+        uint8_t& Via(size_t i) { Touch(i); return via[i]; }
+        void push(Node n) { heap.push_back(n); std::push_heap(heap.begin(), heap.end()); }
+        Node top() const { return heap.front(); }
+        void pop() { std::pop_heap(heap.begin(), heap.end()); heap.pop_back(); }
+        bool empty() const { return heap.empty(); }
+    };
+    struct SearchContext { SearchWorkspace workspace; SearchBudget budget; };
+
+    // The same terrain sight test used at perception and authoritative strike time.
+    bool SightClear(Vec2 a, float ya, Vec2 b, float yb) const {
+        const float len = Distance(a, b);
+        const int steps = static_cast<int>(len / 40.0f);
+        for (int i = 1; i < steps; ++i) {
+            const float t = static_cast<float>(i) / steps;
+            if (t * len < 45 || (1 - t) * len < 45) continue;
+            if (TopAt({a.x + (b.x-a.x)*t, a.z + (b.z-a.z)*t}) > ya + (yb-ya)*t) return false;
+        }
+        return true;
+    }
+
     void AddUpper(const std::vector<UpperNode>& nodes) {
         up = nodes;
         upAt.clear();
@@ -279,8 +328,12 @@ class NavGrid {
 
     // A route that may use the upper nodes, swim and climb: ramps and stairs up to a floor or a roof, rivers, cliffs and ivy. `fromUp` says the bot
     // is on an upper floor (at height fromY); `toUp` that the goal is (at toY). The stops carry their heights; the last stop is `to` itself.
-    bool FindRoute(Vec2 from, float fromY, bool fromUp, Vec2 to, float toY, bool toUp, std::vector<Stop>& out) const {
+    bool FindRoute(Vec2 from, float fromY, bool fromUp, Vec2 to, float toY, bool toUp, std::vector<Stop>& out, SearchWorkspace* scratch = nullptr, SearchBudget* budget = nullptr) const {
+        SearchWorkspace local;
+        SearchWorkspace& work = scratch ? *scratch : local;
+        work.deferred = false; work.expanded = 0;
         out.clear();
+        if (!Connected(from, to, fromUp ? fromY : std::numeric_limits<float>::quiet_NaN())) return false;
         const int base = static_cast<int>(cells.size());
         int start = -1, goal = -1;
         if (fromUp) { const int n = UpperNear(from, fromY, 70.0f, 80.0f); if (n >= 0) start = base + n; }
@@ -289,14 +342,18 @@ class NavGrid {
         if (start < 0) { if (!Snap(from, &a, true, true)) return false; int cx, cz; ToCellClamped(a, cx, cz); start = Index(cx, cz); }
         if (goal < 0) { if (!Snap(to, &b, true)) return false; int cx, cz; ToCellClamped(b, cx, cz); goal = Index(cx, cz); }
         if (start == goal) { out.push_back({to, NodeY(goal), goal >= base, false}); return true; }
+        if (!fromUp && !toUp && up.empty() && !hasWater && LineClear(a, b, true)) {
+            out.push_back({b, StandHeight(b), false, false}); return true;
+        }
         const Vec2 goalAt = NodeXZ(goal);
 
-        struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
         const size_t total = cells.size() + up.size();
-        std::vector<float> g(total, 1e18f);
-        std::vector<int> parent(total, -1);
-        std::vector<uint8_t> via(total, 0);   // 1: the step into this node was a climb
-        std::priority_queue<Node> open;
+        if (budget && (budget->searches <= 0 || budget->expansions <= 0)) { work.deferred = true; return false; }
+        if (budget) --budget->searches;
+        work.Begin(total);
+        auto& open = work;
+        auto& g = work.cost; auto& parent = work.parent; auto& via = work.via;
+        work.Touch(static_cast<size_t>(start));
         g[static_cast<size_t>(start)] = 0;
         open.push({Distance(NodeXZ(start), goalAt) / kCell, start});
         int expansions = 0;
@@ -304,13 +361,14 @@ class NavGrid {
         bool reached = false;
         static const int dxs[8] = {1, -1, 0, 0, 1, 1, -1, -1};
         static const int dzs[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-        while (!open.empty() && expansions < cap) {
-            const Node n = open.top();
+        while (!open.empty() && expansions < cap && (!budget || budget->expansions > 0)) {
+            const SearchWorkspace::Node n = open.top();
             open.pop();
             if (n.idx == goal) { reached = true; break; }
             if (n.f - Distance(NodeXZ(n.idx), goalAt) / kCell > g[static_cast<size_t>(n.idx)] + 1e-3f) continue;
-            expansions++;
+            expansions++; ++work.expanded; if (budget) --budget->expansions;
             auto relax = [&](int to2, float step, bool climb) {
+                work.Touch(static_cast<size_t>(to2));
                 const float ng = g[static_cast<size_t>(n.idx)] + step;
                 if (ng < g[static_cast<size_t>(to2)]) {
                     g[static_cast<size_t>(to2)] = ng;
@@ -353,9 +411,9 @@ class NavGrid {
             }
             GroundToUpper(n.idx, [&](int to2) { relax(to2, Distance(NodeXZ(n.idx), NodeXZ(to2)) / kCell + 0.05f, false); });
         }
-        if (!reached) return false;
+        if (!reached) { work.deferred = budget && budget->expansions <= 0; return false; }
 
-        std::vector<Stop> raw;
+        auto& raw = work.rawRoute;
         for (int i = goal; i != start && i >= 0; i = parent[static_cast<size_t>(i)]) raw.push_back({NodeXZ(i), NodeY(i), i >= base, via[static_cast<size_t>(i)] != 0});
         std::reverse(raw.begin(), raw.end());
         if (raw.empty()) { out.push_back({to, NodeY(goal), goal >= base, false}); return true; }
@@ -366,10 +424,10 @@ class NavGrid {
         while (i < raw.size()) {
             size_t far = i;
             if (!raw[i].upper && !raw[i].climb) {
-                for (size_t j = raw.size() - 1; j > i; j--) {
-                    bool plain = true;
-                    for (size_t k = i; k <= j && plain; k++) plain = !raw[k].upper && !raw[k].climb;
-                    if (plain && LineClear(at, raw[j].p, true)) { far = j; break; }
+                size_t last = i;
+                while (last + 1 < raw.size() && !raw[last+1].upper && !raw[last+1].climb) ++last;
+                for (size_t j = last; j > i; --j) {
+                    if (LineClear(at, raw[j].p, true)) { far = j; break; }
                 }
             }
             out.push_back(raw[far]);
@@ -440,8 +498,12 @@ class NavGrid {
     // Finds a path from a to b as a list of waypoints (not including a, ending at b). Returns false if there is no route.
     // The result is smoothed: waypoints that can be skipped with a clear line are dropped. A `climber` (a bot) goes over the scenery it can
     // stand on, jumps up ledges up to kClimbUp, drops off ones up to kDropDown and goes round cliffs; it would rather walk than climb.
-    bool FindPath(Vec2 from, Vec2 to, std::vector<Vec2>& path, bool climber = false) const {
+    bool FindPath(Vec2 from, Vec2 to, std::vector<Vec2>& path, bool climber = false, SearchWorkspace* scratch = nullptr, SearchBudget* budget = nullptr) const {
+        SearchWorkspace local;
+        SearchWorkspace& work = scratch ? *scratch : local;
+        work.deferred = false; work.expanded = 0;
         path.clear();
+        if (climber && !Connected(from, to)) return false;
         Vec2 a, b;
         if (!Snap(from, &a, climber, true) || !Snap(to, &b, climber)) return false;
         if (LineClear(a, b, climber)) { path.push_back(b); return true; }
@@ -452,23 +514,25 @@ class NavGrid {
         const int start = Index(sx, sz), goal = Index(gx, gz);
         if (start == goal) { path.push_back(b); return true; }
 
-        struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
-        std::vector<float> g(cells.size(), 1e18f);
-        std::vector<int> parent(cells.size(), -1);
-        std::priority_queue<Node> open;
+        if (budget && (budget->searches <= 0 || budget->expansions <= 0)) { work.deferred = true; return false; }
+        if (budget) --budget->searches;
+        work.Begin(cells.size());
+        auto& open = work;
+        auto& g = work.cost; auto& parent = work.parent;
+        work.Touch(static_cast<size_t>(start));
         g[start] = 0;
         open.push({Heuristic(sx, sz, gx, gz), start});
         int expansions = 0;
         bool reached = false;
         static const int dxs[8] = {1, -1, 0, 0, 1, 1, -1, -1};
         static const int dzs[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-        while (!open.empty() && expansions < MaxExpansions()) {
-            const Node n = open.top();
+        while (!open.empty() && expansions < MaxExpansions() && (!budget || budget->expansions > 0)) {
+            const SearchWorkspace::Node n = open.top();
             open.pop();
             if (n.idx == goal) { reached = true; break; }
             const int cx = n.idx % w, cz = n.idx / w;
             if (n.f - Heuristic(cx, cz, gx, gz) > g[n.idx] + 1e-3f) continue; // stale entry
-            expansions++;
+            expansions++; ++work.expanded; if (budget) --budget->expansions;
             for (int k = 0; k < 8; k++) {
                 const int x = cx + dxs[k], z = cz + dzs[k];
                 if (x < 0 || z < 0 || x >= w || z >= h || !Usable(Index(x, z), climber)) continue;
@@ -482,6 +546,7 @@ class NavGrid {
                     if (up > kStepUp) step += 1.5f;                                                   // a jump and a clamber
                     else if (-up > kStepUp) step += 0.4f;                                             // a drop
                 }
+                work.Touch(static_cast<size_t>(Index(x, z)));
                 const float ng = g[n.idx] + step;
                 if (ng < g[Index(x, z)]) {
                     g[Index(x, z)] = ng;
@@ -490,9 +555,9 @@ class NavGrid {
                 }
             }
         }
-        if (!reached) return false;
+        if (!reached) { work.deferred = budget && budget->expansions <= 0; return false; }
 
-        std::vector<Vec2> raw;
+        auto& raw = work.rawPath;
         for (int i = goal; i != start && i >= 0; i = parent[i]) raw.push_back(CellCentre(i % w, i / w));
         std::reverse(raw.begin(), raw.end());
         if (raw.empty()) { path.push_back(b); return true; }

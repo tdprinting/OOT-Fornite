@@ -303,7 +303,11 @@ class Match {
         return true;
     }
 
+    NavGrid::SearchContext& Navigation() { return navigation; }
+    void BeginNavigationTick() { navigation.budget.Reset(); navigationPrepared = true; }
     void Tick(float dt) {
+        if (!navigationPrepared) navigation.budget.Reset();
+        navigationPrepared = false;
         stateTime += dt;
         clock += dt;
         switch (state) {
@@ -897,6 +901,19 @@ class Match {
         const AllyDef& def = AllyOf(a.kind);
         PlayerState* owner = Find(a.owner);
         if (!owner || !owner->alive || clock < a.attackReadyAt) return false;
+        Vec2 targetPos; float targetY = 0, extra = 0;
+        if (IsBossId(targetId)) {
+            auto* boss = FindBoss(targetId); if (!boss || !boss->alive || BossHidden(boss->mode)) return false;
+            if (IsDragonKind(boss->kind) && boss->y > kDragonAirborneAbove && def.melee) return false;
+            targetPos = boss->pos; targetY = boss->y;
+            extra = IsDragonKind(boss->kind) ? kDragonBodyRadius : kBossBodyRadius;
+        } else {
+            auto* target = Find(targetId); if (!target || !target->alive || target->id == a.owner) return false;
+            targetPos = target->pos;
+            targetY = target->isBot && nav ? nav->FloorAt(target->pos) + target->y : target->y;
+        }
+        if (Distance(a.pos, targetPos) > def.range + extra) return false;
+        if (nav && !nav->SightClear(a.pos, nav->FloorAt(a.pos) + 45, targetPos, targetY + 45)) return false;
         a.attackReadyAt = clock + def.cooldown;
         a.actUntil = clock + 0.45f;
         MatchEvent act{MatchEvent::Type::AllyAction};
@@ -1656,11 +1673,13 @@ class Match {
             if (!onGround && def.traverse == Traverse::Climb) { b.mode = DragonMode::Climb; pace = speed * 0.75f; }   // up the wall, straight on
             else if (!onGround && def.traverse == Traverse::Swim) { b.aux = 1; pace = speed * 0.85f; }                 // through the water, straight on
             else if (!nav->LineClear(from, goal)) {
-                if (clock >= b.repathAt || Distance(b.pathGoal, goal) > 150.0f) {
+                if (clock >= b.repathAt) {
                     b.repathAt = clock + 0.7f;
                     b.pathGoal = goal;
                     b.pathIdx = 0;
-                    if (!nav->FindPath(b.pos, goal, b.path)) b.path.clear();
+                    if (!nav->FindPath(b.pos, goal, b.path, false, &navigation.workspace, &navigation.budget)) {
+                        b.path.clear(); if (navigation.workspace.deferred) b.repathAt = clock + 0.05f;
+                    }
                 }
                 while (b.pathIdx < b.path.size() && Distance(b.pos, b.path[b.pathIdx]) < NavGrid::kCell * 0.6f) b.pathIdx++;
                 if (b.pathIdx < b.path.size()) next = b.path[b.pathIdx];
@@ -2896,6 +2915,8 @@ class Match {
     std::vector<FartCloud> fartClouds;
     std::map<uint32_t, float> lastFartCloud;   // when each player last started a cloud
     std::shared_ptr<const NavGrid> nav;
+    NavGrid::SearchContext navigation;
+    bool navigationPrepared = false;
     std::vector<AllyState> allies;
     std::vector<VehicleState> vehicles;
     std::vector<Vec2> vehicleSpots;

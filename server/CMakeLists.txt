@@ -76,3 +76,11 @@ foreach(t boss_arena_tests war_table_tests tests net_tests enet_tests session_te
         target_compile_options(royale_${t} PRIVATE -UNDEBUG)
     endif()
 endforeach()
+add_executable(royale_performance_tests tests/performance_tests.cpp)
+target_link_libraries(royale_performance_tests PRIVATE royale_core)
+add_test(NAME royale_performance_tests COMMAND royale_performance_tests)
+
+# Exercise authored-map routes under the same shared budget as the live host.
+
+add_executable(royale_performance_bench tools/performance_bench.cpp)
+target_link_libraries(royale_performance_bench PRIVATE royale_core)
