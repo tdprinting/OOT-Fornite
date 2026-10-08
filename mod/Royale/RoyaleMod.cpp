@@ -16,6 +16,8 @@
 #include "avriella_toy_sounds.h"
 #include "avriella_anim.h"
 #include "maya_anim.h"
+#include "bokoblin_anim.h"
+#include "bokoblin_sounds.h"
 #include "maya_sounds.h"
 #include "maya_phone.h"
 #include "cart_model.h"
@@ -2821,6 +2823,7 @@ void ClearProps() {
     for (auto& [idx, pa] : gProps) { gCulledProps.insert(idx); Actor_Kill(pa.actor); }
 }
 
+#include "RoyaleBokoblins.h"
 #include "RoyaleBosses.h"   // the bosses: mini bosses, the major boss of each map, their effects
 
 // ---- the glider ---------------------------------------------------------------------------------------------------------------
@@ -6934,6 +6937,7 @@ bool gHitMarkerKill = false;
 float gHurtAmount = 0.0f;
 
 bool KnownPosition(uint16_t id, float* x, float* z) {
+    if (gSession.Client() && royale::IsHelperId(id)) for (const auto& h:gSession.Client()->Helpers()) if (h.Id()==id && h.hp>0) { *x=h.x;*z=h.z;return true; }
     for (const auto& st : gSession.Puppets()) if (st.id == id) { *x = st.x; *z = st.z; return true; }
     if (gSession.Client() && royale::IsBossId(id)) for (const auto& bn : gSession.Client()->Bosses()) if (royale::kBossIdBase + bn.index == id) { *x = bn.x; *z = bn.z; return true; }
     if (CartTargetAt(id, x, z)) return true;
@@ -7056,6 +7060,9 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
     if (self) {
         Player* me = GET_PLAYER(gPlayState);
         pos = me->actor.world.pos;
+    } else if (royale::IsHelperId(id)) {
+        auto it=gBokoblins.find(id); if (it==gBokoblins.end() || !it->second.actor) return;
+        actor=it->second.actor;pos=actor->world.pos;height=35.0f;
     } else if (royale::IsBossId(id)) {
         auto it = gBosses.find(id);
         if (it == gBosses.end() || it->second.actor == nullptr || it->second.fade < 0.2f) return;   // out of sight: nothing to hit
@@ -7533,7 +7540,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -7595,6 +7602,18 @@ float GameVolume(bool music) {
 
 // The chicken dance tune (shared/tune.h), played on a small audio device of its own beside the game's. You hear it when you do the dance, or
 // when somebody doing it is near: louder the closer they are.
+void PlayBokoblinSound(int clip, float x, float z) {
+    namespace S=royale::bokoblin_snd;
+    if (clip<0 || clip>=S::kClipCount || !gPlayState || !VoiceDone(kVoiceBokoblin)) return;
+    Player* player=GET_PLAYER(gPlayState);
+    const float d=std::hypot(player->actor.world.pos.x-x,player->actor.world.pos.z-z);
+    const float volume=GameVolume(false)*0.55f*std::clamp(1.0f-d/1000.0f,0.0f,1.0f);
+    if (volume<0.01f) return;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    if (!cache[clip]) cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoiceBokoblin,cache[clip],false,S::kRate,false,volume);
+}
+
 void StopChickenMusic() { StopVoice(kVoiceChicken); }
 
 void UpdateChickenMusic() {
@@ -10945,6 +10964,10 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
         }
+        else if (auto b=gBokoblinOf.find(locked); b!=gBokoblinOf.end()) {
+            id=static_cast<uint16_t>(b->second);edge=royale::kBokoBodyRadius;
+            if (!KnownPosition(id,&tx,&tz)) id=0;
+        }
         if (id != 0) {
             const float d = std::hypot(tx - player->actor.world.pos.x, tz - player->actor.world.pos.z) - edge;
             if (d <= range * 1.05f) { *outDist = (std::max)(0.0f, d); return id; }
@@ -10973,6 +10996,15 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
             if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
             if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
         }
+    }
+    if (gSession.Client()) for (const auto& h:gSession.Client()->Helpers()) {
+        if (!h.hp) continue;
+        const float dx=h.x-player->actor.world.pos.x,dz=h.z-player->actor.world.pos.z;
+        const float d=std::hypot(dx,dz)-royale::kBokoBodyRadius;
+        if (d>range*1.05f) continue;
+        const s16 off=static_cast<s16>(static_cast<s16>(std::atan2(dx,dz)*(32768.0f/3.14159265f))-player->actor.shape.rot.y);
+        if (std::abs(static_cast<int>(off))>0x2000 && d>40.0f) continue;
+        if (d<bestDist) { bestDist=d;best=static_cast<uint16_t>(h.Id()); }
     }
     // Carts: from their sides too (a cart is about a Link and a half wide and two long). People go first: a cart only counts when it is clearly nearer.
     for (const CartTarget& ct : CartTargets()) {
@@ -11671,6 +11703,7 @@ void ReportEvents(const royale::HudState& hud) {
     for (const royale::ClientEvent& e : gSession.DrainEvents()) {
         auto nameOf = [&](uint16_t id) -> std::string {
             for (const auto& r : hud.roster) if (r.id == id) return r.name;
+            if (royale::IsHelperId(id)) return std::string("a Bokoblin");
             if (royale::IsBossId(id)) return std::string("a mini boss");
             if (royale::IsVehicleId(id)) return std::string("a cart");
             return royale::BotName(id);
@@ -15392,7 +15425,7 @@ void OnGameFrameUpdate() {
     Feat("other players"); ReconcilePuppets(hud.state);
     Feat("loot"); if (DebugOn(kDbgLoot)) ReconcileLoot(hud);
     Feat("props"); if (DebugOn(kDbgProps)) ReconcileProps(hud);
-    Feat("bosses"); ReconcileBosses(hud);
+    Feat("bosses"); ReconcileBosses(hud); ReconcileBokoblins(hud);
     Feat("between updates");
 }
 
@@ -15403,6 +15436,8 @@ void OnSceneInit(int16_t) {
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
     StopMayaVoice();
+    StopVoice(kVoiceBokoblin);
+    gBokoblins.clear(); gBokoblinOf.clear();
     gMayaCompanion = MayaCompanionState{};
     gLobbyPetGroup=royale::lobby::Group{};
     gActorOf.clear();

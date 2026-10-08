@@ -912,6 +912,18 @@ class GameServer {
                 n.aux = b.aux;
                 s.bosses.push_back(n);
             }
+            for (const BossHelper& h : sim.match.Helpers()) {
+                if ((!h.alive && h.mode != BokoMode::Dead) || Distance(self->pos,h.pos)>3000.0f) continue;
+                net::HelperNet n;
+                n.index=static_cast<uint8_t>(h.id-kHelperIdBase); n.boss=static_cast<uint8_t>(h.boss-kBossIdBase);
+                n.kind=static_cast<uint8_t>(h.kind); n.mode=static_cast<uint8_t>(h.mode); n.action=h.action; n.personality=h.personality;
+                n.x=h.pos.x; n.z=h.pos.z; n.rot=h.rot; n.y=static_cast<int16_t>(h.y);
+                n.age=(std::min)(3599.0f,sim.match.Clock()-h.modeAt);
+                n.hp=static_cast<uint8_t>((std::max)(0.0f,h.health)/kBokoHealth*255.0f);
+                n.rock=h.rockActive; n.rockAge=sim.match.Clock()-h.rockAt;
+                n.fromX=h.rockFrom.x; n.fromZ=h.rockFrom.z; n.toX=h.rockTo.x; n.toZ=h.rockTo.z;
+                s.helpers.push_back(n);
+            }
             for (const AllyState& a : sim.match.Allies()) {
                 if (!a.alive || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
                 net::AllyNet n;

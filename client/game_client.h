@@ -121,6 +121,7 @@ class GameClient {
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
     // The mini bosses in the latest snapshot (the ones near you).
+    const std::vector<net::HelperNet>& Helpers() const { return helpers; }
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
     // The hireable allies in the latest snapshot (the ones near you, and yours wherever they are).
     const std::vector<net::AllyNet>& Allies() const { return allies; }
@@ -584,6 +585,7 @@ class GameClient {
         alive = s.alive;
         epoch = s.epoch;
 
+        helpers = s.helpers;
         bosses = s.bosses;
         allies = s.allies;
         // Carts: the ones in this snapshot, and parked ones from the last few (they are only sent now and then; see kParkedVehicleEvery).
@@ -623,6 +625,7 @@ class GameClient {
     std::map<uint16_t, RosterInfo> roster;
     uint32_t tunic = SkinRgb(0);
     InventoryInfo inventory;
+    std::vector<net::HelperNet> helpers;
     std::vector<net::BossNet> bosses;
     std::vector<net::AllyNet> allies;
     std::vector<net::VehicleNet> vehicles;
