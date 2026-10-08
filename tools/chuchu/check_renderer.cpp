@@ -15,7 +15,8 @@ using BM=royale::DragonMode;
 struct Actor { struct {struct {float x=0,y=0,z=0;} pos;} world; };
 struct State {void* gfxCtx=nullptr;};
 struct PlayState {State state;};
-struct BossActor {int kind=0,mode=0,aux=0;float moved=0,smashAge=10,modeAge=0,hurtAge=10;int16_t rot=0;};
+struct BossActor {int kind=0,mode=0,aux=0;float moved=0,smashAge=10,modeAge=0,hurtAge=10,flashAge=10,flashLen=0;int16_t rot=0;};
+bool gHitFlash=true;
 BK KindOf(const BossActor& b) {return static_cast<BK>(b.kind);}
 BM ModeOf(const BossActor& b) {return static_cast<BM>(b.mode);}
 float drawTime=.35f;
@@ -68,5 +69,9 @@ int main() {
         shimmered |= first[i].v.cn[0]!=allocated[i].v.cn[0];
     }
     if(!flowed || !shimmered) return 6;
-    std::puts("ChuChu renderer: all five variants/modes; full 256x256 uploads and valid vertices");
+    boss.flashAge=0;boss.flashLen=.3f;output=commands;ChuChu_Draw(&actor,&play,boss);
+    bool flash=false;
+    for(Gfx* g=commands;g<output;g++) if((g->words.w0>>24)==G_SETENVCOLOR && g->words.w1==0xfff5dcff) flash=true;
+    if(!flash) return 7;
+    std::puts("ChuChu renderer: all five variants/modes; full 256x256 uploads, valid vertices, jelly motion and impact flash");
 }

@@ -38,6 +38,7 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
         v.v.cn[0]=v.v.cn[1]=v.v.cn[2]=shade; v.v.cn[3]=255;
     }
     const bool stone = clip == chu::Petrify;
+    const float hitFlash = gHitFlash && b.flashLen>0 ? std::clamp(1.0f-b.flashAge/b.flashLen,0.0f,1.0f) : 0.0f;
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
@@ -50,10 +51,17 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
     gDPSetTextureLUT(POLY_OPA_DISP++,G_TT_NONE);
     gDPSetTexturePersp(POLY_OPA_DISP++,G_TP_PERSP);
     if (stone) {
-        gDPSetPrimColor(POLY_OPA_DISP++,0,0,145,145,160,255);
+        gDPSetPrimColor(POLY_OPA_DISP++,0,0,static_cast<u8>(145+110*hitFlash),static_cast<u8>(145+110*hitFlash),static_cast<u8>(160+95*hitFlash),255);
         gDPSetCombineMode(POLY_OPA_DISP++,G_CC_PRIMITIVE,G_CC_PRIMITIVE);
     } else {
         gDPSetCombineMode(POLY_OPA_DISP++,G_CC_MODULATEIA,G_CC_MODULATEIA);
+        if(hitFlash>0) {
+            // Blend the coloured texture toward white at impact, then fade back to jelly.
+            gDPSetEnvColor(POLY_OPA_DISP++,255,245,220,255);
+            gDPSetPrimColor(POLY_OPA_DISP++,0,static_cast<u8>(255*(1-hitFlash*.8f)),255,255,255,255);
+            gDPSetCombineLERP(POLY_OPA_DISP++,TEXEL0,ENVIRONMENT,PRIM_LOD_FRAC,ENVIRONMENT,0,0,0,TEXEL0,
+                             TEXEL0,ENVIRONMENT,PRIM_LOD_FRAC,ENVIRONMENT,0,0,0,TEXEL0);
+        }
         gSPTexture(POLY_OPA_DISP++,0xFFFF,0xFFFF,0,G_TX_RENDERTILE,G_ON);
         const int variant=b.kind-static_cast<int>(BK::ChuRed);
         // The port's LoadTile path supports a full high resolution image; LoadBlock truncates large uploads.
