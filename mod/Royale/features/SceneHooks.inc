@@ -320,7 +320,7 @@ void OnGameFrameUpdate() {
     Feat("storm"); DriveStorm(hud);
     Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("dynamic lights"); UpdateDynamicLights(gPlayState);   // before the actors are drawn, so they are lit by this frame's lights
-    Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField());
+    Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField(), LocalWearTunic(hud));
     Feat("pause inventory"); SyncPauseInventory(hud);
     Feat("chicken music"); if (DebugOn(kDbgMusic)) UpdateChickenMusic();
     Feat("music scan"); if (gScanRequested) { gScanRequested = false; ScanMusicFolder(); }   // asked for by the menu (which draws on another thread)

@@ -1052,6 +1052,17 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 // The game colours Link's tunic from its cosmetic settings, so a player's skin is applied by setting those just for the moment their
 // model is drawn, then putting the local player's own colour back. All three tunic colours are set so it doesn't matter which one is worn.
 uint32_t gLocalTunic = royale::SkinRgb(0);
+// The selected skin is retained when red/blue gear temporarily replaces it.
+uint32_t gLocalWearTunic = gLocalTunic;
+uint32_t LocalWearTunic(const royale::HudState& hud) {
+    const int slot = static_cast<int>(royale::GearSlot::Tunic);
+    if (hud.inv.gearMask & (1 << slot)) {
+        const auto item = static_cast<royale::ItemId>(hud.inv.gear[slot].item);
+        if (item == royale::ItemId::GoronTunic) return royale::PackRgb(100, 20, 0);
+        if (item == royale::ItemId::ZoraTunic) return royale::PackRgb(0, 60, 100);
+    }
+    return gLocalTunic;
+}
 bool gTunicApplied = false;                      // we have taken over the cosmetic tunic settings
 int gSavedTunicChanged[3] = {0, 0, 0};
 Color_RGB8 gSavedTunicValue[3] = {};
@@ -1067,7 +1078,7 @@ void SetTunicCosmetics(uint32_t rgb) {
 }
 
 // While you are in a match your own Link wears your chosen skin; leaving gives the player's own cosmetic settings back.
-void ApplyLocalTunic(bool on) {
+void ApplyLocalTunic(bool on, uint32_t rgb) {
     if (on && !gTunicApplied) {
         for (int i = 0; i < 3; i++) {
             gSavedTunicChanged[i] = CVarGetInteger(kTunicChanged[i], 0);
@@ -1076,7 +1087,8 @@ void ApplyLocalTunic(bool on) {
         gTunicApplied = true;
     }
     if (on) {
-        SetTunicCosmetics(gLocalTunic);
+        gLocalWearTunic = rgb;
+        SetTunicCosmetics(gLocalWearTunic);
     } else if (gTunicApplied) {
         for (int i = 0; i < 3; i++) {
             CVarSetInteger(kTunicChanged[i], gSavedTunicChanged[i]);
@@ -1104,7 +1116,7 @@ void Puppet_Draw(Actor* actor, PlayState* play) {
     Player_Draw(actor, play);
     if (st != nullptr) DrawVictoryCrown(play,reinterpret_cast<const Player*>(actor),st->id);
     gGildedPlayer = nullptr;
-    if (st && gTunicApplied) SetTunicCosmetics(gLocalTunic);
+    if (st && gTunicApplied) SetTunicCosmetics(gLocalWearTunic);
     gSaveContext.equips.buttonItems[0] = original;
     // Everyone who is still in the sky during the drop hangs from a glider.
     if (st && HangingFromGlider(st, actor, play)) {

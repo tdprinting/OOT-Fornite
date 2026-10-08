@@ -659,13 +659,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
-    if (hud.weapon == royale::ItemId::Hookshot || hud.weapon == royale::ItemId::ShockwaveGrenade) {
+    if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
+                            player->actor.world.pos.z, aim);
+    } else if (hud.weapon == royale::ItemId::Hookshot) {
         Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-        float tx = 0, tz = 0;
-        if (hud.weapon == royale::ItemId::ShockwaveGrenade && bestDist < 1e8f && KnownPosition(best, &tx, &tz)) {
-            const Vec3f at = { tx, player->actor.world.pos.y, tz };
-            PowerFx(gPlayState, hud.weapon, at, false, &player->actor, hud.selfId);
-        }
     }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
@@ -952,8 +950,14 @@ void SyncLocalDress(Player* player, const royale::HudState& hud) {
     gLocalDress.weapon = hud.weapon;
     const s8 shield = hud.hasShield ? PlayerShieldFor(hud.shield) : PLAYER_SHIELD_NONE;
     if (!hud.hasShield) player->stateFlags1 &= ~PLAYER_STATE1_SHIELDING;
+    const auto tunic = WornGear(hud, royale::GearSlot::Tunic);
+    const s8 wornTunic = tunic == royale::ItemId::GoronTunic ? PLAYER_TUNIC_GORON :
+                         tunic == royale::ItemId::ZoraTunic ? PLAYER_TUNIC_ZORA : PLAYER_TUNIC_KOKIRI;
+    Inventory_ChangeEquipment(EQUIP_TYPE_TUNIC, static_cast<u16>(wornTunic + 1));
+    player->currentTunic = wornTunic;
+    // Keep the save in sync even when an engine refresh already changed the actor.
+    Inventory_ChangeEquipment(EQUIP_TYPE_SHIELD, static_cast<u16>(shield));
     if (player->currentShield != shield && !(player->stateFlags1 & PLAYER_STATE1_SHIELDING)) {
-        Inventory_ChangeEquipment(EQUIP_TYPE_SHIELD, static_cast<u16>(shield));   // the pause screen and the game's own checks agree (put back after the match)
         player->currentShield = shield;
         Player_SetModelGroup(player, Player_ActionToModelGroup(player, player->heldItemAction));
     }
@@ -987,6 +991,9 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
         if (std::fabs(player->linearVelocity) < 1.0f && (player->actor.bgCheckFlags & 1))
             PoseSeq(player, SeqFor(static_cast<uint8_t>(gActionAnim), gLocalDress.weapon, 0, gActionItem, player), t);
     }
+    // Item changes and engine animation updates can leave stale sheath/hand lists
+    // even when currentShield is unchanged. Rebuild from the final draw equipment.
+    Player_SetModelGroup(player, player->modelGroup);
     gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
     Player_Draw(&player->actor, play);
     gGildedPlayer = nullptr;

@@ -107,6 +107,14 @@ void WarDraw(GameState* state) {
         gDPPipeSync(p.out++);gSPTexture(p.out++,0xffff,0xffff,0,G_TX_RENDERTILE,G_ON);
         gDPSetCombineMode(p.out++,G_CC_MODULATEIA_PRIM,G_CC_MODULATEIA_PRIM);p.Color(0xffffffff);
         gDPSetTileCustom(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,PAUSE_EQUIP_PLAYER_WIDTH,PAUSE_EQUIP_PLAYER_HEIGHT,0,G_TX_CLAMP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);
+        // Fast3D normalizes UVs using loaded_texture, not just the render tile.
+        // Load full portrait dimensions before binding the framebuffer texture.
+        static std::array<uint16_t,PAUSE_EQUIP_PLAYER_WIDTH*PAUSE_EQUIP_PLAYER_HEIGHT> portraitTexture{};
+        gDPSetTile(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,0,0,G_TX_LOADTILE,0,
+                   G_TX_CLAMP,G_TX_NOMASK,G_TX_NOLOD,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOLOD);
+        gDPSetTextureImage(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,PAUSE_EQUIP_PLAYER_WIDTH,portraitTexture.data());
+        gDPLoadSync(p.out++);
+        gDPLoadTile(p.out++,G_TX_LOADTILE,0,0,(PAUSE_EQUIP_PLAYER_WIDTH-1)<<2,(PAUSE_EQUIP_PLAYER_HEIGHT-1)<<2);
         gDPSetTextureImageFB(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,PAUSE_EQUIP_PLAYER_WIDTH,gPauseLinkFrameBuffer);
         p.Quad(r,PAUSE_EQUIP_PLAYER_WIDTH,PAUSE_EQUIP_PLAYER_HEIGHT);
     }

@@ -33,6 +33,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
         case ItemId::Bombs: variant = 5; speed = 650.0f; gravity = 760.0f; explodes = true; spin = 6.0f; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::Bombchus: variant = 6; speed = 600.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::HomingBombchus: variant = 7; speed = 700.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
+        case ItemId::ShockwaveGrenade: variant = 10; speed = 650.0f; gravity = 760.0f; explodes = true; spin = 6.0f; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::DekuNuts: variant = 8; speed = 1000.0f; spin = 9.0f; sfx = NA_SE_IT_SLING_SHOT; break;
         case ItemId::Boomerang: variant = 9; speed = 900.0f; spin = 20.0f; sfx = NA_SE_IT_BOOMERANG_THROW; break;
         default: break;
@@ -42,6 +43,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
     for (int i = 0; i < count; i++) {
         const float a = base + (count == 1 ? 0.0f : (i - 1) * 0.11f);
         Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes };
+        if (variant == 10) p.vy = 250.0f; // land near the end of its 520-unit throw
         if (gProjectiles.size() < 160) gProjectiles.push_back(p);
     }
     Vec3f at = { x, y, z };
@@ -301,14 +303,30 @@ void Projectile_Draw(Actor*, PlayState* play) {
         if (p.life <= 0.0f || landed) {
             if (p.explodes && gPlayState != nullptr) {
                 Vec3f pos = { p.x, std::max(p.y, floorY) + 10.0f, p.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
-                EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
-                AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 255, 170, 80, 380.0f, 0.7f, 1);
+                if (p.variant == 10) {
+                    PowerFx(play, royale::ItemId::ShockwaveGrenade, pos, false, nullptr, royale::net::kNoPlayer16);
+                    AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 190, 100, 255, 380.0f, 0.7f, 1);
+                } else {
+                    EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
+                }
+                if (p.variant != 10) AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 255, 170, 80, 380.0f, 0.7f, 1);
                 Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             }
             gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i));
             continue;
         }
         if (DrawRealProjectile(play, p)) { i++; continue; }
+        if (p.variant == 10) {
+            Matrix_Push();
+            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
+            Matrix_RotateY(std::atan2(p.vx, p.vz), MTXMODE_APPLY);
+            Matrix_RotateZ(p.spin, MTXMODE_APPLY);
+            Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
+            DrawItemModel(play, kGidGrenade);
+            Matrix_Pop();
+            i++;
+            continue;
+        }
         const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Projectile, p.variant);
         if (mesh != nullptr && !mesh->dl.empty()) {
             const float horiz = std::hypot(p.vx, p.vz);
