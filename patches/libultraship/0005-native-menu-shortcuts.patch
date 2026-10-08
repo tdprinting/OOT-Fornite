@@ -1,0 +1,23 @@
+diff --git a/src/window/gui/Gui.cpp b/src/window/gui/Gui.cpp
+--- a/src/window/gui/Gui.cpp
++++ b/src/window/gui/Gui.cpp
+@@ -495,7 +495,7 @@
+         (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) && CVarGetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))
+     );
+ 
+-    if (anyMenuKeyPressed) {
++    if (anyMenuKeyPressed && (GetMenu() || GetMenuBar())) {
+         // Open Menu if any Menu key is pressed and the Menu is available
+         // If Menu is not available, open Menu Bar if it is available
+         if (GetMenu()) {
+@@ -523,8 +523,8 @@
+         }
+     }
+ #else
+-    if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+-        (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) && CVarGetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
++    if ((GetMenu() || GetMenuBar()) && (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
++        (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) && CVarGetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0)))) {
+         if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) && GetMenu()) {
+             GetMenu()->ToggleVisibility();
+         } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) &&
