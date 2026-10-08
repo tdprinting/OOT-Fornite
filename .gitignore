@@ -49,3 +49,6 @@ assets/maya/previews/
 
 /build-audit/
 /build-perf/
+assets/chuchu/*.blend1
+/tools/chuchu/__pycache__/
+/build-chuchu-tests/

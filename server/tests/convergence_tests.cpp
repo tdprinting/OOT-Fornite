@@ -113,10 +113,10 @@ int main() {
         CHECK(server.StartMatch());std::set<int> kinds;
         CHECK(server.Sim().match.Bosses().size()==7);
         for (const auto& b:server.Sim().match.Bosses()) {
-            CHECK(b.kind==ConvergenceBossAt(b.home));kinds.insert(static_cast<int>(b.kind));
+            CHECK(b.kind==ConvergenceBossAt(b.home) || IsChuKind(b.kind));kinds.insert(static_cast<int>(b.kind));
             CHECK(ConvergenceDryGround(b.home) && !ConvergenceObstacleAt(b.home));
         }
-        CHECK(kinds.size()==7);
+        CHECK(kinds.size()>=3);
         for (const auto& l:server.Sim().match.Loot()) CHECK(ConvergenceDryGround(l.spawn.pos) && !ConvergenceObstacleAt(l.spawn.pos));
     }
     fortnite::UseTerrainForMap(kSandboxMapIndex);CHECK(fortnite::gSandboxTerrain);

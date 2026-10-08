@@ -162,6 +162,8 @@ const StrikeFx* PendingStrikeOf(uint32_t owner) {
 
 // ---- mini bosses --------------------------------------------------------------------------------------------------------------
 
+#include "RoyaleChuChu.h"
+
 struct MiniLook {
     const char* skeleton;
     bool flex;
@@ -1162,7 +1164,13 @@ void Boss_Update(Actor* actor, PlayState* play) {
         case BK::DragonForest: PhantomGanon_Update(play, b); break;
         case BK::DragonShadow: Bongo_Update(play, b); break;
         case BK::DragonSand: Twinrova_Update(play, b); break;
-        default: MiniBoss_Update(actor, play, b); break;
+        default:
+            if (royale::IsChuKind(KindOf(b))) {
+                b.hurtAge += dt;
+                if (b.hp < b.lastHp - 0.001f) b.hurtAge = 0;
+                b.lastHp = b.hp;
+            } else MiniBoss_Update(actor, play, b);
+            break;
     }
 }
 
@@ -1170,6 +1178,7 @@ void Boss_Draw(Actor* actor, PlayState* play) {
     auto of = gBossOf.find(actor);
     if (of == gBossOf.end()) return;
     BossActor& b = gBosses[of->second];
+    if (royale::IsChuKind(KindOf(b))) { ChuChu_Draw(actor, play, b); return; }
     switch (KindOf(b)) {
         case BK::DragonFire: Volvagia_Draw(actor, play, b); return;
         case BK::DragonWater: Morpha_Draw(actor, play, b); return;
@@ -1460,6 +1469,16 @@ void UpdateBossBodyFx(PlayState* play) {
         const float y = b.actor->world.pos.y;
         b.fxClock += 1.0f / royale::kTickHz;
         const bool every = static_cast<int>(b.fxClock * 20.0f) % 4 == 0;
+        if (royale::IsChuKind(KindOf(b)) && every) {
+            if ((KindOf(b) == BK::ChuYellow || KindOf(b) == BK::ChuBlue) && (b.aux == 1 || mode == BM::Summon)) {
+                Vec3f at = {b.x, y + 100.0f, b.z};
+                Color_RGBA8 prim = {235,255,120,255}, env = {80,210,255,255};
+                EffectSsLightning_Spawn(play, &at, &prim, &env, 110, Rand_ZeroOne() * 0xFFFF, 6, 3);
+            }
+            if (KindOf(b) == BK::ChuRed) Glitter(play,b.x,y+80,b.z,{255,160,35,255},{180,40,0,255},1.2f,35,14);
+            if (KindOf(b) == BK::ChuDark && mode == BM::Stunned && b.aux == 4)
+                Glitter(play,b.x,y+120,b.z,{255,255,200,255},{220,210,140,255},.3f,40,14);
+        }
         auto breath = [&](float reach, float height, Color_RGBA8 prim, int count, float sp0) {   // a stream of sparks out of its mouth
             Color_RGBA8 env = { 255, 255, 255, 255 };
             for (int i = 0; i < count; i++) {

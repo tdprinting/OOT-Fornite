@@ -2353,8 +2353,8 @@ static void MapsHaveTheirOwnNamesAndBosses() {
         const Circle map = {{0, 0}, m.fallback.radius};
         const PoiLayout layout = GeneratePois(12 + id, map, 16, nullptr, id);
         CHECK(layout.pois.size() >= 3);
-        for (const Poi& p : layout.pois) CHECK(p.name >= id * kNamesPerMap && p.name < (id + 1) * kNamesPerMap);
-        CHECK(layout.pois[0].name == id * kNamesPerMap);
+        for (const Poi& p : layout.pois) CHECK(p.name >= PoiNameBase(id) && p.name < PoiNameBase(id)+PoiNameCount(id));
+        CHECK(layout.pois[0].name == PoiNameBase(id));
         // The bosses a match spawns are the ones that suit the place, never a dragon.
         Match match(5, map, 10);
         match.SetMapId(id);
@@ -2363,7 +2363,7 @@ static void MapsHaveTheirOwnNamesAndBosses() {
         match.AddHuman(1);
         match.Start();
         CHECK(!match.Bosses().empty());
-        for (const MiniBoss& b : match.Bosses()) CHECK(b.kind == m.minis[0] || b.kind == m.minis[1]);
+        for (const MiniBoss& b : match.Bosses()) CHECK(b.kind == m.minis[0] || b.kind == m.minis[1] || IsChuKind(b.kind));
         for (const auto& p : match.Players()) if (p.isBot) CHECK(p.scene == m.scene);
     }
     // The dragon of a map is the one for that place.
@@ -3444,6 +3444,63 @@ static Simulation OneBoss(BossKind kind, Vec2 human, std::shared_ptr<const NavGr
     h->maxHealth = h->health = 100.0f;
     if (nav) sim.match.SetNav(std::move(nav));
     return sim;
+}
+
+static void ChuChuCombat() {
+    // The merged combat rules must dodge the damage and the elemental follow-up together.
+    {
+        auto sim=OneBoss(BossKind::ChuRed,{0,80});auto* h=sim.match.Find(1);
+        auto* b=const_cast<MiniBoss*>(sim.match.FindBoss(kBossIdBase));
+        b->windupUntil=sim.match.Clock()+kDt;b->rot=0;
+        h->rollUntil=sim.match.Clock()+1;const float health=h->health;
+        sim.match.Tick(kDt);
+        CHECK(h->health==health && h->burnUntil<=sim.match.Clock());
+    }
+    // Electric melee counter, projectile discharge, and missing ammunition.
+    for (BossKind kind : {BossKind::ChuYellow, BossKind::ChuBlue}) {
+        auto sim = OneBoss(kind, {0, 80});
+        auto* h = sim.match.Find(1);
+        auto* b = const_cast<MiniBoss*>(sim.match.FindBoss(kBossIdBase));
+        // Pick a charged clock; the test match starts after countdown/drop.
+        while (!ChuCharged(kind, sim.match.Clock(), false)) sim.match.Tick(kDt);
+        h->weapon = {ItemId::MasterSword, Rarity::Common}; h->attackReadyAt = 0;
+        const float hp = b->health;
+        CHECK(sim.match.AttackBoss(1,b->id,true).ok && b->health == hp);
+        h->stunUntil=0; h->attackReadyAt=0; h->weapon={ItemId::Boomerang,Rarity::Common};
+        CHECK(sim.match.AttackBoss(1,b->id,true).hit && b->mode == DragonMode::Stunned && b->health < hp);
+        h->attackReadyAt=0; h->weapon={ItemId::MasterSword,Rarity::Common};
+        CHECK(sim.match.AttackBoss(1,b->id,true).hit);
+    }
+    {
+        auto sim=OneBoss(BossKind::ChuDark,{0,80}); auto* h=sim.match.Find(1);
+        auto* b=const_cast<MiniBoss*>(sim.match.FindBoss(kBossIdBase));
+        h->weapon={ItemId::MasterSword,Rarity::Common};h->attackReadyAt=0;
+        const float resisted=sim.match.AttackBoss(1,b->id,true).damage;
+        h->weapon={ItemId::LightArrows,Rarity::Common};h->attackReadyAt=0;
+        CHECK(sim.match.AttackBoss(1,b->id,true).hit && b->mode==DragonMode::Stunned && b->aux==4);
+        h->weapon={ItemId::MegatonHammer,Rarity::Common};h->attackReadyAt=0;
+        CHECK(sim.match.AttackBoss(1,b->id,true).damage > resisted*5);
+    }
+    for (BossKind kind : {BossKind::ChuRed,BossKind::ChuGreen,BossKind::ChuYellow,BossKind::ChuBlue,BossKind::ChuDark}) {
+        CHECK(IsChuKind(kind) && !IsMajorKind(kind));
+        auto sim=OneBoss(kind,{0,300}); bool special=false, strike=false, leapt=false;
+        for(int i=0;i<20*14;i++) {
+            sim.match.Find(1)->pos={0,300}; sim.match.Tick(kDt);
+            const auto* b=sim.match.FindBoss(kBossIdBase);
+            special |= b->mode==DragonMode::Leap || b->mode==DragonMode::Hidden || b->mode==DragonMode::Summon;
+            leapt |= b->mode==DragonMode::Leap;
+            for(const auto& e:sim.match.DrainEvents()) if(e.type==MatchEvent::Type::Strike && e.a==kBossIdBase) strike=true;
+        }
+        CHECK(special && strike);
+        if(kind==BossKind::ChuBlue) CHECK(!leapt);
+    }
+    // Seeded normal matches expose all variants without removing the old pool.
+    std::set<BossKind> seen;
+    for(uint64_t seed=1;seed<=80;seed++) {
+        Match m(seed,MapCircle(),0); m.SetBossCount(7);m.SetBossSpots({{0,0},{500,0},{-500,0},{0,500},{0,-500},{700,700},{-700,-700}});
+        m.SpawnBosses();for(const auto& b:m.Bosses()) { CHECK(!IsMajorKind(b.kind));seen.insert(b.kind); }
+    }
+    for(int k=static_cast<int>(BossKind::ChuRed);k<=static_cast<int>(BossKind::ChuDark);k++) CHECK(seen.count(static_cast<BossKind>(k)));
 }
 
 static void BossesUseTheirOwnMoves() {
@@ -4574,7 +4631,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
