@@ -50,6 +50,10 @@ add_executable(royale_graphics_layers_tests tests/graphics_layers_tests.cpp)
 target_link_libraries(royale_graphics_layers_tests PRIVATE royale_core)
 add_test(NAME royale_graphics_layers_tests COMMAND royale_graphics_layers_tests)
 
+add_executable(royale_shadow_tests tests/shadow_tests.cpp)
+target_link_libraries(royale_shadow_tests PRIVATE royale_core)
+add_test(NAME royale_shadow_tests COMMAND royale_shadow_tests)
+
 add_executable(royale_water_tests tests/water_tests.cpp)
 target_link_libraries(royale_water_tests PRIVATE royale_core)
 add_test(NAME royale_water_tests COMMAND royale_water_tests)

@@ -25,13 +25,12 @@ void WarBuild();
 void WarDraw(GameState* state);
 
 void WarSound(int kind) {
-    static float pitch[] = {1.12f, 1.0f, 0.88f, 0.9f, 1.30f};
     static float volume = 0.75f;
     static const u16 sounds[] = {NA_SE_SY_FSEL_CURSOR, NA_SE_SY_FSEL_DECIDE_L, NA_SE_SY_FSEL_CLOSE,
                                  NA_SE_SY_FSEL_ERROR, NA_SE_SY_CURSOR};
     volume = std::clamp(CVarGetInteger(ROYALE_CVAR("MenuSfx"), 75), 0, 100) / 100.0f;
     kind = std::clamp(kind, 0, 4);
-    if (volume > 0) Audio_PlaySoundGeneral(sounds[kind], &gSfxDefaultPos, 4, &pitch[kind], &volume, &gSfxDefaultReverb);
+    if (volume > 0) Audio_PlaySoundGeneral(sounds[kind], &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &volume, &gSfxDefaultReverb);
 }
 void WarShow(WarPage page) {
     gWar.open = true;
@@ -158,6 +157,7 @@ void WarSetting(int row, const char* label, const char* key, int fallback, int l
     WarRow(400+row,row,text,hint,[key,low,high,step,n](int direction) {
         int value = low == 0 && high == 1 ? !n : std::clamp(n+(direction < 0 ? -step : step),low,high);
         CVarSetInteger(key,value);
+        if(gWar.page==WarPage::Settings&&gWar.section==4)gShadowCfgLoaded=false;
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         if (std::strcmp(key,CVAR_SETTING("Volume.SFX")) == 0) Audio_SetGameVolume(SEQ_PLAYER_SFX,value/100.0f);
     },true,true);
@@ -219,8 +219,8 @@ void WarBuild() {
         WarRow(43,4,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
-        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Updates"};
-        for(int i=0;i<5;++i) WarAdd(50+i,{28,108.0f+i*34,184,29},sections[i],"Choose a settings category",[i](int){gWar.section=i;});
+        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates"};
+        for(int i=0;i<6;++i) WarAdd(50+i,{28,108.0f+i*34,184,29},sections[i],"Choose a settings category",[i](int){gWar.section=i;});
         if(gWar.section==0) {
             WarSetting(0,"Menu music",ROYALE_CVAR("MenuMusic"),70,0,100,5,"Original Ocarina of Time file-select music");
             WarSetting(1,"Menu sounds",ROYALE_CVAR("MenuSfx"),75,0,100,5,"Navigation, confirm, back and error sounds");
@@ -248,6 +248,14 @@ void WarBuild() {
             WarRow(403,3,std::string("Automatic start   ")+(ui.autoStart?"On":"Off"),"Start after the lobby timer. Host can always start manually.",[](int){Ui().autoStart=!Ui().autoStart;WarSave();},can,true);
             WarRow(404,4,"Weather   "+std::to_string(ui.weatherIntensity)+"%","Weather strength for this match",[](int d){Ui().weatherIntensity=std::clamp(Ui().weatherIntensity+(d<0?-10:10),0,100);WarSave();},can,true);
             WarRow(405,5,"Host port   "+std::to_string(ui.port),"Change the port before creating a lobby",[](int){WarEdit(2);},idle);
+        } else if(gWar.section==4) {
+            WarRow(400,0,std::string("Dynamic shadows   ")+(DebugOn(kDbgShadows)?"On":"Off"),"Shadows follow the sun, moon and nearby lights",[](int){gDebugOn[kDbgShadows]=!DebugOn(kDbgShadows);CVarSetInteger(ROYALE_CVAR("Debug.Shadows"),gDebugOn[kDbgShadows]);WarSave();},true,true);
+            const int quality=std::clamp(CVarGetInteger(ROYALE_CVAR("ShadowQuality"),1),0,static_cast<int>(sh::Quality::Count)-1);
+            WarRow(401,1,std::string("Quality   ")+sh::kQualityNames[quality],"Low suits handhelds. Higher presets add detail and distance.",[quality](int d){int q=(quality+(d<0?-1:1)+static_cast<int>(sh::Quality::Count))%static_cast<int>(sh::Quality::Count);CVarSetInteger(ROYALE_CVAR("ShadowQuality"),q);CVarSetInteger(ROYALE_CVAR("ShadowCustom"),0);gShadowCfgLoaded=false;WarSave();},true,true);
+            WarSetting(2,"Shadow darkness",ROYALE_CVAR("ShadowDarkness"),100,0,200,10,"Strength of ground shadows");
+            WarSetting(3,"Soft edges",ROYALE_CVAR("ShadowSoftness"),100,25,300,25,"Softness of shadow edges");
+            WarSetting(4,"Dynamic lights",ROYALE_CVAR("DynLights"),1,0,1,1,"Light from explosions, spells and chests");
+            WarSetting(5,"Building sunlight",ROYALE_CVAR("SunOnBuildings"),1,0,1,1,"Hyrule Kingdom lighting follows sun and moon");
         } else {
 #ifdef __ANDROID__
             const int state=UpdaterInt("getState");
@@ -585,7 +593,7 @@ void WarDraw(GameState* state) {
             p.Wrap(38,151,h.winnerName.empty()?"Match complete":h.winnerName+" wins!",155,16,0xC5A45DFF,3);
             int y=116;for(size_t i=0;i<h.results.size()&&i<5;++i){const auto& r=h.results[i];p.Text(244,y,std::to_string(r.placement)+"  "+r.name+"   "+std::to_string(r.kills)+" KOs",12,0xF4E9CAFF,false,351);y+=22;}
         }
-        if(gWar.page==WarPage::Settings&&gWar.section==4) {
+        if(gWar.page==WarPage::Settings&&gWar.section==5) {
             p.Text(246,231,"VERSION " ROYALE_BUILD_VERSION,11,0xC5A45DFF);
 #ifdef __ANDROID__
             p.Wrap(246,252,UpdaterString("getMessage"),340,10,0xBCD7EEFF,3);
