@@ -849,6 +849,13 @@ inline PoiLayout GenerateIslandPois(uint64_t seed, Circle map, int count, const 
 }
 
 inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
+    if(IsBossArena(mapId)) {
+        PoiLayout arena;
+        arena.pois={ {static_cast<uint8_t>(PoiNameBase(mapId)),{0,0},1500},
+                     {static_cast<uint8_t>(PoiNameBase(mapId)+1),{0,-2400},760},
+                     {static_cast<uint8_t>(PoiNameBase(mapId)+2),{0,-900},650} };
+        return arena;
+    }
     if (ClampMap(mapId) == kFortniteMapIndex) return GenerateIslandPois(seed, map, count, valid);   // the island's places are painted on it
     if (ClampMap(mapId) == 0) return GenerateFieldPois(seed, map, (std::max)(3, (std::min)(8, count - 4)), valid);   // Hyrule Field has places of its own
     PoiLayout out;

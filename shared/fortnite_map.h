@@ -2,6 +2,7 @@
 #include "fortnite_cover_data.h"
 #include "fortnite_map_data.h"
 #include "sandbox_terrain.h"
+#include "boss_arena.h"
 #include "convergence_data.h"
 #include "kingdom_data.h"
 #include <algorithm>
@@ -53,6 +54,11 @@ inline void UseTerrain(bool sandbox) {
 inline void UseTerrainForMap(int mapId) {
     UseTerrain(mapId == 6);
     gTerrainMapId = mapId;
+    if(mapId==9 || mapId==10) {
+        const auto& t=arena::Terrain(mapId==10);
+        gHeightData=t.heights.data();gColourData=t.colours.data();gCoverData=t.cover.data();
+        gSpawnX=arena::kSpawn.x;gSpawnZ=arena::kSpawn.z;gSandboxTerrain=true;
+    }
     if (mapId == 7) {
         gHeightData = convergence::kHeights; gColourData = convergence::kColours; gCoverData = convergence::kCover;
         gSpawnX = 0.0f; gSpawnZ = -600.0f;
