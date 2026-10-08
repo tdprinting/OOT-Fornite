@@ -14,6 +14,17 @@ sys.path.append(str(HERE.parent/'kingdom'))
 import geom, kit, textures, pois
 from layout import *
 
+_HOUSE=kit.house
+def rift_house(*args,**kwargs):
+    args=list(args);args[3]=max(args[3],460);args[4]=max(args[4],440)
+    kwargs['door_width']=240
+    if kwargs.get('name') in ('Castle keep','Snowpeak cabin 0','Snowpeak cabin 1','Lakeside lab'):
+        kwargs['stair_width']=160
+        args[3]=max(args[3],620);args[4]=max(args[4],620)
+    if kwargs.get('name') in ('Castle keep','Snowpeak cabin 1'):kwargs['stair_landing']=True
+    if kwargs.get('name')=='Castle keep':kwargs['alternate_stairs']=True
+    return _HOUSE(*args,**kwargs)
+
 def translated(w,fn,dx,dz,dy=0,scale=1,origin=(0,0)):
     """Transform every representation together, including floors and nav blockers."""
     q=geom.World();real=kit.H;ox,oz=origin
@@ -24,9 +35,14 @@ def translated(w,fn,dx,dz,dy=0,scale=1,origin=(0,0)):
     house=kit.house
     def open_house(*args,**kwargs):
         kwargs['back_door']=True
+        kwargs['door_width']=240
         if kwargs.get('name','').startswith('Snowpeak cabin'):
             args=list(args);args[6]=2
-        return house(*args,**kwargs)
+        name=kwargs.get('name','')
+        if name.startswith('Gerudo house'):
+            args=list(args);index=int(name.split()[-1]);dx,dz=[(-1050,300),(950,500),(-850,-900)][index];args[1],args[2]=4100+dx,3650+dz
+        if name=='ice hut':args=list(args);args[1],args[2]=-1050,-5100
+        return rift_house(*args,**kwargs)
     # Kit town functions imported house directly; every Riftlands dwelling keeps
     # two exits, including the three cabins that were single-entry in Kingdom.
     kit.house=pois.house=open_house
@@ -64,19 +80,19 @@ def arch_bridge(w,a,b,width=340,towers=True):
     ya,yb=kit.H(ax,az)+8,kit.H(bx,bz)+8
     y=max(ya,yb)+55
     P=lambda t,side=0:(ax+(bx-ax)*t+nx*side,az+(bz-az)*t+nz*side)
-    spans=[(0,.18,ya,y),(.18,.82,y,y),(.82,1,y,yb)]
+    spans=[(0,.3,ya,y),(.3,.7,y,y),(.7,1,y,yb)]
     for u,v,y0,y1 in spans:
         x0,z0=P(u);x1,z1=P(v)
         w.ramp(x0,z0,x1,z1,width,y0,y1,'cobble',base=min(y0,y1)-45)
         w.walkways.append((x0,z0,x1,z1,width/2,y0,y1))
     for side in [-1,1]:
-        A=P(.18,side*(width/2+12));B=P(.82,side*(width/2+12))
+        A=P(.3,side*(width/2+12));B=P(.7,side*(width/2+12))
         kit.beam(w,(A[0],y+75,A[1]),(B[0],y+75,B[1]),24,75,'castle_stone',block=True)
     # Arched voussoirs are decorative; supports and deck provide the actual solids.
-    for c in [.32,.5,.68]:
+    for c in [.3,.4,.5,.6,.7]:
         x,z=P(c);bed=kit.H(x,z)
         w.box(x,bed-30,z,90,max(20,y-50-bed+30),width,'castle_stone',math.atan2(bz-az,bx-ax),surf='stone')
-    for u,v in [(.18,.32),(.32,.5),(.5,.68),(.68,.82)]:
+    for u,v in [(.3,.4),(.4,.5),(.5,.6),(.6,.7)]:
         mid=(u+v)/2; radius=(v-u)*L/2
         for side in [-1,1]:
             for k in range(9):
@@ -87,8 +103,9 @@ def arch_bridge(w,a,b,width=340,towers=True):
                 w.face([point(t,radius),point(tt,radius),point(tt,radius+35),point(t,radius+35)],'castle_stone',double=True)
     if towers:
         for u in [.16,.84]:
-            x,z=P(u,width/2+115)
-            kit.house(w,x,z,180,180,style=kit.HouseStyle(wall='castle_stone',roof='roof_red'),name='Crossing tower',loot=False,furnish=False,floor_y=y,footing=False)
+            x,z=P(u,-(width/2+250) if az==-1250 else width/2+250)
+            tower_y=ya+(y-ya)*u/.3 if u<.5 else yb+(y-yb)*(1-u)/.3
+            rift_house(w,x,z,320,320,style=kit.HouseStyle(wall='castle_stone',roof='roof_red'),name='Crossing tower',door_width=240,loot=False,furnish=False,floor_y=tower_y,footing=True)
 
 def waterfall(w,x,z,top,bottom,width=210):
     w.group='Waterfalls';w.far=True
@@ -102,10 +119,13 @@ def waterfall(w,x,z,top,bottom,width=210):
 def palm(w,x,z,seed):
     y=kit.H(x,z)
     w.cylinder(x,z,18,y,y+320,'bark',n=7,col='none',r1=9)
+    w.sphere(x,y+314,z,38,34,38,'leaves',rings=2,segs=7,seed=seed)
     for k in range(6):
-        a=k*math.pi/3+seed*.1
-        ex,ez=x+math.cos(a)*190,z+math.sin(a)*190
-        w.face([(x,y+320,z),(ex,y+290,ez),(ex+math.sin(a)*32,y+270,ez-math.cos(a)*32)],'leaves',double=True)
+        a=k*math.pi/3+seed*.1;dx,dz=math.cos(a),math.sin(a);nx,nz=-dz,dx
+        stations=[(0,14,320),(85,34,352),(190,6,283)]
+        def P(r,wide,yy,side):return (x+dx*r+nx*wide*side,y+yy,z+dz*r+nz*wide*side)
+        for A,B in zip(stations,stations[1:]):
+            w.face([P(*A,-1),P(*B,-1),P(*B,1),P(*A,1)],'leaves',double=True)
 
 def detail(w):
     # Tall Spirit gateway, substantial open colonnades, awnings, oasis palms and pots.
@@ -133,6 +153,16 @@ def detail(w):
             for sz in [-1,1]: w.box(x+sx*145,y,z+sz*135,16,255,16,'timber',col='none')
         w.gable(x,z,330,320,y+255,100,'thatch',col=None)
         kit.table(w,kit.Frame(x,z),-50,0,y,size=(110,65));lantern(w,x+120,z+100,y)
+    # Lab island has a normal boardwalk to the village, independent of swimming.
+    a,b=(-400,3800),(-1800,4200);y0=-165;y1=kit.H(*b)+8
+    kit.beam(w,(a[0],y0,a[1]),(b[0],y1,b[1]),260,22,'planks',surf='wood')
+    w.walkways.append((*a,*b,130,y0,y1))
+    # The main castle approach is also an explicit continuous stone ramp strip;
+    # the terrain uses these same levels, and bots share the physical deck.
+    route=[(0,-1500,350),(0,-2200,430),(0,-2700,710),(0,-2970,820),(0,-3300,820)]
+    for (ax,az,ay),(bx,bz,by) in zip(route,route[1:]):
+        w.ramp(ax,az,bx,bz,360,ay+8,by+8,'cobble',base=min(ay,by)-20)
+        w.walkways.append((ax,az,bx,bz,180,ay+8,by+8))
     # Extra golden paddocks; broad fence breaks preserve buggy exits.
     for xx,zz in [(-4500,2100),(-3200,3700)]:
         kit.fence(w,[(xx-500,zz+300),(xx-500,zz-300),(xx+500,zz-300),(xx+500,zz+300)],h=85)
@@ -144,16 +174,16 @@ def detail(w):
     for side in [-1,1]:
         w.box(side*1050,740,-3900,90,80,1400,'castle_stone',surf='stone')
     # Three tiered root homes with grounded ramps and continuous tree walkways.
-    for k,(x,z,yoff) in enumerate([(4050,3250,220),(4750,3300,280),(4900,2450,340)]):
+    for k,(x,z,yoff) in enumerate([(4050,3500,220),(4950,3350,280),(4900,2450,340)]):
         y=kit.H(x,z)+yoff
         pois.stilts_deck(w,x,z,520,470,y=y)
-        kit.house(w,x,z,340,320,style=kit.HouseStyle(wall='timber',roof='thatch'),name='Deku branch home',floor_y=y,footing=False)
-        gx,gz=x+650,z+900;gy=kit.H(gx,gz)
+        rift_house(w,x,z,340,320,style=kit.HouseStyle(wall='timber',roof='thatch'),name='Deku branch home',door_width=240,floor_y=y,footing=False)
+        gx,gz=(x-750,z+200) if k==0 else (x+650,z+(-600 if k==1 else 900));gy=kit.H(gx,gz)
         w.ramp(gx,gz,x,z+230,170,gy,y,'planks',surf='wood',base=gy-20)
         w.walkways.append((gx,gz,x,z+230,85,gy,y))
         lantern(w,x+210,z+180,y)
-    for a,b in [((4050,3250),(4750,3300)),((4750,3300),(4900,2450))]:
-        floors={(4050,3250):220,(4750,3300):280,(4900,2450):340}
+    for a,b in [((4050,3500),(4950,3350)),((4950,3350),(4900,2450))]:
+        floors={(4050,3500):220,(4950,3350):280,(4900,2450):340}
         ya,yb=kit.H(*a)+floors[a],kit.H(*b)+floors[b]
         kit.beam(w,(a[0],ya,a[1]),(b[0],yb,b[1]),160,25,'planks',surf='wood')
         w.walkways.append((*a,*b,80,ya,yb))
@@ -217,17 +247,23 @@ def detail(w):
     # Forge buildings, lava side pockets, basalt terraces and emissive fissures.
     w.group='Architecture'
     for k in range(3):
-        x,z=3850+k*280,-3500+(k%2)*400
-        kit.house(w,x,z,360,340,style=kit.HouseStyle(wall='brick_dark',roof='roof_red'),name='Quarry forge')
-    for k in range(14):
-        a=k*math.tau/14;x,z=4550+math.cos(a)*370,-4800+math.sin(a)*370;y=kit.H(x,z)
-        w.cylinder(x,z,95,y+1,y+5,'lava_glow',n=8,col='none')
+        x,z=[(3650,-3600),(4250,-3150),(4850,-3750)][k]
+        rift_house(w,x,z,360,340,style=kit.HouseStyle(wall='brick_dark',roof='roof_red'),name='Quarry forge',door_width=240)
+    # A broad basalt crater lip, inset lava and narrow terrain-following ribbons.
+    cx,cz=4550,-4800;cy=kit.H(cx,cz)
+    w.cylinder(cx,cz,270,cy+2,cy+5,'lava_glow',n=16,col='none')
+    for k in range(16):
+        a=k*math.tau/16;x,z=cx+math.cos(a)*540,cz+math.sin(a)*540
+        kit.rock(w,x,z,1.1,k+2100,mat='brick_dark',y=kit.H(x,z),solid=True)
     w.far=True
-    for k in range(6):
-        a=k*1.07
-        for j in range(5):
-            r=500+j*110;x,z=4550+math.cos(a)*r,-4800+math.sin(a)*r;y=kit.H(x,z)
-            w.box(x,y+6,z,15,6,105,'lava_glow',yaw=-a,col='none')
+    for k in range(3):
+        a=k*2.1+.4;dx,dz=math.cos(a),math.sin(a);nx,nz=-dz,dx
+        for j in range(6):
+            r0,r1=460+j*125,460+(j+1)*125
+            x0,z0=cx+dx*r0,cz+dz*r0;x1,z1=cx+dx*r1,cz+dz*r1
+            if terrain.road_dist(np.asarray(x0),np.asarray(z0))<220:continue
+            pts=[(x0+nx*12,z0+nz*12),(x1+nx*12,z1+nz*12),(x1-nx*12,z1-nz*12),(x0-nx*12,z0-nz*12)]
+            w.face([(x,kit.H(x,z)+4,z) for x,z in pts],'lava_glow',double=True)
     w.far=False
     # Shore boulder clusters, exposed cliff courses and smaller flower patches.
     w.group='Props'
@@ -245,6 +281,7 @@ def detail(w):
         y=kit.H(x,z)
         if y<terrain.water_y(np.asarray(x),np.asarray(z))+45 or terrain.road_dist(np.asarray(x),np.asarray(z))<250:continue
         if any(math.hypot(x-px,z-pz)<r+160 for _,px,pz,r,*_ in POIS[:9]):continue
+        if any(math.hypot(x-px,z-pz)<240 for px,pz,_,_ in w.doors):continue
         if terrain.slope_up(np.asarray(x),np.asarray(z))<.78:continue
         if z<-3000 and x<0:kit.pine(w,x,z,rng.uniform(.8,1.3),k,snow=y>520)
         elif x<-3000 and z<1200:palm(w,x,z,k)
@@ -254,12 +291,14 @@ def detail(w):
 
 def build(only=None):
     h=terrain.vertex_grid();kit.HGRID=h
+
     T=textures.build_all()
     # Teal spires, ochre village roofs, turquoise cascades and light foam.
     im,units=T['roof_blue']; im=im.copy();im[...,0]*=.72;im[...,1]*=1.25;T['roof_blue']=(np.clip(im,0,255),units)
     T['castle_stone']=(textures.blocks('#d7ccb2','#a7a18e',5,4,42,jitter=.15,mortar_w=2,bevel=False),120)
     for n in ['castle_stone','town_stone','moss_stone']:
         image,units=T[n];T[n]=(np.clip(image*1.25+35,0,255),units)
+    T['lava_rock']=(np.clip(T['brick_dark'][0]*.8+np.array([15,5,0]),0,255),100)
     T['foam']=(np.full((256,256,3),[205,239,229],dtype=np.float64),128)
     yy,xx=np.mgrid[0:256,0:256];rr=np.hypot(xx-128,yy-128)/128;aa=np.arctan2(yy-128,xx-128)
     spokes=(np.abs(np.sin(aa*3))<.16)|(rr>.78)|(rr<.2)
@@ -274,11 +313,35 @@ def build(only=None):
     T['lava_glow']=(np.full((256,256,3),[255,91,15],dtype=np.float64),100)
     geom.TEX_UNITS.clear();geom.TEX_UNITS.update({n:u for n,(_,u) in T.items()})
     w=geom.World()
+    upper_furniture=kit.furnish_upper
+    def castle_loft_furniture(scene,f,W,D,y,name):
+        if name!='Castle keep':return upper_furniture(scene,f,W,D,y,name)
+        # The roof stair occupies the right wall; furniture stays in the loft.
+        kit.bed(scene,f,55,-D/2+kit.WALL+110,y)
+        px,pz=f.p(75,60);kit.barrel(scene,px,pz,y)
+        px,pz=f.p(40,D/2-kit.WALL-120);kit.crate(scene,px,pz,y,60,f.yaw)
+    kit.furnish_upper=castle_loft_furniture
     translated(w,pois.hyrule_castle,0,-2150,300,1.45,(0,-1700))
+    kit.furnish_upper=upper_furniture
+    w.loot=[(-218,y,z,n) if n=='Castle keep upstairs' else (x,y,z,n) for x,y,z,n in w.loot]
     translated(w,pois.snowpeak,-950,600)
     translated(w,pois.death_mountain,200,-450)
+    oak=pois.oak
+    def village_oak(scene,x,z,*args,**kwargs):
+        if any(math.hypot(x-dx,z-dz)<260 for dx,dz,_,_ in scene.doors):x-=300
+        return oak(scene,x,z,*args,**kwargs)
+    pois.oak=village_oak
     translated(w,pois.kakariko,-150,700)
+    pois.oak=oak
+    ring=pois.ring_wall
+    def ranch_ring(scene,cx,cz,r,t,y0,y1,mat,**kw):
+        if (cx,cz,r)==(1500,4550,660):
+            # Keep the working buildings clear; low outer courses frame paddocks.
+            return ring(scene,cx,cz,1080,45,y0,y0+95,mat,gaps=[(0,400),(math.pi/2,400),(math.pi,400),(math.pi*1.5,400)],n=24)
+        return ring(scene,cx,cz,r,t,y0,y1,mat,**kw)
+    pois.ring_wall=ranch_ring
     translated(w,pois.lon_lon,-5400,-1550)
+    pois.ring_wall=ring
     translated(w,pois.gerudo_ruins,-8650,-4350)
     tower=pois.spiral_tower
     def ruin_tower(scene,x,z,size,height,**kw):
@@ -293,23 +356,80 @@ def build(only=None):
     translated(w,pois.lake_stilts,2950,1850)
     pois.deku_tree(w,4400,2900)
     pois.fairy_fountain(w,3000,2350)
-    kit.house(w,-1800,4500,450,400,storeys=2,name='Lakeside lab')
+    rift_house(w,-1800,4500,450,400,storeys=2,name='Lakeside lab',door_width=240)
     for k,(x,z) in enumerate([(3900,450),(4600,50)]):
-        kit.house(w,x,z,420,400,storeys=2,name='Kakariko house annex '+str(k))
+        rift_house(w,x,z,420,400,storeys=2,name='Kakariko house annex '+str(k),door_width=240)
+    # Each stilt exit has a real broad landing and a flank link to the existing
+    # boardwalk network. The landings sit1 unit above the old deck, avoiding
+    # coplanar duplicated faces while preserving ordinary step height.
+    def in_room(x,z,grow=120):
+        for bx,bz,hw,hd,fy,yaw in w.buildings:
+            if fy!=-165:continue
+            dx,dz=x-bx,z-bz;c,s=math.cos(yaw),math.sin(yaw)
+            if abs(dx*c+dz*s)<hw+grow and abs(-dx*s+dz*c)<hd+grow:return True
+        return False
+    def clear(a,b):
+        distance=math.hypot(a[0]-b[0],a[1]-b[1])
+        return not any(in_room(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t) for t in np.linspace(0,1,max(2,int(distance/25)+1)))
+    corners=[]
+    for bx,bz,hw,hd,fy,yaw in w.buildings:
+        if fy!=-165:continue
+        c,s=math.cos(yaw),math.sin(yaw)
+        for x,z in [(-hw-145,-hd-145),(hw+145,-hd-145),(hw+145,hd+145),(-hw-145,hd+145)]:
+            p=(bx+x*c-z*s,bz+x*s+z*c)
+            if not in_room(*p):corners.append(p)
+    walks=list(w.walkways)
+    destinations=[]
+    for ax,az,cx,cz,hw,y0,y1 in walks:
+        if y0!=-165 or y1!=-165:continue
+        for t in np.linspace(0,1,12):
+            p=(ax+(cx-ax)*t,az+(cz-az)*t)
+            if not in_room(*p):destinations.append(p)
+    import heapq
+    for dx,dz,fy,name in w.doors:
+        if not name.startswith('stilt hut'):continue
+        rooms=[b for b in w.buildings if b[4]==fy and math.hypot(b[0]-dx,b[1]-dz)<400]
+        bx,bz,*_=min(rooms,key=lambda b:math.hypot(b[0]-dx,b[1]-dz))
+        L=math.hypot(dx-bx,dz-bz);ux,uz=(dx-bx)/L,(dz-bz)/L
+        ex,ez=dx+ux*170,dz+uz*170
+        kit.beam(w,(dx,fy+1,dz),(ex,fy+1,ez),320,22,'planks',surf='wood')
+        w.walkways.append((dx,dz,ex,ez,160,fy+1,fy+1))
+        nodes=[(ex,ez)]+corners+destinations
+        dist={0:0};prev={};queue=[(0,0)];goal=None
+        while queue:
+            cost,i=heapq.heappop(queue)
+            if cost!=dist[i]:continue
+            if i>len(corners):goal=i;break
+            for j,p in enumerate(nodes):
+                if j==i or not clear(nodes[i],p):continue
+                value=cost+math.hypot(p[0]-nodes[i][0],p[1]-nodes[i][1])
+                if value<dist.get(j,float('inf')):
+                    dist[j]=value;prev[j]=i;heapq.heappush(queue,(value,j))
+        if goal is None:raise RuntimeError('dock exit lacks a flank link '+name)
+        route=[goal]
+        while route[-1]:route.append(prev[route[-1]])
+        route.reverse()
+        for i,j in zip(route,route[1:]):
+            ax,az=nodes[i];px,pz=nodes[j]
+            kit.beam(w,(ax,fy+1,az),(px,fy+1,pz),200,22,'planks',surf='wood')
+            w.walkways.append((ax,az,px,pz,100,fy+1,fy+1))
     detail(w)
     import props
     props.build(w)
     arch_bridge(w,(-2800,2800),(-1000,2350))
     arch_bridge(w,(650,2250),(3150,3000))
-    arch_bridge(w,(1800,-1250),(3100,-1250),width=360)
+    arch_bridge(w,(1100,-2400),(2900,-2400),width=360)
     # Exactly 48 starter sites at POIs, 24 route/secondary sites, 12 upper-room
     # sites. Exclude legacy cone-covered tower and silo-top candidates.
     import importlib.util
     spec=importlib.util.spec_from_file_location('placement_helpers',HERE.parent/'kingdom'/'export.py')
     helpers=importlib.util.module_from_spec(spec);spec.loader.exec_module(helpers)
     obs=helpers.obstacles(w,h)
+    import author_nav
+    connected=author_nav.reachable(w,h,obs)
     def floor(x,z):return helpers.walk_floor(w,h,x,z)
     def safe(x,z):
+        if not connected(x,z):return False
         y=floor(x,z)
         if y<terrain.water_y(np.asarray(x),np.asarray(z))+15:return False
         if any(a-22<x<b+22 and c-22<z<d+22 for a,b,c,d in obs):return False
@@ -329,14 +449,17 @@ def build(only=None):
                 if safe(x,z) and all(math.hypot(x-s[0],z-s[2])>110 for s in chosen+selected):selected.append((x,floor(x,z),z,'starter pocket'))
         if len(selected)!=6:raise RuntimeError('insufficient starter sites '+str((px,pz)))
         chosen+=selected
-    for s in ground:
-        if len(chosen)>=72:break
-        if s not in chosen and all(math.hypot(s[0]-q[0],s[2]-q[2])>110 for q in chosen):chosen.append(s)
-    for _,x,z,r,*_ in POIS[8:]:
-        for k in range(12):
-            if len(chosen)>=72:break
-            px,pz=x+r*.8*math.cos(k*math.tau/12),z+r*.8*math.sin(k*math.tau/12)
-            if safe(px,pz) and all(math.hypot(px-q[0],pz-q[2])>110 for q in chosen):chosen.append((px,floor(px,pz),pz,'secondary pocket'))
+    # One route/landmark site at all 16 secondary places, plus a second at eight
+    # larger landmarks. This keeps the 24 sites distributed around the island.
+    for index,(_,x,z,r,*_) in enumerate(POIS[8:]):
+        count=0;wanted=2 if index<8 else 1
+        for radius in [r*.55,r*.85,r+150,r+350]:
+            for k in range(16):
+                if count>=wanted:break
+                px,pz=x+radius*math.cos(k*math.tau/16),z+radius*math.sin(k*math.tau/16)
+                if safe(px,pz) and all(math.hypot(px-q[0],pz-q[2])>110 for q in chosen):
+                    chosen.append((px,floor(px,pz),pz,'secondary pocket'));count+=1
+        if count!=wanted:raise RuntimeError('secondary landmark lacks dry sites '+str(index))
     upstairs=[s for s in original if 'upstairs' in s[3]]
     for s in upstairs:
         if len(chosen)>=84:break

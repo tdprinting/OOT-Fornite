@@ -18,18 +18,23 @@ def main():
     w=geom.World();real=kit.H;kit.H=lambda x,z:0
     for k,name in enumerate(names):props.family(w,name,(k%6)*380,(k//6)*450)
     kit.H=real
+    seen=set();tris=[]
+    for tri in w.tris:
+        key=(tri.group,tri.mat,tuple(sorted(tuple(round(c,4) for c in p) for p in tri.p)))
+        if key not in seen:seen.add(key);tris.append(tri)
+    w.tris=tris
     p=builder.pres;sc=p.reset();p.COL.clear();p.MATS.clear()
     for name,(im,_) in T.items():
         image=p.image_from(name,p.textures.native_preview(im),str(OUT/'textures'))
         p.MATS[name]=p.material(name,image,emission=1 if name in ('window_lit','lava_glow') else 0)
     p.build_structures(w);p.lights_and_world(sc)
-    text_mat=bpy.data.materials.new('Label ink');text_mat.diffuse_color=(.025,.04,.05,1)
+    text_mat=bpy.data.materials.new('Label ink');text_mat.use_nodes=True;text_mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=(.015,.02,.025,1)
     # Readable orthographic inspection layout; labels are presentation only.
     for k,name in enumerate(names):
         data=bpy.data.curves.new(name,'FONT');data.body=name.replace('_',' ');data.size=.36;data.align_x='CENTER';data.materials.append(text_mat)
         obj=bpy.data.objects.new(name+' label',data);p.collection('Labels').objects.link(obj)
         obj.location=((k%6)*3.8,-(k//6)*4.5-1.5,.05)
-    mat=bpy.data.materials.new('Inspection ground');mat.diffuse_color=(.75,.72,.62,1)
+    mat=bpy.data.materials.new('Inspection ground');mat.use_nodes=True;mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value=(.75,.72,.62,1)
     me=bpy.data.meshes.new('Inspection ground');me.from_pydata([(-5,-25,-.03),(25,-25,-.03),(25,5,-.03),(-5,5,-.03)],[],[(0,1,2,3)])
     obj=bpy.data.objects.new('Inspection ground',me);p.collection('Presentation').objects.link(obj);me.materials.append(mat)
     cam=p.camera('Prop inspection',(950,2450,3450),(950,75,950),28,ortho=27)

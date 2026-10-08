@@ -674,6 +674,7 @@ bool HazardFloorAt(float x, float z) {
 }
 
 bool WalkableAt(royale::Vec2 p) {
+    if (gMapId == royale::kRiftlandsMapIndex) return royale::RiftlandsPlacementValid(p);
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;

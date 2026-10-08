@@ -94,7 +94,7 @@ class GameServer {
         }
         if (riftlandsMap) {   // a chest site on an upper floor or a roof may stand inside a building's walls, so the site list is not filtered by obstacles
             auto original = valid;
-            valid = [original](Vec2 p) { float y; return (RiftlandsLootHeightAt(p, &y) || (RiftlandsDryGround(p) && !RiftlandsObstacleAt(p, 0.0f))) && (!original || original(p)); };
+            valid = [original](Vec2 p) { return RiftlandsPlacementValid(p) && (!original || original(p)); };
             if (!height) height = [](Vec2 p, float* y) { float s; *y = RiftlandsLootHeightAt(p, &s) ? s : RiftlandsGroundHeight(p); return true; };
         }
         lastLootCount = lootCount;

@@ -1,7 +1,7 @@
 """blender --background --python tools/maps/riftlands/blender_build.py.
 
 Packed .blend, portable .glb, aerial/top and grounded previews from exactly the
-world exported to the game. --quick uses Eevee and smaller preview resolution.
+world exported to the game. --quick uses fewer Cycles samples and smaller preview resolution.
 """
 import sys, importlib.util, math, json
 from pathlib import Path
@@ -16,19 +16,33 @@ SHOTS={
  'overview':((0,11400,15200),(0,400,-300),35),
  'top':((0,24000,0),(0,0,0),None),
  'castle':((3000,2850,-1000),(0,1700,-4100),24),
- 'courtyard':((0,1080,-2950),(-450,935,-3330),22),
- 'crown_props':((-740,1070,-2960),(-450,925,-3300),28),
+ 'courtyard':((600,1100,-3060),(-250,970,-3490),24),
+ 'crown_props':((-180,995,-3110),(-450,865,-3300),28),
  'kakariko':((2550,650,500),(3900,350,-650),26),
  'deku':((2700,720,3700),(4400,700,2900),25),
  'lake':((-1600,600,5750),(0,0,4200),28),
  'bazaar':((-3100,900,600),(-4550,350,-700),28),
- 'ranch':((-2350,650,4300),(-3900,400,3000),28),
+ 'ranch':((-2700,710,2450),(-3900,360,3200),28),
  'lodge':((-2200,1350,-2900),(-3550,850,-4100),28),
- 'quarry':((3100,1200,-2600),(4400,900,-4000),28),
- 'interior':((3780,270,-410),(3900,260,-650),22),
+ 'quarry':((3600,2400,-2850),(4550,1450,-4800),28),
+ 'interior':((3604,264,-843),(3370,244,-995),22),
 }
 
 def main():
+    if '--rerender' in sys.argv:
+        # Reframe named views from the final packed source without rebuilding it.
+        bpy.ops.wm.open_mainfile(filepath=str(OUT/'hyrule_riftlands.blend'))
+        sc=bpy.context.scene
+        names=sys.argv[sys.argv.index('--rerender')+1].split(',')
+        from mathutils import Vector
+        for name in names:
+            eye,target,lens=SHOTS[name];cam=bpy.data.objects['Camera '+name]
+            cam.location=pres.B(eye);cam.rotation_euler=(Vector(pres.B(target))-cam.location).to_track_quat('-Z','Y').to_euler();cam.data.lens=lens
+            sc.camera=cam;sc.render.filepath=str(OUT/(name+'.png'));bpy.ops.render.render(write_still=True)
+            print('RENDERED',sc.render.filepath,flush=True)
+        sc.camera=bpy.data.objects['Camera overview']
+        bpy.ops.wm.save_as_mainfile(filepath=str(OUT/'hyrule_riftlands.blend'),compress=True)
+        return
     quick='--quick' in sys.argv
     OUT.mkdir(parents=True,exist_ok=True)
     w,h,T=world.build();sc=pres.reset();pres.COL.clear();pres.MATS.clear()

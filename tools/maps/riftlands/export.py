@@ -35,5 +35,7 @@ if __name__=='__main__':
     (out/'export-report.json').write_text(json.dumps({k:v for k,v in report.items() if k not in ('world','heights')},indent=2))
     # Reproducible manifest consumed by the authoring audit and human review.
     (out/'placement.json').write_text(json.dumps({'regions':layout.POIS,'water_boxes':layout.POOLS,'roads':layout.ROADS,'props':prop_instances,
-       'allies':layout.ALLY_SPOTS,'buggies':layout.CART_SPOTS,'spawn':[0,1500],
+       'allies':layout.ALLY_SPOTS,'buggies':layout.CART_SPOTS,'encounters':layout.BOSS_SPOTS,
+       'doors':report['world'].doors,'loot_sites':report['world'].loot,
+       'loot_access':{'starter_dry':48,'secondary_dry':24,'upper':12},'spawn':[0,1500],
        'storm_circle':{'center':[0,0],'radius':6500},'run_speed':100,'buggy_max_speed':420},indent=2))

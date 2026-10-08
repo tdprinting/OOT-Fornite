@@ -14,6 +14,9 @@ assets=root/'assets/maps/hyrule_riftlands'
 placement=json.loads((assets/'placement.json').read_text())
 assert len(placement['regions'])==24 and len(placement['allies'])==4 and len(placement['buggies'])==4
 assert len({p['family'] for p in placement['props']})==30
+assert placement['loot_access']=={'starter_dry':48,'secondary_dry':24,'upper':12}
+assert len(placement['loot_sites'])==84 and len(placement['encounters'])==7
+assert placement['doors'] and all(d[3] for d in placement['doors'])
 report=json.loads((assets/'export-report.json').read_text())
 assert report['collision_vertices']<65536 and report['collision_triangles']<65536
 assert (assets/'hyrule_riftlands.blend').is_file()

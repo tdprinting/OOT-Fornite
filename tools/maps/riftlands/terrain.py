@@ -25,6 +25,8 @@ def region(x,z,circles,soft=600):
 def coast_distance(x,z):
     a=np.arctan2(z,x)
     cd=np.hypot(x,z*.94)-(5800+220*np.sin(5*a)+140*np.sin(9*a+.7))+100*fbm(x,z,850,3,8)
+    for _,px,pz,r,*_ in POIS[:8]:
+        if (px,pz)!=(0,4200):cd=np.minimum(cd,np.hypot(x-px,z-pz)-(r+450))
     for mx,mz,peak,r,crater in MOUNTAINS:
         cd=np.minimum(cd,np.hypot(x-mx,z-mz)-r*.95)
     return np.maximum(cd,np.maximum(np.abs(x)-(HALF_X-350),np.abs(z)-(HALF_Z-350)))
@@ -49,6 +51,7 @@ def height(x,z):
                 [(-2700,-3000,240),(-3000,-3450,430),(-3250,-3750,640)],
                 [(3000,-2300,230),(3450,-2800,400),(3850,-3100,550)]]:
         h=ramp(x,z,h,pts,210,230)
+    h=ramp(x,z,h,[(0,-1500,350),(0,-2200,430),(0,-2700,710),(0,-2970,820),(0,-3300,820)],260,260)
     lx,lz,rx,rz=LAKE
     d=np.hypot((x-lx)/rx,(z-lz)/rz)+.075*fbm(x,z,600,3,49)
     bed=-430+(h+430)*smoothstep(.93,1.08,d)

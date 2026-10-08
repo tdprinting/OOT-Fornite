@@ -14,6 +14,13 @@ own += [engine/'libultraship/src'/p for p in ['utils','utils/binarytools','log',
 includes=[str(p) for p in own]+[p for p in includes if p and not p.startswith('%') and '/Shipwright/soh' not in p.replace('\\','/') and '/Shipwright/libultraship' not in p.replace('\\','/')]
 overlay=root/'war-table-compile/pinned-engine'
 if overlay.is_dir():
+    # libultra.h uses a relative include for libultra/gbi.h. An unpatched isolated
+    # checkout must enter the overlay here, before that relative include wins.
+    entry=engine/'libultraship/include/libultraship/libultra.h'
+    target=overlay/'libultraship/include/libultraship/libultra.h'
+    if entry.is_file() and not target.exists():
+        target.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(entry,target)
     # Relative includes of a patched gbi.h must see its pinned companions.
     # Adding this directory to /I would shadow CRT time.h and stdio.h.
     for header in (engine/'libultraship/include/libultraship/libultra').glob('*.h'):

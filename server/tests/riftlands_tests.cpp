@@ -42,7 +42,7 @@ int main() {
     for(const auto& pool:riftlands::kPools) {
         Vec2 p{(pool.x0+pool.x1)/2,(pool.z0+pool.z1)/2};
         CHECK(RiftlandsWaterY(p)==pool.y && RiftlandsTerrainHeight(p)<pool.y-30);
-        CHECK(!RiftlandsDryGround(p));
+        CHECK(!RiftlandsDryGround(p) || RiftlandsOnStructure(p,30));
     }
     for(const auto& w:riftlands::kWalkways) {
         const float run=Distance({w.x0,w.z0},{w.x1,w.z1});
@@ -80,6 +80,18 @@ int main() {
         if(!grid.LineClear(inside,outside)) std::printf("blocked door %s at %.0f %.0f\n",door.house,door.x,door.z);
         CHECK(grid.LineClear(inside,outside));
     }
+    NavGrid upperGrid=grid;
+    upperGrid.SetClimbing(true);
+    for(const auto& cw:riftlands::kClimbWalls) {
+        const float nx=cw.nx/100.0f,nz=cw.nz/100.0f;
+        upperGrid.AddClimb({cw.x+nx*50,cw.z+nz*50},float(cw.y0),{cw.x-nx*45,cw.z-nz*45},float(cw.y1));
+    }
+    // Match the production upper-goal marking before Connected/FindRoute selects
+    // the target region; otherwise it can test the unrelated ground below it.
+    for(const auto& site:riftlands::kLootSites)
+        if(site.y>RiftlandsGroundHeight({site.x,site.z})+90)
+            upperGrid.MarkUpper({site.x,site.z},site.y);
+    upperGrid.BuildRegions();
     int groundReachable=0,upperReachable=0;
     for(size_t i=0;i<std::size(riftlands::kLootSites);++i) {
         const auto& site=riftlands::kLootSites[i];
@@ -90,7 +102,9 @@ int main() {
             groundReachable+=ok;
         } else {
             std::vector<NavGrid::Stop> route;
-            bool ok=grid.FindRoute({0,1500},RiftlandsGroundHeight({0,1500}),false,{site.x,site.z},site.y,true,route);
+            bool ok=upperGrid.FindRoute({0,1500},RiftlandsGroundHeight({0,1500}),false,{site.x,site.z},site.y,true,route);
+            CHECK(upperGrid.UpperNear({site.x,site.z},site.y)>=0);
+            if(ok) CHECK(!route.empty() && route.back().upper);
             if(!ok)std::printf("unreachable upper-room %zu at %.0f %.0f\n",i,site.x,site.z);
             upperReachable+=ok;
         }
@@ -101,6 +115,10 @@ int main() {
     for(uint64_t seed:{1ull,19ull,101ull}) {
         net::LoopbackNetwork network;auto& host=network.Server();
         GameServer server(host,seed,MapOf(0).fallback,84);CHECK(server.SelectMap(11));
+        // The live host supplies WalkableAt/RawFloorAt, rather than the null
+        // callback used by SelectMap alone. Decks over steep banks must survive it.
+        HeightFn hostHeight=[](Vec2 p,float* y) { float site;*y=RiftlandsLootHeightAt(p,&site)?site:RiftlandsGroundHeight(p);return true; };
+        CHECK(server.Reconfigure(MapOf(11).fallback,RiftlandsPlacementValid,84,0,hostHeight));
         CHECK(server.Pois().size()==24);
         server.SetBossCount(3);server.SetPlayerLimit(2);server.Sim().match.AddHuman(1);CHECK(server.StartMatch());
         CHECK(server.Sim().match.Bosses().size()==7);

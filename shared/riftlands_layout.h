@@ -86,6 +86,13 @@ inline bool RiftlandsObstacleAt(Vec2 p, float margin = 22.0f) {
         if (p.x > b.x0-margin && p.x < b.x1+margin && p.z > b.z0-margin && p.z < b.z1+margin) return true;
     return false;
 }
+// Shared host/server placement contract. Upper-room sites carry their own floor;
+// ordinary points use authored deck/floor heights before testing bare terrain.
+inline bool RiftlandsPlacementValid(Vec2 p) {
+    float y;
+    if(RiftlandsLootHeightAt(p,&y)) return y>RiftlandsWaterY(p)+15.0f;
+    return RiftlandsDryGround(p) && !RiftlandsObstacleAt(p,0.0f);
+}
 inline PoiLayout GenerateRiftlandsLayout(const PlacementFn& valid = nullptr) {
     PoiLayout out;
     int i=0;
