@@ -51,7 +51,7 @@ void WarHide() {
 }
 void WarOpen() {
     const auto h = gSession.Hud();
-    WarShow(!gSession.Joined() ? WarPage::Play : h.state == royale::MatchState::Lobby ? WarPage::Lobby : h.state == royale::MatchState::Ending ? WarPage::Results : WarPage::Pause);
+    WarShow(!gSession.Joined() ? (gSession.GetMode()==royale::RoyaleSession::Mode::Idle?WarPage::Play:WarPage::Lobby) : h.state == royale::MatchState::Lobby ? WarPage::Lobby : h.state == royale::MatchState::Ending ? WarPage::Results : WarPage::Pause);
 }
 void WarSave() {
     UiState& ui = Ui();
@@ -91,6 +91,7 @@ void WarBack() {
     if (gWar.page == WarPage::Keyboard) { WarShow(gWar.returnPage); return; }
     if (gWar.page == WarPage::Quit) { WarOpen(); return; }
     if (gWar.page == WarPage::Play) return; // Home always remains available after launch.
+    if (gWar.page == WarPage::Lobby && !gSession.Joined()) { WarQuit(); return; }
     if (gWar.page == WarPage::Pause || gWar.page == WarPage::Lobby) { WarHide(); return; }
     WarOpen();
 }
@@ -658,7 +659,7 @@ void WarGameUpdate() {
         if(InWaitingRoom())gWar.homeTravel=false;
         else GoToWaitingRoom();
     }
-    if(!joined&&gWar.lastJoined) {
+    if(!joined&&(gWar.lastJoined||(gWar.page==WarPage::Lobby&&gSession.GetMode()==royale::RoyaleSession::Mode::Idle&&!gSession.LastEnded().empty()))) {
         const std::string reason=gSession.LastEnded();
         WarQuit();gWar.notice=reason;
     }
@@ -697,7 +698,8 @@ void WarInput() {
     const u16 press=in?in->press.button:0, buttons=in?in->cur.button:0;
     const bool start=(press&BTN_START)||pressed(SDL_SCANCODE_ESCAPE)||pressed(SDL_SCANCODE_F1);
     if(InGame()&&start) {
-        if(gWar.open&&(gWar.page==WarPage::Pause||gWar.page==WarPage::Lobby))WarHide();
+        if(gWar.open&&gWar.page==WarPage::Lobby&&!gSession.Joined())WarQuit();
+        else if(gWar.open&&(gWar.page==WarPage::Pause||gWar.page==WarPage::Lobby))WarHide();
         else WarOpen();
         WarSound(gWar.open?4:2);
     }
