@@ -886,7 +886,7 @@ bool WalkableAt(royale::Vec2 p) {
 // raycasts (a few milliseconds), once per match.
 bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
-    if (gMapId == royale::kSandboxMapIndex || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
+    if (royale::IsTestMap(gMapId) || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
         gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : 0.0f;
         gMapMeasured = true;
@@ -13037,6 +13037,7 @@ u16 gSavedDayTime = 0;
 struct SandboxUi {
     bool god = true, stormRuns = false, weatherFree = false, botsStill = false;
     int season = 1, sky = 0, intensity = 60;   // the weather to set
+    int lastBoss = -1;
     int item = 0, rarity = 4;                  // the item to give
     float day = 0.3f;                          // the time of day, 0 (morning) to 1 (night)
     bool dayRuns = false;
@@ -13072,7 +13073,7 @@ void DriveTimeOfDay(const royale::HudState& hud) {
 // any item, the storm, the weather, the time of day and the glider. The server's side is in Match (SandboxBot, SandboxBoss, ...), and everything
 // the panel does goes through one queue, run on the game's thread (the menu draws on another).
 struct SandboxCmd {
-    enum Kind { Go, Cart, ClearCarts, Bot, ClearBots, FreezeBots, Boss, ClearBosses, Give, Heal, Revive, God, StormRuns, StormPhase, Supply, Weather, WeatherFree, Restock, Glide } kind = Go;
+    enum Kind { ArenaClear, Encounter, Go, Cart, ClearCarts, Bot, ClearBots, FreezeBots, Boss, ClearBosses, Give, Heal, Revive, God, StormRuns, StormPhase, Supply, Weather, WeatherFree, Restock, Glide } kind = Go;
     int a = 0, b = 0, c = 0;
 };
 std::mutex gSandboxLock;
@@ -13096,7 +13097,11 @@ void RunSandboxCommands(const royale::HudState& hud) {
     auto ahead = [&](float d) { return royale::Vec2{ at.x + std::sin(facing) * d, at.z + std::cos(facing) * d }; };
     for (const SandboxCmd& c : cmds) {
         switch (c.kind) {
-            case SandboxCmd::Go: m->SandboxTeleport(self, royale::SandboxZoneAt(c.a)); break;
+            case SandboxCmd::ArenaClear: if(m->SandboxClearArena(self)) gStrikeFx.clear(); break;
+            case SandboxCmd::Encounter:
+                if(m->SandboxBossEncounter(static_cast<royale::BossKind>(c.a),self)) gStrikeFx.clear();
+                break;
+            case SandboxCmd::Go: m->SandboxTeleport(self, royale::IsBossArena(hud.mapId)?(c.a==1?royale::arena::kArmory:c.a==2?royale::arena::kBoss:royale::arena::kSpawn):royale::SandboxZoneAt(c.a)); break;
             case SandboxCmd::Cart: if (!m->SandboxCart(ahead(360.0f), facing)) Say("No room for another cart: take one away first"); break;
             case SandboxCmd::ClearCarts: m->SandboxClearCarts(); break;
             case SandboxCmd::Bot:
@@ -17579,7 +17584,7 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
     gFortniteScene = false;
     if (play == nullptr || play->sceneNum != SCENE_HYRULE_FIELD || !gSession.Joined() || !royale::IsIslandMap(gMapId)) return nullptr;
     gFortniteScene = true;
-    const bool sandbox = gMapId == royale::kSandboxMapIndex;
+    const bool sandbox = royale::IsTestMap(gMapId);
     if (gMapId != royale::fortnite::gTerrainMapId) {   // rebuild both collision and drawing on every custom-map change
         royale::fortnite::UseTerrainForMap(gMapId);
         gFortniteSandbox = sandbox;

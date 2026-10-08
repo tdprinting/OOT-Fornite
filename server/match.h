@@ -3,6 +3,7 @@
 #include "../shared/ally.h"
 #include "../shared/anim.h"
 #include "../shared/boss.h"
+#include "../shared/boss_arena.h"
 #include "../shared/combat.h"
 #include "../shared/map.h"
 #include "../shared/convergence_data.h"
@@ -2496,6 +2497,19 @@ class Match {
         return true;
     }
     void SandboxClearBosses() { for (auto& b : bosses) { b.alive = false; b.health = 0; } }
+    bool SandboxClearArena(uint32_t player) {
+        if(!SandboxLive() || !IsBossArena(mapId) || !Find(player)) return false;
+        bosses.clear();
+        strikes.erase(std::remove_if(strikes.begin(),strikes.end(),[](const Strike& s){return IsBossId(s.by);}),strikes.end());
+        loot.erase(std::remove_if(loot.begin(),loot.end(),[&](const LootEntry& l){return Distance(l.spawn.pos,sandboxRoom.center)>sandboxRoom.radius;}),loot.end());
+        SandboxRevive(player);SandboxHeal(player);SandboxTeleport(player,arena::kSpawn);
+        auto* p=Find(player);p->attackReadyAt=clock;p->rollUntil=0;p->invulnUntil=clock+0.8f;
+        return true;
+    }
+    bool SandboxBossEncounter(BossKind kind, uint32_t player) {
+        if(static_cast<int>(kind)>=kBossKindCount || IsMajorKind(kind)!=(mapId==kMainBossArenaIndex)) return false;
+        return SandboxClearArena(player) && SandboxBoss(kind,arena::kBoss);
+    }
     // The loot plaza: every item in the game lying in rows, and chests along the back. Called when the map is built.
     void SandboxStockLoot() {
         loot.clear();

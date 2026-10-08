@@ -118,14 +118,14 @@ void WarFinishEdit() {
     gWar.notice.clear();
     WarShow(gWar.returnPage);
 }
-void WarHost(bool solo, bool sandbox) {
+void WarHost(bool solo, bool sandbox, int testMap = royale::kSandboxMapIndex) {
     if (!InGame() || gSession.GetMode() != royale::RoyaleSession::Mode::Idle) return;
     auto& ui = Ui();
     ui.port = std::clamp(ui.port, 1024, 65535);
     WarSave();
     ui.error.clear();
     gSession.ClearLastEnded();
-    if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, solo, sandbox)) {
+    if (!gSession.Host(static_cast<uint16_t>(ui.port), CleanName(ui.name), &ui.error, solo, sandbox, testMap)) {
         gWar.notice = "Could not open the lobby: " + ui.error;
         WarSound(3);
         return;
@@ -134,7 +134,8 @@ void WarHost(bool solo, bool sandbox) {
     gWar.rosterOffset = 0;
     RefreshLocalAddresses(ui, true);
     gSoloStartWanted = solo;
-    gWar.pendingZone = sandbox ? gWar.zone : -1;
+    gWar.pendingZone = sandbox && !royale::IsBossArena(testMap) ? gWar.zone : -1;
+    if(royale::IsBossArena(testMap)) {gWar.section=2;gWar.boss=testMap==royale::kMainBossArenaIndex?static_cast<int>(royale::BossKind::DragonFire):0;gSbx.lastBoss=-1;}
     WarShow(WarPage::Lobby);
     gWar.notice = "Connecting to your lobby...";
 }
@@ -209,8 +210,10 @@ void WarBuild() {
     case WarPage::Practice:
         WarRow(30,0,std::string("Course   ")+royale::sandbox::kZones[gWar.zone].name,"Left / right chooses a sandbox test course",[](int d){gWar.zone=(gWar.zone+(d<0?-1:1)+royale::sandbox::kZoneCount)%royale::sandbox::kZoneCount;gWar.mapChangedAt=SDL_GetTicks();},true,true);
         WarRow(31,1,"ENTER TEST COURSE",royale::sandbox::kZones[gWar.zone].blurb,[](int){WarHost(true,true);},idle&&InGame());
-        WarRow(32,3,std::string("Battlefield   ")+royale::MapOf(ui.mapId).name,"Left / right chooses a battlefield for exploration",[](int d){WarMap(d);},true,true);
-        WarRow(33,4,"EXPLORE BATTLEFIELD","Solo match with no bots. Loot, bosses and storm are active.",[](int){WarHost(true,false);},idle&&InGame());
+        WarRow(34,2,"MINI BOSS ARENA","Flat ground, all twelve mini bosses, one encounter at a time",[](int){WarHost(true,true,royale::kMiniBossArenaIndex);},idle&&InGame());
+        WarRow(35,3,"MAIN BOSS ARENA","A larger enclosed arena for the five main bosses",[](int){WarHost(true,true,royale::kMainBossArenaIndex);},idle&&InGame());
+        WarRow(32,4,std::string("Battlefield   ")+royale::MapOf(ui.mapId).name,"Left / right chooses a battlefield for exploration",[](int d){WarMap(d);},true,true);
+        WarRow(33,5,"EXPLORE BATTLEFIELD","Solo match with no bots. Loot, bosses and storm are active.",[](int){WarHost(true,false);},idle&&InGame());
         break;
     case WarPage::Character:
         WarRow(40,0,"Name   "+std::string(ui.name),"Edit your name for the next lobby",[](int){WarEdit(0);},idle);
@@ -297,10 +300,27 @@ void WarBuild() {
         WarRow(91,5,"MAIN MENU","Return to the War Table",[](int){WarQuit();});
         break;
     case WarPage::Tools: {
-        const char* sections[]={"Courses","Equipment","Bots & bosses","World"};
+        const bool arenaMap=royale::IsBossArena(h.mapId);
+        const bool arenaMajor=h.mapId==royale::kMainBossArenaIndex;
+        const char* sections[]={arenaMap?"Arena":"Courses","Equipment",arenaMap?"Boss encounter":"Bots & bosses","World"};
         for(int i=0;i<4;++i) WarAdd(100+i,{28,112.0f+i*34,184,29},sections[i],"Practice tools",[i](int){gWar.section=i;});
         if(!gSession.Sandbox()) break;
-        if(gWar.section==0) {
+        if(arenaMap && gWar.section==0) {
+            WarRow(110,0,royale::MapOf(h.mapId).name,"Clear flat ground with a solid enclosing rim",[](int){},false);
+            WarRow(111,1,"RETURN TO SPAWN","Return to the safe start pad",[](int){SandboxDo(SandboxCmd::Go,0);WarHide();});
+            WarRow(112,2,"VISIT ARMORY","Every weapon and item for testing",[](int){SandboxDo(SandboxCmd::Go,1);WarHide();});
+            WarRow(113,3,"GO TO CENTER","Teleport to the fight center",[](int){SandboxDo(SandboxCmd::Go,2);WarHide();});
+        } else if(arenaMap && gWar.section==2) {
+            if(royale::IsMajorKind(static_cast<royale::BossKind>(gWar.boss))!=arenaMajor) gWar.boss=arenaMajor?static_cast<int>(royale::BossKind::DragonFire):0;
+            WarRow(110,0,royale::BossOf(static_cast<royale::BossKind>(gWar.boss)).name,"Left / right selects a boss for this arena",[arenaMajor](int d){
+                do {gWar.boss=(gWar.boss+(d<0?-1:1)+royale::kBossKindCount)%royale::kBossKindCount;}
+                while(royale::IsMajorKind(static_cast<royale::BossKind>(gWar.boss))!=arenaMajor);
+            },true,true);
+            WarRow(111,1,"START ENCOUNTER","Replace the previous boss and start from full health",[](int){gSbx.lastBoss=gWar.boss;SandboxDo(SandboxCmd::Encounter,gWar.boss);WarHide();});
+            WarRow(112,2,"RESET FIGHT","Clear attacks and drops, heal, and restart the current boss",[](int){SandboxDo(SandboxCmd::Encounter,gSbx.lastBoss);WarHide();},gSbx.lastBoss>=0);
+            WarRow(113,3,"CLEAR ARENA","Remove the encounter and return to spawn",[](int){SandboxDo(SandboxCmd::ArenaClear);WarHide();});
+            WarRow(114,4,"VISIT ARMORY","Choose weapons and counters for the next fight",[](int){SandboxDo(SandboxCmd::Go,1);WarHide();});
+        } else if(gWar.section==0) {
             WarRow(110,0,royale::sandbox::kZones[gWar.zone].name,royale::sandbox::kZones[gWar.zone].blurb,[](int d){gWar.zone=(gWar.zone+(d<0?-1:1)+royale::sandbox::kZoneCount)%royale::sandbox::kZoneCount;},true,true);
             WarRow(111,1,"GO TO COURSE","Teleport to the selected course",[](int){SandboxDo(SandboxCmd::Go,gWar.zone);WarHide();});
             WarRow(112,2,"LAUNCH GLIDER","Launch above your current position",[](int){SandboxDo(SandboxCmd::Glide);WarHide();});
