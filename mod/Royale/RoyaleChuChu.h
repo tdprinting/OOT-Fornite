@@ -13,6 +13,7 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
     else if (mode == BM::Stunned) { clip = KindOf(b) == BK::ChuDark && b.aux == 4 ? chu::Petrify : chu::Hurt; age = b.modeAge; }
     else if (b.hurtAge < 0.45f) { clip = chu::Hurt; loop = false; age = b.hurtAge; duration = 0.45f; }
     const float phase = loop ? std::fmod(age / duration, 1.0f) : std::clamp(age / duration, 0.0f, 1.0f);
+    const float jellyTime = BossTime(play);
     const float frame = phase * (chu::kFrames - 1);
     const int f0 = static_cast<int>(frame), f1 = std::min(f0 + 1, chu::kFrames - 1);
     const float blend = frame - f0;
@@ -26,8 +27,14 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
         v.v.ob[0] = static_cast<s16>(a.x + (z.x-a.x)*blend);
         v.v.ob[1] = static_cast<s16>(a.y + (z.y-a.y)*blend);
         v.v.ob[2] = static_cast<s16>(a.z + (z.z-a.z)*blend);
-        v.v.flag=0; v.v.tc[0]=c.s; v.v.tc[1]=c.t;
-        const u8 shade = static_cast<u8>(std::clamp(170 + a.y/3, 170, 240));
+        // Small surface ripples keep the painted eyes readable while the jelly flows.
+        const float body = std::clamp((150.0f-a.y)/80.0f,0.0f,1.0f);
+        const float ripple = std::sin(a.y*.055f + jellyTime*3.0f + a.x*.018f);
+        v.v.flag=0;
+        v.v.tc[0]=static_cast<s16>(c.s + body*48.0f*ripple);
+        v.v.tc[1]=static_cast<s16>(c.t + body*32.0f*std::sin(a.x*.04f-jellyTime*2.2f));
+        const float glint = std::pow(std::max(0.0f,std::sin(a.x*.025f+a.z*.018f+a.y*.012f-jellyTime*1.8f)),8.0f);
+        const u8 shade = static_cast<u8>(std::clamp(195.0f+a.y*.18f+body*12.0f*ripple+32.0f*glint,175.0f,255.0f));
         v.v.cn[0]=v.v.cn[1]=v.v.cn[2]=shade; v.v.cn[3]=255;
     }
     const bool stone = clip == chu::Petrify;
@@ -38,7 +45,10 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
     const float scale=royale::BossOf(KindOf(b)).scale;
     Matrix_Scale(scale*(KindOf(b)==BK::ChuDark?1.18f:1.0f),scale*(KindOf(b)==BK::ChuDark?0.78f:1.0f),scale,MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK | G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR);
+    gDPSetCycleType(POLY_OPA_DISP++,G_CYC_1CYCLE);
+    gDPSetTextureLUT(POLY_OPA_DISP++,G_TT_NONE);
+    gDPSetTexturePersp(POLY_OPA_DISP++,G_TP_PERSP);
     if (stone) {
         gDPSetPrimColor(POLY_OPA_DISP++,0,0,145,145,160,255);
         gDPSetCombineMode(POLY_OPA_DISP++,G_CC_PRIMITIVE,G_CC_PRIMITIVE);
@@ -50,7 +60,7 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
         gDPSetTextureFilter(POLY_OPA_DISP++,G_TF_BILERP);
         gDPLoadTextureTile(POLY_OPA_DISP++,const_cast<uint8_t*>(chu::kTextures[variant]),G_IM_FMT_RGBA,G_IM_SIZ_16b,
                            chu::kTextureWidth,chu::kTextureHeight,0,0,chu::kTextureWidth-1,chu::kTextureHeight-1,
-                           0,G_TX_WRAP,G_TX_CLAMP,8,8,G_TX_NOLOD,G_TX_NOLOD);
+                           0,G_TX_WRAP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);
     }
     for (size_t first=0;first<count;first+=30) {
         const int n=static_cast<int>(std::min<size_t>(30,count-first));

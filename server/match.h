@@ -2555,7 +2555,12 @@ class Match {
     }
     bool SandboxBossEncounter(BossKind kind, uint32_t player) {
         if(static_cast<int>(kind)>=kBossKindCount || IsMajorKind(kind)!=(mapId==kMainBossArenaIndex)) return false;
-        return SandboxClearArena(player) && SandboxBoss(kind,arena::kBoss);
+        if (!SandboxClearArena(player) || !SandboxBoss(kind,arena::kBoss)) return false;
+        // An encounter begins at safe distance but engages immediately after its opening grace period.
+        sandboxGod = false;
+        bosses.back().target = player;
+        bosses.back().lostTargetAt = clock;
+        return true;
     }
     // The loot plaza: every item in the game lying in rows, and chests along the back. Called when the map is built.
     void SandboxStockLoot() {
