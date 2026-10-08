@@ -1368,6 +1368,9 @@ void StrikeWarning(PlayState* play, StrikeFx& s, float ground, double now) {
 
 void StrikeBlast(PlayState* play, const StrikeFx& s, float ground) {
     const StyleColours c = StyleColoursOf(s.style);
+    // A flash of the strike's own colour lights up whoever is near (a bolt is brighter and whiter).
+    if (s.style == royale::StrikeStyle::Bolt) AddLightFlash(s.x, ground + 80.0f, s.z, 200, 215, 255, 600.0f, 0.5f, 3);
+    else AddLightFlash(s.x, ground + 40.0f, s.z, c.prim.r, c.prim.g, c.prim.b, std::clamp(s.radius * 2.5f, 220.0f, 520.0f), 0.8f, 6);
     Vec3f pos = { s.x, ground + 20.0f, s.z }, zero = { 0, 0, 0 };
     const BossActor* owner = BossById(s.owner);
     switch (s.style) {
