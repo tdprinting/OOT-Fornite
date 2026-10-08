@@ -46,6 +46,7 @@
 #include "sky_model.h"
 #include "graphics_stability.h"
 #include "graphics_layers.h"
+#include "frame_cache.h"
 #include "water_sim.h"
 #include "water_look.h"
 #include "item_surface_maps.h"
@@ -411,6 +412,7 @@ struct GfxPool {
     int cur = 0;
     uint32_t frame = 0;
     bool started = false;
+    bool trim[2] = {false, false};
     royale::gfxlayers::Span free;        // what is left in the current frame's half
     size_t usedLast = 0, peak = 0;       // bytes the last frame used; the most any recent frame used
     bool overflowLast = false, overflowNow = false;
@@ -438,14 +440,17 @@ void GfxPoolFrame(PlayState* play) {
     p.frame = frame;
     p.overflowNow = false;
     p.cur ^= 1;
-    if (p.size[p.cur] < p.want) {
-        p.raw[p.cur].reset(new (std::nothrow) uint8_t[p.want + gl::kGuard + gl::kAlign]);
-        if (p.raw[p.cur] == nullptr) { p.base[p.cur] = nullptr; p.size[p.cur] = 0; p.want = p.size[p.cur ^ 1]; }
+    if (p.size[p.cur] < p.want || (p.trim[p.cur] && p.size[p.cur] > p.want)) {
+        // Reclaim only the retired half, at the same safe point used for growth.
+        std::unique_ptr<uint8_t[]> next(new (std::nothrow) uint8_t[p.want + gl::kGuard + gl::kAlign]);
+        if (!next) { p.want = p.size[p.cur]; }
         else {
+            p.raw[p.cur] = std::move(next);
             p.base[p.cur] = reinterpret_cast<uint8_t*>(gl::AlignUp(reinterpret_cast<uintptr_t>(p.raw[p.cur].get())));
             p.size[p.cur] = p.want;
         }
     }
+    p.trim[p.cur] = false;
     p.free.head = p.base[p.cur];
     p.free.tail = p.base[p.cur] == nullptr ? nullptr : p.base[p.cur] + p.size[p.cur];
 }
@@ -11346,7 +11351,7 @@ void CollectCartWalkers(const std::function<void(const void*, float, float, floa
 }
 
 void DrawWater(PlayState* play) {
-    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCausticCells.clear(); gRipples.Clear(); gCamUnder = 0.0f; return; }
+    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCausticCells.clear(); if (!gRipples.Sleeping()) gRipples.Clear(); gCamUnder = 0.0f; return; }
     Feat("draw: water");
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
     gWaterFrame++;
@@ -11384,13 +11389,16 @@ void DrawWater(PlayState* play) {
         }
         if ((gWeatherShown.sky == royale::Sky::Rain || gWeatherShown.sky == royale::Sky::Thunder) && gWaterRain && pdt > 0.0f) {
             const int drops = static_cast<int>(WeatherAmount() * 6.0f * k + Flora01(gWaterFrame, 41, 690));
-            for (int d = 0; d < drops; d++)
-                gRipples.Impulse(gRipples.MinX() + gRipples.Size() * Flora01(gWaterFrame, d, 691), gRipples.MinZ() + gRipples.Size() * Flora01(gWaterFrame, d, 692),
-                                 1.2f + 1.5f * Flora01(gWaterFrame, d, 693), 10.0f);
+            for (int d = 0; d < drops; d++) {
+                const float x = gRipples.MinX() + gRipples.Size() * Flora01(gWaterFrame, d, 691);
+                const float z = gRipples.MinZ() + gRipples.Size() * Flora01(gWaterFrame, d, 692);
+                float surface = 0;
+                if (WaterSurfaceAt(x, z, &surface)) gRipples.Impulse(x, z, 1.2f + 1.5f * Flora01(gWaterFrame, d, 693), 10.0f);
+            }
         }
         gRipples.Step(pdt);
     } else {
-        gRipples.Clear();
+        if (!gRipples.Sleeping()) gRipples.Clear();
     }
     WaterRain(play, pdt);
     WaterLife(play, pdt, paused);
@@ -16413,6 +16421,8 @@ void OnSceneInit(int16_t) {
     gOurTravel = false;
     ForgetDynamicLights();   // the scene's light table starts empty again
     ForgetShadows();
+    gGfxPool.want = royale::gfxlayers::kPoolMin; gGfxPool.peak = 0; gGfxPool.started = false;
+    gGfxPool.trim[0] = gGfxPool.trim[1] = true;
     // Scene change destroys every puppet actor, so forget them all.
     gPuppetOf.clear();
     StopMayaVoice();
@@ -17017,8 +17027,43 @@ void UpdateDynamicLights(PlayState* play) {
 
 // ---- the ground under a shadow or a light ----
 // Floor heights, by a lattice of world points, so a shadow that moves across the ground mostly finds its heights already measured.
-std::unordered_map<uint64_t, float> gShadowFloor;
-uint32_t gShadowFloorFrame = 0;
+royale::FrameCache<float, 8192> gShadowFloor;
+bool gShadowFloorDeferred = false;
+struct ShadowCollisionRegion { float x, z, radius; uint64_t signature; };
+ShadowCollisionRegion gShadowCollisionRegions[BG_ACTOR_MAX];
+int gShadowCollisionRegionCount = 0;
+
+// Version only floor samples near changed dynamic collision. Moving one platform
+// should not discard cached ground heights across the whole visible scene.
+void GatherShadowCollisionRegions(PlayState* play) {
+    gShadowCollisionRegionCount = 0;
+    for (int i = 0; i < BG_ACTOR_MAX; ++i) {
+        const auto& b = play->colCtx.dyna.bgActors[i];
+        if (!b.actor || !(play->colCtx.dyna.bgActorFlags[i] & 1)) continue;
+        uint64_t h = 1469598103934665603ULL;
+        auto bytes = [&](const void* data, size_t n) {
+            const auto* p = static_cast<const uint8_t*>(data);
+            for (size_t j = 0; j < n; ++j) { h ^= p[j]; h *= 1099511628211ULL; }
+        };
+        bytes(&i, sizeof(i)); bytes(&b.actor, sizeof(b.actor)); bytes(&b.colHeader, sizeof(b.colHeader));
+        bytes(&play->colCtx.dyna.bgActorFlags[i], sizeof(play->colCtx.dyna.bgActorFlags[i]));
+        bytes(&b.curTransform.scale, sizeof(b.curTransform.scale));
+        bytes(&b.curTransform.rot, sizeof(b.curTransform.rot));
+        bytes(&b.curTransform.pos, sizeof(b.curTransform.pos));
+        gShadowCollisionRegions[gShadowCollisionRegionCount++] = {
+            static_cast<float>(b.boundingSphere.center.x), static_cast<float>(b.boundingSphere.center.z),
+            static_cast<float>(b.boundingSphere.radius) + 96.0f, h};
+    }
+}
+uint64_t ShadowFloorVersion(float x, float z) {
+    uint64_t version = 0;
+    for (int i = 0; i < gShadowCollisionRegionCount; ++i) {
+        const auto& r = gShadowCollisionRegions[i];
+        if (std::fabs(x-r.x) <= r.radius && std::fabs(z-r.z) <= r.radius)
+            version ^= r.signature;
+    }
+    return version;
+}
 constexpr float kNoFloor = -1.0e9f;
 
 float ShadowFloorAt(PlayState* play, float x, float z, float fromY) {
@@ -17030,12 +17075,13 @@ float ShadowFloorAt(PlayState* play, float x, float z, float fromY) {
 }
 float LatticeFloor(PlayState* play, int ix, int iz, float cell, float fromY) {
     const int band = static_cast<int>(std::floor(fromY / 96.0f));
-    const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(ix) & 0xFFFFF) << 44) | (static_cast<uint64_t>(static_cast<uint32_t>(iz) & 0xFFFFF) << 24) |
+    const uint64_t latticeKey = (static_cast<uint64_t>(static_cast<uint32_t>(ix) & 0xFFFFF) << 44) | (static_cast<uint64_t>(static_cast<uint32_t>(iz) & 0xFFFFF) << 24) |
                          (static_cast<uint64_t>(static_cast<uint32_t>(band) & 0xFFFF) << 8) | (static_cast<uint64_t>(cell) & 0xFF);
-    auto it = gShadowFloor.find(key);
-    if (it != gShadowFloor.end()) return it->second;
-    const float y = ShadowFloorAt(play, ix * cell, iz * cell, (band + 1) * 96.0f);
-    gShadowFloor.emplace(key, y);
+    const uint64_t key = latticeKey ^ ShadowFloorVersion(ix * cell, iz * cell);
+    float y = kNoFloor;
+    if (!gShadowFloor.Get(key, 540 + static_cast<uint32_t>((key ^ (key >> 8)) % 121), &y, [&] {
+        return ShadowFloorAt(play, ix * cell, iz * cell, (band + 1) * 96.0f);
+    })) gShadowFloorDeferred = true;
     return y;
 }
 
@@ -17062,13 +17108,14 @@ bool MeasurePatch(PlayState* play, float cx, float cz, float half, int grid, flo
     g->rows = std::min(sh::kMaxGrid + 2, static_cast<int>(std::ceil((cz + half) / g->cell)) - g->iz0);
     if (g->cols <= 0 || g->rows <= 0) return false;
     bool any = false;
+    gShadowFloorDeferred = false;
     for (int j = 0; j <= g->rows; j++)
         for (int i = 0; i <= g->cols; i++) {
             const float y = LatticeFloor(play, g->ix0 + i, g->iz0 + j, g->cell, fromY);
             g->y[j * (g->cols + 1) + i] = y;
             any = any || y > kNoFloor;
         }
-    return any;
+    return any && !gShadowFloorDeferred;
 }
 
 // Draws a measured patch's squares as triangles (two rows of vertices at a time, as the water does). The vertices are already made.
@@ -17103,7 +17150,7 @@ struct ShadowMapState {
     float cover = 0.0f;         // 0 in the open, 1 under a roof (no sun shadow), eased
     uint32_t coverAt = 0;
     int size = 0;
-    uint8_t map[sh::kMaxMapSize * sh::kMaxMapSize];
+    std::vector<uint8_t> map;
 };
 std::unordered_map<uint64_t, std::unique_ptr<ShadowMapState>> gShadowMaps;
 struct SwappedShadow { ActorShadowFunc draw; s16 id; };
@@ -17113,7 +17160,7 @@ alignas(16) uint8_t gShadowTex[2][sh::kMaxMaps][sh::kMaxMapSize * sh::kMaxMapSiz
 void ForgetShadows() {
     gShadowMaps.clear();
     gShadowSwapped.clear();   // the actors went with the scene
-    gShadowFloor.clear();
+    gShadowFloor.Invalidate();
 }
 
 // Joints of a Link the game has drawn (puppets are Links too).
@@ -17127,12 +17174,13 @@ bool LinkCapsules(Player* p, ShadowSource* s) {
     return true;
 }
 
-void GatherShadowSources(PlayState* play, std::vector<ShadowSource>& out, float range) {
+void GatherShadowSources(PlayState* play, std::vector<ShadowSource>& out, float range, const std::vector<Actor*>* selected = nullptr) {
     out.clear();
     const Vec3f eye = play->view.eye;
     auto near = [&](const Vec3f& p, float pad) { return std::hypot(p.x - eye.x, p.z - eye.z) < range + pad; };
     Player* me = GET_PLAYER(play);
     auto floorOf = [&](Actor* a, float above) {   // under an actor the game does not keep a floor for
+        if (!selected) return a->world.pos.y;
         const float y = ShadowFloorAt(play, a->world.pos.x, a->world.pos.z, a->world.pos.y + above);
         return y > kNoFloor ? y : a->world.pos.y;
     };
@@ -17141,10 +17189,11 @@ void GatherShadowSources(PlayState* play, std::vector<ShadowSource>& out, float 
         const bool mine = a == &me->actor;
         if (!gShadowKinds[mine ? kShadowYou : kShadowPlayers].on || a->draw == nullptr) continue;
         if (!mine && a->draw != Puppet_Draw && a->draw != Corpse_Draw) continue;
-        if (!near(a->world.pos, 0)) continue;
+        if (!near(a->world.pos, 0) || (selected && std::find(selected->begin(), selected->end(), a) == selected->end())) continue;
         ShadowSource s;
         s.key = a; s.actor = a; s.kind = mine ? kShadowYou : kShadowPlayers;
-        if (!LinkCapsules(reinterpret_cast<Player*>(a), &s)) continue;
+        if (selected) { if (!LinkCapsules(reinterpret_cast<Player*>(a), &s)) continue; }
+        else { s.n = 1; s.centre = {a->world.pos.x, a->world.pos.y + 30, a->world.pos.z}; }
         s.floorY = a->floorHeight > BGCHECK_Y_MIN + 10.0f && a->floorHeight <= a->world.pos.y + 5.0f ? a->floorHeight : floorOf(a, 30.0f);
         out.push_back(s);
     }
@@ -17152,7 +17201,8 @@ void GatherShadowSources(PlayState* play, std::vector<ShadowSource>& out, float 
     for (int cat = 0; cat < ACTORCAT_MAX; cat++) {
         if (cat == ACTORCAT_PLAYER) continue;
         for (Actor* a = play->actorCtx.actorLists[cat].head; a != nullptr; a = a->next) {
-            if (a->draw == nullptr || !near(a->world.pos, 400.0f)) continue;
+            if (a->draw == nullptr || !near(a->world.pos, 400.0f) ||
+                (selected && std::find(selected->begin(), selected->end(), a) == selected->end())) continue;
             ShadowSource s;
             s.key = a; s.actor = a;
             const Vec3f& p = a->world.pos;
@@ -17250,7 +17300,7 @@ bool CoveredFrom(PlayState* play, const sh::V3& at, const sh::V3& toward) {
 }
 
 // One shadow: paint (or reuse) its map, then lay it on the ground.
-void DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const sh::ShadowLight& light, float alpha, const sh::Settings& set, int slot, bool farAway) {
+bool DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const sh::ShadowLight& light, float alpha, const sh::Settings& set, int slot, bool farAway) {
     const uint64_t id = (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(s.key)) << 2) | static_cast<uint64_t>(lightIndex & 3);
     std::unique_ptr<ShadowMapState>& st = gShadowMaps[id];
     if (!st) st.reset(new ShadowMapState());
@@ -17262,24 +17312,26 @@ void DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
     // Repaint when it moves or animates (far ones only every few frames), or when the light turns.
     const bool turned = sh::Dot(m.frame.toward, light.toward) < 0.9995f;
     const bool moved = sh::Len(sh::Sub(m.centre, s.centre)) > 0.5f || std::fabs(m.frame.groundY - s.floorY) > 0.5f;
-    const bool due = !farAway || set.refreshFar <= 1 || (frame - m.painted) >= static_cast<uint32_t>(set.refreshFar);
+    const int refresh = s.kind == kShadowYou ? 1 : farAway ? std::max(1, set.refreshFar) : set.mapSize <= 16 ? 2 : 1;
+    const bool due = refresh == 1 || ((frame + static_cast<uint32_t>(reinterpret_cast<uintptr_t>(s.key) >> 4)) % refresh == 0);
     if (fresh || ((s.moving || moved || turned) && due)) {
         m.frame = sh::PlanMap(s.caps, s.n, light.toward, s.floorY, soft);
         m.size = set.mapSize;
-        sh::Rasterize(m.frame, s.caps, s.n, soft, m.map, m.size);
+        m.map.resize(static_cast<size_t>(m.size) * m.size);
+        sh::Rasterize(m.frame, s.caps, s.n, soft, m.map.data(), m.size);
         m.painted = frame;
         m.centre = s.centre;
     }
     uint8_t* tex = gShadowTex[frame & 1][slot];
-    std::memcpy(tex, m.map, static_cast<size_t>(m.size) * m.size);
+    std::memcpy(tex, m.map.data(), static_cast<size_t>(m.size) * m.size);
 
     // The ground under it.
     const sh::MapFrame& f = m.frame;
     GroundPatch g;
-    if (!MeasurePatch(play, f.cx, f.cz, f.half, set.grid, f.groundY + 30.0f, &g)) return;
+    if (!MeasurePatch(play, f.cx, f.cz, f.half, set.grid, f.groundY + 30.0f, &g)) return false;
     const int V = g.cols + 1, count = V * (g.rows + 1);
     Vtx* v = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * count));
-    if (v == nullptr) return;
+    if (v == nullptr) return false;
     // Vertices relative to the middle of the map: the frames the game blends in between slide the whole shadow along with its caster.
     const float ox = g.ix0 * g.cell, oz = g.iz0 * g.cell;
     const float mx = f.cx, my = f.groundY, mz = f.cz;
@@ -17304,7 +17356,7 @@ void DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
             o.v.cn[0] = o.v.cn[1] = o.v.cn[2] = 255;
             o.v.cn[3] = static_cast<u8>(std::clamp(a * 255.0f, 0.0f, 255.0f));
         }
-    if (!GfxHasRoom(play, 24 + g.rows * (4 + g.cols))) return;
+    if (!GfxHasRoom(play, 24 + g.rows * (4 + g.cols))) return false;
     int shift = 4;
     while ((1 << shift) < m.size) shift++;
     FrameInterpolation_RecordOpenChild(s.key, 0x5AD0 + lightIndex);
@@ -17317,6 +17369,7 @@ void DrawOneShadow(PlayState* play, const ShadowSource& s, int lightIndex, const
     CLOSE_DISPS(play->state.gfxCtx);
     DrawPatch(play, v, g.cols, g.rows);
     FrameInterpolation_RecordCloseChild();
+    return true;
 }
 
 // The soft glow on the ground under a light.
@@ -17382,8 +17435,10 @@ void DrawShadowsAndLights(PlayState* play) {
     const sh::Settings set = ShadowSettings();
     const bool shadowsOn = DebugOn(kDbgShadows) && set.maxMaps > 0;
     if (!shadowsOn) { RestoreRoundShadows(play, keep); }
+    if (!DebugOn(kDbgShadows)) return;
     const uint32_t frame = play->state.frames;
-    if (frame - gShadowFloorFrame > 600 || gShadowFloor.size() > 30000) { gShadowFloor.clear(); gShadowFloorFrame = frame; }
+    GatherShadowCollisionRegions(play);
+    gShadowFloor.BeginFrame(frame, 64);
     Feat("draw: shadows and lights");
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
@@ -17407,6 +17462,8 @@ void DrawShadowsAndLights(PlayState* play) {
     }
     if (!shadowsOn) return;
 
+    // Reserve a separate allowance for casters, so light pools cannot starve the local shadow.
+    gShadowFloor.BeginFrame(frame, 256);
     // The shadows.
     static std::vector<ShadowSource> sources;
     GatherShadowSources(play, sources, set.range);
@@ -17421,6 +17478,13 @@ void DrawShadowsAndLights(PlayState* play) {
     static std::vector<int> chosen;
     chosen.resize(cands.size());
     const int picked = sh::Choose(cands.data(), static_cast<int>(cands.size()), set.maxMaps, chosen.data());
+    static std::vector<Actor*> selected;
+    selected.clear();
+    for (int i = 0; i < picked; ++i) selected.push_back(sources[chosen[i]].actor);
+    GatherShadowSources(play, sources, set.range, &selected);
+    std::sort(sources.begin(), sources.end(), [&](const ShadowSource& a, const ShadowSource& b) {
+        return std::find(selected.begin(), selected.end(), a.actor) < std::find(selected.begin(), selected.end(), b.actor);
+    });
 
     const sh::ShadowLight sun = SunShadowNow();
     const float darkness = gShadowCfg.darkness / 100.0f;
@@ -17433,18 +17497,11 @@ void DrawShadowsAndLights(PlayState* play) {
     gDPSetTextureFilter(POLY_XLU_DISP++, G_TF_BILERP);
     CLOSE_DISPS(play->state.gfxCtx);
     int slot = 0;
-    for (int c = 0; c < picked && slot < set.maxMaps; c++) {
-        const ShadowSource& s = sources[chosen[c]];
+    for (size_t c = 0; c < sources.size() && slot < set.maxMaps; c++) {
+        const ShadowSource& s = sources[c];
         const float dist = std::hypot(s.centre.x - eye.x, s.centre.z - eye.z);
         const float fade = sh::RangeFade(dist, set.range);
         if (fade <= 0.0f || s.n <= 0) continue;
-        if (s.actor != nullptr) {   // its own round shadow goes while it has this one
-            keep.insert(s.actor);
-            if (s.actor->shape.shadowDraw != nullptr) {
-                gShadowSwapped.emplace(s.actor, SwappedShadow{ s.actor->shape.shadowDraw, s.actor->id });
-                s.actor->shape.shadowDraw = nullptr;
-            }
-        }
         const bool farAway = dist > 0.5f * set.range;
         // The sun (or moon), unless it is under cover.
         const uint64_t coverId = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(s.key)) << 2;
@@ -17460,15 +17517,23 @@ void DrawShadowsAndLights(PlayState* play) {
             cover = st->cover;
         }
         const float sunAlpha = sun.strength * darkness * fade * (1.0f - cover);
-        if (sunAlpha > 0.01f) DrawOneShadow(play, s, 0, sun, sunAlpha, set, slot++, farAway);
+        bool drawn = false;
+        if (sunAlpha > 0.01f) drawn = DrawOneShadow(play, s, 0, sun, sunAlpha, set, slot++, farAway);
         // Nearby lights (Medium and up): the strongest give a second shadow, away from them.
         for (int k = 0, given = 0; k < gLightsNowCount && given < set.lightShadows && slot < set.maxMaps; k++) {
             const sh::Light& l = gLightsNow[k];
             const sh::ShadowLight pl = sh::PointShadow(l.pos, l.radius, gLightsNowBright[k], s.centre);
             const float a = pl.strength * darkness * fade;
             if (a < 0.05f) continue;
-            DrawOneShadow(play, s, 1 + given, pl, a, set, slot++, farAway);
+            drawn = DrawOneShadow(play, s, 1 + given, pl, a, set, slot++, farAway) || drawn;
             given++;
+        }
+        if (drawn && s.actor != nullptr) {   // its own round shadow goes while it has this one
+            keep.insert(s.actor);
+            if (s.actor->shape.shadowDraw != nullptr) {
+                gShadowSwapped.emplace(s.actor, SwappedShadow{ s.actor->shape.shadowDraw, s.actor->id });
+                s.actor->shape.shadowDraw = nullptr;
+            }
         }
     }
     RestoreRoundShadows(play, keep);

@@ -73,7 +73,11 @@ public:
     static constexpr int kSponge = 6;   // cells at the edge that soak the rings up, so they do not bounce off an invisible wall
 
     explicit RippleField(float cell = 14.0f, float speed = 120.0f, float damping = 0.55f)
-        : cell_(cell), speed_(speed), damping_(damping), h_(kN * kN, 0.0f), v_(kN * kN, 0.0f), tmp_(kN * kN, 0.0f) {}
+        : cell_(cell), speed_(speed), damping_(damping), h_(kN * kN, 0.0f), v_(kN * kN, 0.0f), tmp_(kN * kN, 0.0f) {
+        constexpr float dt = 1.0f / 60.0f;
+        keep_ = std::exp(-damping_ * dt);
+        for (int e = 0; e <= kSponge; ++e) sponge_[e] = e == kSponge ? 1.0f : std::exp(-(kSponge-e)*2.2f*dt*6.0f);
+    }
 
     float Cell() const { return cell_; }
     float Size() const { return cell_ * kN; }
@@ -82,7 +86,11 @@ public:
     bool Contains(float x, float z, float margin = 0.0f) const {
         return x >= MinX() + margin && z >= MinZ() + margin && x <= MinX() + Size() - margin && z <= MinZ() + Size() - margin;
     }
-    void Clear() { std::fill(h_.begin(), h_.end(), 0.0f); std::fill(v_.begin(), v_.end(), 0.0f); }
+    void Clear() {
+        std::fill(h_.begin(), h_.end(), 0.0f); std::fill(v_.begin(), v_.end(), 0.0f);
+        sleeping_ = true; quietSteps_ = 0; acc_ = 0;
+    }
+    bool Sleeping() const { return sleeping_; }
 
     // Moves the square so (x, z) is in its middle. Cells that stay inside keep their state; new ones start calm.
     void Recenter(float x, float z) {
@@ -92,8 +100,7 @@ public:
         if (!placed_ || std::abs(dx) >= kN || std::abs(dz) >= kN) {
             Clear();
         } else {
-            Shift(h_, dx, dz);
-            Shift(v_, dx, dz);
+            if (!sleeping_) { Shift(h_, dx, dz); Shift(v_, dx, dz); }
         }
         ox_ = nx; oz_ = nz; placed_ = true;
     }
@@ -108,16 +115,20 @@ public:
         for (int j = j0; j <= j1; j++)
             for (int i = i0; i <= i1; i++) {
                 const float d2 = ((i - fx) * (i - fx) + (j - fz) * (j - fz)) / (rc * rc);
-                if (d2 < 4.0f) h_[j * kN + i] -= depth * std::exp(-d2 * 1.5f);
+                if (d2 < 4.0f && std::fabs(depth) > 1e-6f) {
+                    h_[j * kN + i] -= depth * std::exp(-d2 * 1.5f);
+                    sleeping_ = false; quietSteps_ = 0;
+                }
             }
     }
 
     // Advances the field. Fixed small steps keep it stable whatever the frame rate.
     void Step(float dt) {
+        if (sleeping_) { acc_ = 0; return; }
         acc_ += std::clamp(dt, 0.0f, 0.1f);
         constexpr float kStep = 1.0f / 60.0f;
         int steps = 0;
-        while (acc_ >= kStep && steps < 6) { StepOnce(kStep); acc_ -= kStep; steps++; }
+        while (!sleeping_ && acc_ >= kStep && steps < 6) { acc_ -= kStep; StepOnce(kStep); steps++; }
         if (steps == 6) acc_ = 0.0f;
     }
 
@@ -172,17 +183,23 @@ private:
                 const float lap = h_[k - 1] + h_[k + 1] + h_[k - kN] + h_[k + kN] - 4.0f * h_[k];
                 v_[k] += lap * c2 * dt;
             }
-        const float keep = std::exp(-damping_ * dt);
+        float peakH = 0, peakV = 0;
         for (int j = 0; j < kN; j++)
             for (int i = 0; i < kN; i++) {
                 const int k = j * kN + i;
                 const int edge = std::min(std::min(i, j), std::min(kN - 1 - i, kN - 1 - j));
-                const float sponge = edge >= kSponge ? 1.0f : std::exp(-(kSponge - edge) * 2.2f * dt * 6.0f);
-                v_[k] *= keep * sponge;
+                const float sponge = sponge_[std::min(edge, kSponge)];
+                v_[k] *= keep_ * sponge;
                 h_[k] = (h_[k] + v_[k] * dt) * sponge;
+                peakH = std::max(peakH, std::fabs(h_[k])); peakV = std::max(peakV, std::fabs(v_[k]));
             }
+        if (peakH < 0.001f && peakV < 0.001f) ++quietSteps_; else quietSteps_ = 0;
+        if (quietSteps_ >= 30) { Clear(); }
     }
 
+    float keep_ = 1, sponge_[kSponge+1] = {};
+    bool sleeping_ = true;
+    int quietSteps_ = 0;
     float cell_, speed_, damping_;
     int ox_ = 0, oz_ = 0;
     bool placed_ = false;

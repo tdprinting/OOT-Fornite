@@ -57,3 +57,15 @@ add_test(NAME royale_shadow_tests COMMAND royale_shadow_tests)
 add_executable(royale_water_tests tests/water_tests.cpp)
 target_link_libraries(royale_water_tests PRIVATE royale_core)
 add_test(NAME royale_water_tests COMMAND royale_water_tests)
+
+add_executable(royale_performance_tests tests/performance_tests.cpp)
+target_link_libraries(royale_performance_tests PRIVATE royale_core)
+add_test(NAME royale_performance_tests COMMAND royale_performance_tests)
+
+# Exercise authored-map routes under the same shared budget as the live host.
+add_executable(royale_kingdom_tests tests/kingdom_tests.cpp)
+target_link_libraries(royale_kingdom_tests PRIVATE royale_net)
+add_test(NAME royale_kingdom_tests COMMAND royale_kingdom_tests)
+
+add_executable(royale_performance_bench tools/performance_bench.cpp)
+target_link_libraries(royale_performance_bench PRIVATE royale_core)
