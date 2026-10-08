@@ -1,5 +1,32 @@
 # Sword and shield normal and bump maps
 
+## Flying-triangle renderer fix
+
+Patch `libultraship/0004` fixes two renderer state hazards exposed by the new
+material layouts. Creating an uncached shader immediately binds its program
+and vertex stride. The old lookup helper did that while a previous triangle
+batch could still be queued, particularly when a new clamp variant of an
+already cached colour combiner was first used. Drawing that batch with the new
+stride reads subsequent vertices at incorrect offsets, producing stray triangles.
+The helper now flushes the old batch before unloading or compiling a shader.
+Cached program lookup still leaves the ordinary draw-time switch in charge.
+
+Material uploads also left texture unit 7 active. Framebuffer code that binds
+a texture on the active unit could consequently overwrite the private height
+map binding. OpenGL now provides an optional backend callback that returns to
+unit 0 after uploads, preserving both the colour binding and material samplers.
+Other backends keep a null callback and their existing behavior.
+
+`scripts/test_surface_renderer_state.py` extracts the real patched function
+bodies and compiles them against a deterministic backend. It verifies queued
+geometry uses the old shader stride, cached lookup doesn't flush unnecessarily,
+material bindings survive later framebuffer operations, cached maps aren't
+reuploaded, and material scopes reset. Negative controls reproduce both failures
+with the fixes removed. The full Android build runs this check before compilation.
+This verifies the state hazards; actual device confirmation of the reported
+flying triangles remains necessary. Both surface sliders at 0 bypass the
+material path in equipment and the latest Hyrule Kingdom map while testing.
+
 Engine patches `libultraship/0003` and `0024` add scoped surface materials to
 the Fast3D interpreter and the OpenGL/GLES shaders used on Android. Equipped
 Kokiri, Master and Biggoron swords and Deku, Hylian and Mirror shields use
