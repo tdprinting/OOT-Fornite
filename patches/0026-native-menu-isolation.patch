@@ -1,16 +1,12 @@
 diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
 --- a/soh/src/code/z_play.c
 +++ b/soh/src/code/z_play.c
-@@ -1326,6 +1326,7 @@
- }
+@@ -1347,8 +1347,17 @@
+ // OOT Royale: the mod's sky pass (RoyaleMod.cpp, DrawBackdrop), drawn right after the game's own skybox and before the scene. NULL = none.
+ void (*gRoyaleBackdropDraw)(PlayState* play) = NULL;
  
- extern int Royale_NativeMenuIsOpen(void);
++extern int Royale_NativeMenuIsOpen(void);
 +extern void Royale_NativeMenuDraw(GameState* state);
- void Play_DrawOverlayElements(PlayState* play) {
-     if (Royale_NativeMenuIsOpen()) return;
- 
-@@ -1349,6 +1350,13 @@
- 
  void Play_Draw(PlayState* play) {
      GraphicsContext* gfxCtx = play->state.gfxCtx;
 +    // The menu is a dedicated render pass: never submit the hidden world or HUD.
