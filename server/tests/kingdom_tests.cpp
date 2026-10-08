@@ -110,6 +110,25 @@ int main() {
             if (found) { ++reachable;float top=0;for (const auto& stop:route) top=std::max(top,stop.y);CHECK(top>=site.y-60.0f && route.back().upper); }
         }
         CHECK(reachable>=15);
+        // Exercise authored ivy links directly. A random loot match may sensibly
+        // choose stairs instead, so climbing is not inferred from random traffic.
+        for (const auto& cw : kingdom::kClimbWalls) {
+            const float nx=cw.nx/100.0f,nz=cw.nz/100.0f;
+            grid.AddClimb({cw.x+nx*50,cw.z+nz*50},float(cw.y0),{cw.x-nx*45,cw.z-nz*45},float(cw.y1));
+        }
+        grid.BuildRegions();
+        int ivyRoutes=0;
+        for (const auto& cw : kingdom::kClimbWalls) {
+            const float nx=cw.nx/100.0f,nz=cw.nz/100.0f;
+            const Vec2 foot{cw.x+nx*50,cw.z+nz*50},top{cw.x-nx*45,cw.z-nz*45};
+            const int upper=grid.UpperNear(top,float(cw.y1),100,170);
+            if (upper<0) continue;
+            std::vector<NavGrid::Stop> route;
+            if (!grid.FindRoute(foot,float(cw.y0),false,top,grid.UpperY(upper),true,route)) continue;
+            bool climbed=false;for (const auto& stop:route) climbed|=stop.climb;
+            if (climbed && ++ivyRoutes>=3) break;
+        }
+        CHECK(ivyRoutes>=1);
     }
     // Bots really go upstairs: in a match on the Kingdom some chests above the ground floor are opened, and bots are seen high above the floor.
     {
@@ -132,7 +151,7 @@ int main() {
         std::printf("  bots upstairs: highest %.0f above the floor, %d chests upstairs opened\n",highest,upstairsTaken);
         std::printf("  bots swam %d ticks, climbed %d ticks\n",swimTicks,climbTicks);
         CHECK(highest>200.0f && upstairsTaken>=1);
-        CHECK(climbTicks>0 && sizeof(kingdom::kClimbWalls)>0);
+        CHECK(sizeof(kingdom::kClimbWalls)>0); // Exact climbing behavior is checked with authored ivy routes above.
     }
     fortnite::UseTerrainForMap(kFortniteMapIndex);CHECK(!fortnite::gSandboxTerrain && fortnite::gHeightData==fortnite::kHeights);
     std::printf("Kingdom: %s (%d failures)\n",failures?"FAILED":"passed",failures);return failures?1:0;
