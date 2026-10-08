@@ -6,6 +6,10 @@ Water depth and caustic caches now distinguish map IDs. Map switches reset wake 
 
 Kingdom retains its places, textured buildings, interiors and foliage. The authored Clock Town, Kakariko, Snowpeak, lookout and docks shelves now contain more of their buildings. The ice hut has its own shelf. Entrance ramps find their landing on the actual collision terrain and register as bot walkways. Crowded village roofs use rotation-aware spacing, keeping the same buildings in their neighbourhoods. Short rooms use two interior stair flights and a landing instead of a ramp crossing the exterior wall. Tall pillars are baked into permanent collision instead of consuming nearby proxy slots. Vertex packing includes a conflict-checked independent set of terrain vertices when architectural vertices alone cannot fit the 13-bit first/second corner limit.
 
+The castle spire stands behind the keep with its own clear doorway and a connected rear terrace, rather than intersecting the hall. The windmill reserves its footprint before village houses are spaced.
+
+The terrain and buildings now draw in the mod’s growable frame pool instead of filling the original fixed game command buffer. Batch command guards prevent an opaque-buffer overrun.
+
 The renderer builds vertices and display lists per visible batch, with normal/bump and baked forms allocated only when used. Unseen batches expire after 180 game frames. Every batch has a conservative bounding sphere; only batches entirely behind the camera or beyond their existing draw distance are omitted. Texture resolution, foliage geometry, nearby surface relief, waves, foam and sparkle are retained.
 
 Validation commands:

@@ -56,6 +56,7 @@ def clear_site(w, x, z, W, D, yaw, name):
         obstacles.append((-5700,5900,260,260,math.atan2(-700,-750)))
     if name.startswith('Kakariko house'):
         obstacles.append((4130,-790,230,230,0))
+        obstacles.append((5000,-500,260,260,math.atan2(950,-850)))
     for radius in range(0,1001,25):
         for k in range(16 if radius else 1):
             a=2*math.pi*k/16

@@ -389,13 +389,13 @@ inline void Feat(const char* name) { gFeature = name; }
 //   * a fixed slot in the drawing order (Projectile_Draw), and the sky its own pass behind the world (DrawBackdrop, patches/0022).
 //   * one shared budget: the pool grows to what busy frames need (never past a cap) and each layer's window is sized from what it used before. A
 //     layer that still does not fit is left out of that one frame and the next frame is given more room; it never takes the game's frame with it.
-enum class GfxLayerId : int { Sky, Foliage, Scenery, Ground, Water, Storm, Fog, Fireflies, Tornado, Weather, Wind, Characters, Shadows, Count };
+enum class GfxLayerId : int { Sky, Foliage, Scenery, Ground, Water, Storm, Fog, Fireflies, Tornado, Weather, Wind, Characters, Shadows, Terrain, Count };
 constexpr int kGfxLayerCount = static_cast<int>(GfxLayerId::Count);
 constexpr const char* kGfxLayerNames[kGfxLayerCount] = { "Sky", "Grass and trees", "Island scenery", "Ground patches", "Water", "Storm wall", "Fog banks",
-                                                          "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters", "Shadows and light" };
+                                                          "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters", "Shadows and light", "Map terrain and buildings" };
 // Each layer's translucent window to start with and never go below, in KB: enough for its busiest normal frame (the sky on an overcast night with the
 // Milky Way is about 5500 commands, 88 KB), so a layer is only ever cut short by something unusual. Solid drawing has no window: it takes what is free.
-constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 32, 128, 16, 16, 8, 12, 16, 8, 4, 16 };
+constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 32, 128, 16, 16, 8, 12, 16, 8, 4, 16, 4 };
 
 struct GfxLayerStats {
     size_t xlu = 0, opa = 0, data = 0;   // bytes used this frame
@@ -11690,13 +11690,14 @@ void DrawKingdomStructures(PlayState* play) {
         const Vec3f eye = play->view.eye;
         const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
         if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
-        const float fx = play->view.at.x - eye.x, fy = play->view.at.y - eye.y, fz = play->view.at.z - eye.z;
+        const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
         const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
         return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
     };
     for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
         const auto& batch = km::kBatches[i];
         if ((batch.surface && relief) || !inReach(batch)) continue;
+        if (!GfxHasRoom(play, 20)) break;
         loadTexture(batch.texture);
         gSPDisplayList(POLY_OPA_DISP++, batchList(i, false));
     }
@@ -11729,6 +11730,7 @@ void DrawKingdomStructures(PlayState* play) {
                 for (size_t i = 0; i < kBatchCount; ++i) {
                     const auto& batch = km::kBatches[i];
                     if (batch.surface != c || !inReach(batch)) continue;
+                    if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
                     loadTexture(batch.texture);
                     gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
@@ -11745,6 +11747,8 @@ void DrawKingdomStructures(PlayState* play) {
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
+    GfxLayer layer(play, GfxLayerId::Terrain);
+    if (!layer.Open()) return;
     namespace fn = royale::fortnite;
     if (!gFortniteGpu.built) BuildFortniteGpu();
     constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;
