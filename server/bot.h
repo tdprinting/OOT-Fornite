@@ -199,6 +199,7 @@ class BotController {
             }
             const float ownerDist = Distance(owner->pos, a.pos);
             if (ownerDist > kAllyLeash * 2.0f) {   // left far behind: catch up in a flash, beside the owner
+                allyMemory.erase(a.index);
                 a.pos = {owner->pos.x + 90.0f, owner->pos.z + 60.0f};
                 if (!Walkable(a.pos)) a.pos = owner->pos;
                 continue;
@@ -1887,6 +1888,8 @@ class BotController {
         const WeaponStats w = Match::StatsOf(p);
         if (dist > w.range || m.Clock() < p.attackReadyAt || m.Stunned(p)) return;
         if (m.Invulnerable(foe)) return; // don't waste a swing
+        // Hearing/reveal may identify someone behind cover; it does not make a shot pass through terrain.
+        if (nav && !CanSee(p, foe)) return;
         float chance = mem.skill * (w.ranged ? 1.0f - 0.35f * (dist / w.range) : 1.0f);
         // A moving target across the line of fire is harder to hit; a good shot leads it, a poor one doesn't.
         if (w.ranged && dist > 1.0f) {
@@ -1898,8 +1901,7 @@ class BotController {
         if (w.homing) chance = (std::max)(chance, 0.9f); // it chases: moving doesn't help
         if (nav) {   // the ground: a shot into a rock or a hill is wasted, a sword can't reach up a ledge, and it is easier to shoot down than up
             const float up = EyeOf(foe) - EyeOf(p);
-            if (w.ranged && !CanSee(p, foe)) chance *= 0.2f;
-            else if (!w.ranged && std::fabs(up) > NavGrid::kClimbUp + 40.0f) chance *= 0.15f;
+            if (!w.ranged && std::fabs(up) > NavGrid::kClimbUp + 40.0f) chance *= 0.15f;
             else if (w.ranged && up < -60.0f) chance += 0.08f;
         }
         BotAttack(m, p, mem, foe.id, rng.Unit() < (std::max)(0.05f, chance), dist);

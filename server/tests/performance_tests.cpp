@@ -92,6 +92,23 @@ static void AllyCannotStrikeThroughCover() {
     CHECK(!sim.match.AllyStrike(a,target->id)); // Authoritative range, independent of AI caller.
 }
 
+static void RevealedBotsStillRespectCover() {
+    auto sim = Duel();
+    auto grid = std::make_shared<NavGrid>(Circle{{0,0},3000}, nullptr);
+    grid->Block({0,0},90,500); sim.bots.SetNav(grid);
+    auto* bot = sim.match.Find(1000); auto* foe = sim.match.Find(1);
+    bot->pos = {-180,0}; foe->pos = {180,0};
+    bot->weapon = {ItemId::FairyBow,Rarity::Epic}; bot->ammo.fill(60);
+    bot->hasAbility = false; bot->revealUntil = sim.match.Clock()+10;
+    const auto ammo = bot->ammo;
+    const float ready = bot->attackReadyAt;
+    for (int i = 0; i < 40; ++i) {
+        sim.bots.Step(sim.match, 0); // No movement: keep the terrain obstruction in place.
+        sim.match.Tick(0.05f);
+    }
+    CHECK(bot->ammo == ammo && bot->attackReadyAt == ready);
+}
+
 static void CacheAndRippleSleep() {
     FrameCache<float,8> cache;
     int queries = 0; float out = 0;
@@ -116,7 +133,7 @@ static void CacheAndRippleSleep() {
 }
 int main() {
     NavigationStorageAndBudget(); TerrainTransitions(); BotsAbandonUnreachableLoot();
-    AllyCannotStrikeThroughCover(); CacheAndRippleSleep();
+    AllyCannotStrikeThroughCover(); RevealedBotsStillRespectCover(); CacheAndRippleSleep();
     std::printf("performance regressions: %d failures\n", failures);
     return failures ? 1 : 0;
 }
