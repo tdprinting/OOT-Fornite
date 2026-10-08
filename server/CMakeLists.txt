@@ -20,6 +20,9 @@ endif()
 target_include_directories(royale_net PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet/include)
 
 enable_testing()
+add_executable(royale_war_table_tests tests/war_table_tests.cpp)
+target_link_libraries(royale_war_table_tests PRIVATE royale_core)
+add_test(NAME royale_war_table_tests COMMAND royale_war_table_tests)
 foreach(t tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests)
     add_executable(royale_${t} tests/${t}.cpp)
     target_link_libraries(royale_${t} royale_net)
@@ -66,7 +69,7 @@ foreach(t convergence_tests kingdom_tests)
 endforeach()
 
 # Keep assert-based checks active in optimized local test builds too.
-foreach(t tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests)
+foreach(t war_table_tests tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests)
     if(MSVC)
         target_compile_options(royale_${t} PRIVATE /UNDEBUG)
     else()

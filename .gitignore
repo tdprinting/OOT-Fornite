@@ -41,9 +41,14 @@ assets/maya/*-preview.png
 assets/maya/previews/
 # Local map validation builds
 /build-map-tests/
+/build-war-table/
+/war-table-compile/
 /build-item-tests/
 /tools/__pycache__/
 /scripts/__pycache__/
 
 /review-frames/
 /build-performance-tests/
+assets/chuchu/*.blend1
+/tools/chuchu/__pycache__/
+/build-chuchu-tests/

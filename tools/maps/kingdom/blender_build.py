@@ -179,11 +179,12 @@ def main():
     ap.add_argument('--res', default='1280x720'); ap.add_argument('--samples', type=int, default=24)
     ap.add_argument('--terrain-res', type=int, default=385)
     a = ap.parse_args([x for x in sys.argv[1:]])
+    a.out = os.path.abspath(a.out)
     os.makedirs(a.out, exist_ok=True)
     w, heights, T = kworld.build(a.only.split(',') if a.only else None)
     sc = reset()
     for c in ['Terrain', 'Water', 'Architecture', 'Props', 'Foliage', 'Presentation']: collection(c)
-    texdir = os.path.join(OUT, 'textures'); os.makedirs(texdir, exist_ok=True)
+    texdir = os.path.join(a.out, 'textures'); os.makedirs(texdir, exist_ok=True)
     for name, (img, units) in T.items():
         im = image_from(name, textures.native_preview(img), texdir)
         MATS[name] = material(name, im)
