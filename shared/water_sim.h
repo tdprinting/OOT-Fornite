@@ -40,28 +40,39 @@ inline float SwellSteepness(float amp, float chop) {
     return sum > 1e-5f ? std::clamp(chop, 0.0f, 1.0f) * 0.92f / std::max(sum, 0.92f) : 0.0f;
 }
 
-inline SwellPoint Swell(float x, float z, float t, float amp, float chop) {
-    SwellPoint p;
-    if (amp <= 0.0f) return p;
-    const float q = SwellSteepness(amp, chop);
-    float gx = 0.0f, gz = 0.0f, gy = 0.0f, fold = 0.0f;
-    for (const GerstnerWave& w : kSwell) {
-        const float k = kTau / w.length, a = w.amp * amp, dx = std::cos(w.angle), dz = std::sin(w.angle);
-        const float th = k * (dx * x + dz * z) - k * w.speed * t;
-        const float s = std::sin(th), c = std::cos(th);
-        p.h += a * s;
-        p.ox += q * a * dx * c;
-        p.oz += q * a * dz * c;
-        gx += dx * k * a * c;
-        gz += dz * k * a * c;
-        gy += q * k * a * s;
-        fold += q * k * a * s;
+// Per-frame wave constants. Sampling retains the original waves and shading.
+class PreparedSwell {
+    struct Wave { float k, a, dx, dz, phase; };
+    Wave waves_[kSwellCount];
+    float q_;
+public:
+    PreparedSwell(float t, float amp, float chop) : q_(SwellSteepness(std::max(0.0f, amp), chop)) {
+        for (int i = 0; i < kSwellCount; ++i) {
+            const auto& w = kSwell[i];
+            const float k = kTau / w.length;
+            waves_[i] = {k, w.amp * std::max(0.0f, amp), std::cos(w.angle), std::sin(w.angle), -k * w.speed * t};
+        }
     }
-    p.nx = -gx; p.ny = 1.0f - gy; p.nz = -gz;
-    const float l = std::sqrt(p.nx * p.nx + p.ny * p.ny + p.nz * p.nz);
-    p.nx /= l; p.ny /= l; p.nz /= l;
-    p.fold = std::clamp(fold / 0.92f, 0.0f, 1.0f);
-    return p;
+    SwellPoint Sample(float x, float z) const {
+        SwellPoint p;
+        float gx = 0, gz = 0, gy = 0;
+        for (const auto& w : waves_) {
+            const float th = w.k * (w.dx * x + w.dz * z) + w.phase;
+            const float s = std::sin(th), c = std::cos(th);
+            p.h += w.a * s;
+            p.ox += q_ * w.a * w.dx * c; p.oz += q_ * w.a * w.dz * c;
+            gx += w.dx * w.k * w.a * c; gz += w.dz * w.k * w.a * c;
+            gy += q_ * w.k * w.a * s;
+        }
+        p.nx = -gx; p.ny = 1 - gy; p.nz = -gz;
+        const float l = std::sqrt(p.nx*p.nx + p.ny*p.ny + p.nz*p.nz);
+        p.nx /= l; p.ny /= l; p.nz /= l;
+        p.fold = std::clamp(gy / 0.92f, 0.0f, 1.0f);
+        return p;
+    }
+};
+inline SwellPoint Swell(float x, float z, float t, float amp, float chop) {
+    return PreparedSwell(t, amp, chop).Sample(x, z);
 }
 
 // ---- interactive ripples -----------------------------------------------------------------------------------------------------------------

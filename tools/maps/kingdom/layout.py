@@ -53,27 +53,28 @@ RIVER = [
 OUTLET = [(-4600, 3300, 300), (-5000, 3900, 320), (-5450, 4400, 360), (-6000, 4950, 420), (-6600, 5500, 520)]
 
 LAKE = (-3950, 2350, 1750, 1350)        # centre and radii of Lake Hylia
-LAB_ISLAND = (-4150, 2550, 360)          # the island in the lake
+LAB_ISLAND = (-4150, 2550, 520)          # the island in the lake
 OASIS = (5400, 1350, 330)
 FROZEN_POND = (-1500, -5600, 280)
 
 # Flat ground for building on: x, z, radius of the flat top, height, how far the blend runs.
 PADS = [
     (0, -1650, 900, 520, 330),        # castle plateau (its cliff is the blend)
-    (0, 1150, 820, 40, 600),          # Clock Town
-    (4050, -1350, 650, 150, 550),     # Kakariko
+    (0, 1150, 1250, 40, 500),          # Clock Town
+    (4050, -1350, 1080, 150, 480),     # Kakariko
     (5000, -500, 220, 300, 420),      # Windmill Hill
     (5250, -2250, 330, 230, 380),     # graveyard
     (1500, 4550, 700, 230, 520),      # Lon Lon Ranch hill
     (-1900, 4700, 520, 60, 450),      # Temple Ruins
-    (-2600, -4700, 520, 640, 480),    # Snowpeak Lodge shelf
+    (-2600, -4700, 1280, 640, 520),    # Snowpeak Lodge shelf
     (4100, 3650, 600, 140, 600),      # Gerudo Ruins
     (-5050, -1150, 650, 80, 500),     # Kokiri Forest
     (-5750, -2300, 300, 120, 400),    # Deku Tree Hollow
-    (3350, -3700, 200, 700, 380),     # Goron Lookout
+    (3350, -3700, 420, 700, 420),     # Goron Lookout
     (-3700, -600, 220, 90, 300),      # Fairy Fountain
-    (-5000, 5150, 380, -100, 350),    # Ordon Docks (just above the water)
-    (-5700, 5900, 200, -40, 300),     # Lighthouse Point
+    (-5000, 5150, 820, -100, 400),    # Ordon Docks (just above the water)
+    (-5700, 5900, 460, -40, 360),     # Lighthouse Point
+    (-1070, -5540, 360, 700, 400),  # ice-fishing hut shelf
     (5400, 1350, 600, 90, 450),       # Blossom Oasis rim
 ]
 

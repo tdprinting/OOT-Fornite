@@ -58,14 +58,29 @@ add_executable(royale_water_tests tests/water_tests.cpp)
 target_link_libraries(royale_water_tests PRIVATE royale_core)
 add_test(NAME royale_water_tests COMMAND royale_water_tests)
 
+# Authored map collision and navigation must be tested by CI, not only manually.
+foreach(t convergence_tests kingdom_tests)
+    add_executable(royale_${t} tests/${t}.cpp)
+    target_link_libraries(royale_${t} PRIVATE royale_core)
+    if(MSVC)
+        target_compile_options(royale_${t} PRIVATE /bigobj)
+    endif()
+    add_test(NAME royale_${t} COMMAND royale_${t})
+endforeach()
+
+# Keep assert-based checks active in optimized local test builds too.
+foreach(t boss_arena_tests war_table_tests tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests)
+    if(MSVC)
+        target_compile_options(royale_${t} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(royale_${t} PRIVATE -UNDEBUG)
+    endif()
+endforeach()
 add_executable(royale_performance_tests tests/performance_tests.cpp)
 target_link_libraries(royale_performance_tests PRIVATE royale_core)
 add_test(NAME royale_performance_tests COMMAND royale_performance_tests)
 
 # Exercise authored-map routes under the same shared budget as the live host.
-add_executable(royale_kingdom_tests tests/kingdom_tests.cpp)
-target_link_libraries(royale_kingdom_tests PRIVATE royale_net)
-add_test(NAME royale_kingdom_tests COMMAND royale_kingdom_tests)
 
 add_executable(royale_performance_bench tools/performance_bench.cpp)
 target_link_libraries(royale_performance_bench PRIVATE royale_core)

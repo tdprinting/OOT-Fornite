@@ -390,13 +390,13 @@ inline void Feat(const char* name) { gFeature = name; }
 //   * a fixed slot in the drawing order (Projectile_Draw), and the sky its own pass behind the world (DrawBackdrop, patches/0022).
 //   * one shared budget: the pool grows to what busy frames need (never past a cap) and each layer's window is sized from what it used before. A
 //     layer that still does not fit is left out of that one frame and the next frame is given more room; it never takes the game's frame with it.
-enum class GfxLayerId : int { Sky, Foliage, Scenery, Ground, Water, Storm, Fog, Fireflies, Tornado, Weather, Wind, Characters, Shadows, Count };
+enum class GfxLayerId : int { Sky, Foliage, Scenery, Ground, Water, Storm, Fog, Fireflies, Tornado, Weather, Wind, Characters, Shadows, Terrain, Count };
 constexpr int kGfxLayerCount = static_cast<int>(GfxLayerId::Count);
 constexpr const char* kGfxLayerNames[kGfxLayerCount] = { "Sky", "Grass and trees", "Island scenery", "Ground patches", "Water", "Storm wall", "Fog banks",
-                                                          "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters", "Shadows and light" };
+                                                          "Fireflies", "Tornado", "Weather specks", "Wind streaks", "Characters", "Shadows and light", "Map terrain and buildings" };
 // Each layer's translucent window to start with and never go below, in KB: enough for its busiest normal frame (the sky on an overcast night with the
 // Milky Way is about 5500 commands, 88 KB), so a layer is only ever cut short by something unusual. Solid drawing has no window: it takes what is free.
-constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 32, 128, 16, 16, 8, 12, 16, 8, 4, 16 };
+constexpr size_t kGfxLayerXluKB[kGfxLayerCount] = { 112, 4, 4, 32, 128, 16, 16, 8, 12, 16, 8, 4, 16, 4 };
 
 struct GfxLayerStats {
     size_t xlu = 0, opa = 0, data = 0;   // bytes used this frame
@@ -10884,13 +10884,13 @@ void DrawWaterGrid(PlayState* play, const Vtx* v, int cols, int rows, Use use) {
 struct WaterCell { float surface, depth; bool have; };
 std::unordered_map<uint64_t, WaterCell> gWaterCells;
 int gWaterCellsCell = 0, gWaterCellsAge = 0;
-bool gWaterCellsIsland = false;
+int gWaterCellsMap = -1;
 uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); }
 
 // ---- caustics: the light the waves focus onto the floor under shallow water, as a sheet that lies on the floor (its own fine grid round the
 // camera, 40 units a square) under the surface. Brightest in the shallows in full sun; it fades with depth, at night and under cloud.
 std::unordered_map<uint64_t, WaterCell> gCausticCells;
-bool gCausticCellsIsland = false;
+int gCausticCellsMap = -1;
 
 void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, float sunWarm) {
     if (!gWaterCaustics || gWaterCausticAmt <= 0.0f || !WaterTexturesReady()) return;
@@ -10898,7 +10898,7 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
     constexpr float cc = 40.0f;
     const Vec3f eye = play->view.eye;
     const bool island = OnIsland();
-    if (island != gCausticCellsIsland || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsIsland = island; }
+    if (gMapId != gCausticCellsMap || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsMap = gMapId; }
     const int gi0 = static_cast<int>(std::lround(eye.x / cc)), gj0 = static_cast<int>(std::lround(eye.z / cc));
     const float cx = gi0 * cc, cz = gj0 * cc;
     static std::vector<WaterCell> cells;
@@ -10947,10 +10947,11 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
             }
             // the pattern sways with the swell above it and drifts with the current
             const float sway = 2.2f * std::sin(t * 0.9f + wx * 0.011f) + 1.6f * std::cos(t * 0.7f + wz * 0.013f);
-            PushVtxT(v[j * VC + i], lx, (c.have ? floorY : baseY - 40.0f) + 2.5f - baseY, lz, (wx - os) / kCausticUnits + drift + sway + flowX * 0.02f * t,
-                     (wz - ot) / kCausticUnits + drift * 0.6f - sway * 0.5f + flowZ * 0.02f * t, cr, cg, cb, a);
+            PushVtxT(v[j * VC + i], lx, (c.have ? floorY : baseY - 40.0f) + 2.5f - baseY, lz, (wx - os) / kCausticUnits + drift + sway + std::fmod(flowX * 0.02f * t, static_cast<float>(kWaterTex)),
+                     (wz - ot) / kCausticUnits + drift * 0.6f - sway * 0.5f + std::fmod(flowZ * 0.02f * t, static_cast<float>(kWaterTex)), cr, cg, cb, a);
         }
     const int frame = static_cast<int>(t * 11.0f) % kWaterTexFrames;
+    DrawIdentity identity(&gCausticCells, gi0, gj0);
     SetupWaterXlu(play);
     WaterTexturePass(play, gWaterCausticTex[frame]);
     OPEN_DISPS(play->state.gfxCtx);
@@ -10988,13 +10989,14 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const Vec3f eye = play->view.eye;
     const float half = island ? 2550.0f : 1575.0f, cell = std::round(2.0f * half / N);
     const int icell = static_cast<int>(cell);
-    if (icell != gWaterCellsCell || island != gWaterCellsIsland || ++gWaterCellsAge > 1200 || gWaterCells.size() > 5000) {
-        gWaterCells.clear(); gWaterCellsCell = icell; gWaterCellsIsland = island; gWaterCellsAge = 0;
+    if (icell != gWaterCellsCell || gMapId != gWaterCellsMap || ++gWaterCellsAge > 1200 || gWaterCells.size() > 5000) {
+        gWaterCells.clear(); gWaterCellsCell = icell; gWaterCellsMap = gMapId; gWaterCellsAge = 0;
     }
     const int gi0 = static_cast<int>(std::lround(eye.x / cell)), gj0 = static_cast<int>(std::lround(eye.z / cell));
     const float cx = gi0 * cell, cz = gj0 * cell;
     // On lakes and rivers the game draws its own water just under ours, so the swell there is kept small.
     const float amp = WaveAmp() * (island ? 1.0f : 0.35f), chop = gWaterChop;
+    const rw::PreparedSwell swell(t, amp, chop);
     float ampTotal = 0.0f;
     for (const rw::GerstnerWave& w : rw::kSwell) ampTotal += w.amp * amp;
 
@@ -11088,7 +11090,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     if (fade > 0.0f) {
                         clear[id] = 0;
                         const float shore = std::min(1.0f, c.depth / 90.0f);
-                        const rw::SwellPoint sp = rw::Swell(wx, wz, t, amp, chop);
+                        const rw::SwellPoint sp = swell.Sample(wx, wz);
                         cSW[id] = sp.h * shore; cOX[id] = sp.ox * shore; cOZ[id] = sp.oz * shore;
                         y += royale::graphics::WaterSurfaceOffset(cSW[id], 0.0f, 1.0f, baseLift, lowest);
                         px += cOX[id]; pz += cOZ[id];
@@ -11109,7 +11111,10 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     refined.assign(static_cast<size_t>(N) * N, 0);
     auto quadOk = [&](int i, int j) {
         return i >= 0 && j >= 0 && i < N && j < N && !clear[j * V + i] && !clear[j * V + i + 1] && !clear[(j + 1) * V + i] && !clear[(j + 1) * V + i + 1] &&
-               cells[j * V + i].have && cells[j * V + i + 1].have && cells[(j + 1) * V + i].have && cells[(j + 1) * V + i + 1].have;
+               cells[j * V + i].have && cells[j * V + i + 1].have && cells[(j + 1) * V + i].have && cells[(j + 1) * V + i + 1].have &&
+               std::fabs(cells[j * V + i].surface - cells[j * V + i + 1].surface) < 1.0f &&
+               std::fabs(cells[j * V + i].surface - cells[(j + 1) * V + i].surface) < 1.0f &&
+               std::fabs(cells[j * V + i].surface - cells[(j + 1) * V + i + 1].surface) < 1.0f;
     };
     struct FineQuad { int i, j; };
     static std::vector<FineQuad> fine;
@@ -11178,7 +11183,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 if (cBL) wgt *= ss01(std::hypot(u, 1 - w) * S * 0.5f);
                 if (cBR) wgt *= ss01(std::hypot(1 - u, 1 - w) * S * 0.5f);
                 const float shore = std::min(1.0f, DP[id] / 90.0f);
-                const rw::SwellPoint sp = rw::Swell(wx, wz, t, amp, chop);
+                const rw::SwellPoint sp = swell.Sample(wx, wz);
                 // the exact swell, run into the coarse square's own (straight-line) shape toward coarse neighbours
                 const float iSW = bil(cSW[k00], cSW[k10], cSW[k01], cSW[k11], u, w), iOX = bil(cOX[k00], cOX[k10], cOX[k01], cOX[k11], u, w),
                             iOZ = bil(cOZ[k00], cOZ[k10], cOZ[k01], cOZ[k11], u, w);
@@ -11245,7 +11250,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     DrawWaterGrid(play, v, N, N, [&](int i, int j) {
         return !refined[j * N + i] && !(clear[j * V + i] && clear[j * V + i + 1] && clear[(j + 1) * V + i] && clear[(j + 1) * V + i + 1]);
     });
-    drawFine(v);
+    if (fv != nullptr) drawFine(fv);
     // pass 2: the sparkling ripples (the texture is only drawn fairly near: far off it would shimmer)
     const float texReach = half * 0.62f;
     auto nearQ = [&](int i, int j) { return std::hypot((i + 0.5f - N / 2) * cell + cx - eye.x, (j + 0.5f - N / 2) * cell + cz - eye.z) < texReach; };
@@ -11352,6 +11357,11 @@ void CollectCartWalkers(const std::function<void(const void*, float, float, floa
 
 void DrawWater(PlayState* play) {
     if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCausticCells.clear(); if (!gRipples.Sleeping()) gRipples.Clear(); gCamUnder = 0.0f; return; }
+    static int previousMap = -1;
+    if (previousMap != gMapId) {
+        gWaterDist.clear(); gWaterTrack.clear(); gWaterCells.clear(); gCausticCells.clear();
+        gRipples.Clear(); gCamUnder = 0.0f; previousMap = gMapId;
+    }
     Feat("draw: water");
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
     gWaterFrame++;
@@ -11625,41 +11635,45 @@ void DrawConvergenceStructures(PlayState* play) {
 void DrawKingdomStructures(PlayState* play) {
     if (!OnKingdomTerrain()) return;
     namespace km = royale::kingdom;
-    static std::vector<Vtx> vertices, litVertices;
-    static std::vector<std::vector<Gfx>> lists, litLists;
+    struct BatchCache {
+        std::vector<Vtx> baked, lit;
+        std::vector<Gfx> bakedList, litList;
+        uint32_t seen = 0;
+    };
     constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
-    if (vertices.empty()) {
-        const size_t count = sizeof(km::kDrawVertices) / sizeof(km::kDrawVertices[0]);
-        vertices.resize(count); litVertices.resize(count);
-        for (size_t i = 0; i < count; ++i) {
-            const auto& v = km::kDrawVertices[i];
-            auto& dst = vertices[i].v;
-            dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
-            dst.tc[0] = v.s; dst.tc[1] = v.t;
-            dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255;
-            auto& lit = litVertices[i].n;
-            lit.ob[0] = v.x; lit.ob[1] = v.y; lit.ob[2] = v.z; lit.flag = 0;
-            lit.tc[0] = v.s; lit.tc[1] = v.t;
-            lit.n[0] = v.nx; lit.n[1] = v.ny; lit.n[2] = v.nz; lit.a = 255;
-        }
-        lists.resize(kBatchCount); litLists.resize(kBatchCount);
-        for (size_t i = 0; i < kBatchCount; ++i) {
-            const auto& batch = km::kBatches[i];
-            for (int pass = 0; pass < (batch.surface ? 2 : 1); ++pass) {
-                auto& dl = pass ? litLists[i] : lists[i];
-                const std::vector<Vtx>& source = pass ? litVertices : vertices;
-                dl.resize(batch.count / 3 + batch.count / 30 + 3);
-                Gfx* p = dl.data();
-                for (uint32_t first = 0; first < batch.count; first += 30) {
-                    const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
-                    gSPVertex(p++, reinterpret_cast<uintptr_t>(&source[batch.first + first]), n, 0);
-                    for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
-                }
-                gSPEndDisplayList(p++);
-                dl.resize(static_cast<size_t>(p - dl.data()));
+    static std::vector<BatchCache> cache(kBatchCount);
+    const uint32_t frame = play->state.frames;
+    // Free geometry after 180 unseen game frames; never touch the two frames the renderer may still use.
+    for (auto& c : cache) if ((!c.baked.empty() || !c.lit.empty()) && frame - c.seen > 180) c = BatchCache{};
+    auto batchList = [&](size_t i, bool lighting) -> Gfx* {
+        auto& c = cache[i]; c.seen = frame;
+        auto& vertices = lighting ? c.lit : c.baked;
+        auto& list = lighting ? c.litList : c.bakedList;
+        const auto& batch = km::kBatches[i];
+        if (vertices.empty()) {
+            vertices.resize(batch.count);
+            for (size_t k = 0; k < batch.count; ++k) {
+                const auto& v = km::kDrawVertices[batch.first + k];
+                auto& dst = vertices[k].v;
+                dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
+                dst.tc[0] = v.s; dst.tc[1] = v.t;
+                if (lighting) {
+                    vertices[k].n.n[0] = v.nx; vertices[k].n.n[1] = v.ny; vertices[k].n.n[2] = v.nz;
+                    vertices[k].n.a = 255;
+                } else { dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255; }
             }
+            list.resize(batch.count / 3 + batch.count / 30 + 3);
+            Gfx* p = list.data();
+            for (uint32_t first = 0; first < batch.count; first += 30) {
+                const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
+                gSPVertex(p++, reinterpret_cast<uintptr_t>(&vertices[first]), n, 0);
+                for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
+            }
+            gSPEndDisplayList(p++);
+            list.resize(static_cast<size_t>(p - list.data()));
         }
-    }
+        return list.data();
+    };
     const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
     const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
     struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
@@ -11680,12 +11694,20 @@ void DrawKingdomStructures(PlayState* play) {
         loaded = texture;
     };
     // a chunk is 1853 x 1926 units across: test its far corner, not its middle
-    auto inReach = [&](const km::Batch& batch) { return std::hypot(play->view.eye.x - batch.x, play->view.eye.z - batch.z) <= batch.reach + 1400.0f; };
+    auto inReach = [&](const km::Batch& batch) {
+        const Vec3f eye = play->view.eye;
+        const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
+        if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
+        const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
+        const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
+        return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
+    };
     for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
         const auto& batch = km::kBatches[i];
         if ((batch.surface && relief) || !inReach(batch)) continue;
+        if (!GfxHasRoom(play, 20)) break;
         loadTexture(batch.texture);
-        gSPDisplayList(POLY_OPA_DISP++, lists[i].data());
+        gSPDisplayList(POLY_OPA_DISP++, batchList(i, false));
     }
     if (relief) {   // the lit, relief-mapped faces, one surface class at a time
         {
@@ -11716,9 +11738,10 @@ void DrawKingdomStructures(PlayState* play) {
                 for (size_t i = 0; i < kBatchCount; ++i) {
                     const auto& batch = km::kBatches[i];
                     if (batch.surface != c || !inReach(batch)) continue;
+                    if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
                     loadTexture(batch.texture);
-                    gSPDisplayList(POLY_OPA_DISP++, litLists[i].data());
+                    gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
                 }
                 if (started) gSPSurfaceMap(POLY_OPA_DISP++, 0);
             }
@@ -11732,6 +11755,8 @@ void DrawKingdomStructures(PlayState* play) {
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
+    GfxLayer layer(play, GfxLayerId::Terrain);
+    if (!layer.Open()) return;
     namespace fn = royale::fortnite;
     if (!gFortniteGpu.built) BuildFortniteGpu();
     constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;

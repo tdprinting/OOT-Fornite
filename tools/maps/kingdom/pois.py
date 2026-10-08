@@ -139,7 +139,10 @@ def hyrule_castle(w):
     house(w, 0, -1880, 760, 620, 0.0, storeys=2, style=style(wall='castle_stone', base='castle_stone', trim='castle_stone', roof='roof_blue',
           roof_kind='flat', floor='cobble', window='window_lit', tint=(1, 1, 1)), name='Castle keep', floor_y=py + 14)
     w.far = True
-    spiral_tower(w, 0, -2230, 380, 1500, yaw=math.pi, wall='castle_stone', floor='cobble', roof='roof_blue', name='Castle spire', cap='spire', y0=py + 14)
+    spiral_tower(w, 0, -2480, 380, 1500, yaw=0.0, wall='castle_stone', floor='cobble', roof='roof_blue', name='Castle spire', cap='spire', y0=py + 14)
+    # The spire has its own walls, with a clear front entrance across the rear terrace.
+    w.ramp(0,-2180,0,-2320,180,py+14,py+14,'castle_stone',surf='stone',base=py-20)
+    w.walkways.append((0,-2180,0,-2320,90,py+14,py+14))
     # Side spires on the keep's corners (drawn, seen from everywhere)
     for sx in (-1, 1):
         for sz in (-1, 1):
