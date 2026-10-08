@@ -86,7 +86,7 @@ def main():
     sc.render.resolution_y=1024 if not quick else 683
     sc.render.resolution_percentage=100
     sc.view_settings.exposure=0
-    shots=list(SHOTS) if not quick else ['overview','castle','deku','lake']
+    shots=list(SHOTS) if not quick or '--all-views' in sys.argv else ['overview','castle','deku','lake']
     for n in shots:
         eye,target,lens=SHOTS[n]
         cam=pres.camera('Camera '+n,eye,target,lens or 28,ortho=153 if lens is None else None)

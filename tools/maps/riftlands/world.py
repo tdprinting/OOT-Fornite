@@ -15,6 +15,17 @@ import geom, kit, textures, pois
 from layout import *
 
 _HOUSE=kit.house
+FURNITURE_SCALE=.4
+ORDINARY_STOREY=170
+ORDINARY_DOOR_HEIGHT=140
+
+def scaled_furniture(original,framed):
+    def build(*args,**kwargs):
+        if framed:x,z=args[1].p(args[2],args[3]);y=args[4]
+        else:x,z,y=args[1:4]
+        return translated(args[0],lambda q:original(q,*args[1:],**kwargs),0,0,
+                          scale=FURNITURE_SCALE,origin=(x,z),vertical_scale=FURNITURE_SCALE,floor_y=y)
+    return build
 def rift_house(*args,**kwargs):
     args=list(args);args[3]=max(args[3],460);args[4]=max(args[4],440)
     kwargs['door_width']=240
@@ -23,13 +34,28 @@ def rift_house(*args,**kwargs):
         args[3]=max(args[3],620);args[4]=max(args[4],620)
     if kwargs.get('name') in ('Castle keep','Snowpeak cabin 1'):kwargs['stair_landing']=True
     if kwargs.get('name')=='Castle keep':kwargs['alternate_stairs']=True
-    return _HOUSE(*args,**kwargs)
+    # Geometry and collider clearance use normal Adult Link; Adult Power is a
+    # temporary actor boost, not a permanent 1.35x enlargement of the avatar.
+    monument=kwargs.get('name') in ('Castle keep','Snowpeak Lodge')
+    saved={n:getattr(kit,n) for n in ('STOREY','DOOR_H','table','stool','bed','shelf','barrel','crate','pot')}
+    if not monument:
+        kit.STOREY=ORDINARY_STOREY;kit.DOOR_H=ORDINARY_DOOR_HEIGHT
+        st=kwargs.get('style') or kit.HouseStyle()
+        rise=kwargs.get('roof_rise')
+        if rise is None:rise=(.42*min(args[3],args[4]) if st.roof_kind=='hip' else .5*args[3])
+        kwargs['roof_rise']=rise*ORDINARY_STOREY/saved['STOREY']
+    for n in ('table','stool','bed','shelf','barrel','crate','pot'):
+        setattr(kit,n,scaled_furniture(saved[n],n in ('table','stool','bed','shelf')))
+    try:return _HOUSE(*args,**kwargs)
+    finally:
+        for n,value in saved.items():setattr(kit,n,value)
 
-def translated(w,fn,dx,dz,dy=0,scale=1,origin=(0,0)):
+def translated(w,fn,dx,dz,dy=0,scale=1,origin=(0,0),vertical_scale=1,floor_y=0):
     """Transform every representation together, including floors and nav blockers."""
     q=geom.World();real=kit.H;ox,oz=origin
     X=lambda x:ox+(x-ox)*scale+dx
     Z=lambda z:oz+(z-oz)*scale+dz
+    Y=lambda y:floor_y+(y-floor_y)*vertical_scale+dy
     def local(x,z):return real(X(x),Z(z))-dy
     kit.H=pois.H=local
     house=kit.house
@@ -50,23 +76,23 @@ def translated(w,fn,dx,dz,dy=0,scale=1,origin=(0,0)):
     finally:kit.H=pois.H=real;kit.house=pois.house=house
     off=len(w.col_verts)
     sm={i:w.surface(next(n for n,v in geom.SURFACES.items() if v==s),c,h) for i,(s,c,h) in enumerate(q.surfaces)}
-    P=lambda v:(X(v[0]),v[1]+dy,Z(v[2]))
+    P=lambda v:(X(v[0]),Y(v[1]),Z(v[2]))
     for t in q.tris:
         t.p=tuple(P(v) for v in t.p)
         A,B,C=[np.array(v) for v in t.p];n=np.cross(B-A,C-A);t.normal=tuple(n/max(1e-9,np.linalg.norm(n)))
         w.tris.append(t)
     w.col_verts += [P(v) for v in q.col_verts]
     w.col_tris += [(a+off,b+off,c+off,sm[s]) for a,b,c,s in q.col_tris]
-    w.props += [(X(a),b+dy,Z(c),X(d),e+dy,Z(f),n) for a,b,c,d,e,f,n in q.props]
+    w.props += [(X(a),Y(b),Z(c),X(d),Y(e),Z(f),n) for a,b,c,d,e,f,n in q.props]
     w.obstacles += [(X(a),X(b),Z(c),Z(d)) for a,b,c,d in q.obstacles]
     for block in q.blockers:
-        if block[0]=='box':_,a,b,c,d,e,f=block;w.blockers.append(('box',X(a),X(b),Z(c),Z(d),e+dy,f+dy))
-        else:_,ps,a,b=block;w.blockers.append(('poly',[(X(x),Z(z)) for x,z in ps],a+dy,b+dy))
-    w.buildings += [(X(a),Z(b),c*scale,d*scale,e+dy,f) for a,b,c,d,e,f in q.buildings]
-    w.walkways += [(X(a),Z(b),X(c),Z(d),e*scale,f+dy,g+dy) for a,b,c,d,e,f,g in q.walkways]
-    w.loot += [(X(a),b+dy,Z(c),n) for a,b,c,n in q.loot]
-    w.doors += [(X(a),Z(b),c+dy,n) for a,b,c,n in q.doors]
-    w.interior += [(X(a),X(b),Z(c),Z(d),e+dy,f+dy) for a,b,c,d,e,f in q.interior]
+        if block[0]=='box':_,a,b,c,d,e,f=block;w.blockers.append(('box',X(a),X(b),Z(c),Z(d),Y(e),Y(f)))
+        else:_,ps,a,b=block;w.blockers.append(('poly',[(X(x),Z(z)) for x,z in ps],Y(a),Y(b)))
+    w.buildings += [(X(a),Z(b),c*scale,d*scale,Y(e),f) for a,b,c,d,e,f in q.buildings]
+    w.walkways += [(X(a),Z(b),X(c),Z(d),e*scale,Y(f),Y(g)) for a,b,c,d,e,f,g in q.walkways]
+    w.loot += [(X(a),Y(b),Z(c),n) for a,b,c,n in q.loot]
+    w.doors += [(X(a),Z(b),Y(c),n) for a,b,c,n in q.doors]
+    w.interior += [(X(a),X(b),Z(c),Z(d),Y(e),Y(f)) for a,b,c,d,e,f in q.interior]
 
 def lantern(w,x,z,y):
     w.cylinder(x,z,8,y,y+155,'timber',n=5,col='none')
