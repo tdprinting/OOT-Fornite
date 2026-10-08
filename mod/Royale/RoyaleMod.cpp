@@ -220,6 +220,7 @@ struct WorldAnchor {
 
 royale::RoyaleSession gSession;
 bool WarMenuOpen();
+std::atomic<bool> gMenuAudioMuted{true};
 void WarOpen();
 void WarInput();
 void WarGameUpdate();
@@ -678,8 +679,21 @@ bool MustBeInField(royale::MatchState state) {
 struct Rgb { u8 r, g, b; };
 constexpr Rgb kRarityRgb[royale::kRarityCount] = { { 96, 210, 84 }, { 72, 132, 250 }, { 236, 64, 52 }, { 186, 92, 236 }, { 250, 210, 40 } };
 
-// Panels are the game's own dark, slightly warm text-box black rather than a modern navy.
-ImU32 OotPanel(int alpha) { return IM_COL32(16, 12, 8, alpha); }
+// HUD and native menus share one War Table palette.
+ImU32 HudColor(uint32_t rgba, int alpha=255) { return IM_COL32(rgba>>24,(rgba>>16)&255,(rgba>>8)&255,alpha); }
+ImU32 OotPanel(int alpha) { return HudColor(royale::wartable::theme::Panel,alpha); }
+void HudFrame(ImDrawList* dl,ImVec2 a,ImVec2 b,float scale,bool selected=false) {
+    using namespace royale::wartable::theme;
+    dl->AddRectFilled(ImVec2(a.x+2*scale,a.y+3*scale),ImVec2(b.x+2*scale,b.y+3*scale),IM_COL32(6,15,36,192));
+    dl->AddRectFilled(a,b,HudColor(selected?Button:Panel,237));
+    dl->AddRect(a,b,HudColor(selected?Focus:Border),0,0,(selected?2.5f:1.0f)*scale);
+    const float length=7*scale;
+    for(int i=0;i<4;++i) {
+        const ImVec2 c(i&1?b.x:a.x,i&2?b.y:a.y);
+        dl->AddLine(c,ImVec2(c.x+(i&1?-length:length),c.y),HudColor(selected?Focus:Gold),2*scale);
+        dl->AddLine(c,ImVec2(c.x,c.y+(i&2?-length:length)),HudColor(selected?Focus:Gold),2*scale);
+    }
+}
 
 const char* RarityName(royale::Rarity r) {
     static const char* names[royale::kRarityCount] = { "Common", "Uncommon", "Rare", "Epic", "Legendary" };
@@ -5612,14 +5626,14 @@ void DrawStaminaBar(ImDrawList* dl, ImVec2 ds, const royale::HudState& h) {
     if (alpha <= 0.0f) return;
     auto a = [&](int v) { return static_cast<int>(v * alpha); };
     const float unit = ds.y / 240.0f;   // the game's own HUD is laid out on a 240 high screen
-    const float bx = 30.0f * unit, by = 66.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 4.0f * unit;
+    const float bx = 34.0f * unit / 3.0f, by = 146.0f * unit / 3.0f, bw = 260.0f * unit / 3.0f, bh = 4.0f * unit;
     const float fill = std::clamp(gStamina, 0.0f, 1.0f);
     const bool winded = !gSprinting && fill < kSprintMinStamina;
     dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, a(170)), 3.0f);
-    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(58, 42, 16, a(200)), 2.0f);   // dark leather brown
+    dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), HudColor(royale::wartable::theme::Button,a(200)), 2.0f);   // dark leather brown
     if (fill > 0.0f) {
         // Hylian hair gold (#F0DF57) from the art guide; Hylian crest red (#AD3725) while too winded to sprint.
-        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), winded ? IM_COL32(173, 55, 37, a(255)) : IM_COL32(240, 223, 87, a(255)), 2.0f);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), winded ? IM_COL32(173, 55, 37, a(255)) : HudColor(royale::wartable::theme::Gold,a(255)), 2.0f);
         dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(255, 248, 200, a(150)), 2.0f);
     }
 }
@@ -5830,7 +5844,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
 
     const float round = 12.0f * scale;
     dl->AddRectFilled(ImVec2(a.x + 3 * scale, a.y + 4 * scale), ImVec2(b.x + 3 * scale, b.y + 4 * scale), IM_COL32(0, 0, 0, 90), round);
-    dl->AddRectFilled(a, b, IM_COL32(10, 16, 22, 170), round);
+    HudFrame(dl,a,b,scale);
     dl->PushClipRect(ImVec2(a.x + 2 * scale, a.y + 2 * scale), ImVec2(b.x - 2 * scale, b.y - 2 * scale), true);
 
     // The game's minimap, placed with the game's own numbers for where it sits and how world positions land on it (z_map_exp.c's compass
@@ -5904,7 +5918,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     dl->AddTriangle(tip, l, r, IM_COL32(0, 0, 0, 220), 1.5f * scale);
 
     // The frame: the menus' gold rule, and N at the top.
-    dl->AddRect(a, b, IM_COL32(176, 118, 24, 255), round, 0, 2.0f * scale);
+    dl->AddRect(a,b,HudColor(royale::wartable::theme::Border),0,0,1.0f*scale);
     dl->AddRect(ImVec2(a.x + 4 * scale, a.y + 4 * scale), ImVec2(b.x - 4 * scale, b.y - 4 * scale), IM_COL32(255, 214, 90, 120), round * 0.7f, 0, 1.0f * scale);
     const ImVec2 nsz = ImGui::GetFont()->CalcTextSizeA(14.0f * scale, FLT_MAX, 0.0f, "N");
     const ImVec2 np(c.x - nsz.x * 0.5f, a.y - nsz.y * 0.5f);
@@ -6343,7 +6357,7 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
 // on a touch screen you can tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; };
-    const ImU32 grey = IM_COL32(120, 112, 100, 255);
+    const ImU32 grey = HudColor(royale::wartable::theme::Muted,150);
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
@@ -6385,10 +6399,10 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     for (size_t i = 0; i < slots.size(); i++) {
         const Slot& sl = slots[i];
         const ImVec2 a(x, y), b(x + w, y + hgt);
-        dl->AddRectFilled(a, b, OotPanel(195), 6.0f * scale);
+        HudFrame(dl,a,b,scale,sl.selected);
         if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
-        dl->AddRect(a, b, sl.selected ? IM_COL32(255, 236, 120, 255) : sl.border, 6.0f * scale, 0, (sl.selected ? 4.0f : 2.5f) * scale);
+        dl->AddRectFilled(ImVec2(a.x+4*scale,b.y-4*scale),ImVec2(b.x-4*scale,b.y-2*scale),sl.border);
         if (sl.filled) {   // which button uses the slot
             const int nres = royale::kMaxReserveWeapons;
             const char* hint = i == 0 ? "B" : static_cast<int>(i) <= nres ? "D-pad L/R" : static_cast<int>(i) == nres + 1 ? "C-Left" : static_cast<int>(i) == nres + 2 ? "D-pad Dn" : "D-pad Up";
@@ -6399,7 +6413,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
             dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
         }
         const float ts = 11.5f * scale;
-        dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), IM_COL32(255, 255, 255, sl.filled ? 255 : 120), sl.title.c_str());
+        dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), HudColor(royale::wartable::theme::Ink,sl.filled?255:120), sl.title.c_str());
         dl->AddText(font, ts * 0.9f, ImVec2(a.x + 5 * scale, a.y + 3 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
         if (sl.filled && sl.ammo >= 0) { // how many shots are left
             const std::string n = "x" + std::to_string(sl.ammo);
@@ -6434,9 +6448,9 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.gear[i].item);
         const ImU32 col = RarityU32(static_cast<royale::Rarity>(h.inv.gear[i].rarity));
         const ImVec2 a(gx, gy), b(gx + gs, gy + gs);
-        dl->AddRectFilled(a, b, OotPanel(195), 5.0f * scale);
+        HudFrame(dl,a,b,scale);
         DrawItemIcon(dl, id, ImVec2(gx + gs * 0.5f, gy + gs * 0.5f), gs * 0.72f, col);
-        dl->AddRect(a, b, col, 5.0f * scale, 0, 2.0f * scale);
+        dl->AddRectFilled(ImVec2(a.x+3*scale,b.y-3*scale),ImVec2(b.x-3*scale,b.y-scale),col);
         gx += gs + 5.0f * scale;
     }
 }
@@ -7206,21 +7220,21 @@ struct UiStyle {
           banner, bannerLight, bannerLoss, bannerLossLight, bronze, silver, medalGold;
 };
 const UiStyle kUi = {
-    IM_COL32(44, 18, 112, 215),    // bgTop: the tint over the game behind the end screen, top...
-    IM_COL32(16, 40, 140, 215),    // bgBottom: ...and bottom
-    IM_COL32(14, 16, 48, 232),     // panel (the death card, the spectating bar)
-    IM_COL32(110, 200, 255, 255),  // edge
-    IM_COL32(255, 206, 64, 255),   // gold
-    IM_COL32(248, 248, 255, 255),  // white
+    HudColor(royale::wartable::theme::Panel,255),    // bgTop: the tint over the game behind the end screen, top...
+    HudColor(royale::wartable::theme::Button,255),    // bgBottom: ...and bottom
+    HudColor(royale::wartable::theme::Panel,237),     // panel (the death card, the spectating bar)
+    HudColor(royale::wartable::theme::Border),  // edge
+    HudColor(royale::wartable::theme::Gold),   // gold
+    HudColor(royale::wartable::theme::Ink),  // white
     IM_COL32(160, 168, 200, 255),  // grey
-    IM_COL32(150, 205, 255, 255),  // label: the light blue of names and headings
-    IM_COL32(90, 225, 255, 255),   // accent: the ring, ticks, the chosen tab
+    HudColor(royale::wartable::theme::Muted),  // label: the light blue of names and headings
+    HudColor(royale::wartable::theme::Focus),   // accent: the ring, ticks, the chosen tab
     IM_COL32(255, 92, 84, 255),    // red
     IM_COL32(120, 255, 140, 255),  // green: you
     IM_COL32(60, 150, 255, 90),    // selfRow
     IM_COL32(255, 255, 255, 12),   // rowAlt
-    IM_COL32(18, 22, 70, 230),     // button
-    IM_COL32(40, 110, 230, 245),   // buttonHot
+    HudColor(royale::wartable::theme::Button,237),     // button
+    HudColor(royale::wartable::theme::Button,255),   // buttonHot
     IM_COL32(30, 30, 50, 190),     // buttonOff
     IM_COL32(255, 255, 255, 18),   // tile
     IM_COL32(240, 120, 30, 255),   // banner: a win
@@ -7433,41 +7447,8 @@ void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const
         UiTextCentred(dl, font, 30.0f * scale, cx, ds.y * 0.13f + 104.0f * scale, UiAlpha(kUi.gold, sub),
                       "#" + std::to_string(gDeath.place) + "  of " + std::to_string(std::max(gDeath.place, h.playerLimit)));
 
-        // 2. The death card.
-        if (t < kDeathCardDelay) return;
-        const float a = static_cast<float>(std::min(1.0, (t - kDeathCardDelay) / 0.3));
-        const float pw = std::min(ds.x - 32.0f * scale, 600.0f * scale), ph = 196.0f * scale;
-        const ImVec2 pa(cx - pw * 0.5f, ds.y - ph - 28.0f * scale + (1.0f - a) * 30.0f * scale), pb(pa.x + pw, pa.y + ph);
-        dl->AddRectFilled(pa, pb, UiAlpha(kUi.panel, a), 12.0f * scale);
-        dl->AddRect(pa, pb, UiAlpha(kUi.edge, a), 12.0f * scale, 0, 2.5f * scale);
-        const float pad = 16.0f * scale, gap = 10.0f * scale, tileH = 70.0f * scale;
-        const float tw = (pw - pad * 2 - gap * 2) / 3.0f;
-        const int points = royale::ScorePoints(gMyStats.damage, gMyStats.kills, gMyStats.chests, gDeath.place);
-        char dmg[16];
-        std::snprintf(dmg, sizeof(dmg), "%.1f", gMyStats.damage);
-        const std::string values[3] = { std::to_string(gMyStats.kills), dmg, UiThousands(points) };
-        const char* labels[3] = { "KILLS", "DAMAGE", "POINTS" };
-        for (int i = 0; i < 3; i++) {
-            const ImVec2 ta(pa.x + pad + i * (tw + gap), pa.y + pad);
-            UiTile(dl, font, scale, ta, ImVec2(ta.x + tw, ta.y + tileH), values[i], labels[i], i == 2 ? kUi.gold : kUi.white, a);
-        }
-        if (gUiPad.left || gUiPad.right) { gDeath.focus = 1 - gDeath.focus; UiSfx(NA_SE_SY_CURSOR); }
-        gUiPad.left = gUiPad.right = gUiPad.up = gUiPad.down = gUiPad.b = gUiPad.page = false;
-        const float by = pa.y + pad + tileH + 14.0f * scale, bh = 50.0f * scale, bw = (pw - pad * 2 - gap) * 0.5f;
-        if (UiButton(dl, font, scale, ImVec2(pa.x + pad, by), ImVec2(pa.x + pad + bw, by + bh), "Spectate", gDeath.focus == 0, true, a)) {
-            gDeath.card = false;
-            if (!gDeath.spectated) {   // the first time: whoever got you
-                gDeath.spectated = true;
-                for (const auto& st : gSession.Puppets()) if (st.alive && st.id == gDeath.killer) gSpectateTarget = st.id;
-                if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
-            }
-        }
-        if (UiButton(dl, font, scale, ImVec2(pb.x - pad - bw, by), ImVec2(pb.x - pad, by + bh), "Leave match", gDeath.focus == 1, true, a)) {
-            gSession.Leave();
-            return;
-        }
-        UiTextCentred(dl, font, 14.0f * scale, cx, pb.y - 22.0f * scale, UiAlpha(kUi.grey, a), "D-pad Left / Right to choose, A to select");
-        gUiPad.a = false;
+        // After the fall, WarGameUpdate opens the native death menu.
+        // Its controller/touch actions and statistics share the War Table painter.
         return;
     }
 
@@ -7852,7 +7833,7 @@ void DrawOverlay() {
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     DrawUnderwaterOverlay(dl, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
-    const ImU32 white = IM_COL32(255, 255, 255, 255), gold = IM_COL32(255, 210, 70, 255), red = IM_COL32(255, 90, 90, 255),
+    const ImU32 white = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold), red = IM_COL32(255, 90, 90, 255),
                 green = IM_COL32(110, 230, 130, 255);
     auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {
         dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
@@ -7942,34 +7923,22 @@ void DrawOverlay() {
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
 
-    // The shield bar, under the hearts: the game draws a row of hearts at the top left, and the bar runs as wide as that row and is filled by shield potions.
+    // Battle Royale vitals replace the adventure HUD with matching War Table panels.
     {
-        const float unit = ds.y / 240.0f;                                  // the game's own HUD is laid out on a 240 high screen
-        const float bx = 30.0f * unit, by = 46.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 7.0f * unit;
-        const float fill = std::clamp(h.inv.shield / royale::kMaxShield, 0.0f, 1.0f);
-        dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, 170), 3.0f);
-        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(20, 30, 60, 200), 2.0f);
-        if (fill > 0.0f) {
-            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), IM_COL32(70, 150, 255, 255), 2.0f);
-            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(170, 215, 255, 180), 2.0f);
-        }
-        char label[24];
-        std::snprintf(label, sizeof(label), "%d", static_cast<int>(std::lround(fill * 100.0f)));
-        text(bx + bw + 8.0f * unit, by - 4.0f * unit, IM_COL32(150, 200, 255, 255), 14.0f * unit, label);
-    }
-    // The magic meter, a green bar under the shield bar: abilities spend it, it refills on its own, Magic Jars top it up.
-    {
-        const float unit = ds.y / 240.0f;
-        const float bx = 30.0f * unit, by = 57.0f * unit, bw = std::max(3.0f, h.maxHealth) * 16.0f * unit, bh = 6.0f * unit;
-        const float fill = std::clamp(h.magic / royale::kMaxMagic, 0.0f, 1.0f);
-        const float need = h.inv.hasAbility ? royale::AbilityMagic(static_cast<royale::ItemId>(h.inv.ability.item)) / royale::kMaxMagic : 0.0f;
-        dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, 170), 3.0f);
-        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(15, 40, 20, 200), 2.0f);
-        if (fill > 0.0f) {
-            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh), fill >= need ? IM_COL32(60, 200, 90, 255) : IM_COL32(150, 170, 70, 255), 2.0f);
-            dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw * fill, by + bh * 0.45f), IM_COL32(170, 255, 190, 170), 2.0f);
-        }
-        if (need > 0.0f) dl->AddLine(ImVec2(bx + bw * need, by - 1), ImVec2(bx + bw * need, by + bh + 1), IM_COL32(255, 255, 255, 200), 1.5f);   // what your ability costs
+        using namespace royale::wartable::theme;
+        const float x=22*scale,y=22*scale,w=284*scale;
+        HudFrame(dl,{x,y},{x+w,y+117*scale},scale);
+        auto bar=[&](int row,const char* label,float value,float maximum,ImU32 color) {
+            const float top=y+(12+row*34)*scale;
+            char line[64];std::snprintf(line,sizeof(line),"%s  %.1f / %.1f",label,value,maximum);
+            text(x+12*scale,top,HudColor(Ink),14*scale,line);
+            const ImVec2 a(x+12*scale,top+19*scale),b(x+w-12*scale,top+26*scale);
+            dl->AddRectFilled(a,b,HudColor(Button));
+            dl->AddRectFilled(a,{a.x+(b.x-a.x)*std::clamp(value/std::max(0.01f,maximum),0.0f,1.0f),b.y},color);
+        };
+        bar(0,"HEALTH",h.selfHealth,h.maxHealth,IM_COL32(120,220,145,255));
+        bar(1,"SHIELD",h.inv.shield,royale::kMaxShield,HudColor(Focus));
+        bar(2,"MAGIC",h.magic,royale::kMaxMagic,HudColor(Gold));
     }
     DrawStaminaBar(dl, ds, h);
 
@@ -8226,7 +8195,8 @@ void MixVoices(int16_t* buf, uint32_t frames) {
                 v.pos = std::fmod(v.pos, static_cast<double>(total));
                 f = static_cast<size_t>(v.pos);
             }
-            const int l = static_cast<int>(p[f * ch] * v.volume), r = v.stereo ? static_cast<int>(p[f * ch + 1] * v.volume) : l;
+            const float gain = gMenuAudioMuted.load(std::memory_order_relaxed) ? 0.0f : v.volume;
+            const int l = static_cast<int>(p[f * ch] * gain), r = v.stereo ? static_cast<int>(p[f * ch + 1] * gain) : l;
             buf[2 * i] = static_cast<int16_t>(std::clamp(buf[2 * i] + l, -32768, 32767));
             buf[2 * i + 1] = static_cast<int16_t>(std::clamp(buf[2 * i + 1] + r, -32768, 32767));
             v.pos += step;
@@ -16484,7 +16454,6 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { WarInput(); OnEmoteWheelInput(); });
-    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawEnd>([]() { if (gPlayState) WarDraw(&gPlayState->state); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnZTitleInit>([](void*) { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateMainStart>([]() { EnsureHudWindow(); });
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHatLimb>(OnPlayerHatLimb);
@@ -17694,7 +17663,17 @@ namespace {
 #include "RoyaleWarTable.h"
 }
 
-extern "C" int Royale_NativeMenuIsOpen(void) { return WarMenuOpen(); }
+extern "C" int Royale_NativeMenuIsOpen(void) { return WarMenuOpen() || EndScreenUp(gSession.Hud()); }
+extern "C" int Royale_NativeMenuHideHud(void) { return WarMenuOpen() || gSession.Joined(); }
+extern "C" int Royale_NativeMenuAllowSfx(u16 id) {
+    if (!gMenuAudioMuted.load(std::memory_order_relaxed)) return true;
+    return id == NA_SE_SY_FSEL_CURSOR || id == NA_SE_SY_FSEL_DECIDE_L ||
+           id == NA_SE_SY_FSEL_CLOSE || id == NA_SE_SY_FSEL_ERROR || id == NA_SE_SY_CURSOR || id == NA_SE_SY_DECIDE;
+}
+extern "C" void Royale_NativeMenuDraw(GameState* state) {
+    Gfx_SetupFrame(state->gfxCtx, 8, 16, 36);
+    WarDraw(state);
+}
 
 extern "C" void Royale_NativeMenuBoot(GameState* state) {
     Gfx_SetupFrame(state->gfxCtx, 8, 16, 36);

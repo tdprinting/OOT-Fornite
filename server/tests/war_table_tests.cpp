@@ -5,6 +5,20 @@
 using namespace royale::wartable;
 static void Check(bool ok,const char* message) {if(!ok){std::cerr<<message<<'\n';std::exit(1);}}
 int main() {
+    Check(ActivePage(false,false,false,false,true)==Page::Play,"Startup always reaches Play");
+    Check(ActivePage(false,true,false,false,true)==Page::Lobby,"Pending joins retain cancellation");
+    Check(ActivePage(true,false,true,false,true)==Page::Lobby,"Lobby has its own actions");
+    Check(ActivePage(true,false,false,false,true)==Page::Pause,"Alive players get the BR pause menu");
+    Check(ActivePage(true,false,false,false,false)==Page::Death,"Eliminated players get Spectate and Leave");
+    Check(ActivePage(true,false,false,true,false)==Page::Results,"Results take priority over elimination");
+    Check(!ShowDeathMenu(true,true,true,1.79)&&ShowDeathMenu(true,true,true,1.8),"Death menu waits for the ragdoll moment");
+    Check(!ShowDeathMenu(true,false,true,8)&&!ShowDeathMenu(true,true,false,8),"Spectating or ended matches do not reopen the death menu");
+    const auto base=Loadout(royale::ItemId::MasterSword,royale::Rarity::Common,true,1,1,1,0,false);
+    Check(std::fabs(base.attack-1.5f*royale::kPlayerDamageScale)<.001f&&base.defense==0,"Pause attack uses normal player damage");
+    const auto empowered=Loadout(royale::ItemId::MasterSword,royale::Rarity::Legendary,true,1.2f,1,.9f,.35f,true);
+    Check(empowered.attack>base.attack&&empowered.defense>50,"Rarity, gear, shield and adult buffs are reflected");
+    const auto empty=Loadout(royale::ItemId::FairyBow,royale::Rarity::Legendary,false,1,1,1,0,false);
+    Check(std::fabs(empty.attack-royale::WeaponOf(royale::ItemId::BasicSword).damage*royale::kPlayerDamageScale)<.001f,"Empty ranged weapons show the basic melee fallback without rarity");
     std::set<int> maps;
     int current=0;
     for(int i=0;i<royale::kPlayableMapCount;++i){maps.insert(current);current=CycleMap(current,1);}

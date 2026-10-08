@@ -34,6 +34,8 @@ void WarSound(int kind) {
 }
 void WarShow(WarPage page) {
     gWar.open = true;
+    gMenuAudioMuted.store(true, std::memory_order_relaxed);
+    for (u8 bank = 0; bank < 7; ++bank) Audio_StopSfxByBank(bank);
     gWar.page = page;
     gWar.focus = 4;
     gWar.section = 0;
@@ -45,13 +47,14 @@ void WarShow(WarPage page) {
 }
 void WarHide() {
     gWar.open = false;
+    gMenuAudioMuted.store(EndScreenUp(gSession.Hud()), std::memory_order_relaxed);
     gWar.repeat = {};
     if (Ship::Context::GetInstance()->GetWindow()->IsFullscreen())
         Ship::Context::GetInstance()->GetWindow()->SetMouseCapture(true);
 }
 void WarOpen() {
     const auto h = gSession.Hud();
-    WarShow(!gSession.Joined() ? (gSession.GetMode()==royale::RoyaleSession::Mode::Idle?WarPage::Play:WarPage::Lobby) : h.state == royale::MatchState::Lobby ? WarPage::Lobby : h.state == royale::MatchState::Ending ? WarPage::Results : WarPage::Pause);
+    WarShow(wt::ActivePage(gSession.Joined(), gSession.GetMode()!=royale::RoyaleSession::Mode::Idle, h.state==royale::MatchState::Lobby, h.state==royale::MatchState::Ending, !h.haveSelf || h.selfAlive));
 }
 void WarSave() {
     UiState& ui = Ui();
@@ -87,7 +90,19 @@ void WarQuit() {
     WarShow(WarPage::Play);
     gWar.homeTravel = true;
 }
+void WarSpectate() {
+    gDeath.card = false;
+    gUiPad = {};
+    if (!gDeath.spectated) {
+        gDeath.spectated = true;
+        for (const auto& player : gSession.Puppets())
+            if (player.alive && player.id == gDeath.killer) gSpectateTarget = player.id;
+        if (gSpectateTarget == kSpectateSelf) CycleSpectate(1);
+    }
+    WarHide();
+}
 void WarBack() {
+    if (gWar.page == WarPage::Death) { WarSpectate(); return; }
     if (gWar.page == WarPage::Keyboard) { WarShow(gWar.returnPage); return; }
     if (gWar.page == WarPage::Quit) { WarOpen(); return; }
     if (gWar.page == WarPage::Play) return; // Home always remains available after launch.
@@ -185,7 +200,7 @@ void WarBuild() {
         WarAdd(1102,{386,271,142,27},"Cancel","Keep the previous value",[](int){WarBack();});
         return;
     }
-    const char* tabs[] = {"PLAY","CHARACTER","SETTINGS","GUIDE"};
+    const char* tabs[] = {joined?"MATCH":"PLAY","CHARACTER","SETTINGS","GUIDE"};
     for(int i=0;i<4;++i) WarAdd(1+i,{24.0f+i*150,64,144,27},tabs[i],"L / R: change page",[i](int){
         if(i==0) WarOpen(); else WarShow(static_cast<WarPage>(i));
     });
@@ -284,11 +299,15 @@ void WarBuild() {
         WarRow(64,5,joined?"QUIT TO MAIN MENU":"CANCEL CONNECTION","Leave this session and return to the War Table",[](int){if(gSession.Joined())WarShow(WarPage::Quit);else WarQuit();});
         break;
     case WarPage::Pause:
-        WarRow(70,0,"RESUME", "Return to the battlefield",[](int){WarHide();});
-        if(gSession.Sandbox()) WarRow(71,1,"PRACTICE TOOLS","Items, bots, bosses, courses and world controls",[](int){WarShow(WarPage::Tools);});
-        WarRow(72,2,"SETTINGS","Audio, graphics and comfort settings",[](int){WarShow(WarPage::Settings);});
-        WarRow(73,3,"HOW TO PLAY","Battle Royale controls and objectives",[](int){WarShow(WarPage::Guide);});
-        WarRow(74,5,"QUIT TO MAIN MENU","Leave the match and return to the War Table",[](int){WarShow(WarPage::Quit);});
+        WarAdd(70,{239,147,361,43},"RESUME MATCH","Return to the battlefield",[](int){WarHide();});
+        WarAdd(72,{239,201,175,39},"SETTINGS","Audio, graphics and comfort",[](int){WarShow(WarPage::Settings);});
+        WarAdd(73,{425,201,175,39},"HOW TO PLAY","Battle Royale controls",[](int){WarShow(WarPage::Guide);});
+        WarAdd(71,{239,253,175,39},gSession.Sandbox()?"PRACTICE TOOLS":"CHARACTER","Equipment and character options",[](int){WarShow(gSession.Sandbox()?WarPage::Tools:WarPage::Character);});
+        WarAdd(74,{425,253,175,39},"LEAVE MATCH","Return to the main menu",[](int){WarShow(WarPage::Quit);});
+        break;
+    case WarPage::Death:
+        WarAdd(120,{56,251,250,42},"SPECTATE","Watch the remaining players; B also spectates",[](int){WarSpectate();});
+        WarAdd(121,{333,251,250,42},"LEAVE MATCH","Return to the main menu",[](int){WarShow(WarPage::Quit);});
         break;
     case WarPage::Quit:
         WarRow(80,2,"STAY IN GAME","Keep playing",[](int){WarOpen();});
@@ -377,12 +396,20 @@ struct WarPainter {
         guMtxIdent(&f.identity);
         f.viewport = {{{640,480,G_MAXZ/2,0},{640,480,G_MAXZ/2,0}}};
         gDPPipeSync(out++);
+        gsSPResetFB(out++);
+        gSPGrayscale(out++, false);
+        gSPClearExtraGeometryMode(out++, G_EX_INVERT_CULLING);
         gSPSurfaceMap(out++,0); // World material effects must not leak into menu text or art.
         gSPViewport(out++,&f.viewport);
         gDPSetScissor(out++,G_SC_NON_INTERLACE,0,0,320,240);
         gSPMatrix(out++,&f.projection,G_MTX_PROJECTION|G_MTX_LOAD|G_MTX_NOPUSH);
         gSPMatrix(out++,&f.identity,G_MTX_MODELVIEW|G_MTX_LOAD|G_MTX_NOPUSH);
         gSPLoadGeometryMode(out++,G_SHADE|G_SHADING_SMOOTH);
+        // Establish the complete 2D pipeline, including world alpha/depth state.
+        gDPSetOtherMode(out++, G_AD_DISABLE | G_CD_DISABLE | G_CK_NONE | G_TC_FILT |
+            G_TF_BILERP | G_TT_NONE | G_TL_TILE | G_TD_CLAMP | G_TP_NONE |
+            G_CYC_1CYCLE | G_PM_NPRIMITIVE, G_AC_NONE | G_ZS_PIXEL |
+            G_RM_XLU_SURF | G_RM_XLU_SURF2);
         gDPSetCycleType(out++,G_CYC_1CYCLE);
         gDPSetRenderMode(out++,G_RM_XLU_SURF,G_RM_XLU_SURF2);
         gDPSetTexturePersp(out++,G_TP_NONE);
@@ -417,11 +444,11 @@ struct WarPainter {
         Rect({r.x,r.y,width,r.h},color);Rect({r.x+r.w-width,r.y,width,r.h},color);
     }
     void Panel(wt::Rect r) {
-        Rect({r.x+2,r.y+3,r.w,r.h},0x060F24C0);Rect(r,0x163871ED);
+        Rect({r.x+2,r.y+3,r.w,r.h},0x060F24C0);Rect(r,wt::theme::Panel);
         Border(r,0x91B4D3CC);Border({r.x+3,r.y+3,r.w-6,r.h-6},0x426CA7AA);
         for(int corner=0;corner<4;++corner) {
             const float x=corner&1?r.x+r.w-7:r.x, y=corner&2?r.y+r.h-7:r.y;
-            Rect({x,y,7,2},0xC5A45DFF);Rect({x,y,2,7},0xC5A45DFF);
+            Rect({x,y,7,2},wt::theme::Gold);Rect({x,y,2,7},wt::theme::Gold);
         }
     }
     void Tile(const unsigned char* data,wt::Rect r,int w,int h,bool font=false,uint32_t color=0xffffffff) {
@@ -440,7 +467,7 @@ struct WarPainter {
         const auto* widths=heading?wt::art::headingWidths:wt::art::bodyWidths;
         float w=0;for(unsigned char c:s)w+=widths[(c>=32&&c<128)?c-32:31]*(size/(heading?21.0f:18.0f));return w;
     }
-    void Text(float x,float y,const std::string& s,float size=11,uint32_t color=0xF4E9CAFF,bool heading=false,float maxWidth=1000) {
+    void Text(float x,float y,const std::string& s,float size=11,uint32_t color=wt::theme::Ink,bool heading=false,float maxWidth=1000) {
         const auto* atlas=heading?wt::art::heading:wt::art::body;
         const auto* widths=heading?wt::art::headingWidths:wt::art::bodyWidths;
         float k=size/(heading?21.0f:18.0f), origin=x;
@@ -452,7 +479,7 @@ struct WarPainter {
             x+=widths[index]*k;
         }
     }
-    void Wrap(float x,float y,const std::string& s,float width,float size=10,uint32_t color=0xBCD7EEFF,int maxLines=3) {
+    void Wrap(float x,float y,const std::string& s,float width,float size=10,uint32_t color=wt::theme::Muted,int maxLines=3) {
         std::istringstream words(s);std::string word,line;int lines=0;
         while(words>>word) {
             std::string next=line.empty()?word:line+" "+word;
@@ -560,66 +587,105 @@ void WarPortrait() {
 
 void WarDraw(GameState* state) {
     if(!gWar.open||!state)return;
+    DrawIdentity menuIdentity(&gWar, 0, 0);
     const auto h=gSession.Hud();
-    const bool hero=gWar.page==WarPage::Play||gWar.page==WarPage::Character||gWar.page==WarPage::Pause;
+    const bool hero=gWar.page==WarPage::Play||gWar.page==WarPage::Character;
     if(hero)WarPortrait();
     WarPainter p;
     p.Rect({-400,-400,1440,1160},0x060D20FF);
     p.Image(wt::art::background,{0,0,640,360},10,6);
-    p.Text(26,20,"BATTLE ROYALE",26,0xF4E9CAFF,true);
-    p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,0xC5A45DFF);
+    p.Text(26,20,"BATTLE ROYALE",26,wt::theme::Ink,true);
+    p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
     p.Text(498,28,gSession.Joined()?(h.isHost?"HOSTING":"CONNECTED"):"OFFLINE",10,0x9EDCFFFF);
     if(!gWar.bootError.empty()) {
-        p.Panel({40,100,560,205});p.Text(60,120,"SAVE COULD NOT OPEN",18,0xF4E9CAFF,true);
-        p.Wrap(60,154,gWar.bootError,518,12,0xF4E9CAFF,6);p.Text(60,266,"A / Enter: retry",12);p.End(state);return;
+        p.Panel({40,100,560,205});p.Text(60,120,"SAVE COULD NOT OPEN",18,wt::theme::Ink,true);
+        p.Wrap(60,154,gWar.bootError,518,12,wt::theme::Ink,6);p.Text(60,266,"A / Enter: retry",12);p.End(state);return;
     }
     p.offset=(1-gWar.transition)*12;
     if(gWar.page==WarPage::Play) {
         p.Panel({24,102,136,207});p.Panel({169,102,273,207});p.Panel({449,102,168,207});
-        p.Text(36,113,"ADVENTURER",12,0xF4E9CAFF,true);
+        p.Text(36,113,"ADVENTURER",12,wt::theme::Ink,true);
         const float reveal=gWar.reduced?1:std::min(1.0f,(SDL_GetTicks()-gWar.mapChangedAt)/180.0f);
         p.Image(WarMapPixels(Ui().mapId),{177+(1-reveal)*8,112,257,153},6,4,0xFFFFFF00|static_cast<uint32_t>(255*reveal));
-        p.Text(212,282,royale::MapOf(Ui().mapId).name,11,0xF4E9CAFF,true,190);
+        p.Text(212,282,royale::MapOf(Ui().mapId).name,11,wt::theme::Ink,true,190);
         p.Text(40,288,Ui().name,11,0x9EDCFFFF,false,112);
+    } else if(gWar.page==WarPage::Death) {
+        p.Panel({40,103,560,204});
+        p.Text(59,114,"ELIMINATED",24,wt::theme::Ink,true);
+        p.Text(471,118,"#"+std::to_string(gDeath.place),24,wt::theme::Gold,true,110);
+        p.Text(61,149,gDeath.by.empty()?"Your battle is over. The match continues.":gDeath.by,11,wt::theme::Muted,false,516);
+        char damage[20];std::snprintf(damage,sizeof(damage),"%.1f",gMyStats.damage);
+        const std::string values[]={std::to_string(gMyStats.kills),damage,UiThousands(royale::ScorePoints(gMyStats.damage,gMyStats.kills,gMyStats.chests,gDeath.place))};
+        const char* labels[]={"ELIMINATIONS","DAMAGE DEALT","MATCH POINTS"};
+        for(int i=0;i<3;++i) {
+            const float x=58+i*180.0f;
+            p.Rect({x,177,164,60},wt::theme::Button);p.Border({x,177,164,60},0x527EBBFF);
+            p.Text(x+12,184,values[i],22,i==2?wt::theme::Gold:wt::theme::Ink,true,140);
+            p.Text(x+12,215,labels[i],9,wt::theme::Muted,true,140);
+        }
     } else if(gWar.page==WarPage::Keyboard) {
-        p.Panel({82,100,476,209});p.Text(104,112,gWar.edit+"_",13,0xF4E9CAFF,false,428);
+        p.Panel({82,100,476,209});p.Text(104,112,gWar.edit+"_",13,wt::theme::Ink,false,428);
     } else {
         p.Panel({24,102,194,207});p.Panel({226,102,391,207});
-        const char* titles[]={"PLAY","CHARACTER","SETTINGS","HOW TO PLAY","JOIN FRIENDS","PRACTICE","LOBBY","MATCH MENU","PRACTICE TOOLS","RESULTS","KEYBOARD","LEAVE MATCH?"};
-        if(gWar.page!=WarPage::Settings&&gWar.page!=WarPage::Tools)p.Text(36,115,titles[static_cast<int>(gWar.page)],14,0xF4E9CAFF,true,174);
-        if(gWar.page==WarPage::Join) p.Wrap(38,151,"Enter the host address shown in their lobby. On the same Wi-Fi, use their local address. Internet play requires a VPN or UDP forwarding.",155,11,0xBCD7EEFF,9);
+        const char* titles[]={"PLAY","CHARACTER","SETTINGS","HOW TO PLAY","JOIN FRIENDS","PRACTICE","LOBBY","MATCH MENU","PRACTICE TOOLS","RESULTS","KEYBOARD","LEAVE MATCH?","ELIMINATED"};
+        if(gWar.page!=WarPage::Settings&&gWar.page!=WarPage::Tools)p.Text(36,115,titles[static_cast<int>(gWar.page)],14,wt::theme::Ink,true,174);
+        if(gWar.page==WarPage::Join) p.Wrap(38,151,"Enter the host address shown in their lobby. On the same Wi-Fi, use their local address. Internet play requires a VPN or UDP forwarding.",155,11,wt::theme::Muted,9);
         if(gWar.page==WarPage::Practice) {
             p.Image(WarMapPixels(royale::kSandboxMapIndex),{35,145,172,111},6,4);
-            p.Wrap(38,265,"Twelve courses. Every item. Your own test ground.",161,10,0xBCD7EEFF,3);
+            p.Wrap(38,265,"Twelve courses. Every item. Your own test ground.",161,10,wt::theme::Muted,3);
         }
-        if(gWar.page==WarPage::Quit) p.Wrap(38,153,h.isHost?"Leaving will close the hosted match for every player. Return to the main screen?":"Leave this match and return to the main screen?",159,12,0xF4E9CAFF,8);
-        if(gWar.page==WarPage::Pause) {p.Text(38,283,"MATCH CONTINUES",10,0xC5A45DFF,true);}
+        if(gWar.page==WarPage::Quit) p.Wrap(38,153,h.isHost?"Leaving will close the hosted match for every player. Return to the main screen?":"Leave this match and return to the main screen?",159,12,wt::theme::Ink,8);
+        if(gWar.page==WarPage::Pause) {
+            royale::PlayerState loadout;
+            loadout.gearMask=h.inv.gearMask;
+            for(int i=0;i<royale::kGearSlots;++i) {
+                loadout.gear[i].item=static_cast<royale::ItemId>(h.inv.gear[i].item);
+                loadout.gear[i].rarity=static_cast<royale::Rarity>(h.inv.gear[i].rarity);
+            }
+            const auto gear=royale::TotalsOf(loadout);
+            const auto ammo=royale::AmmoUsedBy(h.weapon);
+            const bool hasAmmo=ammo==royale::AmmoKind::None || h.ammo[static_cast<size_t>(ammo)]>0;
+            const auto stats=wt::Loadout(h.weapon,h.weaponRarity,hasAmmo,gear.melee,gear.ranged,gear.damageTaken,
+                h.hasShield?royale::ShieldReduction(h.shield,h.shieldRarity):0,h.adultLeft>0);
+            char health[48],shield[48],attack[48],defense[48],magic[48];
+            std::snprintf(health,sizeof(health),"Health   %.1f / %.1f",h.selfHealth,h.maxHealth);
+            std::snprintf(shield,sizeof(shield),"Shield   %.1f / %.1f",h.inv.shield,royale::kMaxShield);
+            std::snprintf(attack,sizeof(attack),"Attack   %.2f / hit",stats.attack);
+            std::snprintf(defense,sizeof(defense),"Defense   %.0f%%",stats.defense);
+            std::snprintf(magic,sizeof(magic),"Magic   %.0f / %.0f",h.magic,royale::kMaxMagic);
+            const char* rows[]={health,shield,attack,defense,magic};
+            for(int i=0;i<5;++i)p.Text(37,142+i*23.0f,rows[i],11,wt::theme::Ink,false,171);
+            p.Text(37,259,std::to_string(h.alive)+" left / "+std::to_string(gMyStats.kills)+" KOs",10,wt::theme::Muted,false,172);
+            p.Text(38,286,"MATCH CONTINUES",10,wt::theme::Gold,true);
+            p.Text(239,117,"BATTLE ROYALE",16,wt::theme::Ink,true);
+            p.Text(239,135,royale::MapOf(h.mapId).name,8,wt::theme::Muted,false,352);
+        }
         if(gWar.page==WarPage::Lobby) {
             p.Text(38,139,std::to_string(h.humanCount)+" players / "+std::to_string(h.playerLimit)+" slots",10);
             int y=160;for(size_t i=gWar.rosterOffset;i<h.roster.size()&&i<static_cast<size_t>(gWar.rosterOffset+5);++i){
-                p.Text(38,y,(h.roster[i].host?"* ":h.roster[i].ready?"+ ":"  ")+h.roster[i].name,11,0xF4E9CAFF,false,160);y+=18;
+                p.Text(38,y,(h.roster[i].host?"* ":h.roster[i].ready?"+ ":"  ")+h.roster[i].name,11,wt::theme::Ink,false,160);y+=18;
             }
             if(h.isHost) {
-                p.Text(68,257,"PORT "+std::to_string(h.hostPort),9,0xC5A45DFF);
+                p.Text(68,257,"PORT "+std::to_string(h.hostPort),9,wt::theme::Gold);
                 p.Text(38,279,Ui().localAddresses.empty()?"No LAN address":Ui().localAddresses.front(),10,0x9EDCFFFF,false,170);
             }
         }
         if(gWar.page==WarPage::Guide) {
-            p.Wrap(38,150,"Drop into Hyrule, gather gear, stay inside the safe zone and be the last survivor.",154,12,0xBCD7EEFF,8);
-            p.Text(244,121,"BATTLE ROYALE CONTROLS",15,0xF4E9CAFF,true);
-            p.Wrap(244,155,"Move with the stick. Use your equipped weapon with B. Interact with A. Your current control prompts appear during play. Open this menu with Start. L / R changes menu pages; A selects, B goes back.",346,12,0xF4E9CAFF,8);
+            p.Wrap(38,150,"Drop into Hyrule, gather gear, stay inside the safe zone and be the last survivor.",154,12,wt::theme::Muted,8);
+            p.Text(244,121,"BATTLE ROYALE CONTROLS",15,wt::theme::Ink,true);
+            p.Wrap(244,155,"Move with the stick. Use your equipped weapon with B. Interact with A. Your current control prompts appear during play. Open this menu with Start. L / R changes menu pages; A selects, B goes back.",346,12,wt::theme::Ink,8);
             p.Wrap(244,260,"Practice Tools lets you try equipment, bots, bosses, vehicles and gliding safely.",343,10,0x9EDCFFFF,2);
         }
         if(gWar.page==WarPage::Results) {
-            p.Wrap(38,151,h.winnerName.empty()?"Match complete":h.winnerName+" wins!",155,16,0xC5A45DFF,3);
-            int y=116;for(size_t i=0;i<h.results.size()&&i<5;++i){const auto& r=h.results[i];p.Text(244,y,std::to_string(r.placement)+"  "+r.name+"   "+std::to_string(r.kills)+" KOs",12,0xF4E9CAFF,false,351);y+=22;}
+            p.Wrap(38,151,h.winnerName.empty()?"Match complete":h.winnerName+" wins!",155,16,wt::theme::Gold,3);
+            int y=116;for(size_t i=0;i<h.results.size()&&i<5;++i){const auto& r=h.results[i];p.Text(244,y,std::to_string(r.placement)+"  "+r.name+"   "+std::to_string(r.kills)+" KOs",12,wt::theme::Ink,false,351);y+=22;}
         }
         if(gWar.page==WarPage::Settings&&gWar.section==5) {
-            p.Text(246,231,"VERSION " ROYALE_BUILD_VERSION,11,0xC5A45DFF);
+            p.Text(246,231,"VERSION " ROYALE_BUILD_VERSION,11,wt::theme::Gold);
 #ifdef __ANDROID__
-            p.Wrap(246,252,UpdaterString("getMessage"),340,10,0xBCD7EEFF,3);
+            p.Wrap(246,252,UpdaterString("getMessage"),340,10,wt::theme::Muted,3);
 #else
-            p.Wrap(246,131,"Install a newer desktop build to update the game.",340,12,0xBCD7EEFF,3);
+            p.Wrap(246,131,"Install a newer desktop build to update the game.",340,12,wt::theme::Muted,3);
 #endif
         }
     }
@@ -633,10 +699,10 @@ void WarDraw(GameState* state) {
     }
     for(size_t i=0;i<gWar.controls.size();++i) {
         const auto& w=gWar.controls[i].view;const bool selected=static_cast<int>(i)==gWar.focus;
-        const uint32_t bg=!w.enabled?0x162644FF:selected?0x83C6EFFF:0x244F9EFF;
+        const uint32_t bg=!w.enabled?0x162644FF:selected?0x83C6EFFF:wt::theme::Button;
         p.Rect(w.rect,bg);p.Border(w.rect,selected?0xD5F1FFFF:0x527EBBFF);
         const float size=w.id>=1000?13:w.rect.w>300?12:w.rect.w>150?13:11;
-        const uint32_t ink=!w.enabled?0x8497B2FF:selected?0x101D3DFF:0xF4E9CAFF;
+        const uint32_t ink=!w.enabled?0x8497B2FF:selected?0x101D3DFF:wt::theme::Ink;
         const float x=w.rect.w>300?w.rect.x+10:w.rect.x+std::max(5.0f,(w.rect.w-p.TextWidth(w.label,size,true))/2);
         p.Text(x,w.rect.y+(w.rect.h-size)/2-1,w.label,size,ink,true,w.rect.w-15);
     }
@@ -645,14 +711,18 @@ void WarDraw(GameState* state) {
     std::string hint=gWar.notice;
     if(hint.empty()&&!gWar.controls.empty())hint=gWar.controls[std::clamp(gWar.focus,0,static_cast<int>(gWar.controls.size())-1)].view.hint;
     p.Wrap(29,316,hint,582,10,0xC6E2F4FF,1);
-    p.Text(30,339,"A  Select     B  Back     L / R  Pages     Start  Resume",10,0xF4E9CAFF);
+    p.Text(30,339,gWar.page==WarPage::Death?"A  Select     B  Spectate     L / R  Pages":"A  Select     B  Back     L / R  Pages     Start  Menu",10,wt::theme::Ink);
     p.End(state);
 }
 
 void WarMusic() {
     if(!InGame())return;
-    const bool want=gWar.open;
+    const bool want=gWar.open||EndScreenUp(gSession.Hud());
+    if (gMenuAudioMuted.exchange(want,std::memory_order_relaxed)!=want && want)
+        for(u8 bank=0;bank<7;++bank)Audio_StopSfxByBank(bank);
     if(want) {
+        Audio_SetGameVolume(SEQ_PLAYER_BGM_SUB, 0.0f);
+        Audio_SetGameVolume(SEQ_PLAYER_FANFARE, 0.0f);
         if(!gWar.music || gWar.savedScene!=gPlayState->sceneNum) {
             gWar.savedSequence=gActiveSeqs[SEQ_PLAYER_BGM_MAIN].seqId;
             if(gWar.savedSequence==NA_BGM_FILE_SELECT)gWar.savedSequence=gSaveContext.seqId;
@@ -666,6 +736,8 @@ void WarMusic() {
         Audio_QueueSeqCmd(NA_BGM_STOP|(SEQ_PLAYER_BGM_MAIN<<24));
         if(sequence!=NA_BGM_DISABLED && (sequence&255)!=255)Audio_QueueSeqCmd((SEQ_PLAYER_BGM_MAIN<<24)|sequence);
         Audio_SetGameVolume(SEQ_PLAYER_BGM_MAIN,CVarGetInteger(CVAR_SETTING("Volume.MainMusic"),100)/100.0f);
+        Audio_SetGameVolume(SEQ_PLAYER_BGM_SUB,CVarGetInteger(CVAR_SETTING("Volume.SubMusic"),100)/100.0f);
+        Audio_SetGameVolume(SEQ_PLAYER_FANFARE,CVarGetInteger(CVAR_SETTING("Volume.Fanfare"),100)/100.0f);
         gWar.music=false;
         gBgmMuted=false;
     }
@@ -685,6 +757,14 @@ void WarGameUpdate() {
     }
     if(joined&&!gWar.lastJoined) { gWar.notice.clear(); if(!gSession.SoloTest())WarShow(WarPage::Lobby); }
     gWar.lastJoined=joined;
+    if (gDeath.active && !gDeath.placeSettled && ImGui::GetTime()-gDeath.at>0.8) {
+        gDeath.place = h.alive>=gDeath.aliveAtDeath ? gDeath.aliveAtDeath+1 : gDeath.aliveAtDeath;
+        if (IsLive(h)) gDeath.place=std::max(2,gDeath.place);
+        gDeath.placeSettled=true;
+    }
+    if (joined && wt::ShowDeathMenu(gDeath.active,gDeath.card,IsLive(h),ImGui::GetTime()-gDeath.at) &&
+        (!gWar.open || gWar.page==WarPage::Pause)) { gUiPad={}; WarShow(WarPage::Death); }
+    if (gWar.page==WarPage::Death && (!joined || h.selfAlive || h.state==royale::MatchState::Ending)) WarOpen();
     if(joined&&(h.state==royale::MatchState::Countdown||h.state==royale::MatchState::Drop)&&gWar.page==WarPage::Lobby)WarHide();
     if(joined&&h.state==royale::MatchState::InMatch&&gWar.page==WarPage::Lobby)WarHide();
     // The gameplay recap owns the initial end-of-match presentation. Start opens native results.
