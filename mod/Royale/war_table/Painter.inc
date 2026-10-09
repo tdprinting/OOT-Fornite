@@ -226,6 +226,7 @@ bool WarPetPreview() {
     if(!InGame())return false;
     if(gWarPetFramebuffer<0)gWarPetFramebuffer=gfx_create_framebuffer(kWarPetSize,kWarPetSize,kWarPetSize,kWarPetSize,true);
     if(gWarPetFramebuffer<0)return false;
+    DrawIdentity previewIdentity(&gWarPetFramebuffer,PetKind(),0);
     const float time=gWar.reduced||!gWar.previewAnimate?0:gWar.clock;
     const float yaw=.35f+(gWar.reduced||!gWar.previewAnimate?0:std::sin(time*.45f)*.22f);
     float minX=1e9f,maxX=-1e9f,minY=1e9f,maxY=-1e9f,depth=1;
@@ -267,6 +268,8 @@ bool WarPetPreview() {
     gDPSetFillColor(POLY_OPA_DISP++,(GPACK_RGBA5551(22,56,113,1)<<16)|GPACK_RGBA5551(22,56,113,1));
     gDPFillRectangle(POLY_OPA_DISP++,0,0,kWarPetSize-1,kWarPetSize-1);
     gDPPipeSync(POLY_OPA_DISP++);
+    // Mesh setup uses the world fog blend mode; neutralize inherited scene fog.
+    gSPFogFactor(POLY_OPA_DISP++,0,0);gSPFogFactor(POLY_XLU_DISP++,0,0);
     gSPViewport(POLY_OPA_DISP++,&frame.viewport);gSPViewport(POLY_XLU_DISP++,&frame.viewport);
     gSPMatrix(POLY_OPA_DISP++,&frame.projection,G_MTX_PROJECTION|G_MTX_LOAD|G_MTX_NOPUSH);
     gSPMatrix(POLY_OPA_DISP++,&frame.identity,G_MTX_MODELVIEW|G_MTX_LOAD|G_MTX_NOPUSH);
