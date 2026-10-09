@@ -283,7 +283,7 @@ void CatPoof(PlayState* play, float x, float y, float z) {
 }
 
 bool LobbyPetsActive() {
-    return CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0 && gSession.Joined() &&
+    return MapOption("PetsEnabled",true) && CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0 && gSession.Joined() &&
         gSession.Hud().state==royale::MatchState::Lobby && InPlayableScene(royale::MatchState::Lobby) && !gSkydiving && !gSpectating;
 }
 bool SocialPet_Update(Actor* actor, PlayState* play, int pet);
@@ -495,7 +495,7 @@ int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"),
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 0)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),0) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
                       !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }

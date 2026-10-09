@@ -858,7 +858,7 @@ void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.
 
 void ReconcileBabyPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = DebugOn(kDbgAvriella) && (LobbyPetsActive() || (MapOption("LiloPet", false) && PetKind() == 1)) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr &&
+    const bool want = DebugOn(kDbgAvriella) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),1) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr &&
                       !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); EndBabyToy(gBaby, true); }

@@ -44,3 +44,11 @@ Device acceptance: launch from a cold start, use every top tab, enter Practice, 
 The pause status panel displays live health/max health, potion shield, normal attack per hit/projectile, passive normal-hit defense, and magic. It uses the server's weapon, ammo fallback, rarity, gear, equipped shield and Adult Power formulas. Attack excludes jump/spin and target-specific modifiers; defense excludes guard direction, piercing, temporary potion reduction and damage-type-specific modifiers. The detailed match recap also suppresses world rendering and audio.
 
 HUD vitals and item/gear hotbars now share the native palette, square framed panels, gold corner ornaments and ice-blue selection. Rarity remains a separate coloured stripe and icon. Health/shield/magic replace the original adventure HUD during BR sessions; interaction and cooldown logic are unchanged.
+
+## Game options and pet previews
+
+Settings now starts with a visible Pets & Preview category. Pets is the master switch; Lobby Pets controls the trio and Follow Me controls the selected gameplay companion. The master switch preserves both saved choices while disabling all three companion spawns and their pending voices. The Character page links directly here. Preview remains available when pets are off.
+
+Lilo, Avriella and Maya are animated from their existing skinned game meshes in a dedicated 192 x 192 framebuffer. Bounds fit the selected pose, matrices use packed engine format, depth clears every frame, and menu UV normalization uses the full framebuffer dimensions. No preview actor, dialogue, collision or world drawing is created. Reduced Motion freezes preview animation; its separate animation button changes only the preview.
+
+The settings sidebar has two pages. Option pages expose sky/ground weather, water detail and effects, combat particles/glow, music volumes/folder playback, cloth/wind strength, hosted season/weather changes and existing feature switches. Direct settings edits refresh cached runtime graphics values immediately and save the original CVar keys. Match options retain host/lobby permissions.

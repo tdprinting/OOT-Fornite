@@ -19,6 +19,14 @@ int main() {
     Check(empowered.attack>base.attack&&empowered.defense>50,"Rarity, gear, shield and adult buffs are reflected");
     const auto empty=Loadout(royale::ItemId::FairyBow,royale::Rarity::Legendary,false,1,1,1,0,false);
     Check(std::fabs(empty.attack-royale::WeaponOf(royale::ItemId::BasicSword).damage*royale::kPlayerDamageScale)<.001f,"Empty ranged weapons show the basic melee fallback without rarity");
+    std::set<int> settings;
+    for(int section:kSettingsOrder){Check(section>=0&&section<kSettingsCount,"Settings section is valid");settings.insert(section);}
+    Check(settings.size()==kSettingsCount&&kSettingsOrder[0]==6,"All settings are reachable and Pets is first");
+    Check(SettingsPage(6)==0&&SettingsPage(8)==1&&SettingsPage(5)==1,"Pets, water and updates have reachable sidebar pages");
+    for(int bits=0;bits<8;++bits)for(int selected=0;selected<3;++selected)for(int pet=0;pet<3;++pet) {
+        const bool enabled=bits&1,lobby=bits&2,follow=bits&4;
+        Check(PetEnabled(enabled,lobby,follow,selected,pet)==(enabled&&(lobby||(follow&&selected==pet))),"Master pet toggle overrides lobby group and follower choice");
+    }
     std::set<int> maps;
     int current=0;
     for(int i=0;i<royale::kPlayableMapCount;++i){maps.insert(current);current=CycleMap(current,1);}

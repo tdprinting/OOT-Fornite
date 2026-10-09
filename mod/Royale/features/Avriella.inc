@@ -354,7 +354,7 @@ void MayaCompanion_Draw(Actor* actor, PlayState* play) {
 }
 void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) { StopMayaVoice(); gMayaCompanion = MayaCompanionState{}; } }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
-    const bool want = DebugOn(kDbgAllies) && (LobbyPetsActive() || (MapOption("LiloPet",false) && PetKind()==2)) && gSession.Joined() &&
+    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),2) && gSession.Joined() &&
         InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
     if (!want) { if (gMayaCompanion.actor) { Actor_Kill(gMayaCompanion.actor); StopMayaVoice(); } gMayaCompanion = MayaCompanionState{}; return; }
     if (gMayaCompanion.actor) return;
