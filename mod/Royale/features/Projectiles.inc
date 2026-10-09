@@ -6,6 +6,7 @@ struct Projectile {
     float x, y, z, vx, vy, vz, life, gravity, spin;
     uint32_t variant;
     bool explodes;
+    royale::Rarity rarity = royale::Rarity::Common;
 };
 std::vector<Projectile> gProjectiles;
 Actor* gProjectileActor = nullptr;
@@ -16,7 +17,9 @@ struct Reveal { float x, y, z; int gid; float age; royale::Rarity rarity; };
 std::vector<Reveal> gReveals;
 constexpr float kRevealSeconds = 3.2f;
 
-void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw) {
+void LaunchSelfFromShockwave(Player* player, float x, float z, royale::Rarity rarity);
+
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity) {
     using royale::ItemId;
     if (!InField() || gPlayState == nullptr) return;
     const royale::WeaponStats w = royale::WeaponOf(weapon);
@@ -42,7 +45,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
     const int count = weapon == ItemId::TripleSlingshot ? 3 : 1;
     for (int i = 0; i < count; i++) {
         const float a = base + (count == 1 ? 0.0f : (i - 1) * 0.11f);
-        Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes };
+        Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes, rarity };
         if (variant == 10) p.vy = 250.0f; // land near the end of its 520-unit throw
         if (gProjectiles.size() < 160) gProjectiles.push_back(p);
     }
@@ -305,6 +308,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
                 Vec3f pos = { p.x, std::max(p.y, floorY) + 10.0f, p.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
                 if (p.variant == 10) {
                     PowerFx(play, royale::ItemId::ShockwaveGrenade, pos, false, nullptr, royale::net::kNoPlayer16);
+                    LaunchSelfFromShockwave(GET_PLAYER(play), pos.x, pos.z, p.rarity);
                     AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 190, 100, 255, 380.0f, 0.7f, 1);
                 } else {
                     EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
@@ -662,15 +666,17 @@ struct PickupNote {
 };
 std::deque<PickupNote> gPickupLog;                    // newest first, shown (colour coded) in the menu
 std::string gBannerText;                              // the big "you got" line above the hotbar
+std::string gBannerDescription;
 royale::Rarity gBannerRarity = royale::Rarity::Common;
 double gBannerUntil = 0;
 
-void NotePickup(const std::string& label, royale::Rarity rarity, bool fromChest) {
+void NotePickup(royale::ItemId item, const std::string& label, royale::Rarity rarity, bool fromChest) {
     gPickupLog.push_front({ (fromChest ? "Chest: " : "") + label, rarity });
     while (gPickupLog.size() > 10) gPickupLog.pop_back();
     gBannerText = label;
+    gBannerDescription = royale::DefOf(item).effect;
     gBannerRarity = rarity;
-    gBannerUntil = ImGui::GetTime() + 2.5;
+    gBannerUntil = ImGui::GetTime() + 4.0;
 }
 
 std::string ShortName(royale::ItemId id) {

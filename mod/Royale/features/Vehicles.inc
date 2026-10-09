@@ -788,7 +788,7 @@ void PlaceOnSeat(Player* player, const royale::CartBody& body, royale::Seat seat
 void LeaveSeatPose(Player* player) {
     player->actor.shape.rot.x = player->actor.shape.rot.z = 0;
     player->actor.shape.yOffset = 0;
-    if (player->actor.draw == LocalRide_Draw) player->actor.draw = Player_Draw;
+    if (player->actor.draw == LocalRide_Draw) player->actor.draw = LocalDressOn() ? LocalLink_Draw : Player_Draw;
 }
 
 // The camera follows Link's feet on the ground under the saddle, so in the saddle it sits as low as a walking Link's and the front of the cart
@@ -944,7 +944,8 @@ void PoseRider(Player* player) {
 void LocalRide_Draw(Actor* actor, PlayState* play) {
     Player* player = reinterpret_cast<Player*>(actor);
     if (player == GET_PLAYER(play) && (gRide.seated || gRide.settleOnGround)) PoseRider(player);
-    Player_Draw(actor, play);
+    if (player == GET_PLAYER(play)) DrawLocalDressed(player, play, false);
+    else Player_Draw(actor, play);
 }
 
 // ---- other players in carts (Puppet_Update calls this) ----------------------------------------------------------------------------

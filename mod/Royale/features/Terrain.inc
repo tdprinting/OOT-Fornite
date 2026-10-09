@@ -795,13 +795,14 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
     if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
         SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
-                            player->actor.world.pos.z, aim);
+                            player->actor.world.pos.z, aim, hud.weaponRarity);
     } else if (hud.weapon == royale::ItemId::Hookshot) {
         Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
-    if (hasAmmo && ammoKind != royale::AmmoKind::None) gSession.ReportAttack(royale::net::kNoPlayer16, false);
+    if (hasAmmo && (ammoKind != royale::AmmoKind::None || hud.weapon == royale::ItemId::ShockwaveGrenade))
+        gSession.ReportAttack(royale::net::kNoPlayer16, false);
     HitNpcInFront(player, w);
     SmashPropInFront(player, w);
 }
@@ -912,18 +913,44 @@ constexpr float kLaunchGraceSeconds = 1.0f;   // still safe this long after touc
 int gLaunchFrames = 0;                        // frames since the launch; 0 = no launch going
 bool gLaunchAirborne = false;                 // has left the ground
 double gLaunchSafeUntil = 0;                  // set when you touch down
+struct PendingShockwaveLaunch { float x, z; royale::Rarity rarity; double at; };
+std::vector<PendingShockwaveLaunch> gPendingShockwaveLaunches;
 
-void LaunchSelf(Player* player, royale::Rarity rarity) {
-    if (gSkydiving || player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD)) return;
+void LaunchSelf(Player* player, royale::Rarity rarity, float awayX = 0.0f, float awayZ = 0.0f) {
+    if (gSkydiving || gLaunchFrames > 0 || player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_DEAD)) return;
     const float height = 260.0f * royale::RarityScale(rarity);           // Uncommon about 300 units up (six Links), Legendary about 455
     const float g = player->actor.gravity < -0.3f ? -player->actor.gravity : 1.0f;
     player->actor.velocity.y = std::sqrt(2.0f * g * height);
+    const float away = std::hypot(awayX, awayZ);
+    if (away > 1.0f) {
+        player->actor.velocity.x = awayX / away * 12.0f;
+        player->actor.velocity.z = awayZ / away * 12.0f;
+        player->actor.speedXZ = 12.0f;
+    }
     player->actor.world.pos.y += 2.0f;                                   // off the floor, so the game puts him in his jump next frame
     player->actor.bgCheckFlags &= ~1;
     player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
     gLaunchFrames = 1;
     gLaunchAirborne = false;
     gLaunchSafeUntil = 0;
+}
+
+void LaunchSelfFromShockwave(Player* player, float x, float z, royale::Rarity rarity) {
+    if (player == nullptr) return;
+    const float dx = player->actor.world.pos.x - x, dz = player->actor.world.pos.z - z;
+    const float distance = std::hypot(dx, dz);
+    constexpr float radius = 180.0f;
+    if (distance <= radius) LaunchSelf(player, rarity, dx, dz);
+}
+
+void UpdateShockwaveLaunches(Player* player) {
+    const double now = ImGui::GetTime();
+    for (auto it = gPendingShockwaveLaunches.begin(); it != gPendingShockwaveLaunches.end();) {
+        if (now >= it->at) {
+            LaunchSelfFromShockwave(player, it->x, it->z, it->rarity);
+            it = gPendingShockwaveLaunches.erase(it);
+        } else ++it;
+    }
 }
 
 void UpdateLaunch(Player* player) {
@@ -1034,13 +1061,13 @@ u8 RealItemFor(royale::ItemId w) {
     }
 }
 // The game's own enhancements that let any Link hold and shoot any item (child with the bow, adult with the slingshot); on only during a match.
-const char* const kItemCvars[3] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment") };
-int gSavedItemCvars[3] = {};
+const char* const kItemCvars[5] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment"), CVAR_ENHANCEMENT("PersistentMasks"), CVAR_ENHANCEMENT("AdultMasks") };
+int gSavedItemCvars[5] = {};
 bool gItemCvarsOn = false;
 void ApplyItemCvars(bool on) {
     if (on == gItemCvarsOn) return;
     gItemCvarsOn = on;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         if (on) { gSavedItemCvars[i] = CVarGetInteger(kItemCvars[i], 0); CVarSetInteger(kItemCvars[i], 1); }
         else CVarSetInteger(kItemCvars[i], gSavedItemCvars[i]);
     }
@@ -1070,17 +1097,23 @@ struct LocalDress {
     royale::ItemId weapon = royale::ItemId::BasicSword;
 };
 LocalDress gLocalDress;
+bool gLocalMaskSaved = false;
+u8 gSavedLocalMask = PLAYER_MASK_NONE;
 bool LocalDressOn() { return gLocalDress.on; }
 royale::ItemId WornGear(const royale::HudState& hud, royale::GearSlot slot) {
     const int i = static_cast<int>(slot);
     return (hud.inv.gearMask & (1 << i)) ? static_cast<royale::ItemId>(hud.inv.gear[i].item) : royale::ItemId::Count;
 }
 void SyncLocalDress(Player* player, const royale::HudState& hud) {
-    gLocalDress.on = (LiveAndAlive(hud) || VictoryWalk(hud)) && InField();
+    const bool dressOn = (LiveAndAlive(hud) || VictoryWalk(hud)) && InField();
+    if (dressOn && !gLocalMaskSaved) { gSavedLocalMask = player->currentMask; gLocalMaskSaved = true; }
+    if (!dressOn && gLocalMaskSaved) { player->currentMask = gSavedLocalMask; gLocalMaskSaved = false; }
+    gLocalDress.on = dressOn;
     gSelfInvulnLeft = hud.invulnLeft;
     if (!gLocalDress.on) return;
     gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
     gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
+    player->currentMask = gLocalDress.mask;
     gLocalDress.weapon = hud.weapon;
     const s8 shield = hud.hasShield ? PlayerShieldFor(hud.shield) : PLAYER_SHIELD_NONE;
     if (!hud.hasShield) player->stateFlags1 &= ~PLAYER_STATE1_SHIELDING;
@@ -1103,7 +1136,6 @@ void SyncLocalDress(Player* player, const royale::HudState& hud) {
 void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
     if (!gLocalDress.on) { Player_Draw(&player->actor, play); return; }
     const s8 boots = player->currentBoots;
-    const u8 mask = player->currentMask;
     player->currentBoots = gLocalDress.boots;
     player->currentMask = gLocalDress.mask;
     const bool using_ = mayPose && gActionFrames > 0 && gActionItem != royale::ItemId::Count && player->meleeWeaponState == 0 &&
@@ -1138,7 +1170,6 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
         Player_SetModelGroup(player, group);
     }
     player->currentBoots = boots;
-    player->currentMask = mask;
 }
 
 // A bomb or bombchu in Link's hands burns down like a thrown one (a bomb in 70 frames, a bombchu in 120) and blows up in his hands. Here you carry your
@@ -1265,6 +1296,7 @@ void OnPlayerUpdate() {
     }
     UpdateSkydive(player, hud);
     UpdateLaunch(player);
+    UpdateShockwaveLaunches(player);
     ReconcileLocalGlider(gSkydiving);
     if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
         LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
@@ -1505,8 +1537,8 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto& l = gSession.Client()->Loot()[e.index];
                     const royale::Rarity got = static_cast<royale::Rarity>(l.rarity);
                     const std::string label = LootLabel(l);
-                    NotePickup(label, got, l.chest);
                     const royale::ItemId itemId = static_cast<royale::ItemId>(l.item);
+                    NotePickup(itemId, label, got, l.chest);
                     float py = 0;
                     if (!FloorAt(l.x, l.z, &py)) py = GET_PLAYER(gPlayState)->actor.world.pos.y;
                     gPickupFx.push_back({ itemId, got, l.x, py, l.z, ImGui::GetTime() });
@@ -1573,9 +1605,17 @@ void ReportEvents(const royale::HudState& hud) {
                     AddToxicCloud(e.x, FloorAt(e.x, e.z, &y) ? y : me->actor.world.pos.y, e.z, false);
                 }
                 break;
-            case royale::ClientEvent::Type::Strike:
-                AddStrikeFx(e.x, e.z, e.amount, e.health, e.id == royale::net::kNoPlayer16 ? static_cast<uint8_t>(royale::StrikeStyle::Bolt) : e.item, e.id);
+            case royale::ClientEvent::Type::Strike: {
+                const uint8_t style = e.id == royale::net::kNoPlayer16 ? static_cast<uint8_t>(royale::StrikeStyle::Bolt) : e.item;
+                AddStrikeFx(e.x, e.z, e.amount, e.health, style, e.id);
+                if (style == static_cast<uint8_t>(royale::StrikeStyle::Shockwave) && InField()) {
+                    royale::Rarity rarity = e.id == hud.selfId ? hud.weaponRarity : royale::Rarity::Common;
+                    const auto owner = gState.find(e.id);
+                    if (e.id != hud.selfId && owner != gState.end()) rarity = owner->second.weaponRarity;
+                    gPendingShockwaveLaunches.push_back({ e.x, e.z, rarity, ImGui::GetTime() + std::max(0.0f, e.health) });
+                }
                 break;
+            }
             case royale::ClientEvent::Type::AllyChanged: {
                 const char* name = royale::kAllyDefs[std::min<int>(e.index, royale::kAllyCount - 1)].name;
                 if (e.item == 0) {
