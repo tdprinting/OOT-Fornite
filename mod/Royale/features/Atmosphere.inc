@@ -450,16 +450,18 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
         }
     }
 
-    // Distant hills ringing the horizon, blue-green and lit by the day, so the sun and moon rise and set behind them.
+    // Distant hills ring the horizon. Keep them low and softly lit so the camera-centred skybox reads as a far ridge,
+    // rather than isolated dark peaks floating over the landscape during the glider drop.
     {
-        const float lit = 0.3f + 1.0f * L.day, tw = L.twilight;
+        const float lit = 0.55f + 0.75f * L.day, tw = L.twilight;
         const float tint[3] = { lit * (1.0f - 0.5f * ov) * (1.0f + 0.35f * tw), lit * (1.0f - 0.5f * ov) * (1.0f - 0.05f * tw), lit * (1.0f - 0.3f * ov) * (1.0f - 0.2f * tw) };
         constexpr int kHillCount = 22;
+        constexpr float sizeScale = 0.55f;
         for (int i = 0; i < kHillCount; i++) {
-            const float a = kTau * i / kHillCount + (Flora01(i, 3, 741) - 0.5f) * 0.16f;
+            const float a = kTau * i / kHillCount;
             const float ca = std::cos(a), sa = std::sin(a);
-            const float size = kR * (0.085f + 0.065f * Flora01(i, 5, 742));
-            const float o[3] = { ca * kR * 0.93f, kR * 0.002f, sa * kR * 0.93f };
+            const float size = kR * (0.085f + 0.065f * Flora01(i, 5, 742)) * sizeScale;
+            const float o[3] = { ca * kR * 0.93f, -kR * 0.001f, sa * kR * 0.93f };
             const float ax[3] = { -sa, 0.0f, ca }, cz[3] = { -ca, 0.0f, -sa };
             sky.Add(kHills[i % 3], o, ax, yAxis, cz, size, tint, 1.0f);
         }
@@ -1059,4 +1061,3 @@ void DriveRealWeather() {
         fogManaged = amount > 0.0f || fogNearAdj != 0.0f || fogFarAdj != 0.0f || fogColAdj[0] != 0.0f || fogColAdj[1] != 0.0f || fogColAdj[2] != 0.0f;
     }
 }
-

@@ -145,6 +145,7 @@ enum class StrikeStyle : uint8_t {
     Rock,     // falling rocks, a landing, a shockwave: plain damage
     Magic,    // Phantom Ganon's energy: stuns briefly
     Spore,    // the Lizalfos's spore pods bursting: plain damage
+    Shockwave, // a purple blast that launches players away from its center
     Count
 };
 

@@ -1312,6 +1312,7 @@ StyleColours StyleColoursOf(royale::StrikeStyle s) {
         case royale::StrikeStyle::Rock: return { { 235, 200, 140, 255 }, { 120, 80, 30, 255 } };
         case royale::StrikeStyle::Magic: return { { 220, 255, 190, 255 }, { 80, 210, 60, 255 } };
         case royale::StrikeStyle::Spore: return { { 210, 255, 130, 255 }, { 80, 160, 20, 255 } };
+        case royale::StrikeStyle::Shockwave: return { { 230, 170, 255, 255 }, { 115, 35, 220, 255 } };
         default: return { { 255, 200, 60, 255 }, { 255, 60, 20, 255 } };
     }
 }
@@ -1403,6 +1404,13 @@ void StrikeBlast(PlayState* play, const StrikeFx& s, float ground) {
             EffectSsBlast_SpawnShockwave(play, &pos, &zero, &zero, &pr, &en, 10);
             SparkBurst(play, s.x, ground + 20.0f, s.z, c.prim, 16, 5.0f);
             SoundAt(s.x, ground, s.z, NA_SE_EN_TWINROBA_MS_FREEZE);
+            break;
+        }
+        case royale::StrikeStyle::Shockwave: {
+            Color_RGBA8 pr = c.prim, en = c.env;
+            EffectSsBlast_SpawnShockwave(play, &pos, &zero, &zero, &pr, &en, 14);
+            SparkBurst(play, s.x, ground + 20.0f, s.z, c.prim, 28, 8.0f);
+            SoundAt(s.x, ground, s.z, NA_SE_IT_BOMB_EXPLOSION);
             break;
         }
         case royale::StrikeStyle::Water: {   // a geyser

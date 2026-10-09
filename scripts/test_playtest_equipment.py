@@ -26,7 +26,7 @@ constexpr int PLAYER_BOOTS_KOKIRI=0, PLAYER_MASK_NONE=0;
 constexpr int PLAYER_TUNIC_KOKIRI=0, PLAYER_TUNIC_GORON=1, PLAYER_TUNIC_ZORA=2;
 constexpr int EQUIP_TYPE_SHIELD=1, EQUIP_TYPE_TUNIC=2, PLAYER_STATE1_SHIELDING=1;
 void Player_Draw() {} void LocalLink_Draw() {}
-struct Player { s8 currentShield=0,currentTunic=0; int heldItemAction=0,stateFlags1=0;
+struct Player { s8 currentShield=0,currentTunic=0; u8 currentMask=0; int heldItemAction=0,stateFlags1=0;
  struct { void (*draw)()=Player_Draw; } actor; };
 int equipment[4]={}; int refreshes=0; float gSelfInvulnLeft=0;
 void Inventory_ChangeEquipment(int type,u16 value) {equipment[type]=value;}
@@ -40,8 +40,9 @@ bool LiveAndAlive(const royale::HudState&) {return true;}
 bool VictoryWalk(const royale::HudState&) {return false;}
 struct LocalDress {bool on=false; s8 boots=0; u8 mask=0; royale::ItemId weapon=royale::ItemId::BasicSword;};
 LocalDress gLocalDress;
+bool gLocalMaskSaved=false; u8 gSavedLocalMask=PLAYER_MASK_NONE;
 uint32_t gLocalTunic=royale::PackRgb(30,105,27);
-struct Projectile {float x,y,z,vx,vy,vz,life,gravity,spin; uint32_t variant; bool explodes;};
+struct Projectile {float x,y,z,vx,vy,vz,life,gravity,spin; uint32_t variant; bool explodes; royale::Rarity rarity;};
 std::vector<Projectile> gProjectiles;
 void* gPlayState=reinterpret_cast<void*>(1);
 struct Vec3f {float x,y,z;};
@@ -72,13 +73,13 @@ int main() {
  h.hasShield=false; p.stateFlags1=PLAYER_STATE1_SHIELDING; SyncLocalDress(&p,h);
  assert(p.currentShield==0 && p.stateFlags1==0 && equipment[EQUIP_TYPE_SHIELD]==0);
  for(s16 yaw : {s16(0),s16(16384),s16(-16384)}) {
-  gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,yaw);
+  gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,yaw,royale::Rarity::Legendary);
   assert(gProjectiles.size()==1); const auto& g=gProjectiles[0];
   assert(g.variant==10 && g.explodes && g.gravity>0 && g.life>0.7f);
   assert(std::fabs(std::hypot(g.vx,g.vz)*g.life-520)<1);
   assert(45+g.vy*g.life-g.gravity*g.life*g.life/2<5);
  }
- field=false; gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,0);
+ field=false; gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,0,royale::Rarity::Common);
  assert(gProjectiles.empty());
  std::cout<<"Production gear colors, shield resync/removal, and grenade flight passed\n";
 }

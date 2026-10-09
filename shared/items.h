@@ -138,7 +138,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
-    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kWeapon, rC, rL, "B throws it: a shockwave that hurts and stuns everyone around the target"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kWeapon, rC, rL, "B throws it: launches nearby players away without damage"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
