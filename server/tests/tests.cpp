@@ -4666,7 +4666,7 @@ int main() {
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
-    CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
+    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");
