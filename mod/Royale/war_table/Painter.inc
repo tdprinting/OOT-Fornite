@@ -230,8 +230,9 @@ bool WarPetPreview() {
     const float time=gWar.reduced||!gWar.previewAnimate?0:gWar.clock;
     const float yaw=.35f+(gWar.reduced||!gWar.previewAnimate?0:std::sin(time*.45f)*.22f);
     float minX=1e9f,maxX=-1e9f,minY=1e9f,maxY=-1e9f,depth=1;
-    auto bounds=[&](const auto& pose,const auto* vertices,int count,auto skin) {
+    auto bounds=[&](const auto& pose,const auto* vertices,int count,auto skin,auto visible) {
         for(int i=0;i<count;++i) {
+            if(!visible(vertices[i]))continue;
             float pos[3],normal[3];skin(pose,vertices[i],pos,normal);
             const float x=pos[0]*std::cos(yaw)+pos[2]*std::sin(yaw);
             minX=std::min(minX,x);maxX=std::max(maxX,x);minY=std::min(minY,pos[1]);maxY=std::max(maxY,pos[1]);
@@ -240,9 +241,9 @@ bool WarPetPreview() {
     };
     royale::lilo::Pose lilo;royale::avriella::Pose baby;royale::maya::Pose maya;
     const int pet=PetKind();
-    if(pet==0) {royale::lilo::SampleClip(royale::lilo::kIdle,time,lilo);bounds(lilo,royale::lilo::kVerts,royale::lilo::kVertCount,royale::lilo::SkinVertex);}
-    else if(pet==1) {royale::avriella::SampleClip(royale::avriella::kSit,time,baby);bounds(baby,royale::avriella::kVerts,royale::avriella::kVertCount,royale::avriella::SkinVertex);}
-    else {royale::maya::SampleClip(royale::maya::kIdle,time,maya);bounds(maya,royale::maya::kVerts,royale::maya::kVertCount,royale::maya::SkinVertex);}
+    if(pet==0) {royale::lilo::SampleClip(royale::lilo::kIdle,time,lilo);bounds(lilo,royale::lilo::kVerts,royale::lilo::kVertCount,royale::lilo::SkinVertex,[](const auto&){return true;});}
+    else if(pet==1) {royale::avriella::SampleClip(royale::avriella::kSit,time,baby);bounds(baby,royale::avriella::kVerts,royale::avriella::kVertCount,royale::avriella::SkinVertex,[](const auto&){return true;});}
+    else {royale::maya::SampleClip(royale::maya::kIdle,time,maya);bounds(maya,royale::maya::kVerts,royale::maya::kVertCount,royale::maya::SkinVertex,[&maya](const auto& v){return wt::PreviewBoneVisible(maya.absolute[v.bone],maya.bone[v.bone].t[1]);});}
     struct Camera {Mtx projection,identity;Vp viewport;};static std::array<Camera,2> camera;
     auto& frame=camera[gPlayState->state.frames%2];
     const float half=std::max(1.0f,std::max(maxX-minX,maxY-minY)*.64f),cx=(minX+maxX)*.5f,cy=(minY+maxY)*.5f;
