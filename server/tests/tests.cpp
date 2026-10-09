@@ -4217,6 +4217,21 @@ static int CartNear(const Match& m, Vec2 at) {
     return -1;
 }
 
+static void CartBlastVectorGrowth() {
+    Simulation sim=CartDuel(4,{1500,1500},{-1500,-1500},{{0,0},{1000,0}});
+    Match& m=sim.match;
+    CHECK(m.Vehicles().size()==2);
+    if(m.Vehicles().size()!=2)return;
+    for(size_t i=0;i<m.MutableVehicles().size();++i) {
+        auto& v=m.MutableVehicles()[i];v.body.x=static_cast<float>(i)*20.0f;v.body.z=0;
+    }
+    m.AddStrike({0,0},500,kCartHealth+1,0,1,StrikeStyle::Rock);
+    m.TickStrikes();
+    CHECK(m.Vehicles()[0].wrecked&&m.Vehicles()[1].wrecked);
+    CHECK(m.Strikes().size()==3);
+    for(const auto& strike:m.Strikes())CHECK(strike.applied);
+}
+
 static void CartsSeatsRamsAndWrecks() {
     CHECK(VehicleCountFor(2000) >= 4 && VehicleCountFor(1e6f) == kMaxVehicles);
     Simulation sim = CartDuel(4, {1500, 1500}, {-1500, -1500}, {{0, 0}, {1000, 0}});

@@ -1659,9 +1659,13 @@ class Match {
     }
 
     void TickStrikes() {
-        for (auto& s : strikes) {
-            if (s.applied || clock < s.hitAt) continue;
-            s.applied = true;
+        // WreckVehicle can append another strike while this one is applied.
+        // Index iteration plus a value snapshot stays valid across vector growth
+        // and still processes immediate chain explosions in the same tick.
+        for (size_t index=0;index<strikes.size();++index) {
+            if (strikes[index].applied || clock < strikes[index].hitAt) continue;
+            strikes[index].applied = true;
+            const Strike s = strikes[index];
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast
