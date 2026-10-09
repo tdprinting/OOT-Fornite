@@ -1,4 +1,5 @@
 #include "water_sim.h"
+#include "water_look.h"
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -63,6 +64,22 @@ int main() {
     require(f.Activity() == 0.0f, "jumping far starts calm");
     for (int i = 0; i < 1000; i++) { f.Impulse(100000 + (i % 7) * 9.0f, (i % 5) * 11.0f, 9.0f, 18.0f); f.Step(1.0f / 30.0f); }
     require(std::isfinite(f.Energy()) && f.Activity() < 200.0f, "constant pushing stays bounded");
+
+    // Bright sun paths stay bounded without flattening ordinary ripples to white.
+    LookParams look;
+    look.eye[1] = 100.0f;
+    LookSky sky{};
+    sky.sun[1] = 1.0f; sky.sunA = 1.0f;
+    for (int q = 0; q < 3; ++q) { sky.hor[q] = 180.0f; sky.zen[q] = 120.0f; }
+    Look shaded{};
+    ShadeWater(look, sky, 0, 0, 0, 400, 0, 1, 0, 0, 0, 0, 0.5f, 1, shaded);
+    require(shaded.glint[3] > 0 && shaded.glint[3] < 160, "sun highlights retain headroom");
+    const float fullGlint = shaded.glint[3];
+    ShadeWater(look, sky, 0, 0, 0, 400, 0, 1, 0, 0, 0, 0, 0.5f, 0.5f, shaded);
+    require(std::fabs(shaded.glint[3] - fullGlint * 0.5f) < 0.001f, "highlights fade continuously");
+    look.glintAmt = 0;
+    ShadeWater(look, sky, 0, 0, 0, 400, 0, 1, 0, 0, 0, 0, 0.5f, 1, shaded);
+    require(shaded.glint[3] == 0, "disabled glints stay disabled");
 
     // The textures tile, loop, and have both dark ground and bright pattern.
     constexpr int S = 64, F = 16;

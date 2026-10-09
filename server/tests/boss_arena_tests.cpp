@@ -27,6 +27,10 @@ int main() {
             if(IsMajorKind(kind)!=(map==kMainBossArenaIndex)) continue;
             CHECK(m.SandboxBossEncounter(kind,1));CHECK(m.Bosses().size()==1 && m.Bosses()[0].kind==kind);
             CHECK(Distance(m.Bosses()[0].home,arena::kBoss)<1);
+            CHECK(!m.SandboxGodOn() && m.Bosses()[0].target==1);
+            // Starting a fight must allow real boss damage, even from the distant spawn.
+            for(int tick=0;tick<kTickHz*30 && m.Find(1)->health==m.Find(1)->maxHealth;tick++) m.Tick(1.0f/kTickHz);
+            CHECK(m.Find(1)->health<m.Find(1)->maxHealth);
             auto* p=m.Find(1);p->alive=false;p->health=0;p->burnUntil=m.Clock()+20;
             CHECK(m.SandboxBossEncounter(kind,1));
             CHECK(p->alive && p->health==p->maxHealth && p->burnUntil<=m.Clock());

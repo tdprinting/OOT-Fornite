@@ -400,7 +400,7 @@ bool WaterTexturesReady() {
 // World units per texel of each texture. Texture coordinates are counted from an origin that moves a whole tile at a time, so they stay small
 // (the renderer holds them in 16 bits) and the pattern never jumps when the grid follows the camera.
 constexpr float kGlintUnits = 3.0f, kFoamUnits = 2.6f, kCausticUnits = 3.4f;
-float TexOrigin(float c, float units) { const float tile = kWaterTex * units; return std::floor(c / tile) * tile; }
+float TexOrigin(float c, float units) { const float tile = kWaterTex * units; return std::round(c / tile) * tile; }
 
 void PushVtxT(Vtx& o, float x, float y, float z, float s, float t, float r, float g, float b, float a) {
     PushVtx4(o, x, y, z, r, g, b, a);
@@ -413,6 +413,7 @@ void PushVtxT(Vtx& o, float x, float y, float z, float s, float t, float r, floa
 void WaterTexturePass(PlayState* play, const uint8_t* tex) {
     OPEN_DISPS(play->state.gfxCtx);
     gDPPipeSync(POLY_XLU_DISP++);
+    gDPSetTextureFilter(POLY_XLU_DISP++, G_TF_BILERP);
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     gDPLoadTextureBlock(POLY_XLU_DISP++, tex, G_IM_FMT_I, G_IM_SIZ_8b, kWaterTex, kWaterTex, 0, G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 6, 6,
                         G_TX_NOLOD, G_TX_NOLOD);
@@ -619,6 +620,12 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     };
     // where the surface sits: over the game's own water on lakes and rivers, on the island's (lowered) sea bed there is room to dip
     const float baseLift = island ? 0.0f : 5.0f, lowest = island ? -34.0f : 1.0f;
+    // Fade texture detail before its draw cutoff, on both mesh resolutions.
+    const float texReach = half * 0.62f;
+    auto textureFade = [&](float wx, float wz) {
+        const float k = std::clamp((texReach - std::hypot(wx - eye.x, wz - eye.z)) / (cell * 2.0f), 0.0f, 1.0f);
+        return k * k * (3.0f - 2.0f * k);
+    };
     const float og = TexOrigin(cx, kGlintUnits), ogz = TexOrigin(cz, kGlintUnits), of = TexOrigin(cx, kFoamUnits), ofz = TexOrigin(cz, kFoamUnits);
     float flowX, flowZ;
     WaterCurrentAt(eye.x, eye.z, t, &flowX, &flowZ);
@@ -628,10 +635,10 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     auto emit = [&](Vtx* base, Vtx* gl, Vtx* fo, size_t at, float px, float py, float pz, float wx, float wz, float nx, float nz, const WaterLook& o) {
         PushVtx4(base[at], px, py, pz, o.col[0], o.col[1], o.col[2], o.col[3]);
         if (gl != nullptr)
-            PushVtxT(gl[at], px, py + 0.5f, pz, (wx - og) / kGlintUnits + gS + nx * 9.0f, (wz - ogz) / kGlintUnits + gT + nz * 9.0f, o.glint[0], o.glint[1], o.glint[2], o.glint[3]);
+            PushVtxT(gl[at], px, py + 0.5f, pz, (wx - og) / kGlintUnits + gS + nx * 9.0f, (wz - ogz) / kGlintUnits + gT + nz * 9.0f, o.glint[0], o.glint[1], o.glint[2], o.glint[3] * textureFade(wx, wz));
         if (fo != nullptr) {
             const float fl = 0.6f + 0.4f * light;
-            PushVtxT(fo[at], px, py + 0.7f, pz, (wx - of) / kFoamUnits + fS + nx * 4.0f, (wz - ofz) / kFoamUnits + fT + nz * 4.0f, 240.0f * fl, 248.0f * fl, 252.0f * fl, o.foam);
+            PushVtxT(fo[at], px, py + 0.7f, pz, (wx - of) / kFoamUnits + fS + nx * 4.0f, (wz - ofz) / kFoamUnits + fT + nz * 4.0f, 240.0f * fl, 248.0f * fl, 252.0f * fl, o.foam * textureFade(wx, wz));
         }
     };
 
@@ -668,11 +675,12 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                         nx = sp.nx * shore; nz = sp.nz * shore;
                         const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
                         shade(wx, wz, y, c.depth, nx, ny, nz, 0.0f, sp.fold * shore, cSW[id], i + gi0, j + gj0, fade, o);
-                        hasGlint[id] = o.glint[3] > 1.0f; hasFoam[id] = o.foam > 1.0f;
                     }
                 }
             }
             emit(v, vg, vf, id, px, y - baseY, pz, wx, wz, nx, nz, o);
+            hasGlint[id] = vg != nullptr && vg[id].v.cn[3] > 0;
+            hasFoam[id] = vf != nullptr && vf[id].v.cn[3] > 0;
         }
     }
 
@@ -733,7 +741,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         const bool eL = !isRef(qi - 1, qj), eR = !isRef(qi + 1, qj), eT = !isRef(qi, qj - 1), eB = !isRef(qi, qj + 1);
         const bool cTL = !isRef(qi - 1, qj - 1), cTR = !isRef(qi + 1, qj - 1), cBL = !isRef(qi - 1, qj + 1), cBR = !isRef(qi + 1, qj + 1);
         const float step = cell / S;
-        float H[FV * FV], P[FV * FV], FW[FV * FV], DP[FV * FV], SF[FV * FV], WX[FV * FV], WZ[FV * FV], PX[FV * FV], PZ[FV * FV], NX[FV * FV], NY[FV * FV], NZ[FV * FV], FO[FV * FV], CR[FV * FV];
+        float WGT[FV * FV], H[FV * FV], P[FV * FV], FW[FV * FV], DP[FV * FV], SF[FV * FV], WX[FV * FV], WZ[FV * FV], PX[FV * FV], PZ[FV * FV], NX[FV * FV], NY[FV * FV], NZ[FV * FV], FO[FV * FV], CR[FV * FV];
         auto bil = [](float a, float b, float c, float d, float u, float w) { return (a * (1 - u) + b * u) * (1 - w) + (c * (1 - u) + d * u) * w; };
         for (int b = 0; b <= S; b++)
             for (int a = 0; a <= S; a++) {
@@ -752,6 +760,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 if (cTR) wgt *= ss01(std::hypot(1 - u, w) * S * 0.5f);
                 if (cBL) wgt *= ss01(std::hypot(u, 1 - w) * S * 0.5f);
                 if (cBR) wgt *= ss01(std::hypot(1 - u, 1 - w) * S * 0.5f);
+                WGT[id] = wgt;
                 const float shore = std::min(1.0f, DP[id] / 90.0f);
                 const rw::SwellPoint sp = swell.Sample(wx, wz);
                 // the exact swell, run into the coarse square's own (straight-line) shape toward coarse neighbours
@@ -762,10 +771,13 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 PZ[id] = lz + iOZ + (sp.oz * shore - iOZ) * wgt;
                 float foam = 0.0f;
                 float push = gWaterWakes || gWaterRipples ? WaterDisplaceAt(wx, wz, &foam) : 0.0f;
-                push *= kWaterPush * wgt;
+                push *= kWaterPush;
                 FW[id] = foam * wgt;
-                P[id] = push;
-                H[id] = royale::graphics::WaterSurfaceOffset(sw, push, shore, baseLift, lowest);
+                P[id] = push * shore * wgt;
+                // Match the already clamped, quantized coarse edge, including troughs.
+                const float edgeH = bil(v[k00].v.ob[1], v[k10].v.ob[1], v[k01].v.ob[1], v[k11].v.ob[1], u, w) * 0.25f + baseY - SF[id];
+                const float exactH = royale::graphics::WaterSurfaceOffset(sp.h, push, shore, baseLift, lowest);
+                H[id] = edgeH + (exactH - edgeH) * wgt;
                 NX[id] = sp.nx * shore; NY[id] = sp.ny; NZ[id] = sp.nz * shore;
                 FO[id] = sp.fold * shore;
                 CR[id] = sw;
@@ -783,6 +795,25 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 const float y = SF[id] + H[id];
                 shade(WX[id], WZ[id], y, DP[id], nx, ny, nz, FW[id], FO[id], CR[id], static_cast<int>(WX[id] / step), static_cast<int>(WZ[id] / step), fade, o);
                 emit(fv, fg, ff, q * FV * FV + id, PX[id] - 0.0f, y - baseY, PZ[id], WX[id], WZ[id], nx, nz, o);
+                // Geometry alone does not hide a seam: coarse colours and UVs
+                // interpolate linearly. Run the detailed shading into those too.
+                const float u = static_cast<float>(a) / S, w = static_cast<float>(b) / S;
+                auto matchEdge = [&](Vtx* dst, const Vtx* src) {
+                    if (dst == nullptr || src == nullptr) return;
+                    Vtx& out = dst[q * FV * FV + id];
+                    auto mix = [&](float x00, float x10, float x01, float x11, float value) {
+                        const float edge = bil(x00, x10, x01, x11, u, w);
+                        return std::lround(edge + (value - edge) * WGT[id]);
+                    };
+                    for (int ch = 0; ch < 4; ++ch)
+                        out.v.cn[ch] = static_cast<u8>(mix(src[k00].v.cn[ch], src[k10].v.cn[ch], src[k01].v.cn[ch], src[k11].v.cn[ch], out.v.cn[ch]));
+                    for (int ch = 0; ch < 2; ++ch)
+                        out.v.tc[ch] = static_cast<s16>(mix(src[k00].v.tc[ch], src[k10].v.tc[ch], src[k01].v.tc[ch], src[k11].v.tc[ch], out.v.tc[ch]));
+                    if (WGT[id] == 0.0f)
+                        for (int ch = 0; ch < 3; ++ch)
+                            out.v.ob[ch] = static_cast<s16>(mix(src[k00].v.ob[ch], src[k10].v.ob[ch], src[k01].v.ob[ch], src[k11].v.ob[ch], out.v.ob[ch]));
+                };
+                matchEdge(fv, v); matchEdge(fg, vg); matchEdge(ff, vf);
             }
     }
 
@@ -822,17 +853,15 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     });
     if (fv != nullptr) drawFine(fv);
     // pass 2: the sparkling ripples (the texture is only drawn fairly near: far off it would shimmer)
-    const float texReach = half * 0.62f;
-    auto nearQ = [&](int i, int j) { return std::hypot((i + 0.5f - N / 2) * cell + cx - eye.x, (j + 0.5f - N / 2) * cell + cz - eye.z) < texReach; };
     if (vg != nullptr) {
         WaterTexturePass(play, gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
-        DrawWaterGrid(play, vg, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasGlint, i, j) && nearQ(i, j); });
+        DrawWaterGrid(play, vg, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasGlint, i, j); });
         if (fg != nullptr) drawFine(fg);
     }
     // pass 3: the foam
     if (vf != nullptr) {
         WaterTexturePass(play, gWaterFoamImage);
-        DrawWaterGrid(play, vf, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasFoam, i, j) && nearQ(i, j); });
+        DrawWaterGrid(play, vf, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasFoam, i, j); });
         if (ff != nullptr) drawFine(ff);
     }
     if (vg != nullptr || vf != nullptr) WaterPlainPass(play);

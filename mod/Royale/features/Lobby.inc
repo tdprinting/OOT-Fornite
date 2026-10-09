@@ -89,7 +89,7 @@ void RunSandboxCommands(const royale::HudState& hud) {
         switch (c.kind) {
             case SandboxCmd::ArenaClear: if(m->SandboxClearArena(self)) gStrikeFx.clear(); break;
             case SandboxCmd::Encounter:
-                if(m->SandboxBossEncounter(static_cast<royale::BossKind>(c.a),self)) gStrikeFx.clear();
+                if(m->SandboxBossEncounter(static_cast<royale::BossKind>(c.a),self)) { gStrikeFx.clear(); gSbx.god=m->SandboxGodOn(); }
                 break;
             case SandboxCmd::Go: m->SandboxTeleport(self, royale::IsBossArena(hud.mapId)?(c.a==1?royale::arena::kArmory:c.a==2?royale::arena::kBoss:royale::arena::kSpawn):royale::SandboxZoneAt(c.a)); break;
             case SandboxCmd::Cart: if (!m->SandboxCart(ahead(360.0f), facing)) Say("No room for another cart: take one away first"); break;

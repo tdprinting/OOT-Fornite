@@ -104,7 +104,10 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
             const float skyc = std::min(255.0f, (sky.hor[q] + sky.zen[q]) * 0.65f + 70.0f);
             o.glint[q] = skyc + (o.glint[q] - skyc) * std::min(1.0f, spec * 3.0f + path * 1.5f);
         }
-        o.glint[3] = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (55.0f + 140.0f * fres + 260.0f * spec + 420.0f * path);
+        // Keep ordinary ripples subtle and reserve bright highlights for the
+        // sun/moon path. A smooth response avoids large saturated white patches.
+        const float energy = (18.0f + 65.0f * fres + 160.0f * spec + 180.0f * path);
+        o.glint[3] = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (160.0f * energy / (160.0f + energy));
     }
     o.col[0] = c[0]; o.col[1] = c[1]; o.col[2] = c[2]; o.col[3] = a * fade;
 }

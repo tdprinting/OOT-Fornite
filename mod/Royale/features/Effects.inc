@@ -311,11 +311,12 @@ struct FloatingNumber { float x, y, z, amount; double at; bool mine; };
 std::vector<FloatingNumber> gFloatingNumbers;
 struct IncomingHit { uint16_t from; double at; };
 std::vector<IncomingHit> gIncomingHits;
-double gHurtAt = -100.0, gHitMarkerAt = -100.0;
+double gHurtAt = -100.0, gHitMarkerAt = -100.0, gImpactSoundAt = -100.0;
 bool gHitMarkerKill = false;
 float gHurtAmount = 0.0f;
 
 bool KnownPosition(uint16_t id, float* x, float* z) {
+    if(gPlayState && InGame() && id==gSession.Hud().selfId) {const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;*x=p.x;*z=p.z;return true;}
     if (gSession.Client() && royale::IsHelperId(id)) for (const auto& h:gSession.Client()->Helpers()) if (h.Id()==id && h.hp>0) { *x=h.x;*z=h.z;return true; }
     for (const auto& st : gSession.Puppets()) if (st.id == id) { *x = st.x; *z = st.z; return true; }
     if (gSession.Client() && royale::IsBossId(id)) for (const auto& bn : gSession.Client()->Bosses()) if (royale::kBossIdBase + bn.index == id) { *x = bn.x; *z = bn.z; return true; }
@@ -336,7 +337,8 @@ HitKind HitKindOfBoss(const BossActor& b) {
         case BK::Lava: case BK::DragonFire: return HitKind::Fire;
         case BK::Frost: return HitKind::Ice;
         case BK::Moss: return HitKind::Moss;
-        case BK::Tide: case BK::DragonWater: return HitKind::Water;
+        case BK::Tide: case BK::DragonWater:
+        case BK::ChuRed: case BK::ChuGreen: case BK::ChuYellow: case BK::ChuBlue: case BK::ChuDark: return HitKind::Water;
         case BK::Shade: case BK::DragonShadow: return HitKind::Shadow;
         case BK::Dune: return b.armourOff ? HitKind::Flesh : HitKind::Metal;
         default: return HitKind::Magic;
@@ -446,6 +448,7 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
         auto it = gBosses.find(id);
         if (it == gBosses.end() || it->second.actor == nullptr || it->second.fade < 0.2f) return;   // out of sight: nothing to hit
         boss = &it->second;
+        actor = boss->actor;
         pos = boss->actor->world.pos;
         kind = HitKindOfBoss(*boss);
         height = royale::IsDragonKind(KindOf(*boss)) ? 70.0f : 50.0f * royale::kBossDefs[boss->kind].scale;
@@ -457,6 +460,23 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
     }
     if (!self && std::hypot(pos.x - GET_PLAYER(gPlayState)->actor.world.pos.x, pos.z - GET_PLAYER(gPlayState)->actor.world.pos.z) > 2400.0f) return;   // too far to see
     const Vec3f at = HitPoint(pos, height, fromX, fromZ, haveFrom, boss != nullptr ? 22.0f * royale::kBossDefs[boss->kind].scale : 14.0f);
+    // Confirmed impacts are audible on bosses too (they are not in the player actor table).
+    const double impactNow = ImGui::GetTime();
+    if (!self && actor && impactNow-gImpactSoundAt > .06 &&
+        std::hypot(pos.x-GET_PLAYER(gPlayState)->actor.world.pos.x,pos.z-GET_PLAYER(gPlayState)->actor.world.pos.z)<1200.0f) {
+        gImpactSoundAt=impactNow;
+        Audio_PlayActorSound2(actor, kind==HitKind::Metal ? NA_SE_IT_SHIELD_REFLECT_SW : NA_SE_IT_SWORD_STRIKE);
+        royale::ItemId weapon=royale::ItemId::Count;
+        if(attacker==gSession.Hud().selfId) weapon=gSession.Hud().weapon;
+        else {auto it=gState.find(attacker);if(it!=gState.end()) weapon=it->second.weapon;}
+        if(weapon==royale::ItemId::BasicSword || weapon==royale::ItemId::KokiriSword || weapon==royale::ItemId::MasterSword || weapon==royale::ItemId::BiggoronSword || weapon==royale::ItemId::GildedSword)
+            Audio_PlayActorSound2(actor,NA_SE_IT_SWORD_SWING_HARD);
+    }
+    // A short white contact mark reads clearly without adding more debris.
+    if(gHitParticles && gHitAmount>.01f) {
+        Vec3f contact=at;
+        EffectSsHitMark_SpawnCustomScale(gPlayState,EFFECT_HITMARK_WHITE,static_cast<s16>(180.0f*size),&contact);
+    }
     if (gHitReact && (boss == nullptr || !royale::IsDragonKind(KindOf(*boss)))) {   // rock away from the attacker, harder for a harder hit
         float dx = 0, dz = 0;
         if (haveFrom) { dx = pos.x - fromX; dz = pos.z - fromZ; const float d = std::hypot(dx, dz); if (d > 1.0f) { dx /= d; dz /= d; } else dx = dz = 0.0f; }
