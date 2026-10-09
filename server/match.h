@@ -513,11 +513,23 @@ class Match {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
         PlayerState* a = Find(attackerId);
-        if (!a || !a->alive || AmmoUsedBy(a->weapon.item) == AmmoKind::None || !HasAmmo(*a, a->weapon.item)) return r;
+        if (!a || !a->alive) return r;
+        const bool shockwave = a->weapon.item == ItemId::ShockwaveGrenade;
+        if ((!shockwave && AmmoUsedBy(a->weapon.item) == AmmoKind::None) || !HasAmmo(*a, a->weapon.item)) return r;
         const WeaponStats w = ActiveWeapon(a->weapon.item, true);
-        if (w.damage <= 0 || clock < a->attackReadyAt || Stunned(*a)) return r;
+        if ((w.damage <= 0 && !shockwave) || clock < a->attackReadyAt || Stunned(*a)) return r;
         a->attackReadyAt = clock + w.cooldown;
         SpendAmmo(*a, a->weapon.item);
+        if (shockwave) {
+            const float yaw = static_cast<float>(a->rot) * (3.14159265f / 32768.0f);
+            MatchEvent blast{MatchEvent::Type::Strike};
+            blast.a = attackerId;
+            blast.x = a->pos.x + std::sin(yaw) * w.range;
+            blast.z = a->pos.z + std::cos(yaw) * w.range;
+            blast.amount = w.splashRadius; blast.health = 0.8f;
+            blast.item = static_cast<uint8_t>(StrikeStyle::Shockwave);
+            events.push_back(blast);
+        }
         r.ok = true;
         return r;
     }
@@ -532,8 +544,9 @@ class Match {
         PlayerState* t = Find(targetId);
         if (!a || !t || a == t || !a->alive || !t->alive) return r;
         const bool hadAmmo = HasAmmo(*a, a->weapon.item);
+        const bool shockwave = hadAmmo && a->weapon.item == ItemId::ShockwaveGrenade;
         WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
-        if (w.damage <= 0 || clock < a->attackReadyAt) return r;
+        if ((w.damage <= 0 && !shockwave) || clock < a->attackReadyAt) return r;
         if (clock < a->stunUntil || clock < a->frozenUntil) return r;
         if (Distance(a->pos, t->pos) > w.range * 1.1f) return r;
         if (w.ranged) style = AttackStyle::Normal;   // only blades and hammers jump slash and spin
@@ -552,9 +565,9 @@ class Match {
             *blocked = Guards(victim, a->pos, w);
             return amount * (1.0f - reduction) * (*blocked ? 1.0f - kGuardBlock : 1.0f);
         };
-        r.damage = dealt(*t, base, &r.blocked);
+        r.damage = shockwave ? 0.0f : dealt(*t, base, &r.blocked);
         r.hit = true;
-        r.killed = Damage(targetId, r.damage, attackerId, w.splashRadius > 0 && w.ranged ? DamageKind::Explosion : DamageKind::Normal);
+        r.killed = !shockwave && Damage(targetId, r.damage, attackerId, w.splashRadius > 0 && w.ranged ? DamageKind::Explosion : DamageKind::Normal);
         if (style == AttackStyle::Spin) {   // the spin catches everyone else within reach too
             const float reach = w.range * 1.1f + kSpinReachBonus;
             for (auto& o : players) {
@@ -599,7 +612,14 @@ class Match {
                     break;
             }
         }
-        if (w.splashRadius > 0) {
+        if (shockwave) {
+            MatchEvent blast{MatchEvent::Type::Strike};
+            blast.a = attackerId; blast.x = t->pos.x; blast.z = t->pos.z;
+            blast.amount = w.splashRadius; blast.health = 0.8f;
+            blast.item = static_cast<uint8_t>(StrikeStyle::Shockwave);
+            events.push_back(blast);
+        }
+        if (w.splashRadius > 0 && !shockwave) {
             const Vec2 centre = t->pos;
             for (auto& o : players) {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
@@ -1477,6 +1497,11 @@ class Match {
             LootSpawn second = SiteChest(rng, {at.x + 70.0f, at.z + 40.0f}, 2);
             second.supply = true;
             AddLoot(second);
+            if (supplyCount == 1) {
+                LootSpawn gilded = {{at.x, at.z + 110.0f}, ItemId::GildedSword, Rarity::Legendary, true, false};
+                gilded.supply = true;
+                AddLoot(gilded);
+            }
             LootSpawn money = {{at.x - 70.0f, at.z + 40.0f}, ItemId::Rupees, Rarity::Common, false, false};
             money.amount = 60;
             money.supply = true;
@@ -1634,9 +1659,13 @@ class Match {
     }
 
     void TickStrikes() {
-        for (auto& s : strikes) {
-            if (s.applied || clock < s.hitAt) continue;
-            s.applied = true;
+        // WreckVehicle can append another strike while this one is applied.
+        // Index iteration plus a value snapshot stays valid across vector growth
+        // and still processes immediate chain explosions in the same tick.
+        for (size_t index=0;index<strikes.size();++index) {
+            if (strikes[index].applied || clock < strikes[index].hitAt) continue;
+            strikes[index].applied = true;
+            const Strike s = strikes[index];
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast

@@ -41,7 +41,7 @@ const UiStyle kUi = {
     IM_COL32(200, 210, 225, 255),  // silver medal
     IM_COL32(255, 200, 50, 255),   // gold medal
 };
-constexpr double kDeathCardDelay = 1.8;   // seconds of watching your body fall before the card comes up
+constexpr double kDeathCardDelay = 4.0;   // keep the ragdoll camera uninterrupted for four seconds
 constexpr double kEndPanelDelay = 7.0;    // a visible victory lap before results take the controls
 
 bool IsLive(const royale::HudState& h);   // with the match's health, below
@@ -117,7 +117,11 @@ void StartEndScreen(const royale::HudState& h) {
 }
 
 bool DeathCardUp(const royale::HudState& h) { return gDeath.active && gDeath.card && IsLive(h) && ImGui::GetTime() - gDeath.at > kDeathCardDelay; }
-bool EndScreenUp(const royale::HudState& h) { return h.state == royale::MatchState::Ending && gEnd.open && ImGui::GetTime() - gEnd.at > kEndPanelDelay; }
+bool EndScreenUp(const royale::HudState& h) {
+    const double now = ImGui::GetTime();
+    const bool watchedRagdoll = !gDeath.active || now - gDeath.at >= kDeathCardDelay;
+    return h.state == royale::MatchState::Ending && gEnd.open && watchedRagdoll && now - gEnd.at > kEndPanelDelay;
+}
 
 // Runs before the game reads the controller (from OnEmoteWheelInput). While the death card or the end screen is up the controller is theirs (Start
 // still opens the menu). Returns true when it took this frame's buttons.
@@ -218,6 +222,13 @@ void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const
     const bool spectatingEnd = h.state == royale::MatchState::Ending && (!gEnd.open || !EndScreenUp(h)) && h.haveSelf && !h.selfAlive;
     if (!(gDeath.active && IsLive(h)) && !spectatingEnd) return;
     const double now = ImGui::GetTime(), t = now - gDeath.at;
+    if (gDeath.active && gDeath.card && t < kDeathCardDelay) {
+        UiVignette(dl, ds, 0.12f);
+        const float bar = ds.y * 0.085f * static_cast<float>(std::min(1.0, t / 0.45));
+        dl->AddRectFilled(ImVec2(0, 0), ImVec2(ds.x, bar), IM_COL32(0, 0, 0, 235));
+        dl->AddRectFilled(ImVec2(0, ds.y - bar), ds, IM_COL32(0, 0, 0, 235));
+        return; // leave the ragdoll unobstructed for the opening four seconds
+    }
     // Your place: the player count may or may not have taken you off yet when the elimination arrives, so look again a moment later.
     if (gDeath.active && !gDeath.placeSettled && t > 0.8) {
         gDeath.place = h.alive >= gDeath.aliveAtDeath ? gDeath.aliveAtDeath + 1 : gDeath.aliveAtDeath;
@@ -551,7 +562,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
     for (const auto& r : h.results) if (r.self) me = &r;
     const int place = me != nullptr && me->placement > 0 ? me->placement : won ? 1 : gDeath.place;
     const std::string winnerLine = won ? "You are the last one standing" : !h.winnerName.empty() ? "Winner: " + h.winnerName : "Nobody survived";
-    if (gEnd.open && t < kEndPanelDelay) {
+    if (gEnd.open && !EndScreenUp(h)) {
         // Keep the winner, their crown and their emote visible. The recap must
         // not cover the world or capture movement during this celebration.
         DrawEndBanner(dl, font, scale, cx, 65.0f * scale, place, won, 1.0f, 0.8f);
@@ -712,7 +723,17 @@ void DrawOverlay() {
         const float fade = static_cast<float>(std::min(1.0, gBannerUntil - ImGui::GetTime()));
         ImU32 col = RarityU32(gBannerRarity);
         col = (col & 0x00FFFFFF) | (static_cast<ImU32>(255 * fade) << 24);
-        centered(ds.y * 0.58f, col, 30 * scale, gBannerText);
+        centered(ds.y * 0.56f, col, 27 * scale, gBannerText);
+        if (!gBannerDescription.empty()) {
+            const float size = 16.0f * scale;
+            const float wrap = ds.x * 0.82f;
+            ImVec2 desc = font->CalcTextSizeA(size, wrap, wrap, gBannerDescription.c_str());
+            const ImVec2 pos((ds.x - desc.x) * 0.5f, ds.y * 0.56f + 31.0f * scale);
+            const ImU32 ink = IM_COL32(245, 245, 255, static_cast<int>(230 * fade));
+            dl->AddText(font, size, ImVec2(pos.x + 1.5f, pos.y + 1.5f), IM_COL32(0, 0, 0, static_cast<int>(210 * fade)),
+                        gBannerDescription.c_str(), nullptr, wrap);
+            dl->AddText(font, size, pos, ink, gBannerDescription.c_str(), nullptr, wrap);
+        }
     }
     DrawWeather(dl, ds, scale, h);
     DrawStorm(dl, ds, scale, h);

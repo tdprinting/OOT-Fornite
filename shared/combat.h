@@ -52,7 +52,7 @@ constexpr WeaponStats WeaponOf(ItemId id) {
         case ItemId::IceArrows:     return {0.8f, 1200, 1.4f, true, E::Freeze, 1.5f};
         case ItemId::LightArrows:   return {1.6f, 1500, 1.8f, true, E::PierceShield};
         case ItemId::Hookshot:      return {0.4f, 900, 2.5f, true, E::Pull, 1.0f};
-        case ItemId::ShockwaveGrenade: return {1.2f, 520, 5.0f, true, E::Stun, 1.2f, 0, 180};
+        case ItemId::ShockwaveGrenade: return {0.0f, 520, 5.0f, true, E::None, 0, 0, 180};
         default:                    return {0, 0, 1, false};
     }
 }

@@ -47,6 +47,7 @@ Look LookFor(royale::ItemId weapon) {
         case ItemId::Boomerang: return { PLAYER_MODELGROUP_BOOMERANG, PLAYER_IA_BOOMERANG, ITEM_BOOMERANG };
         case ItemId::Hookshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_HOOKSHOT, ITEM_HOOKSHOT };
         case ItemId::ShockwaveGrenade: return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_BOMB, ITEM_BOMB };   // thrown like a bomb
+        case ItemId::DekuNuts: return { PLAYER_MODELGROUP_EXPLOSIVES, PLAYER_IA_DEKU_NUT, ITEM_NUT };
         case ItemId::Longshot: return { PLAYER_MODELGROUP_HOOKSHOT, PLAYER_IA_LONGSHOT, ITEM_LONGSHOT };
         case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
             return { PLAYER_MODELGROUP_BOW_SLINGSHOT, PLAYER_IA_BOW, ITEM_BOW };   // the elemental arrows are loosed from the real bow
@@ -189,7 +190,7 @@ std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a fli
 std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
 std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
 
-void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw); // below, with the other custom models
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity = royale::Rarity::Common); // below, with the other custom models
 
 // ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
 
@@ -634,6 +635,7 @@ bool SongSwirl(royale::ItemId song, s16* actorId, s16* params) {
         // show the plain one the game uses for the scarecrow's song.
         case ItemId::MinuetOfForest: case ItemId::BoleroOfFire: case ItemId::SerenadeOfWater: case ItemId::RequiemOfSpirit:
         case ItemId::NocturneOfShadow: case ItemId::PreludeOfLight: case ItemId::SunsSong: case ItemId::SongOfStorms:
+        case ItemId::FairyOcarina: case ItemId::OcarinaOfTime:
             *actorId = ACTOR_OCEFF_WIPE4; return true;
         default: return false;
     }
@@ -654,7 +656,17 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self, A
         }
     };
     auto shock = [&](float y) { Vec3f pos = { at.x, at.y + y, at.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 }; EffectSsBlast_SpawnWhiteShockwave(play, &pos, &vel, &accel); };
-    auto spell = [&](s16 actorId, SpellKind kind) { SpawnSpell(play, actorId, 0, kind, caster, who, self); };
+    auto spell = [&](s16 actorId, SpellKind kind) { if (caster != nullptr) SpawnSpell(play, actorId, 0, kind, caster, who, self); };
+    if (caster == nullptr) {
+        // If a remote actor has not streamed in yet, keep every spell visible at
+        // the replicated cast position using the game's own particle system.
+        switch (item) {
+            case ItemId::DinsFire: ring({ 255, 200, 80, 255 }, { 255, 40, 0, 255 }, 45.0f, 20, 3.0f, 110); break;
+            case ItemId::NayrusLove: ring({ 140, 210, 255, 255 }, { 30, 60, 255, 255 }, 50.0f, 22, 2.8f, 100); break;
+            case ItemId::FaroresWind: ring({ 190, 255, 180, 255 }, { 20, 200, 100, 255 }, 50.0f, 22, 2.8f, 100); break;
+            default: break;
+        }
+    }
     if (self && (royale::IsSong(item) || item == ItemId::FairyOcarina || item == ItemId::OcarinaOfTime)) {
         s16 id = 0, params = 0;
         if (SongSwirl(item, &id, &params)) SpawnSpell(play, id, params, SpellKind::Song, caster, who, true);
@@ -679,6 +691,11 @@ void PowerFx(PlayState* play, royale::ItemId item, const Vec3f& at, bool self, A
             if (self) Environment_AddLightningBolts(play, 2);
             ring({ 255, 255, 255, 255 }, { 120, 120, 255, 255 }, 70.0f, 20, 2.4f, 90);
             break;
+        case ItemId::FairyOcarina: case ItemId::OcarinaOfTime:
+            ring({ 210, 255, 230, 255 }, { 80, 170, 255, 255 }, 42.0f, 20, 2.6f, 95);
+            ring({ 255, 240, 150, 255 }, { 140, 80, 255, 255 }, 78.0f, 24, 1.8f, 80);
+            shock(26.0f);
+            break;
         case ItemId::ShockwaveGrenade:   // a purple blast at the feet that throws the user up
             ring({ 235, 190, 255, 255 }, { 160, 60, 255, 255 }, 30.0f, 16, 3.4f, 110);
             ring({ 210, 150, 255, 255 }, { 120, 40, 230, 255 }, 65.0f, 22, 1.2f, 90);
@@ -701,11 +718,14 @@ void AbilityFx(uint16_t who, royale::ItemId item, bool self, float x, float z) {
     if (song && (self || d < 900.0f)) PlaySongMelody(OcarinaSongOf(item));
     if (self) return;   // your own spell already made its sound and flash when you used it
     auto a = gActorOf.find(who);
-    if (a == gActorOf.end() || a->second == nullptr) return;
-    PowerFx(gPlayState, item, a->second->world.pos, false, a->second, who);
-    Player* p = (Player*)a->second;
-    if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
-    if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
+    Actor* actor = a != gActorOf.end() ? a->second : nullptr;
+    Vec3f at = actor != nullptr ? actor->world.pos : Vec3f{ x, GroundY(gPlayState, x, z, me->actor.world.pos.y), z };
+    PowerFx(gPlayState, item, at, false, actor, who);
+    if (actor != nullptr) {
+        Player* p = (Player*)actor;
+        if (!song) PuppetSfx(&p->actor, AbilitySfx(item));
+        if (const u16 v = AbilityVoice(item)) PuppetVoice(p, v);
+    }
 }
 
 // ---- the puppet itself ------------------------------------------------------------------------------------------------------------
@@ -924,7 +944,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         static std::unordered_map<uint16_t, uint8_t> previous;
         uint8_t& before = previous[s.id];
         if (s.anim != before && s.alive && (s.anim == static_cast<uint8_t>(royale::Anim::Shoot) || s.anim == static_cast<uint8_t>(royale::Anim::Throw)))
-            SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot);
+            SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot, s.weaponRarity);
         before = s.anim;
     }
     if (s.alive && PuppetRide(play, player, m, s.id)) return;   // sat in a cart (or climbing down from one)

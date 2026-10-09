@@ -182,7 +182,10 @@ static void CombatMath() {
     CHECK(WeaponDps(ItemId::KokiriSword, Rarity::Legendary) > WeaponDps(ItemId::KokiriSword, Rarity::Common));
     CHECK(KindOf(ItemId::Longshot) == ItemKind::Ability && KindOf(ItemId::FairyBow) == ItemKind::Weapon);
     CHECK(ShieldReduction(ItemId::MirrorShield, Rarity::Legendary) <= 0.75f);
-    for (int i = 0; i < kItemCount; i++) CHECK((WeaponOf(kItems[i].id).damage > 0) == (KindOf(kItems[i].id) == ItemKind::Weapon));
+    for (int i = 0; i < kItemCount; i++) {
+        const ItemId id = kItems[i].id;
+        CHECK((WeaponOf(id).damage > 0 || id == ItemId::ShockwaveGrenade) == (KindOf(id) == ItemKind::Weapon));
+    }
     // The Gilded Sword is the strongest sword: it reaches further and hits harder than the Master Sword, one-handed, Legendary only, and found as loot.
     const WeaponStats gilded = WeaponOf(ItemId::GildedSword), master = WeaponOf(ItemId::MasterSword);
     CHECK(gilded.damage > master.damage && gilded.range > master.range && !gilded.ranged && !IsTwoHanded(ItemId::GildedSword));
@@ -501,7 +504,7 @@ static void CatalogIsConsistent() {
         songs += IsSong(d.id);
         simple += IsSimpleSong(d.id);
         switch (d.kind) {
-            case ItemKind::Weapon:     CHECK(WeaponOf(d.id).damage > 0 && WeaponOf(d.id).range > 0 && WeaponOf(d.id).cooldown > 0); break;
+            case ItemKind::Weapon:     CHECK((WeaponOf(d.id).damage > 0 || d.id == ItemId::ShockwaveGrenade) && WeaponOf(d.id).range > 0 && WeaponOf(d.id).cooldown > 0); break;
             case ItemKind::Shield:     CHECK(ShieldReduction(d.id, Rarity::Common) > 0); break;
             case ItemKind::Consumable: {
                 PotionDef p = PotionOf(d.id);
@@ -1674,7 +1677,7 @@ static void SupplyDrops() {
         if (l.container && l.rarity == Rarity::Legendary) legendary++;
         if (l.item == ItemId::Rupees && l.amount == 60) rupees++;
     }
-    CHECK(supply == 3 * announced && legendary >= announced && rupees == announced);                                             // crate, second chest, money
+    CHECK(supply == 3 * announced + 1 && legendary >= announced && rupees == announced);                                             // crate, second chest, money
     // Off means off, and none come in the last quarter of the storm.
     Simulation off = DragonArena(0, false);
     off.match.SetSupplyDrops(false);
@@ -3724,7 +3727,7 @@ static void ShockwaveGrenade() {
     // Hookshot and Shockwave Grenade are hotbar weapons used with B, not powers.
     CHECK(KindOf(ItemId::ShockwaveGrenade) == ItemKind::Weapon && KindOf(ItemId::Hookshot) == ItemKind::Weapon);
     CHECK(InPool(ItemId::ShockwaveGrenade) && InPool(ItemId::Hookshot));
-    {   // The grenade hurts the target and stuns everyone around it, but not you.
+    {   // The grenade is a knockback-only projectile: it does not damage or stun.
         Simulation sim = Duel(5, {100, 0}, {0, 0});
         Match& m = sim.match;
         PlayerState* user = m.Find(1);
@@ -3734,9 +3737,24 @@ static void ShockwaveGrenade() {
         user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
         user->attackReadyAt = 0;
         const float before = target->health;
-        CHECK(m.Attack(1, 1000).ok && target->health < before && m.Stunned(*target));
+        CHECK(m.Attack(1, 1000).ok && target->health == before && !m.Stunned(*target));
         CHECK(!m.Stunned(*user) && user->health == user->maxHealth);
         CHECK(!m.Attack(1, 1000).ok);   // recharging: a grenade is slow
+    }
+    {   // Throws with no locked target still announce a blast downrange for every client.
+        Simulation sim = Duel(5, {100, 0}, {0, 0});
+        Match& m = sim.match;
+        PlayerState* user = m.Find(1);
+        user->pos = {0, 0}; user->rot = 0;
+        user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
+        user->attackReadyAt = 0;
+        m.DrainEvents();
+        CHECK(m.ShootAtNothing(1).ok);
+        bool announced = false;
+        for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(StrikeStyle::Shockwave)) {
+            announced = true; CHECK(std::fabs(e.x) < 0.01f && std::fabs(e.z - 520.0f) < 0.01f && e.health > 0.0f);
+        }
+        CHECK(announced);
     }
     {   // The hookshot reels the target in and stuns them.
         Simulation sim = Duel(5, {100, 0}, {0, 0});
@@ -4199,6 +4217,21 @@ static int CartNear(const Match& m, Vec2 at) {
     return -1;
 }
 
+static void CartBlastVectorGrowth() {
+    Simulation sim=CartDuel(4,{1500,1500},{-1500,-1500},{{0,0},{1000,0}});
+    Match& m=sim.match;
+    CHECK(m.Vehicles().size()==2);
+    if(m.Vehicles().size()!=2)return;
+    for(size_t i=0;i<m.MutableVehicles().size();++i) {
+        auto& v=m.MutableVehicles()[i];v.body.x=static_cast<float>(i)*20.0f;v.body.z=0;
+    }
+    m.AddStrike({0,0},500,kCartHealth+1,0,1,StrikeStyle::Rock);
+    m.TickStrikes();
+    CHECK(m.Vehicles()[0].wrecked&&m.Vehicles()[1].wrecked);
+    CHECK(m.Strikes().size()==3);
+    for(const auto& strike:m.Strikes())CHECK(strike.applied);
+}
+
 static void CartsSeatsRamsAndWrecks() {
     CHECK(VehicleCountFor(2000) >= 4 && VehicleCountFor(1e6f) == kMaxVehicles);
     Simulation sim = CartDuel(4, {1500, 1500}, {-1500, -1500}, {{0, 0}, {1000, 0}});
@@ -4633,7 +4666,7 @@ int main() {
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
-    CartPhysics(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
+    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

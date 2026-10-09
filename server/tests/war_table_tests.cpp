@@ -19,7 +19,6 @@ int main() {
     Check(empowered.attack>base.attack&&empowered.defense>50,"Rarity, gear, shield and adult buffs are reflected");
     const auto empty=Loadout(royale::ItemId::FairyBow,royale::Rarity::Legendary,false,1,1,1,0,false);
     Check(std::fabs(empty.attack-royale::WeaponOf(royale::ItemId::BasicSword).damage*royale::kPlayerDamageScale)<.001f,"Empty ranged weapons show the basic melee fallback without rarity");
-    Check(!PreviewBoneVisible(true,-101)&&PreviewBoneVisible(true,-100)&&PreviewBoneVisible(false,-200),"Hidden Maya props do not shrink the pet preview framing");
     std::set<int> settings;
     for(int section:kSettingsOrder){Check(section>=0&&section<kSettingsCount,"Settings section is valid");settings.insert(section);}
     Check(settings.size()==kSettingsCount&&kSettingsOrder[0]==6,"All settings are reachable and Pets is first");

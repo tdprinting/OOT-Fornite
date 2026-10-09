@@ -243,7 +243,7 @@ bool WarPetPreview() {
     const int pet=PetKind();
     if(pet==0) {royale::lilo::SampleClip(royale::lilo::kIdle,time,lilo);bounds(lilo,royale::lilo::kVerts,royale::lilo::kVertCount,royale::lilo::SkinVertex,[](const auto&){return true;});}
     else if(pet==1) {royale::avriella::SampleClip(royale::avriella::kSit,time,baby);bounds(baby,royale::avriella::kVerts,royale::avriella::kVertCount,royale::avriella::SkinVertex,[](const auto&){return true;});}
-    else {royale::maya::SampleClip(royale::maya::kIdle,time,maya);bounds(maya,royale::maya::kVerts,royale::maya::kVertCount,royale::maya::SkinVertex,[&maya](const auto& v){return wt::PreviewBoneVisible(maya.absolute[v.bone],maya.bone[v.bone].t[1]);});}
+    else {royale::maya::SampleClip(royale::maya::kIdle,time,maya);bounds(maya,royale::maya::kVerts,royale::maya::kVertCount,royale::maya::SkinVertex,[&maya](const auto& v){return royale::maya::PreviewVertexVisible(maya,v);});}
     struct Camera {Mtx projection,identity;Vp viewport;};static std::array<Camera,2> camera;
     auto& frame=camera[gPlayState->state.frames%2];
     const float half=std::max(1.0f,std::max(maxX-minX,maxY-minY)*.64f),cx=(minX+maxX)*.5f,cy=(minY+maxY)*.5f;
