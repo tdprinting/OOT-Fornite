@@ -97,6 +97,12 @@ inline void PreserveJointLinks(Pose& p) {
     }
 }
 
+// Match the renderer's hidden-prop rule when fitting the menu preview camera.
+inline bool PreviewVertexVisible(const Pose& pose,const Vert& vertex) {
+    const int bone=vertex.b0%kBoneCount;
+    return !kBoneIsProp[bone] || pose.bone[bone].t[1]>=-100.0f;
+}
+
 // Where a vertex ends up in a pose, and which way its normal (unit length) then points.
 inline void SkinVertex(const Pose& p, const Vert& v, float pos[3], float nrm[3]) {
     const float rest[3] = {v.x, v.y, v.z}, n[3] = {v.nx / 127.0f, v.ny / 127.0f, v.nz / 127.0f};

@@ -16,7 +16,6 @@ inline int SettingsPage(int section) {
     for(int i=0;i<kSettingsCount;++i)if(kSettingsOrder[i]==section)return i/kSettingsPageSize;
     return 0;
 }
-inline bool PreviewBoneVisible(bool absolute,float localY) { return !absolute || localY>=-100.0f; }
 inline bool PetEnabled(bool enabled,bool lobbyGroup,bool follower,int chosen,int pet) {
     return enabled && (lobbyGroup || (follower && chosen==pet));
 }

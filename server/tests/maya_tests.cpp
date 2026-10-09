@@ -13,6 +13,21 @@ int main() {
     namespace M = royale::maya;
     static_assert(M::kClipCount==19 && M::kFaceCount==8);
     assert(royale::kMayaCompanionLineCount==14);
+    {
+        M::Pose preview;M::SampleClip(M::kIdle,0,preview);
+        int visible=0;
+        for(const auto& vertex:M::kVerts) {
+            const int bone=vertex.b0%M::kBoneCount;
+            assert(M::PreviewVertexVisible(preview,vertex)==(!M::kBoneIsProp[bone]||preview.bone[bone].t[1]>=-100.0f));
+            if(M::PreviewVertexVisible(preview,vertex))++visible;
+        }
+        assert(visible>0&&visible<M::kVertCount);
+        for(int bone=0;bone<M::kBoneCount;++bone)if(M::kBoneIsProp[bone]) {
+            M::Vert vertex{};vertex.b0=static_cast<uint8_t>(bone);
+            preview.bone[bone].t[1]=-101;assert(!M::PreviewVertexVisible(preview,vertex));
+            preview.bone[bone].t[1]=-100;assert(M::PreviewVertexVisible(preview,vertex));
+        }
+    }
     for (const auto& batch:M::kBatches) {
         assert(batch.vertCount>0 && batch.vertCount<=32);
         assert(batch.firstVert+batch.vertCount<=M::kVertCount);
