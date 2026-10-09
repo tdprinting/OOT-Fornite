@@ -2366,7 +2366,7 @@ static void MapsHaveTheirOwnNamesAndBosses() {
         match.AddHuman(1);
         match.Start();
         CHECK(!match.Bosses().empty());
-        for (const MiniBoss& b : match.Bosses()) CHECK(b.kind == m.minis[0] || b.kind == m.minis[1] || IsChuKind(b.kind));
+        for (const MiniBoss& b : match.Bosses()) CHECK(b.kind == m.minis[0] || b.kind == m.minis[1] || IsChuKind(b.kind) || b.kind == BossKind::Hollowbell);
         for (const auto& p : match.Players()) if (p.isBot) CHECK(p.scene == m.scene);
     }
     // The dragon of a map is the one for that place.

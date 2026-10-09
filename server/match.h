@@ -1335,6 +1335,7 @@ class Match {
         bosses.clear();
         helpers.clear();
         Rng rng(seed ^ 0x626F7373ull); // "boss"
+        bool morrowSpawned = false;
         std::vector<Vec2> spots = bossSpots;
         for (size_t i = spots.size(); i > 1; i--) std::swap(spots[i - 1], spots[rng.Below(static_cast<uint32_t>(i))]);
         while (static_cast<int>(bosses.size()) < bossCount) {
@@ -1370,6 +1371,8 @@ class Match {
             b.home = b.pos = at;
             // One third of guards draw from the new jelly pool; retain every original guard.
             if (rng.Below(3) == 0) b.kind = static_cast<BossKind>(static_cast<int>(BossKind::ChuRed) + rng.Below(5));
+            // One contested Hollowbell encounter at most; retain the remaining guards.
+            if (!morrowSpawned && rng.Below(4) == 0) { b.kind = BossKind::Hollowbell; morrowSpawned = true; }
             b.maxHealth = b.health = BossOf(b.kind).health;
             bosses.push_back(b);
             SpawnHelpers(b);
@@ -1438,6 +1441,7 @@ class Match {
     void KillBoss(MiniBoss& b, PlayerState& killer) {
         b.alive = false;
         b.health = 0;
+        for (auto& strike : strikes) if (strike.by == b.id) strike.applied = true;
         killer.bossKills++;
         killer.dirty = true;
         // Several chests on the best tiers, in a ring around where it fell.
@@ -1617,7 +1621,7 @@ class Match {
             case BossKind::DragonShadow: case BossKind::Shade: return StrikeStyle::Shadow;
             case BossKind::Frost: return StrikeStyle::Ice;
             case BossKind::Moss: return StrikeStyle::Spore;
-            case BossKind::Stone: case BossKind::Dune: return StrikeStyle::Rock;
+            case BossKind::Stone: case BossKind::Dune: case BossKind::Hollowbell: return StrikeStyle::Rock;
             default: return StrikeStyle::Fire;
         }
     }
@@ -1662,6 +1666,10 @@ class Match {
         for (auto& s : strikes) {
             if (s.applied || clock < s.hitAt) continue;
             s.applied = true;
+            if (IsBossId(s.by)) {
+                const MiniBoss* owner = FindBoss(s.by);
+                if (owner && owner->kind == BossKind::Hollowbell && !owner->alive) continue;
+            }
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast
@@ -1904,6 +1912,36 @@ class Match {
         bool started = false;
         float busy = 0.0f;
         switch (b.kind) {
+            case BossKind::Hollowbell: {
+                if (d >= 650.0f) break;
+                // Both attacks capture target position and facing once. Strike events carry the actual warnings.
+                b.rot = FaceRot(b.pos, at);
+                const float facing = static_cast<float>(b.rot) * (3.14159265f / 32768.0f);
+                const Vec2 forward = {std::sin(facing), std::cos(facing)};
+                const Vec2 side = {-forward.z, forward.x};
+                const bool road = b.moves % 2 == 0 && d >= 160.0f;
+                const auto mark = [&](Vec2 p, float radius, float damage, float delay) {
+                    if (Inside(p) && (!nav || nav->Walkable(p)))
+                        AddStrike(p, radius, damage, delay, b.id, StrikeStyle::Rock);
+                };
+                if (road) {
+                    StartMove(b, DragonMode::Slam, 2.0f, DragonMode::Stunned, 1.6f, 1);
+                    for (int i = 0; i < 3; ++i)
+                        mark({b.pos.x + forward.x * (150.0f + 150.0f * i), b.pos.z + forward.z * (150.0f + 150.0f * i)},
+                             85.0f, 1.1f, 1.1f + 0.4f * i);
+                    busy = 3.6f;
+                } else {
+                    const Vec2 center = d < 160.0f ? Vec2{b.pos.x + forward.x * 160.0f, b.pos.z + forward.z * 160.0f} : at;
+                    StartMove(b, DragonMode::Summon, 2.3f, DragonMode::Stunned, 1.8f, b.health <= b.maxHealth * 0.5f ? 3 : 2);
+                    const bool overtime = b.aux == 3;
+                    mark(center, 75.0f, 0.8f, overtime ? 1.2f : 2.2f);
+                    mark({center.x + side.x * 170.0f, center.z + side.z * 170.0f}, 75.0f, 0.8f, overtime ? 1.7f : 1.2f);
+                    mark({center.x - side.x * 170.0f, center.z - side.z * 170.0f}, 75.0f, 0.8f, overtime ? 2.2f : 1.7f);
+                    busy = 4.1f;
+                }
+                started = true;
+                break;
+            }
             case BossKind::ChuRed: case BossKind::ChuGreen: case BossKind::ChuYellow: case BossKind::ChuBlue: case BossKind::ChuDark:
                 if (d < 520.0f) {
                     const StrikeStyle style = ChuStyle(b.kind);
@@ -1994,7 +2032,7 @@ class Match {
             default: break;
         }
         if (started) {
-            b.specialReadyAt = clock + busy + 7.0f + static_cast<float>(rng.Unit()) * 3.0f;   // a breather after each trick
+            b.specialReadyAt = clock + busy + 7.0f + (b.kind == BossKind::Hollowbell ? 0.0f : static_cast<float>(rng.Unit()) * 3.0f);   // a breather after each trick
             b.attackReadyAt = (std::max)(b.attackReadyAt, clock + busy + def.cooldown * 0.5f);
             b.moves++;
         }
@@ -2005,6 +2043,12 @@ class Match {
         const BossDef def = BossOf(b.kind);
         if (IsChuKind(b.kind) && (b.mode == DragonMode::Patrol || b.mode == DragonMode::Chase))
             b.aux = ChuCharged(b.kind, clock, false) ? 1 : 0;
+        if (b.kind == BossKind::Hollowbell && !IsBossArena(mapId) && Distance(b.pos, b.home) > kBossLeash) {
+            strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [&](const Strike& s) { return s.by == b.id; }), strikes.end());
+            b.mode = DragonMode::Patrol; b.windupUntil = -1; b.target = kNoPlayer;
+            BossWalk(b, b.home, def.speed * 0.8f, dt);
+            return;
+        }
         if (TickMiniMove(b, dt)) return;
         // Notice the nearest player in range (the current target is kept while it stays in reach).
         PlayerState* target = Find(b.target);
@@ -2040,12 +2084,13 @@ class Match {
             const float d = Distance(b.pos, target->pos);
             if (b.mode == DragonMode::Patrol) b.mode = DragonMode::Chase;
             if (clock >= b.specialReadyAt && clock >= b.attackReadyAt && StartMiniSpecial(b, *target, d)) return;
-            if (d > kBossReach * 0.75f) BossWalk(b, target->pos, def.speed * (ArmourOff(b) ? kIronKnuckleBareSpeed : 1.0f), dt);
+            const bool overtime = b.kind == BossKind::Hollowbell && b.health <= b.maxHealth * 0.5f;
+            if (d > kBossReach * 0.75f) BossWalk(b, target->pos, def.speed * (ArmourOff(b) ? kIronKnuckleBareSpeed : overtime ? 1.2f : 1.0f), dt);
             b.rot = FaceRot(b.pos, target->pos);
             if (d <= kBossReach + 20.0f && clock >= b.attackReadyAt) {
-                b.attackReadyAt = clock + def.cooldown * (ArmourOff(b) ? kIronKnuckleBareSwing : 1.0f);
+                b.attackReadyAt = clock + (overtime ? 1.65f : def.cooldown * (ArmourOff(b) ? kIronKnuckleBareSwing : 1.0f));
                 b.lastSmashAt = clock;
-                b.windupUntil = clock + kBossWindupSeconds;   // it rears back first: that half second is the player's chance to roll away
+                b.windupUntil = clock + (b.kind == BossKind::Hollowbell ? 0.85f : kBossWindupSeconds);
             }
         } else {
             // Lost them (or they ran too far): walk home and recover.

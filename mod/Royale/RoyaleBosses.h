@@ -41,6 +41,7 @@ struct BossActor {
     int swings = 0;              // which of its two swings comes next
     float fade = 1.0f;           // 0 when it is out of sight (under the ground, under the water, vanished, hiding in the grass)
     float spin = 0;              // the Big Octo's spin, the Dodongo's roll
+    bool morrowAlerted = false;
     bool armourOff = false;      // the Iron Knuckle has lost its armour
     float fxClock = 0;           // for effects that come every so often
     float flashAge = 10.0f, flashLen = 0.0f;   // seconds since a hit flashed it, and how long that flash lasts (see HitFeedback)
@@ -163,6 +164,7 @@ const StrikeFx* PendingStrikeOf(uint32_t owner) {
 // ---- mini bosses --------------------------------------------------------------------------------------------------------------
 
 #include "RoyaleChuChu.h"
+#include "RoyaleMorrow.h"
 
 struct MiniLook {
     const char* skeleton;
@@ -1114,7 +1116,7 @@ void Boss_Update(Actor* actor, PlayState* play) {
     b.modeFresh = b.mode != b.shownMode || b.aux != b.shownAux;
     if (b.modeFresh) {
         const BM was = static_cast<BM>(b.shownMode < 0 ? b.mode : b.shownMode);
-        if (b.shownMode >= 0) BossModeStarted(play, b, was);
+        if (b.shownMode >= 0 && KindOf(b) != BK::Hollowbell) BossModeStarted(play, b, was);
         b.shownMode = b.mode;
         b.shownAux = b.aux;
         b.modeAge = 0.0f;
@@ -1159,6 +1161,7 @@ void Boss_Update(Actor* actor, PlayState* play) {
     if ((KindOf(b) == BK::Tide || KindOf(b) == BK::Lava) && mode == BM::Charge) b.spin += KindOf(b) == BK::Tide ? 0.9f : 0.6f;
     else b.spin = 0.0f;
     switch (KindOf(b)) {
+        case BK::Hollowbell: Morrow_Update(play, b); break;
         case BK::DragonFire: Volvagia_Update(play, b); break;
         case BK::DragonWater: b.skReady = true; break;   // Morpha is drawn from pieces, not a skeleton
         case BK::DragonForest: PhantomGanon_Update(play, b); break;
@@ -1180,6 +1183,7 @@ void Boss_Draw(Actor* actor, PlayState* play) {
     BossActor& b = gBosses[of->second];
     if (royale::IsChuKind(KindOf(b))) { ChuChu_Draw(actor, play, b); return; }
     switch (KindOf(b)) {
+        case BK::Hollowbell: Morrow_Draw(actor, play, b); return;
         case BK::DragonFire: Volvagia_Draw(actor, play, b); return;
         case BK::DragonWater: Morpha_Draw(actor, play, b); return;
         case BK::DragonForest: PhantomGanon_Draw(actor, play, b); return;
@@ -1267,13 +1271,21 @@ void ReconcileBosses(const royale::HudState& hud) {
                 }
             } else {
                 BossActor& b = it->second;
+                if (KindOf(b)==BK::Hollowbell && n.mode==static_cast<uint8_t>(BM::Patrol) && b.mode!=n.mode)
+                    gStrikeFx.erase(std::remove_if(gStrikeFx.begin(),gStrikeFx.end(),[&](const StrikeFx& s){return s.owner==id;}),gStrikeFx.end());
                 b.tx = n.x; b.tz = n.z; b.trot = n.rot; b.hp = n.hp / 255.0f; b.talt = n.y; b.mode = n.mode; b.aux = n.aux;
                 if (n.smashing && b.smashAge > 0.3f) b.smashAge = 0.0f;
                 if (b.actor) b.actor->shape.shadowScale = royale::BossHidden(static_cast<BM>(n.mode)) || b.fade < 0.5f ? 0.0f : (royale::IsDragonKind(KindOf(b)) ? 0.0f : 70.0f * royale::kBossDefs[n.kind].scale);
             }
         }
     }
-    for (auto& [id, b] : gBosses) if (!wanted.count(id) && b.actor) Actor_Kill(b.actor);
+    for (auto& [id, b] : gBosses) if (!wanted.count(id) && b.actor) {
+        if (KindOf(b)==BK::Hollowbell) {
+            if (show) PlayMorrowSound(5,b.x,b.z);
+            gStrikeFx.erase(std::remove_if(gStrikeFx.begin(),gStrikeFx.end(),[&](const StrikeFx& s){return s.owner==id;}),gStrikeFx.end());
+        }
+        Actor_Kill(b.actor);
+    }
 }
 
 // Name and health bar over each boss (not over one that is out of sight).
@@ -1596,7 +1608,9 @@ void UpdateBossWorldFx() {
     for (StrikeFx& s : gStrikeFx) {
         const float ground = GroundY(gPlayState, s.x, s.z, pl->actor.world.pos.y);
         if (now < s.land) StrikeWarning(gPlayState, s, ground, now);
-        else if (!s.boomed) { s.boomed = true; StrikeBlast(gPlayState, s, ground); }
+        else if (!s.boomed) { s.boomed = true; StrikeBlast(gPlayState, s, ground);
+            const auto* owner=BossById(s.owner); if(owner && KindOf(*owner)==BK::Hollowbell) PlayMorrowSound(2,s.x,s.z);
+        }
     }
     gStrikeFx.erase(std::remove_if(gStrikeFx.begin(), gStrikeFx.end(), [&](const StrikeFx& s) { return now > s.land + 1.0; }), gStrikeFx.end());
     UpdateBossBodyFx(gPlayState);

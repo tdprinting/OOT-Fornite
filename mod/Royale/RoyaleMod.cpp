@@ -20,6 +20,8 @@
 #include "maya_anim.h"
 #include "bokoblin_anim.h"
 #include "bokoblin_sounds.h"
+#include "morrow_model.h"
+#include "morrow_sounds.h"
 #include "maya_sounds.h"
 #include "maya_phone.h"
 #include "cart_model.h"

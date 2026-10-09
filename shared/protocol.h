@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 34; // 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
+constexpr uint16_t kProtocolVersion = 35; // 35: Hollowbell boss kind. 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;

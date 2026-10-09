@@ -15,11 +15,12 @@ namespace royale {
 //   Dune   Iron Knuckle (its armour breaks off at half health and it gets fast)
 //   DragonFire Volvagia   DragonWater Morpha      DragonForest Phantom Ganon   DragonShadow Bongo Bongo   DragonSand Twinrova
 // Append new kinds so the existing major boss IDs and authored region IDs stay stable.
-enum class BossKind : uint8_t { Stone, Lava, Frost, Moss, Tide, Shade, Dune, DragonFire, DragonWater, DragonForest, DragonShadow, DragonSand, ChuRed, ChuGreen, ChuYellow, ChuBlue, ChuDark, Count };
-constexpr int kMiniBossKindCount = 12;
+enum class BossKind : uint8_t { Stone, Lava, Frost, Moss, Tide, Shade, Dune, DragonFire, DragonWater, DragonForest, DragonShadow, DragonSand, ChuRed, ChuGreen, ChuYellow, ChuBlue, ChuDark, Hollowbell, Count };
+constexpr int kMiniBossKindCount = 13;
 inline constexpr BossKind kMiniBossKinds[kMiniBossKindCount] = {
     BossKind::Stone, BossKind::Lava, BossKind::Frost, BossKind::Moss, BossKind::Tide, BossKind::Shade, BossKind::Dune,
-    BossKind::ChuRed, BossKind::ChuGreen, BossKind::ChuYellow, BossKind::ChuBlue, BossKind::ChuDark
+    BossKind::ChuRed, BossKind::ChuGreen, BossKind::ChuYellow, BossKind::ChuBlue, BossKind::ChuDark,
+    BossKind::Hollowbell
 };
 constexpr bool IsChuKind(BossKind k) { return k >= BossKind::ChuRed && k <= BossKind::ChuDark; }
 constexpr bool ChuCharged(BossKind k, float clock, bool dazed) {
@@ -75,6 +76,7 @@ constexpr BossDef kBossDefs[] = {
     {"Yellow ChuChu", "Crackling Jelly Giant", 24.0f, 0.9f, 1.7f, 62.0f, 1.2f, 4, Traverse::Leap, 0.0f},
     {"Blue ChuChu", "Stormwater Jelly Giant", 26.0f, 1.0f, 1.8f, 55.0f, 1.2f, 4, Traverse::Swim, 0.0f},
     {"Dark ChuChu", "Petrifying Shadow Jelly", 24.0f, 0.9f, 1.8f, 58.0f, 1.2f, 4, Traverse::Burrow, 0.0f},
+    {"Morrow", "The Hollowbell Warden", 30.0f, 1.0f, 1.9f, 60.0f, 1.0f, 4, Traverse::Leap, 0.0f},
 };
 constexpr int kBossKindCount = sizeof(kBossDefs) / sizeof(kBossDefs[0]);
 static_assert(kBossKindCount == static_cast<int>(BossKind::Count), "one definition per kind of boss");

@@ -22,7 +22,7 @@ assert 'cp -R "$ROOT/mod/Royale/features" "$DEST/"' in copy_script, "Build omits
 expanded = read_mod_source(mod)
 if args.copied:
     assert read_mod_source(args.copied / "RoyaleMod.cpp") == expanded, "Copied implementation differs"
-    for header in ("RoyaleLobbyFish.h", "RoyaleLobbyPets.h", "RoyaleWarTable.h", "RoyaleBokoblins.h"):
+    for header in ("RoyaleLobbyFish.h", "RoyaleLobbyPets.h", "RoyaleWarTable.h", "RoyaleBokoblins.h", "RoyaleMorrow.h"):
         assert (args.copied / header).read_bytes() == (mod.parent / header).read_bytes(), header
     for fragment in (mod.parent / "war_table").glob("*.inc"):
         assert (args.copied / "war_table" / fragment.name).read_bytes() == fragment.read_bytes(), fragment.name
