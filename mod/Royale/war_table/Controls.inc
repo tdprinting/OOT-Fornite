@@ -4,11 +4,11 @@ namespace wt = royale::wartable;
 using WarPage = wt::Page;
 struct WarControl { wt::Widget view; std::function<void(int)> act; };
 struct WarState {
-    bool open = true, booted = false, music = false, reduced = false;
+    bool open = true, booted = false, music = false, reduced = false, previewAnimate = true;
     bool lastJoined = false, mouseDown = false, wasTouch = false, homeTravel = false;
     WarPage page = WarPage::Play, returnPage = WarPage::Play;
     int focus = 0, section = 0, zone = 0, item = 1, boss = 0, rosterOffset = 0;
-    int keyboardTarget = 0, pendingZone = -1;
+    int keyboardTarget = 0, pendingZone = -1, optionPage = 0, optionPages = 1;
     uint32_t lastTicks = 0, enteredAt = 0, mapChangedAt = 0;
     uint16_t savedSequence = NA_BGM_DISABLED;
     int savedScene = -1;
@@ -39,6 +39,7 @@ void WarShow(WarPage page) {
     gWar.page = page;
     gWar.focus = 4;
     gWar.section = 0;
+    gWar.optionPage = 0;
     gWar.transition = gWar.reduced ? 1.0f : 0.0f;
     gWar.enteredAt = SDL_GetTicks();
     gWar.repeat = {};
@@ -167,16 +168,48 @@ void WarAdd(int id, wt::Rect rect, std::string label, std::string hint, std::fun
 void WarRow(int id, int row, std::string label, std::string hint, std::function<void(int)> act, bool enabled = true, bool adjustable = false) {
     WarAdd(id,{234,102.0f+row*29,378,25},std::move(label),std::move(hint),std::move(act),enabled,adjustable);
 }
-void WarSetting(int row, const char* label, const char* key, int fallback, int low, int high, int step, const char* hint) {
+void WarSetting(int row, const char* label, const char* key, int fallback, int low, int high, int step, const char* hint, bool enabled=true) {
     int n = std::clamp(CVarGetInteger(key, fallback), low, high);
     const bool toggle = low == 0 && high == 1;
     std::string text = std::string(label) + "   " + (toggle ? (n ? "On" : "Off") : std::to_string(n));
     WarRow(400+row,row,text,hint,[key,low,high,step,n](int direction) {
         int value = low == 0 && high == 1 ? !n : std::clamp(n+(direction < 0 ? -step : step),low,high);
         CVarSetInteger(key,value);
+        // Refresh cached local graphics values as well as the saved setting.
+        Ui().loaded=false; Ui();
         if(gWar.page==WarPage::Settings&&gWar.section==4)gShadowCfgLoaded=false;
         Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
         if (std::strcmp(key,CVAR_SETTING("Volume.SFX")) == 0) Audio_SetGameVolume(SEQ_PLAYER_SFX,value/100.0f);
+    },enabled,true);
+}
+struct WarOption { const char* label; const char* key; int fallback, low=0, high=1, step=1; const char* hint="Change this game option"; };
+void WarFocusFirstOption() {
+    for(int i=0;i<static_cast<int>(gWar.controls.size());++i) {
+        const auto& w=gWar.controls[i].view;
+        if(w.enabled&&w.rect.x>=234&&w.rect.y<280){gWar.focus=i;break;}
+    }
+}
+void WarOptionPager(int pages) {
+    gWar.optionPages=std::max(1,pages);
+    if(pages<=1)return;
+    gWar.optionPage=std::clamp(gWar.optionPage,0,pages-1);
+    WarAdd(800,{235,282,100,22},"< OPTIONS","Previous option page",[](int){gWar.optionPage=std::max(0,gWar.optionPage-1);WarFocusFirstOption();},gWar.optionPage>0);
+    WarAdd(801,{507,282,100,22},"OPTIONS >","More options in this category",[pages](int){gWar.optionPage=std::min(pages-1,gWar.optionPage+1);WarFocusFirstOption();},gWar.optionPage+1<pages);
+}
+void WarOptions(std::initializer_list<WarOption> options,bool enabled=true) {
+    const int pages=(static_cast<int>(options.size())+5)/6;
+    gWar.optionPage=std::clamp(gWar.optionPage,0,std::max(0,pages-1));
+    int index=0;for(const auto& option:options) {
+        if(index/6==gWar.optionPage)WarSetting(index%6,option.label,option.key,option.fallback,option.low,option.high,option.step,option.hint,enabled);
+        ++index;
+    }
+    WarOptionPager(pages);
+}
+void WarDebugToggle(int row,int id) {
+    const bool on=DebugOn(id);
+    WarRow(700+id,row,std::string(kDebugSwitches[id].key)+"   "+(on?"On":"Off"),kDebugSwitches[id].label,[id,on](int){
+        gDebugOn[id]=!on;const auto key=std::string(ROYALE_CVAR("Debug."))+kDebugSwitches[id].key;
+        CVarSetInteger(key.c_str(),!on);WarSave();
     },true,true);
 }
 void WarBuild() {
@@ -235,31 +268,67 @@ void WarBuild() {
         WarRow(41,1,std::string("Tunic   ")+(ui.skin<royale::kSkinCount?royale::kSkins[ui.skin].name:"Custom"),"Left / right changes your tunic",[](int d){Ui().skin=(Ui().skin+(d<0?-1:1)+royale::kSkinCount)%royale::kSkinCount;WarSave();},idle,true);
         { int pet=MapOption("LiloPet",false)?PetKind()+1:0; const char* names[]={"None","Lilo","Avriella","Maya"};
           WarRow(42,2,std::string("Companion   ")+names[std::clamp(pet,0,3)],"Your companion follows you in the world",[pet](int d){int n=(pet+(d<0?-1:1)+4)%4;CVarSetInteger(ROYALE_CVAR("LiloPet"),n!=0);CVarSetInteger(ROYALE_CVAR("PetKind"),std::max(0,n-1));WarSave();},true,true); }
+        WarRow(44,3,"PETS & PREVIEW","Enable pets and preview each companion",[](int){WarShow(WarPage::Settings);gWar.section=6;});
         WarRow(43,4,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
-        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates"};
-        for(int i=0;i<6;++i) WarAdd(50+i,{28,108.0f+i*34,184,29},sections[i],"Choose a settings category",[i](int){gWar.section=i;});
+        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced"};
+        gWar.optionPages=1;
+        const int menuPage=wt::SettingsPage(gWar.section);
+        for(int row=0;row<wt::kSettingsPageSize;++row) {
+            const int index=menuPage*wt::kSettingsPageSize+row;if(index>=wt::kSettingsCount)break;
+            const int section=wt::kSettingsOrder[index];
+            WarAdd(50+section,{28,108.0f+row*29,184,25},sections[section],"Choose a settings category",[section](int){gWar.section=section;gWar.optionPage=0;});
+        }
+        WarAdd(850,{28,282,86,22},"< BACK","Previous categories",[](int){gWar.section=wt::kSettingsOrder[0];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
+        WarAdd(851,{122,282,90,22},"MORE >","World, water, effects, advanced and updates",[](int){gWar.section=wt::kSettingsOrder[6];gWar.optionPage=0;gWar.focus=4;},menuPage==0);
         if(gWar.section==0) {
+            WarOptionPager(2);
+            if(gWar.optionPage==1) {
+                WarSetting(0,"Master volume",CVAR_SETTING("Volume.Master"),40,0,100,5,"Overall game volume");
+                WarSetting(1,"Fanfares",CVAR_SETTING("Volume.Fanfare"),100,0,100,5,"Victory and item music");
+                WarSetting(2,"Ambient music",CVAR_SETTING("Volume.SubMusic"),100,0,100,5,"Secondary world music");
+                WarSetting(3,"Lobby music folder",ROYALE_CVAR("LobbyMusic"),1,0,1,1,"Play your music folder while waiting");
+                WarSetting(4,"OoT instruments",ROYALE_CVAR("OotConvert"),0,0,1,1,"Use game instruments for converted songs");
+                WarRow(405,5,"RESCAN MUSIC FOLDER","Refresh locally installed music",[](int){gScanRequested=true;});
+            } else {
             WarSetting(0,"Menu music",ROYALE_CVAR("MenuMusic"),70,0,100,5,"Original Ocarina of Time file-select music");
             WarSetting(1,"Menu sounds",ROYALE_CVAR("MenuSfx"),75,0,100,5,"Navigation, confirm, back and error sounds");
             WarSetting(2,"Game music",CVAR_SETTING("Volume.MainMusic"),100,0,100,5,"Music volume during gameplay");
             WarSetting(3,"Game effects",CVAR_SETTING("Volume.SFX"),100,0,100,5,"Gameplay sound effects");
             WarRow(404,4,std::string("Match music   ")+(ui.musicMode==0?"Original":ui.musicMode==1?"Music folder":"Off"),"Choose original music, your music folder or silence",[](int d){Ui().musicMode=(Ui().musicMode+(d<0?-1:1)+3)%3;WarSave();},true,true);
+            }
         } else if(gWar.section==1) {
+            WarOptionPager(2);
+            if(gWar.optionPage==1) {
+                WarSetting(0,"Cloth strength",ROYALE_CVAR("ClothPhysics"),100,0,200,10,"Amount of cloth motion");
+                WarSetting(1,"Wind strength",ROYALE_CVAR("WindStrength"),100,0,200,10,"Strength of local wind animation");
+                WarSetting(2,"Wind streaks",ROYALE_CVAR("WindStreaks"),1,0,1,1,"Show air trails that indicate wind");
+                WarSetting(3,"Cloud amount",ROYALE_CVAR("SkyClouds"),100,0,200,10,"Density of moving sky clouds");
+                WarSetting(4,"Fog amount",ROYALE_CVAR("FogAmount"),100,0,200,10,"Strength of atmospheric fog");
+            } else {
             WarRow(400,0,"Weather detail   "+std::to_string(ui.weatherDensity)+"%","Particle density on this device",[](int d){Ui().weatherDensity=std::clamp(Ui().weatherDensity+(d<0?-25:25),0,200);WarSave();},true,true);
             WarRow(401,1,"Foliage   "+std::to_string(ui.foliage)+"%","Grass and foliage density",[](int d){Ui().foliage=std::clamp(Ui().foliage+(d<0?-25:25),0,200);WarSave();},true,true);
             WarRow(402,2,std::string("Cloth motion   ")+(ui.clothOn?"On":"Off"),"Animate cloth on hats and gliders",[](int){Ui().clothOn=!Ui().clothOn;WarSave();},true,true);
             WarRow(403,3,std::string("Wind   ")+(ui.windOn?"On":"Off"),"Wind movement in the world",[](int){Ui().windOn=!Ui().windOn;WarSave();},true,true);
             WarSetting(4,"Frame interpolation",CVAR_SETTING("InterpolationFPS"),60,20,120,10,"Higher values may need more GPU power");
+            }
         } else if(gWar.section==2) {
             WarSetting(0,"Reduced menu motion",ROYALE_CVAR("ReducedMotion"),0,0,1,1,"Remove slides and selection pulses");
             WarSetting(1,"Show players on map",ROYALE_CVAR("MapPlayers"),1,0,1,1,"Show nearby known players on the minimap");
             WarSetting(2,"Show bots on map",ROYALE_CVAR("MapBots"),1,0,1,1,"Show nearby bots on the minimap");
             WarSetting(3,"Hit flashes",ROYALE_CVAR("HitFlash"),1,0,1,1,"Flash feedback when attacks connect");
             WarSetting(4,"Blood effects",ROYALE_CVAR("HitBlood"),1,0,1,1,"Optional combat blood effects");
+            WarDebugToggle(5,kDbgMinimap);
         } else if(gWar.section==3) {
             const bool can=idle||(h.isHost&&h.state==royale::MatchState::Lobby&&!gPendingStart);
+            WarOptionPager(2);
+            if(gWar.optionPage==1) {
+                const int season=std::clamp(ui.weatherSeason,0,static_cast<int>(royale::kSeasonRandom));
+                WarRow(400,0,std::string("Season   ")+(season==royale::kSeasonRandom?"Random":royale::SeasonName(static_cast<royale::Season>(season))),"Choose the hosted match season",[](int d){Ui().weatherSeason=(Ui().weatherSeason+(d<0?-1:1)+5)%5;WarSave();},can,true);
+                WarRow(401,1,"Weather changes   "+std::to_string(ui.weatherChange)+"%","How often hosted weather changes",[](int d){Ui().weatherChange=std::clamp(Ui().weatherChange+(d<0?-10:10),0,100);WarSave();},can,true);
+                WarRow(402,2,std::string("Temple waiting room   ")+(ui.waitingRoom?"On":"Off"),"Use the Temple while waiting for your lobby",[](int){Ui().waitingRoom=!Ui().waitingRoom;WarSave();},idle,true);
+            } else {
             WarRow(400,0,"Players   "+std::to_string(ui.playerLimit),"Empty places are filled with bots",[](int d){Ui().playerLimit=std::clamp(Ui().playerLimit+(d<0?-1:1),royale::kMinPlayers,royale::kMaxPlayers);WarSave();},can,true);
             const char* difficulty[]={"Easy","Normal","Hard"};
             WarRow(401,1,std::string("Bots   ")+difficulty[ui.botDifficulty],"Bot difficulty for hosted games",[](int d){Ui().botDifficulty=(Ui().botDifficulty+(d<0?-1:1)+3)%3;WarSave();},can,true);
@@ -267,6 +336,7 @@ void WarBuild() {
             WarRow(403,3,std::string("Automatic start   ")+(ui.autoStart?"On":"Off"),"Start after the lobby timer. Host can always start manually.",[](int){Ui().autoStart=!Ui().autoStart;WarSave();},can,true);
             WarRow(404,4,"Weather   "+std::to_string(ui.weatherIntensity)+"%","Weather strength for this match",[](int d){Ui().weatherIntensity=std::clamp(Ui().weatherIntensity+(d<0?-10:10),0,100);WarSave();},can,true);
             WarRow(405,5,"Host port   "+std::to_string(ui.port),"Change the port before creating a lobby",[](int){WarEdit(2);},idle);
+            }
         } else if(gWar.section==4) {
             WarRow(400,0,std::string("Dynamic shadows   ")+(DebugOn(kDbgShadows)?"On":"Off"),"Shadows follow the sun, moon and nearby lights",[](int){gDebugOn[kDbgShadows]=!DebugOn(kDbgShadows);CVarSetInteger(ROYALE_CVAR("Debug.Shadows"),gDebugOn[kDbgShadows]);WarSave();},true,true);
             const int quality=std::clamp(CVarGetInteger(ROYALE_CVAR("ShadowQuality"),1),0,static_cast<int>(sh::Quality::Count)-1);
@@ -275,6 +345,49 @@ void WarBuild() {
             WarSetting(3,"Soft edges",ROYALE_CVAR("ShadowSoftness"),100,25,300,25,"Softness of shadow edges");
             WarSetting(4,"Dynamic lights",ROYALE_CVAR("DynLights"),1,0,1,1,"Light from explosions, spells and chests");
             WarSetting(5,"Building sunlight",ROYALE_CVAR("SunOnBuildings"),1,0,1,1,"Hyrule Kingdom lighting follows sun and moon");
+        } else if(gWar.section==6) {
+            auto row=[](int id,int line,std::string label,const char* hint,std::function<void(int)> action) {
+                WarAdd(id,{393,115.0f+line*33,213,28},std::move(label),hint,std::move(action),true,true);
+            };
+            const bool enabled=MapOption("PetsEnabled",true),lobby=MapOption("LobbyAllPets",false),follow=MapOption("LiloPet",false);
+            auto toggle=[](const char* key,bool value){
+                CVarSetInteger(key,!value);WarSave();
+                if(!MapOption("PetsEnabled",true)) {
+                    StopVoice(kVoiceCat);StopVoice(kVoiceBaby);StopVoice(kVoiceMaya);StopVoice(kVoicePhone);
+                    StopVoice(kVoiceToy);StopVoice(kVoiceToySfx);gBabyCoos.clear();
+                }
+            };
+            row(420,0,std::string("Pets   ")+(enabled?"On":"Off"),"Master switch for all pet companions",[enabled,toggle](int){toggle(ROYALE_CVAR("PetsEnabled"),enabled);});
+            row(421,1,std::string("Lobby pets   ")+(lobby?"On":"Off"),"All three companions play together in the lobby",[lobby,toggle](int){toggle(ROYALE_CVAR("LobbyAllPets"),lobby);});
+            row(422,2,std::string("Follow me   ")+(follow?"On":"Off"),"Bring the selected companion into gameplay",[follow,toggle](int){toggle(ROYALE_CVAR("LiloPet"),follow);});
+            const char* names[]={"Lilo","Avriella","Maya"};
+            row(423,3,std::string("Companion   ")+names[PetKind()],"Left/right selects the pet shown in the preview",[](int d){CVarSetInteger(ROYALE_CVAR("PetKind"),(PetKind()+(d<0?-1:1)+3)%3);WarSave();});
+            WarAdd(424,{393,255,213,28},std::string("Animate preview   ")+(gWar.previewAnimate?"On":"Off"),"Toggle preview motion without changing gameplay or menu settings",[](int){gWar.previewAnimate=!gWar.previewAnimate;});
+        } else if(gWar.section==7) {
+            WarOptions({
+                {"Original OoT sky",ROYALE_CVAR("SkyOot"),1},{"Stars",ROYALE_CVAR("SkyStars"),1},{"Sun and moon",ROYALE_CVAR("SkyBodies"),1},
+                {"Puddles",ROYALE_CVAR("GroundPuddles"),1},{"Ground snow",ROYALE_CVAR("GroundSnow"),1},{"Ground frost",ROYALE_CVAR("GroundFrost"),1},
+                {"Fallen leaves",ROYALE_CVAR("GroundLeaves"),1},{"Footprints and trails",ROYALE_CVAR("GroundTrails"),1},{"Merge ground patches",ROYALE_CVAR("GroundMerge"),1},
+                {"Ground detail",ROYALE_CVAR("GroundAmount"),100,0,200,10},{"Ground deformation",ROYALE_CVAR("GroundDeform"),100,0,200,10}});
+        } else if(gWar.section==8) {
+            WarOptions({
+                {"Water detail (0-2)",ROYALE_CVAR("WaterDetail"),1,0,2,1},{"Wave height",ROYALE_CVAR("WaterWaves"),100,0,200,10},{"Water clarity",ROYALE_CVAR("WaterClarity"),100,0,200,10},
+                {"Splashes and bubbles",ROYALE_CVAR("WaterFx"),1},{"Water life",ROYALE_CVAR("WaterLife"),1},{"Swimmer wakes",ROYALE_CVAR("WaterWakes"),1},
+                {"Rain rings",ROYALE_CVAR("WaterRain"),1},{"Sky reflections",ROYALE_CVAR("WaterSky"),1},{"Character reflections",ROYALE_CVAR("WaterBodies"),1},
+                {"Underwater effects",ROYALE_CVAR("WaterUnder"),1},{"Water currents",ROYALE_CVAR("WaterCurrent"),1},{"Choppy crests",ROYALE_CVAR("WaterChop"),60,0,200,10},
+                {"Sun glints",ROYALE_CVAR("WaterGlints"),1},{"Glint strength",ROYALE_CVAR("WaterGlintAmt"),100,0,200,10},{"Caustics",ROYALE_CVAR("WaterCaustics"),1},
+                {"Caustic strength",ROYALE_CVAR("WaterCausticAmt"),100,0,200,10},{"Shore foam",ROYALE_CVAR("WaterFoamTex"),1},{"Foam strength",ROYALE_CVAR("WaterFoamAmt"),100,0,200,10},
+                {"Ripple simulation",ROYALE_CVAR("WaterRipples"),1},{"Underwater strength",ROYALE_CVAR("WaterUnderAmt"),100,0,200,10}});
+        } else if(gWar.section==9) {
+            WarOptions({
+                {"Hit particles",ROYALE_CVAR("HitParticles"),1},{"Scale hit effects",ROYALE_CVAR("HitScaled"),1},{"Effects on your Link",ROYALE_CVAR("HitOnSelf"),1},
+                {"Hit reactions",ROYALE_CVAR("HitReact"),1},{"Hit effect strength",ROYALE_CVAR("HitAmount"),100,0,200,10},
+                {"Other weapon glow",ROYALE_CVAR("HeldGlow"),1},{"Your weapon glow",ROYALE_CVAR("HeldGlowSelf"),0},
+                {"Enemies on map",ROYALE_CVAR("MapEnemies"),1},{"Lilo encounter",ROYALE_CVAR("LiloCat"),1}});
+        } else if(gWar.section==10) {
+            const int pages=(kDebugCount+5)/6;gWar.optionPage=std::clamp(gWar.optionPage,0,pages-1);
+            for(int row=0;row<6;++row){int id=gWar.optionPage*6+row;if(id<kDebugCount)WarDebugToggle(row,id);}
+            WarOptionPager(pages);
         } else {
 #ifdef __ANDROID__
             const int state=UpdaterInt("getState");

@@ -217,3 +217,82 @@ void WarPortrait() {
     CVarSetColor24(CVAR_COSMETIC("Link.KokiriTunic.Value"),saved);
 }
 
+
+// Render the existing skinned pet rigs in a dedicated framebuffer. No actor,
+// companion brain, speech or world geometry participates in this preview.
+constexpr int kWarPetSize=192;
+int gWarPetFramebuffer=-1;
+bool WarPetPreview() {
+    if(!InGame())return false;
+    if(gWarPetFramebuffer<0)gWarPetFramebuffer=gfx_create_framebuffer(kWarPetSize,kWarPetSize,kWarPetSize,kWarPetSize,true);
+    if(gWarPetFramebuffer<0)return false;
+    DrawIdentity previewIdentity(&gWarPetFramebuffer,PetKind(),0);
+    const float time=gWar.reduced||!gWar.previewAnimate?0:gWar.clock;
+    const float yaw=.35f+(gWar.reduced||!gWar.previewAnimate?0:std::sin(time*.45f)*.22f);
+    float minX=1e9f,maxX=-1e9f,minY=1e9f,maxY=-1e9f,depth=1;
+    auto bounds=[&](const auto& pose,const auto* vertices,int count,auto skin,auto visible) {
+        for(int i=0;i<count;++i) {
+            if(!visible(vertices[i]))continue;
+            float pos[3],normal[3];skin(pose,vertices[i],pos,normal);
+            const float x=pos[0]*std::cos(yaw)+pos[2]*std::sin(yaw);
+            minX=std::min(minX,x);maxX=std::max(maxX,x);minY=std::min(minY,pos[1]);maxY=std::max(maxY,pos[1]);
+            depth=std::max(depth,std::fabs(pos[0])+std::fabs(pos[2]));
+        }
+    };
+    royale::lilo::Pose lilo;royale::avriella::Pose baby;royale::maya::Pose maya;
+    const int pet=PetKind();
+    if(pet==0) {royale::lilo::SampleClip(royale::lilo::kIdle,time,lilo);bounds(lilo,royale::lilo::kVerts,royale::lilo::kVertCount,royale::lilo::SkinVertex,[](const auto&){return true;});}
+    else if(pet==1) {royale::avriella::SampleClip(royale::avriella::kSit,time,baby);bounds(baby,royale::avriella::kVerts,royale::avriella::kVertCount,royale::avriella::SkinVertex,[](const auto&){return true;});}
+    else {royale::maya::SampleClip(royale::maya::kIdle,time,maya);bounds(maya,royale::maya::kVerts,royale::maya::kVertCount,royale::maya::SkinVertex,[&maya](const auto& v){return wt::PreviewBoneVisible(maya.absolute[v.bone],maya.bone[v.bone].t[1]);});}
+    struct Camera {Mtx projection,identity;Vp viewport;};static std::array<Camera,2> camera;
+    auto& frame=camera[gPlayState->state.frames%2];
+    const float half=std::max(1.0f,std::max(maxX-minX,maxY-minY)*.64f),cx=(minX+maxX)*.5f,cy=(minY+maxY)*.5f;
+    guOrtho(&frame.projection,cx-half,cx+half,cy-half,cy+half,-depth*4,depth*4,1);
+    MtxF identity;SkinMatrix_Clear(&identity);Matrix_MtxFToMtx(&identity,&frame.identity);
+    frame.viewport={{{kWarPetSize*2,kWarPetSize*2,G_MAXZ/2,0},{kWarPetSize*2,kWarPetSize*2,G_MAXZ/2,0}}};
+    static std::array<uint16_t,kWarPetSize*kWarPetSize> color{},zbuffer{};
+    auto* play=gPlayState;Matrix_Push();
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx* opa=POLY_OPA_DISP++;Gfx* xlu=POLY_XLU_DISP++;
+    gsSPSetFB(WORK_DISP++,gWarPetFramebuffer);
+    gSPDisplayList(WORK_DISP++,POLY_OPA_DISP);gSPDisplayList(WORK_DISP++,POLY_XLU_DISP);
+    gDPPipeSync(POLY_OPA_DISP++);gSPSurfaceMap(POLY_OPA_DISP++,0);
+    gDPSetScissor(POLY_OPA_DISP++,G_SC_NON_INTERLACE,0,0,kWarPetSize,kWarPetSize);
+    gSPGrayscale(POLY_OPA_DISP++,false);gSPClearExtraGeometryMode(POLY_OPA_DISP++,G_EX_INVERT_CULLING);
+    gDPSetDepthImage(POLY_OPA_DISP++,zbuffer.data());
+    gDPSetColorImage(POLY_OPA_DISP++,G_IM_FMT_RGBA,G_IM_SIZ_16b,kWarPetSize,zbuffer.data());
+    gDPSetCycleType(POLY_OPA_DISP++,G_CYC_FILL);gDPSetRenderMode(POLY_OPA_DISP++,G_RM_NOOP,G_RM_NOOP2);
+    gDPSetFillColor(POLY_OPA_DISP++,(GPACK_ZDZ(G_MAXFBZ,0)<<16)|GPACK_ZDZ(G_MAXFBZ,0));
+    gDPFillRectangle(POLY_OPA_DISP++,0,0,kWarPetSize-1,kWarPetSize-1);gDPPipeSync(POLY_OPA_DISP++);
+    gDPSetColorImage(POLY_OPA_DISP++,G_IM_FMT_RGBA,G_IM_SIZ_16b,kWarPetSize,color.data());
+    gDPSetCycleType(POLY_OPA_DISP++,G_CYC_FILL);gDPSetRenderMode(POLY_OPA_DISP++,G_RM_NOOP,G_RM_NOOP2);
+    gDPSetFillColor(POLY_OPA_DISP++,(GPACK_RGBA5551(22,56,113,1)<<16)|GPACK_RGBA5551(22,56,113,1));
+    gDPFillRectangle(POLY_OPA_DISP++,0,0,kWarPetSize-1,kWarPetSize-1);
+    gDPPipeSync(POLY_OPA_DISP++);
+    // Mesh setup uses the world fog blend mode; neutralize inherited scene fog.
+    gSPFogFactor(POLY_OPA_DISP++,0,0);gSPFogFactor(POLY_XLU_DISP++,0,0);
+    gSPViewport(POLY_OPA_DISP++,&frame.viewport);gSPViewport(POLY_XLU_DISP++,&frame.viewport);
+    gSPMatrix(POLY_OPA_DISP++,&frame.projection,G_MTX_PROJECTION|G_MTX_LOAD|G_MTX_NOPUSH);
+    gSPMatrix(POLY_OPA_DISP++,&frame.identity,G_MTX_MODELVIEW|G_MTX_LOAD|G_MTX_NOPUSH);
+    gSPMatrix(POLY_XLU_DISP++,&frame.projection,G_MTX_PROJECTION|G_MTX_LOAD|G_MTX_NOPUSH);
+    gSPMatrix(POLY_XLU_DISP++,&frame.identity,G_MTX_MODELVIEW|G_MTX_LOAD|G_MTX_NOPUSH);
+    if(pet==0)DrawLiloModel(play,0,0,0,yaw,1,lilo,0);
+    else if(pet==1)DrawAvriellaModel(play,0,0,0,yaw,1,baby,0);
+    else DrawMayaCompanionModel(play,0,0,0,yaw,1,maya,0);
+    gSPEndDisplayList(POLY_OPA_DISP++);gSPEndDisplayList(POLY_XLU_DISP++);
+    gSPBranchList(opa,POLY_OPA_DISP);gSPBranchList(xlu,POLY_XLU_DISP);
+    gsSPResetFB(WORK_DISP++);
+    CLOSE_DISPS(play->state.gfxCtx);
+    Matrix_Pop();return true;
+}
+void WarPetImage(WarPainter& p,wt::Rect rect) {
+    static std::array<uint16_t,kWarPetSize*kWarPetSize> pixels{};
+    gDPPipeSync(p.out++);gSPTexture(p.out++,0xffff,0xffff,0,G_TX_RENDERTILE,G_ON);
+    gDPSetCombineMode(p.out++,G_CC_MODULATEIA_PRIM,G_CC_MODULATEIA_PRIM);p.Color(0xffffffff);
+    gDPSetTileCustom(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,kWarPetSize,kWarPetSize,0,G_TX_CLAMP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);
+    gDPSetTile(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,0,0,G_TX_LOADTILE,0,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOLOD,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOLOD);
+    gDPSetTextureImage(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,kWarPetSize,pixels.data());
+    gDPLoadSync(p.out++);gDPLoadTile(p.out++,G_TX_LOADTILE,0,0,(kWarPetSize-1)<<2,(kWarPetSize-1)<<2);
+    gDPSetTextureImageFB(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,kWarPetSize,gWarPetFramebuffer);
+    p.Quad(rect,kWarPetSize,kWarPetSize);
+}

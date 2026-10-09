@@ -4,6 +4,8 @@ void WarDraw(GameState* state) {
     const auto h=gSession.Hud();
     const bool hero=gWar.page==WarPage::Play||gWar.page==WarPage::Character;
     if(hero)WarPortrait();
+    const bool pets=gWar.page==WarPage::Settings&&gWar.section==6;
+    const bool petImage=pets&&WarPetPreview();
     WarPainter p;
     p.Rect({-400,-400,1440,1160},0x060D20FF);
     p.Image(wt::art::background,{0,0,640,360},10,6);
@@ -42,6 +44,14 @@ void WarDraw(GameState* state) {
         p.Panel({24,102,194,207});p.Panel({226,102,391,207});
         const char* titles[]={"PLAY","CHARACTER","SETTINGS","HOW TO PLAY","JOIN FRIENDS","PRACTICE","LOBBY","MATCH MENU","PRACTICE TOOLS","RESULTS","KEYBOARD","LEAVE MATCH?","ELIMINATED"};
         if(gWar.page!=WarPage::Settings&&gWar.page!=WarPage::Tools)p.Text(36,115,titles[static_cast<int>(gWar.page)],14,wt::theme::Ink,true,174);
+        if(pets) {
+            const char* names[]={"Lilo","Avriella","Maya"};
+            p.Text(240,114,"PET PREVIEW",12,wt::theme::Gold,true);
+            p.Border({239,139,143,143},wt::theme::Border);
+            if(petImage)WarPetImage(p,{242,142,137,137});
+            else p.Wrap(249,178,"Preview available once the game is ready.",120,11,wt::theme::Muted,4);
+            p.Text(248,286,names[PetKind()],11,wt::theme::Ink,true);
+        }
         if(gWar.page==WarPage::Join) p.Wrap(38,151,"Enter the host address shown in their lobby. On the same Wi-Fi, use their local address. Internet play requires a VPN or UDP forwarding.",155,11,wt::theme::Muted,9);
         if(gWar.page==WarPage::Practice) {
             p.Image(WarMapPixels(royale::kSandboxMapIndex),{35,145,172,111},6,4);
@@ -101,6 +111,9 @@ void WarDraw(GameState* state) {
             p.Wrap(246,131,"Install a newer desktop build to update the game.",340,12,wt::theme::Muted,3);
 #endif
         }
+    }
+    if(gWar.page==WarPage::Settings&&gWar.section!=6&&gWar.section!=4&&gWar.section!=5) {
+        p.Text(361,289,"OPTIONS "+std::to_string(gWar.optionPage+1)+" / "+std::to_string(gWar.optionPages),9,wt::theme::Muted);
     }
     if(hero&&InGame()) {
         const wt::Rect r=gWar.page==WarPage::Play?wt::Rect{38,133,108,146}:wt::Rect{44,146,145,128};

@@ -9,6 +9,17 @@
 #include "combat.h"
 
 namespace royale::wartable {
+// Pets stay visible on the first settings page; every category remains reachable.
+inline constexpr int kSettingsOrder[]={6,0,1,2,3,4,7,8,9,10,5};
+inline constexpr int kSettingsCount=11, kSettingsPageSize=6;
+inline int SettingsPage(int section) {
+    for(int i=0;i<kSettingsCount;++i)if(kSettingsOrder[i]==section)return i/kSettingsPageSize;
+    return 0;
+}
+inline bool PreviewBoneVisible(bool absolute,float localY) { return !absolute || localY>=-100.0f; }
+inline bool PetEnabled(bool enabled,bool lobbyGroup,bool follower,int chosen,int pet) {
+    return enabled && (lobbyGroup || (follower && chosen==pet));
+}
 namespace theme {
 constexpr uint32_t Panel=0x163871ED, Button=0x244F9EFF, Border=0x91B4D3FF;
 constexpr uint32_t Ink=0xF4E9CAFF, Muted=0xBCD7EEFF, Gold=0xC5A45DFF, Focus=0xD8F3FFFF;

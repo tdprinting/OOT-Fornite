@@ -194,6 +194,7 @@ extern "C" void Royale_ShowQuestLabel(void) {
 
 // (defined in libultraship's gfx_pc.cpp; declared here, at file scope, because the mod's own code sits in an anonymous namespace)
 struct GfxRenderingAPI* gfx_get_current_rendering_api();
+extern "C" int gfx_create_framebuffer(uint32_t width,uint32_t height,uint32_t nativeWidth,uint32_t nativeHeight,uint8_t resize);
 
 namespace {
 
