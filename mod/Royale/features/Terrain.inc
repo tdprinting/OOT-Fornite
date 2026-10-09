@@ -1481,7 +1481,8 @@ void ReportEvents(const royale::HudState& hud) {
                         if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
                         HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
-                        Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        if(!DebugOn(kDbgHitFx)) Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE,&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
                         swing(e.other);
@@ -1489,7 +1490,8 @@ void ReportEvents(const royale::HudState& hud) {
                         if (target != gActorOf.end()) {
                             if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
-                            if (std::hypot(tx - me->actor.world.pos.x, tz - me->actor.world.pos.z) < 1200.0f) soundAt(e.id, NA_SE_IT_SWORD_STRIKE);
+                            if(!DebugOn(kDbgHitFx) && std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)<1200.0f) soundAt(e.id,NA_SE_IT_SWORD_STRIKE);
+
                         }
                     }
                 }
