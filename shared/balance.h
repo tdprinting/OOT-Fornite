@@ -125,4 +125,39 @@ constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
     {0, 25, 0.00f, 2.0f},
 }};
 
+
+// ---- Teams, Down But Not Out, Siphon, pings and Deku launch pads (protocol 37) ----------------------------------------------------
+// The host picks the mode in the lobby. Solo is exactly the old game: everyone is their own team and nobody is ever knocked.
+enum class TeamMode : uint8_t { Solo, Duos, Squads };
+constexpr int kTeamModeCount = 3;
+constexpr int TeamSize(TeamMode m) { return m == TeamMode::Duos ? 2 : m == TeamMode::Squads ? 4 : 1; }
+constexpr const char* TeamModeName(TeamMode m) { return m == TeamMode::Duos ? "Duos" : m == TeamMode::Squads ? "Squads" : "Solo"; }
+
+// Down But Not Out (team modes): a lethal hit knocks you down while a teammate still stands. You crawl, cannot fight, and bleed out.
+constexpr float kKnockHealth = 3.0f;        // hearts of bleed-out bar; enemy hits and the storm drain it too
+constexpr float kKnockBleedPerSec = 0.1f;   // hearts a second, on its own
+constexpr float kReviveSeconds = 3.0f;      // a teammate holds A this long
+constexpr float kReviveRange = 120.0f;      // and has to stay this close
+constexpr float kReviveHealth = 2.0f;       // hearts you get back up with (no shield)
+constexpr float kReviveInvulnSeconds = 1.5f;
+constexpr float kKnockedSpeedScale = 0.25f; // the crawl, against a normal run
+
+// Siphon: an elimination gives the eliminator a heart; what does not fit in the hearts, plus a third of a shield bar, goes to the shield.
+constexpr float kSiphonHealth = 1.0f;
+constexpr float kSiphonShield = kMaxShield / 3.0f;
+
+// Pings (L): a marker your team sees for a few seconds.
+constexpr float kPingSeconds = 8.0f;
+constexpr int kPingMaxPerPlayer = 3;
+constexpr float kPingMinDist = 600.0f, kPingMaxDist = 1500.0f;   // how far ahead of Link a "place" ping lands
+constexpr float kPingReach = 2500.0f;                            // the server drops a ping further than this from its sender
+constexpr float kPingConeDegrees = 12.0f;                        // an enemy or loot within this cone of where Link faces becomes that kind of ping
+enum class PingKind : uint8_t { Place, Enemy, Loot };
+
+// Deku Flower launch pads: stand on one and press A to be flung up into the skydive and glider.
+constexpr float kLaunchPadRadius = 70.0f;
+constexpr int kLaunchPadsMin = 3, kLaunchPadsMax = 6;   // placed by the server at the start of a match
+constexpr int kMaxLaunchPads = 16;                      // including the ones players plant with the Deku Launch Flower
+constexpr float kLaunchPadPlaceAhead = 120.0f;          // the consumable plants a pad this far in front of you
+
 } // namespace royale

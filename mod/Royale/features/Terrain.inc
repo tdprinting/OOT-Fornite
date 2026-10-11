@@ -1343,6 +1343,7 @@ void OnPlayerUpdate() {
     HandleCombatInput(player, hud);
     UpdateSprint(player, hud);
     ApplySpeedBuffs(player, hud);
+    UpdateSquad(player, hud);
     UpdateLocalRide(player, hud);
     UpdateRideCamera(player);
 
@@ -1686,8 +1687,12 @@ void ReportEvents(const royale::HudState& hud) {
                     if (e.id == hud.selfId) ShowBanner("A Fairy saved you!", IM_COL32(255, 170, 215, 255), 2.4f);
                 }
                 break;
+            case royale::ClientEvent::Type::Knocked: case royale::ClientEvent::Type::TeamRevived: case royale::ClientEvent::Type::Pinged:
+                SquadEvent(e, hud);
+                break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
+                if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
                 if (mine && !me) {   // for the death and end screens (and their medals)
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;

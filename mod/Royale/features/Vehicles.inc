@@ -108,7 +108,8 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
-    DrawLocalDressed(player, play, !emote);
+    else if (gSelfKnocked) PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+    DrawLocalDressed(player, play, !emote && !gSelfKnocked);
     DrawVictoryCrown(play,player,gSession.Hud().selfId);
 }
 
@@ -123,6 +124,7 @@ void OnEmoteWheelInput() {
     Input& in = gPlayState->state.input[0];
     const royale::HudState hud = gSession.Hud();
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
+    if (SquadInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // knocked down: the controller only crawls and pings
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
     // A consumable in hand (taken with C-Down or by tapping its slot): B drinks it, so the press is kept from the game or Link would swing the weapon.
     if (gHandStack >= 0 && LiveAndAlive(hud) && InField()) {
@@ -1055,7 +1057,7 @@ void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, co
     if (!LiveAndAlive(h) || !InField() || WarMenuOpen() || EndScreenUp(h)) return;
     using G = royale::controls::Glyph;
     const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
-    const float cx = ds.x * 0.5f, y = ds.y - 76.0f * scale - 88.0f * scale;
+    const float cx = ds.x * 0.5f, y = ds.y - 150.0f * scale;   // the item bar is on the right now, so the chip is free to be centred
     if (CVarGetInteger(CVAR_SETTING("Royale.ButtonPrompts"), 1) && !MessageBoxUp() && !gSkydiving && !gRide.seated) {
         std::string label;
         const size_t loot = NearestLootIndex();
@@ -1066,19 +1068,17 @@ void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, co
         else if (TalkTargetNear()) label = "Talk";
         if (!label.empty()) DrawPromptRow(dl, font, cx, y, scale, { { pr.interact, label } });
     }
-    // Touch JUMP button, above EMOTE at the bottom right.
+    // Touch JUMP button, stacked above EMOTE on the right edge.
     if (gSkydiving || gRide.seated || gWheel.open || !CVarGetInteger(CVAR_SETTING("Royale.TouchJump"), 1)) return;
     ImGuiIO& io = ImGui::GetIO();
-    const float rad = 30.0f * scale;
-    const ImVec2 c(ds.x - 18.0f * scale - 64.0f * scale, ds.y - 40.0f * scale - 24.0f * scale - 18.0f * scale - rad);
+    float rad;
+    const ImVec2 c = HudTouchButton(ds, scale, h, 1, &rad);
     const bool over = std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= rad;
     const bool down = over && ImGui::IsMouseDown(0) && !io.WantCaptureMouse;
-    dl->AddCircleFilled(ImVec2(c.x + 2 * scale, c.y + 3 * scale), rad, IM_COL32(6, 15, 36, 192), 28);
-    dl->AddCircleFilled(c, rad, OotPanel(down ? 255 : 205), 28);
-    dl->AddCircle(c, rad, HudColor(down ? royale::wartable::theme::Focus : royale::wartable::theme::Gold), 28, 2.5f * scale);
-    DrawPadGlyph(dl, font, ImVec2(c.x, c.y - 7.0f * scale), 13.0f * scale, pr.jump);
-    const ImVec2 tsz = font->CalcTextSizeA(12.0f * scale, FLT_MAX, 0.0f, "JUMP");
-    dl->AddText(font, 12.0f * scale, ImVec2(c.x - tsz.x * 0.5f, c.y + 9.0f * scale), IM_COL32(240, 236, 220, 255), "JUMP");
+    HudRoundButton(dl, c, rad, HudColor(down ? royale::wartable::theme::Focus : royale::wartable::theme::Gold), down, scale);
+    DrawPadGlyph(dl, font, ImVec2(c.x, c.y - 7.0f * scale), 12.0f * scale, pr.jump);
+    const ImVec2 tsz = font->CalcTextSizeA(11.0f * scale, FLT_MAX, 0.0f, "JUMP");
+    dl->AddText(font, 11.0f * scale, ImVec2(c.x - tsz.x * 0.5f, c.y + 8.0f * scale), IM_COL32(240, 236, 220, 255), "JUMP");
     if (over && ImGui::IsMouseClicked(0) && !io.WantCaptureMouse) gTouchJump = true;
 }
 

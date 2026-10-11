@@ -24,6 +24,7 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         Swim = 34,        // swimming strokes (bots; older clients draw them as Idle)
                         Tread = 35,       // treading water
                         Climb = 36,       // going up a cliff or an ivy wall, hand over hand
+                        Knocked = 37,     // down but not out: lying on the ground, crawling (team modes; older clients draw it as Idle)
                         Count };
 
 // The moves that dodge like a roll does: the server gives them the same moment of safety.

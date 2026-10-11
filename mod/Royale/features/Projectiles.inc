@@ -345,6 +345,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         gGfxPool.gameOpaLeft = gfx->polyOpa.d > gfx->polyOpa.p ? static_cast<size_t>(gfx->polyOpa.d - gfx->polyOpa.p) * sizeof(Gfx) : 0;
         gGfxPool.gameXluLeft = gfx->polyXlu.d > gfx->polyXlu.p ? static_cast<size_t>(gfx->polyXlu.d - gfx->polyXlu.p) * sizeof(Gfx) : 0;
     }
+    DrawLaunchPads(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
@@ -530,7 +531,7 @@ int GidFor(royale::ItemId id) {
         case ItemId::ShockwaveGrenade: return kGidGrenade;
         case ItemId::GildedSword: return kGidGilded;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
-        case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
+        case ItemId::DekuNuts: case ItemId::NutAmmo: case ItemId::DekuLaunchFlower: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
         case ItemId::IceArrows: return GID_ARROW_ICE;
         case ItemId::LightArrows: return GID_ARROW_LIGHT;
