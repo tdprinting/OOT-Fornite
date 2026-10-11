@@ -1,0 +1,85 @@
+diff --git a/libultraship b/libultraship
+--- a/libultraship
++++ b/libultraship
+@@ -1 +1 @@
+-Subproject commit a8504496746b469a2d5424c58b1e5aae1492f861
++Subproject commit a8504496746b469a2d5424c58b1e5aae1492f861-dirty
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+index ec96b1c..9654b69 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
+@@ -10,6 +10,7 @@ DEFINE_HOOK(OnZTitleUpdate, (void* gameState));
+ DEFINE_HOOK(OnLoadGame, (int32_t fileNum));
+ DEFINE_HOOK(OnExitGame, (int32_t fileNum));
+ DEFINE_HOOK(OnPlayerItemMaterial, (void* play, void* player, int32_t limbIndex, void* dList));
++DEFINE_HOOK(OnPlayerSkinLimb, (void* play, void* player, int32_t limbIndex, void* dList, void* pos, void* rot, int32_t pause));
+ DEFINE_HOOK(OnPlayerClothLimb, (void* player, int32_t limbIndex, int16_t* rot));
+ DEFINE_HOOK(OnGameStateMainStart, ());
+ DEFINE_HOOK(OnGameFrameUpdate, ());
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+index 17988b5..a3e3616 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.cpp
+@@ -22,6 +22,10 @@ void GameInteractor_ExecuteOnPlayerItemMaterial(void* play, void* player, int32_
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerItemMaterial>(play, player, limbIndex, dList);
+ }
+ 
++void GameInteractor_ExecuteOnPlayerSkinLimb(void* play, void* player, int32_t limbIndex, void* dList, void* pos, void* rot, int32_t pause) {
++    GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerSkinLimb>(play, player, limbIndex, dList, pos, rot, pause);
++}
++
+ void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot) {
+     GameInteractor::Instance->ExecuteHooks<GameInteractor::OnPlayerClothLimb>(player, limbIndex, rot);
+ }
+diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+index e5754fb..7bdd29e 100644
+--- a/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
++++ b/soh/soh/Enhancements/game-interactor/GameInteractor_Hooks.h
+@@ -13,6 +13,7 @@ void GameInteractor_ExecuteOnZTitleUpdate(void* gameState);
+ void GameInteractor_ExecuteOnLoadGame(int32_t fileNum);
+ void GameInteractor_ExecuteOnExitGame(int32_t fileNum);
+ void GameInteractor_ExecuteOnPlayerItemMaterial(void* play, void* player, int32_t limbIndex, void* dList);
++void GameInteractor_ExecuteOnPlayerSkinLimb(void* play, void* player, int32_t limbIndex, void* dList, void* pos, void* rot, int32_t pause);
+ void GameInteractor_ExecuteOnPlayerClothLimb(void* player, int32_t limbIndex, int16_t* rot);
+ void GameInteractor_ExecuteOnGameStateMainStart();
+ void GameInteractor_ExecuteOnGameFrameUpdate();
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+index 9d84216..8416447 100644
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -1523,6 +1523,10 @@ s32 Player_OverrideLimbDrawGameplayFirstPerson(PlayState* play, s32 limbIndex, G
+ 
+     GameInteractor_ExecuteOnPlayerItemMaterial(play, this, limbIndex, dList);
+ 
++    // OOT Royale: a player skin (a whole other body on Link's skeleton) sees every limb's final position, rotation and display list here,
++    // keeps the limb's matrix and may blank the display list so its own body is drawn instead (mod/Royale/features/Skins.inc).
++    GameInteractor_ExecuteOnPlayerSkinLimb(play, this, limbIndex, dList, pos, rot, 0);
++
+     return false;
+ }
+ 
+@@ -1530,6 +1534,7 @@ s32 Player_OverrideLimbDrawGameplayCrawling(PlayState* play, s32 limbIndex, Gfx*
+                                             void* thisx) {
+     if (!Player_OverrideLimbDrawGameplayCommon(play, limbIndex, dList, pos, rot, thisx)) {
+         *dList = NULL;
++        GameInteractor_ExecuteOnPlayerSkinLimb(play, thisx, limbIndex, dList, pos, rot, 0);
+     }
+ 
+     return false;
+@@ -2113,7 +2118,16 @@ u8 sPauseModelGroupBySword[] = {
+     PLAYER_MODELGROUP_BGS,              // PLAYER_SWORD_BIGGORON
+ };
+ 
++s32 Player_OverrideLimbDrawPauseImpl(PlayState* play, s32 limbIndex, Gfx** dList, Vec3f* pos, Vec3s* rot, void* arg);
++
++// OOT Royale: the pause and menu pictures of Link go through the same skin hook as the world (pause = 1: no Player, the local skin).
+ s32 Player_OverrideLimbDrawPause(PlayState* play, s32 limbIndex, Gfx** dList, Vec3f* pos, Vec3s* rot, void* arg) {
++    s32 r = Player_OverrideLimbDrawPauseImpl(play, limbIndex, dList, pos, rot, arg);
++    GameInteractor_ExecuteOnPlayerSkinLimb(play, NULL, limbIndex, dList, pos, rot, 1);
++    return r;
++}
++
++s32 Player_OverrideLimbDrawPauseImpl(PlayState* play, s32 limbIndex, Gfx** dList, Vec3f* pos, Vec3s* rot, void* arg) {
+     u8* playerSwordAndShield = arg;
+     // SOH: Ensure positive value from playerSwordAndShield[] to avoid OOB array access.
+     //      This can occur in the case where playerSwordAndShield[0] is PLAYER_SWORD_NONE

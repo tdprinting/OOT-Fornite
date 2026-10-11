@@ -1,0 +1,37 @@
+{
+  "id": "link_hd",
+  "name": "Link HD",
+  "source": "assets/skins/link_hd/Link.fbx",
+  "textures_dir": "assets/skins/link_hd/textures",
+  "up": "Z", "forward": "-Y",
+  "drop_materials": ["outline_solidify", "outline_details"],
+  "decimate": {"link_limb": 0.34, "link_head": 0.3, "link_face": 0.3, "link_tunic": 0.42, "link_collar": 0.45,
+               "link_accessories": 0.7, "link_buckle": 1.0, "link_somethingsomething": 1.0},
+  "textures": {"link_tunic": "link_tunic.png", "link_tunic transpaent": "link_tunic.png", "link_hand": "link_hand.png",
+               "link_skin": "link_face.png", "link_eye": "link_eye.png", "hair1": "link_hair_bake.png", "hair2": "link_hair_bake.png",
+               "link_hat": "Link_hat.png", "belt_link": "belt_link.png", "tunic golden": "belt_link.png"},
+  "bones": {
+    "ROOTSHJnt": "lower", "Spine_01SHJnt": "waist", "Spine_02SHJnt": "torso", "Spine_TopSHJnt": "torso",
+    "l_Arm_ClavicleSHJnt": "torso", "r_Arm_ClavicleSHJnt": "torso", "l_AC_AuxSHJnt": "torso", "r_AC_AuxSHJnt": "torso",
+    "Neck_01SHJnt": "head", "Neck_02SHJnt": "head", "Neck_TopSHJnt": "head", "Head_JawSHJnt": "head", "Head_JawEndSHJnt": "head",
+    "Head_TopSHJnt": "head", "l_Eye_01SHJnt": "head", "r_Eye_01SHJnt": "head",
+    "l_Arm_ShoulderSHJnt": "l_shoulder", "l_Arm_Upper_Curve1SHJnt": "l_shoulder",
+    "l_Arm_Elbow_CurveSHJnt": "l_forearm", "l_Arm_Lower_Curve1SHJnt": "l_forearm",
+    "l_WristSHJnt": "l_hand", "l_Hand_*": "l_hand", "l_Finger_*": "l_hand", "l_Thumb_*": "l_hand", "l_GripPoint_AuxSHJnt": "l_hand", "l_openThumb_*": "l_hand",
+    "r_Arm_ShoulderSHJnt": "r_shoulder", "r_Arm_Upper_Curve1SHJnt": "r_shoulder",
+    "r_Arm_Elbow_CurveSHJnt": "r_forearm", "r_Arm_Lower_Curve1SHJnt": "r_forearm",
+    "r_WristSHJnt": "r_hand", "r_Hand_*": "r_hand", "r_Finger_*": "r_hand", "r_Thumb_*": "r_hand", "r_GripPoint_AuxSHJnt": "r_hand", "r_openThumb_*": "r_hand",
+    "l_Leg_HipSHJnt": "l_thigh", "l_Leg_KneeSHJnt": "l_shin", "l_Leg_AnkleSHJnt": "l_foot", "l_Leg_BallSHJnt": "l_foot", "l_Leg_ToeSHJnt": "l_foot",
+    "r_Leg_HipSHJnt": "r_thigh", "r_Leg_KneeSHJnt": "r_shin", "r_Leg_AnkleSHJnt": "r_foot", "r_Leg_BallSHJnt": "r_foot", "r_Leg_ToeSHJnt": "r_foot"
+  },
+  "anchors": {
+    "l_thigh": "l_Leg_HipSHJnt", "l_shin": "l_Leg_KneeSHJnt", "l_foot": "l_Leg_AnkleSHJnt",
+    "r_thigh": "r_Leg_HipSHJnt", "r_shin": "r_Leg_KneeSHJnt", "r_foot": "r_Leg_AnkleSHJnt",
+    "l_shoulder": "l_Arm_ShoulderSHJnt", "l_forearm": "l_Arm_Elbow_CurveSHJnt", "l_hand": "l_WristSHJnt",
+    "r_shoulder": "r_Arm_ShoulderSHJnt", "r_forearm": "r_Arm_Elbow_CurveSHJnt", "r_hand": "r_WristSHJnt",
+    "head": "Neck_TopSHJnt"
+  },
+  "tips": {"l_foot": "l_Leg_ToeSHJnt", "r_foot": "r_Leg_ToeSHJnt", "l_hand": "l_Finger_03_04SHJnt", "r_hand": "r_Finger_03_04SHJnt", "head": "Head_TopSHJnt"},
+  "hat_tail": {"material": "link_hat", "axis": "back", "start": 0.10, "full": 0.18},
+  "hat_world_dir": [0.0, -0.55, -0.83]
+}

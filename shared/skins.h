@@ -31,6 +31,13 @@ constexpr uint8_t RgbR(uint32_t c) { return static_cast<uint8_t>(c >> 16); }
 constexpr uint8_t RgbG(uint32_t c) { return static_cast<uint8_t>(c >> 8); }
 constexpr uint8_t RgbB(uint32_t c) { return static_cast<uint8_t>(c); }
 
+// Player models: a whole other body for Link, drawn on the game's own skeleton and animations. 0 is the game's own Link; the others are
+// generated models (shared/skin_<id>_model.h, tools/skins/) registered by index in mod/Royale/features/Skins.inc (kSkinModelOf). The index
+// is saved with the menu, sent to the other players next to the tunic colour, and shown on them. docs/SKINS.md says how to add one.
+constexpr const char* kSkinModelNames[] = { "Hero of Time", "Link HD" };
+constexpr int kSkinModelCount = sizeof(kSkinModelNames) / sizeof(kSkinModelNames[0]);
+constexpr bool ValidSkinModel(int index) { return index >= 0 && index < kSkinModelCount; }
+
 // Bots wear a preset chosen from their id.
 constexpr uint32_t BotTunic(uint32_t id) { return SkinRgb(static_cast<int>((id * 2654435761u >> 16) % kSkinCount)); }
 

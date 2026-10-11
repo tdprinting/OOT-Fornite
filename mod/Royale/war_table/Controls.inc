@@ -79,6 +79,8 @@ void WarSave() {
     gSession.SetWeatherOptions({static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange)});
     gLocalTunic = SelectedTunic(ui);
     gSession.SetTunic(gLocalTunic);
+    gLocalSkinModel = std::clamp(ui.model, 0, royale::kSkinModelCount - 1);
+    gSession.SetSkinModel(gLocalSkinModel);
     gWeatherDensity = ui.weatherDensity / 100.0f;
     gFoliage = ui.foliage / 100.0f;
     gClothScale = ui.clothOn ? ui.clothPhysics / 100.0f : 0;
@@ -491,10 +493,11 @@ void WarBuild() {
     case WarPage::Character:
         WarRow(40,0,"Name   "+std::string(ui.name),"Edit your name for the next lobby",[](int){WarEdit(0);},idle);
         WarRow(41,1,std::string("Tunic   ")+(ui.skin<royale::kSkinCount?royale::kSkins[ui.skin].name:"Custom"),"Left / right changes your tunic",[](int d){Ui().skin=(Ui().skin+(d<0?-1:1)+royale::kSkinCount)%royale::kSkinCount;WarSave();},idle,true);
+        WarRow(45,2,std::string("Model   ")+royale::kSkinModelNames[std::clamp(ui.model,0,royale::kSkinModelCount-1)],"Left / right changes your body: the game's own Link or a newer model (everyone sees it)",[](int d){Ui().model=(Ui().model+(d<0?-1:1)+royale::kSkinModelCount)%royale::kSkinModelCount;WarSave();},idle,true);
         { int pet=MapOption("LiloPet",false)?PetKind()+1:0; const char* names[]={"None","Lilo","Avriella","Maya"};
-          WarRow(42,2,std::string("Companion   ")+names[std::clamp(pet,0,3)],"Your companion follows you in the world",[pet](int d){int n=(pet+(d<0?-1:1)+4)%4;CVarSetInteger(ROYALE_CVAR("LiloPet"),n!=0);CVarSetInteger(ROYALE_CVAR("PetKind"),std::max(0,n-1));WarSave();},true,true); }
-        WarRow(44,3,"PETS & PREVIEW","Enable pets and preview each companion",[](int){WarShow(WarPage::Settings);gWar.section=6;});
-        WarRow(43,4,"RETURN","Back to the game",[](int){WarOpen();});
+          WarRow(42,3,std::string("Companion   ")+names[std::clamp(pet,0,3)],"Your companion follows you in the world",[pet](int d){int n=(pet+(d<0?-1:1)+4)%4;CVarSetInteger(ROYALE_CVAR("LiloPet"),n!=0);CVarSetInteger(ROYALE_CVAR("PetKind"),std::max(0,n-1));WarSave();},true,true); }
+        WarRow(44,4,"PETS & PREVIEW","Enable pets and preview each companion",[](int){WarShow(WarPage::Settings);gWar.section=6;});
+        WarRow(43,5,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
         const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced","Display","Regular game"};

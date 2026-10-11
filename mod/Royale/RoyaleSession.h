@@ -30,6 +30,7 @@ struct PuppetState {
     ItemId weapon = ItemId::BasicSword;
     Rarity weaponRarity = Rarity::Common;
     uint32_t tunic = SkinRgb(0); // 0xRRGGBB, the colour this player chose (bots wear a preset by id)
+    int skinModel = 0;           // the model this player chose (index into kSkinModelNames; 0 is the game's own Link; bots wear 0)
     // What is drawn on them as the game draws it: the shield on their back or arm, the boots and the mask (ItemId::Count for none).
     ItemId shield = ItemId::Count;
     ItemId boots = ItemId::Count;
@@ -186,6 +187,7 @@ class RoyaleSession {
         if (!clientTransport) { Leave(); Fail(error, err); return false; }
         client = std::make_unique<GameClient>(*clientTransport, playerName, token);
         client->SetTunic(tunic);
+        client->SetSkin(skinModel);
         mode = Mode::Hosting;
         return true;
     }
@@ -198,6 +200,7 @@ class RoyaleSession {
         if (!clientTransport) { Fail(error, err); return false; }
         client = std::make_unique<GameClient>(*clientTransport, playerName);
         client->SetTunic(tunic);
+        client->SetSkin(skinModel);
         mode = Mode::Joined;
         return true;
     }
@@ -221,6 +224,8 @@ class RoyaleSession {
 
     // The tunic colour (0xRRGGBB) the other players see you in. Set before hosting or joining.
     void SetTunic(uint32_t rgb) { tunic = rgb; }
+    // The player model (index into kSkinModelNames) the other players see you as. Set before hosting or joining.
+    void SetSkinModel(int index) { skinModel = static_cast<uint8_t>(ValidSkinModel(index) ? index : 0); }
     // Host only, in the lobby: how many players the match has, bots included (2 to 32). Returns false if that isn't allowed right now.
     // Host only: the lobby starts the match by itself after this many seconds; 0 turns the timer off.
     void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
@@ -298,6 +303,7 @@ class RoyaleSession {
             const bool known = it != client->Roster().end();
             s.name = known ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
             s.tunic = known ? it->second.tunic : BotTunic(id);
+            s.skinModel = known ? it->second.skin : 0;
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
@@ -333,6 +339,7 @@ class RoyaleSession {
             s.isBot = it == client->Roster().end();
             s.name = it != client->Roster().end() ? it->second.name : BotName(id);
             s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
+            s.skinModel = it != client->Roster().end() ? it->second.skin : 0;
             const Vec2 at = BusPosAt(client->Bus(), client->BusTime());
             s.x = at.x; s.z = at.z; s.y = client->Bus().altitude;
             s.anim = static_cast<uint8_t>(Anim::BusRide);
@@ -514,6 +521,7 @@ class RoyaleSession {
 
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     uint32_t tunic = SkinRgb(0);
+    uint8_t skinModel = 0;
     int playerLimit = kMaxPlayers;
     TeamMode teamMode = TeamMode::Solo;
     int selectedMap = 0;
