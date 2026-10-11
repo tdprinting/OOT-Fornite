@@ -91,7 +91,13 @@ struct PlayerState {
     float damageDealt = 0;  // hearts of damage done to other players (storm and burn-out excluded)
     int chestsOpened = 0;
     int bossKills = 0;
-    int placement = 0;      // 1 = winner; set when eliminated (number alive at that moment) or when the match ends
+    int placement = 0;      // 1 = winner; set when eliminated (number alive at that moment) or when the match ends. In team modes: the team's place
+    // ---- teams and Down But Not Out (team modes only; in Solo `team` is unique and `knocked` never happens)
+    int team = 0;
+    bool knocked = false;        // down: alive, crawling, cannot fight; bleeds out
+    float knockHealth = 0;       // the bleed-out bar, hearts (kKnockHealth when knocked)
+    uint32_t knockedBy = 0xFFFFFFFFu;   // who knocked them (credited when they bleed out)
+    float reviveProgress = 0;    // 0..1 while a teammate holds A beside them
     bool dirty = true; // inventory or status changed since it was last sent to the owner
 };
 
@@ -99,7 +105,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather, AllyChanged, AllyAction } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather, AllyChanged, AllyAction, Knocked, TeamRevived, PadsChanged } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -108,6 +114,7 @@ struct MatchEvent {
     MatchState state = MatchState::Lobby; // StateChanged
     uint8_t item = 0;       // AbilityUsed: which ability
     float x = 0, z = 0;     // AbilityUsed: where the user stood | BossDown: where it fell (a = boss id, b = who landed the last hit)
+    // Knocked: a = victim, b = who knocked them | TeamRevived: a = the player back on their feet, b = the teammate who revived them | PadsChanged: the pad list changed.
     // AllyChanged: a = ally index, b = its owner (kNoPlayer when free), item = 0 hired / 1 released / 2 fell. AllyAction: a = ally index, b = target id, x/z = target.
 };
 
@@ -308,6 +315,8 @@ class Match {
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
         for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
         if (sandbox) for (auto& p : players) p.pos = sandboxSpawn;
+        AssignTeams();
+        PlaceStartingPads();
         SpawnBosses();
         SpawnAllies();
         SpawnVehicles();
@@ -355,7 +364,7 @@ class Match {
                     if (!p.alive) continue;
                     TickGas(p, dt);
                     if (!p.alive) continue;
-                    if (clock < p.regenUntil && p.health < p.maxHealth) p.health = (std::min)(p.maxHealth, p.health + p.regenRate * dt);
+                    if (!p.knocked && clock < p.regenUntil && p.health < p.maxHealth) p.health = (std::min)(p.maxHealth, p.health + p.regenRate * dt);
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
@@ -365,7 +374,9 @@ class Match {
                 TickHelpers(dt);
 #endif
                 TickVehicles(dt);
-                if (!sandbox && Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
+                TickKnocked(dt);
+                ExpirePings();
+                if (!sandbox && (soloTest ? Alive() <= 0 : TeamsAlive() <= 1)) Enter(MatchState::Ending);
                 break;
             case MatchState::Ending:
             case MatchState::Lobby:
@@ -382,6 +393,7 @@ class Match {
         if (!p || !p->alive || state == MatchState::Drop || hearts <= 0) return false;
         if (clock < p->invulnUntil) return false;
         if (sandbox && sandboxGod && !p->isBot) return false;   // the test map: nothing hurts you until you switch it off
+        if (attacker != id && SameTeam(attacker, id)) return false;   // teammates (bots, players, their allies and blasts) never hurt each other
 
         const GearTotals g = TotalsOf(*p);
         float mult = g.damageTaken;
@@ -393,6 +405,9 @@ class Match {
         if (clock < p->frozenUntil && kind != DamageKind::Storm) mult *= 1.25f; // frozen targets are brittle
         if (kind != DamageKind::Storm) mult *= (IsBossId(attacker) || IsHelperId(attacker)) ? kBossDamageScale : attacker == kNoPlayer ? kHazardDamageScale : kPlayerDamageScale;
         hearts *= mult;
+
+        if (p->knocked) return HurtKnocked(*p, hearts, attacker, announce);   // already down: this wears the bleed-out bar
+        if (auto h = reviveHolds.find(id); h != reviveHolds.end()) h->second.cancelled = true;   // taking damage breaks off a revive you were giving
 
         // The shield bar takes the hit first (the storm goes straight through it).
         float soaked = 0;
@@ -406,7 +421,9 @@ class Match {
         p->health -= hearts;
         bool killed = p->health <= 0;
         if (killed && TryFairy(*p)) killed = false;
-        if (killed) p->health = 0;
+        const bool goesDown = killed && CanBeKnocked(*p);   // a teammate still stands: down but not out
+        if (goesDown) killed = false;
+        if (killed || goesDown) p->health = 0;
         if (attacker != kNoPlayer && attacker != id && kind != DamageKind::Storm) {
             if (PlayerState* a = Find(attacker)) a->damageDealt += dealt;
         }
@@ -416,8 +433,212 @@ class Match {
             e.a = id; e.b = attacker; e.amount = hearts + soaked; e.health = p->health;
             events.push_back(e);
         }
+        if (goesDown) Knock(*p, attacker);
         if (killed) Eliminate(*p, attacker);
         return killed;
+    }
+
+    // ---- teams, Down But Not Out, Siphon, pings and launch pads (protocol 37) ----------------------------------------------------------
+    // Solo is the old game: every player is their own team and nobody is knocked. The host picks Duos or Squads in the lobby.
+    bool SetTeamMode(TeamMode m) { if (state != MatchState::Lobby) return false; teamMode = m; return true; }
+    TeamMode GetTeamMode() const { return teamMode; }
+    bool TeamsOn() const { return teamMode != TeamMode::Solo; }
+
+    // Made when the match starts: the people first (in joining order), then the bots, each team filled before the next one is started.
+    void AssignTeams() {
+        const int size = TeamSize(teamMode);
+        int i = 0;
+        for (auto& p : players) p.team = size > 1 ? i++ / size : static_cast<int>(p.id);
+    }
+    // Teammates of each other: the same team and not the same player. Never true in Solo.
+    bool SameTeam(const PlayerState& a, const PlayerState& b) const { return a.id != b.id && a.team == b.team; }
+    bool SameTeam(uint32_t a, uint32_t b) const {
+        if (a == b) return false;
+        const PlayerState* x = Find(a);
+        const PlayerState* y = Find(b);
+        return x && y && x->team == y->team;
+    }
+    int TeamsAlive() const {
+        std::vector<int> seen;
+        for (const auto& p : players) if (p.alive && std::find(seen.begin(), seen.end(), p.team) == seen.end()) seen.push_back(p.team);
+        return static_cast<int>(seen.size());
+    }
+    bool HasStandingMate(const PlayerState& p) const {
+        for (const auto& o : players) if (o.id != p.id && o.team == p.team && o.alive && !o.knocked) return true;
+        return false;
+    }
+    bool CanBeKnocked(const PlayerState& p) const { return TeamsOn() && state == MatchState::InMatch && !p.knocked && HasStandingMate(p); }
+
+    // Down but not out: lethal damage while a teammate still stands. The bleed-out bar starts full; `by` is credited if it runs out.
+    void Knock(PlayerState& p, uint32_t by) {
+        p.knocked = true;
+        p.health = 0;
+        p.knockHealth = kKnockHealth;
+        p.armor = 0;
+        p.reviveProgress = 0;
+        p.rollUntil = 0;
+        p.knockedBy = (by != kNoPlayer && by != p.id && Find(by)) ? by : kNoPlayer;
+        Cleanse(p);
+        for (auto& v : vehicles) for (auto& who : v.seat) if (who == p.id) who = kNoPlayer;
+        reviveHolds.erase(p.id);
+        p.dirty = true;
+        MatchEvent e{MatchEvent::Type::Knocked};
+        e.a = p.id; e.b = p.knockedBy;
+        events.push_back(e);
+        CascadeIfExtinct(p.team);
+    }
+    // A hit (or the storm) on somebody who is already down wears the bleed-out bar. True if it finished them.
+    bool HurtKnocked(PlayerState& p, float hearts, uint32_t attacker, bool announce) {
+        p.knockHealth -= hearts;
+        p.reviveProgress = 0;
+        p.dirty = true;
+        if (attacker != kNoPlayer && attacker != p.id) if (PlayerState* a = Find(attacker)) a->damageDealt += hearts;
+        if (attacker != kNoPlayer && announce) {
+            MatchEvent e{MatchEvent::Type::Damaged};
+            e.a = p.id; e.b = attacker; e.amount = hearts; e.health = (std::max)(0.0f, p.knockHealth);
+            events.push_back(e);
+        }
+        if (p.knockHealth > 0) return false;
+        const bool byPlayer = attacker != kNoPlayer && attacker != p.id && Find(attacker);
+        Eliminate(p, byPlayer ? attacker : p.knockedBy);   // a finishing blow counts for whoever struck it; the storm and the bleed for whoever knocked them down
+        return true;
+    }
+    // When no teammate is left standing, the ones lying down are out too.
+    void CascadeIfExtinct(int team) {
+        if (!TeamsOn()) return;
+        for (const auto& o : players) if (o.team == team && o.alive && !o.knocked) return;
+        for (auto& o : players) if (o.team == team && o.alive && o.knocked) Eliminate(o, o.knockedBy);
+    }
+
+    // Reviving: the standing teammate's game sends "I am holding A on this one" every tenth of a second. The server counts the kReviveSeconds
+    // itself and checks the distance every tick. Moving away or taking a hit cancels it (until A is let go and pressed again).
+    struct ReviveHold { uint32_t target = 0xFFFFFFFFu; float lastAt = 0; bool cancelled = false; };
+    bool ReviveValid(const PlayerState* r, const PlayerState* t) const {
+        return state == MatchState::InMatch && r && t && r != t && r->alive && !r->knocked && t->alive && t->knocked && r->team == t->team &&
+               !RidingIn(r->id) && Distance(r->pos, t->pos) <= kReviveRange;
+    }
+    bool HoldRevive(uint32_t reviverId, uint32_t targetId) {
+        const PlayerState* r = Find(reviverId);
+        const PlayerState* t = Find(targetId);
+        auto it = reviveHolds.find(reviverId);
+        if (!ReviveValid(r, t)) {
+            if (it != reviveHolds.end()) { it->second.cancelled = true; it->second.lastAt = clock; }   // walked off, or the target is up or gone
+            return false;
+        }
+        if (it != reviveHolds.end() && it->second.cancelled) { it->second.lastAt = clock; return false; }   // stays cancelled while A is held
+        if (it == reviveHolds.end() || it->second.target != targetId) reviveHolds[reviverId] = ReviveHold{targetId, clock, false};
+        else it->second.lastAt = clock;
+        return true;
+    }
+    void ReleaseRevive(uint32_t reviverId) { reviveHolds.erase(reviverId); }
+    void Revive(PlayerState& k, uint32_t by) {
+        k.knocked = false;
+        k.knockHealth = 0;
+        k.reviveProgress = 0;
+        k.knockedBy = kNoPlayer;
+        k.health = (std::min)(kReviveHealth, k.maxHealth);
+        k.armor = 0;
+        k.invulnUntil = (std::max)(k.invulnUntil, clock + kReviveInvulnSeconds);
+        k.dirty = true;
+        reviveHolds.erase(by);
+        MatchEvent e{MatchEvent::Type::TeamRevived};
+        e.a = k.id; e.b = by;
+        events.push_back(e);
+    }
+    // Each tick: knocked players bleed, and a revive that is on moves along.
+    void TickKnocked(float dt) {
+        if (!TeamsOn()) return;
+        for (auto it = reviveHolds.begin(); it != reviveHolds.end();) {
+            if (clock - it->second.lastAt > kReviveHoldGrace) it = reviveHolds.erase(it); else ++it;
+        }
+        for (auto& k : players) {
+            if (!k.alive || !k.knocked) continue;
+            k.knockHealth -= kKnockBleedPerSec * dt;
+            uint32_t reviver = kNoPlayer;
+            for (auto& [rid, hold] : reviveHolds) {
+                if (hold.target != k.id || hold.cancelled) continue;
+                if (ReviveValid(Find(rid), &k)) { reviver = rid; break; }
+                hold.cancelled = true;
+            }
+            if (reviver != kNoPlayer) {
+                k.reviveProgress += dt / kReviveSeconds;
+                if (k.reviveProgress >= 1.0f) { Revive(k, reviver); continue; }
+            } else {
+                k.reviveProgress = 0;
+            }
+            if (k.knockHealth <= 0) Eliminate(k, k.knockedBy);
+        }
+    }
+
+    // Siphon: the eliminator gets a heart; what does not fit in the hearts, and a third of a shield bar, goes to the shield (capped).
+    void Siphon(PlayerState& k) {
+        const float heal = (std::max)(0.0f, (std::min)(kSiphonHealth, k.maxHealth - k.health));
+        k.health += heal;
+        k.armor = (std::min)(kMaxShield, k.armor + (kSiphonHealth - heal) + kSiphonShield);
+        k.dirty = true;
+    }
+
+    // Pings: a marker for the pinger's team. At most kPingMaxPerPlayer each (the oldest goes), kPingSeconds long.
+    struct Ping { uint32_t owner = 0; PingKind kind = PingKind::Place; Vec2 pos = {}; uint32_t target = 0xFFFFFFFFu; float expires = 0; };
+    bool PlacePing(uint32_t owner, PingKind kind, Vec2 pos, uint32_t target, Ping* out = nullptr) {
+        const PlayerState* p = Find(owner);
+        if (!p || !p->alive || state != MatchState::InMatch) return false;
+        if (Distance(p->pos, pos) > kPingReach || Distance(pos, map.center) > map.radius * 1.05f) return false;
+        if (kind == PingKind::Enemy) {
+            const PlayerState* t = Find(target);
+            const bool boss = IsBossId(target) && FindBoss(target) && FindBoss(target)->alive;
+            if (!boss && (!t || !t->alive || t == p || SameTeam(*p, *t))) kind = PingKind::Place;
+        } else if (kind == PingKind::Loot) {
+            if (target >= loot.size() || loot[target].taken) kind = PingKind::Place;
+        }
+        int mine = 0;
+        for (const Ping& g : pings) mine += g.owner == owner;
+        while (mine >= kPingMaxPerPlayer) {
+            for (size_t i = 0; i < pings.size(); i++) if (pings[i].owner == owner) { pings.erase(pings.begin() + static_cast<long>(i)); mine--; break; }
+        }
+        pings.push_back({owner, kind, pos, target, clock + kPingSeconds});
+        if (out) *out = pings.back();
+        return true;
+    }
+    void ExpirePings() { pings.erase(std::remove_if(pings.begin(), pings.end(), [this](const Ping& g) { return g.expires <= clock; }), pings.end()); }
+    const std::vector<Ping>& Pings() const { return pings; }
+    // Who gets to see a ping: its owner and their teammates (just the owner in Solo).
+    bool PingVisibleTo(const Ping& g, uint32_t viewer) const { return viewer == g.owner || SameTeam(g.owner, viewer); }
+
+    // Deku Flower launch pads: a few across the map at the start (near towns when the host's game gave us the spots), and the ones players plant.
+    void SetPadSpots(std::vector<Vec2> spots) { padSpots = std::move(spots); }
+    const std::vector<Vec2>& Pads() const { return pads; }
+    bool PadValid(Vec2 at) const { return Distance(at, map.center) <= map.radius * 0.97f && (!placement || placement(at)); }
+    void PlaceStartingPads() {
+        pads.clear();
+        Rng rng(seed ^ 0x6C61756Eull);   // "laun"
+        if (sandbox) {   // the test map has one beside the spawn
+            Vec2 at = {sandboxSpawn.x + 180.0f, sandboxSpawn.z};
+            if (!PadValid(at)) at = sandboxSpawn;
+            pads.push_back(at);
+        } else {
+            const int want = kLaunchPadsMin + static_cast<int>(rng.Below(static_cast<uint32_t>(kLaunchPadsMax - kLaunchPadsMin + 1)));
+            for (int tries = 0; tries < 200 && static_cast<int>(pads.size()) < want; tries++) {
+                Vec2 at = padSpots.empty() ? RandomPointIn(rng, map, placement, 0.8f) : padSpots[rng.Below(static_cast<uint32_t>(padSpots.size()))];
+                if (!PadValid(at)) continue;
+                bool apart = true;
+                for (const Vec2& o : pads) apart = apart && Distance(o, at) > 600.0f;
+                if (apart) pads.push_back(at);
+            }
+        }
+        events.push_back(MatchEvent{MatchEvent::Type::PadsChanged});
+    }
+    // The Deku Launch Flower: plants a pad a step in front of the player. False (and the item stays) if there is no room or no ground there.
+    bool PlacePad(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || p->knocked || state != MatchState::InMatch || static_cast<int>(pads.size()) >= kMaxLaunchPads) return false;
+        const float facing = static_cast<float>(p->rot) * (3.14159265f / 32768.0f);
+        Vec2 at = {p->pos.x + std::sin(facing) * kLaunchPadPlaceAhead, p->pos.z + std::cos(facing) * kLaunchPadPlaceAhead};
+        if (!PadValid(at)) return false;
+        for (const Vec2& o : pads) if (Distance(o, at) < kLaunchPadRadius * 1.5f) return false;
+        pads.push_back(at);
+        events.push_back(MatchEvent{MatchEvent::Type::PadsChanged});
+        return true;
     }
 
     // An angered villager hit this player. A few hits a second at most, and only while the match is on.
@@ -568,6 +789,7 @@ class Match {
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
+        if (const PlayerState* knockedCheck = Find(attackerId); knockedCheck && knockedCheck->knocked) return r;   // down: no attacks at all
         if (IsHelperId(targetId) || IsBossId(targetId) || IsVehicleId(targetId)) {   // a Shockwave Grenade at a boss, a cart or a helper
             const PlayerState* a = Find(attackerId);
             if (a && a->weapon.item == ItemId::ShockwaveGrenade) {
@@ -582,7 +804,7 @@ class Match {
         if (IsVehicleId(targetId)) return AttackVehicle(attackerId, targetId, hit);
         PlayerState* a = Find(attackerId);
         PlayerState* t = Find(targetId);
-        if (!a || !t || a == t || !a->alive || !t->alive) return r;
+        if (!a || !t || a == t || !a->alive || !t->alive || a->knocked || SameTeam(*a, *t)) return r;
         const bool hadAmmo = HasAmmo(*a, a->weapon.item);
         const bool shockwave = hadAmmo && a->weapon.item == ItemId::ShockwaveGrenade;
         WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
@@ -762,7 +984,7 @@ class Match {
     bool SelectWeapon(uint32_t id, int slot) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
-        if (slot < 1 || slot > static_cast<int>(p->reserve.size())) return false;
+        if (slot < 1 || slot > static_cast<int>(p->reserve.size()) || p->knocked) return false;
         std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
         p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
         p->dirty = true;
@@ -772,7 +994,7 @@ class Match {
     bool PickUp(uint32_t id, size_t index, bool force = true) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
-        if (index >= loot.size() || loot[index].taken) return false;
+        if (index >= loot.size() || loot[index].taken || p->knocked) return false;
         const LootSpawn s = loot[index].spawn;
         if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
         if (s.container && !force) return false; // chests have to be opened on purpose
@@ -865,7 +1087,7 @@ class Match {
     // is enough); otherwise something that cures fire or stun; otherwise a Poe. A Fairy is never used this way.
     bool UsePotion(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || p->potions.empty()) return false;
+        if (!p || !p->alive || p->knocked || p->potions.empty()) return false;
         if (state != MatchState::Drop && state != MatchState::InMatch) return false;
 
         int best = -1;
@@ -907,10 +1129,16 @@ class Match {
     // Drink the stack the player has in hand. Refused when it would do nothing (full health for a healing potion, a full shield bar...).
     bool UseStack(uint32_t id, ItemId item, Rarity rarity) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         size_t idx = p->potions.size();
         for (size_t i = 0; i < p->potions.size(); i++) if (p->potions[i].item == item && p->potions[i].rarity == rarity) { idx = i; break; }
         if (idx == p->potions.size()) return false;
+        if (item == ItemId::DekuLaunchFlower) {   // planted in front of you; stays in the bag if there is no room
+            if (!PlacePad(id)) return false;
+            p->potions.erase(p->potions.begin() + static_cast<long>(idx));
+            p->dirty = true;
+            return true;
+        }
         const PotionDef d = PotionOf(item);
         if (d.revive) return false;
         if (d.shield > 0) {
@@ -932,7 +1160,7 @@ class Match {
     // Put the weapon in hand on the ground so somebody else can take it; a backup weapon (or the starter sword) takes its place.
     bool DropWeapon(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (IsStarter(p->weapon)) return false;
         DropEquipment(*p, p->weapon);
         if (!p->reserve.empty()) { p->weapon = p->reserve.front(); p->reserve.erase(p->reserve.begin()); }
@@ -946,7 +1174,7 @@ class Match {
     // A small potion only works while the bar is below half; the big one fills it. Fails if the bag has none or the bar is already full enough.
     bool UseShield(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         int best = -1;
         float bestFit = 0;
         for (size_t i = 0; i < p->potions.size(); i++) {
@@ -1000,7 +1228,7 @@ class Match {
     // Pay an ally to join you. The player must be standing next to it, have the rupees and have a free place (two allies at most).
     bool HireAlly(uint32_t playerId, int index) {
         PlayerState* p = Find(playerId);
-        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || index < 0 || index >= static_cast<int>(allies.size())) return false;
+        if (!p || !p->alive || p->knocked || (state != MatchState::InMatch && state != MatchState::Drop) || index < 0 || index >= static_cast<int>(allies.size())) return false;
         AllyState& a = allies[static_cast<size_t>(index)];
         const AllyDef& def = AllyOf(a.kind);
         if (!a.alive || a.Hired() || p->rupees < def.price || AlliesOf(playerId) >= kMaxAlliesPerPlayer) return false;
@@ -1034,7 +1262,7 @@ class Match {
             targetPos = boss->pos; targetY = boss->y;
             extra = IsDragonKind(boss->kind) ? kDragonBodyRadius : kBossBodyRadius;
         } else {
-            auto* target = Find(targetId); if (!target || !target->alive || target->id == a.owner) return false;
+            auto* target = Find(targetId); if (!target || !target->alive || target->id == a.owner || SameTeam(a.owner, targetId)) return false;
             targetPos = target->pos;
             targetY = target->isBot && nav ? nav->FloorAt(target->pos) + target->y : target->y;
         }
@@ -1074,7 +1302,7 @@ class Match {
             return false;
         }
         PlayerState* t = Find(targetId);
-        if (!t || !t->alive || t->id == a.owner) return false;
+        if (!t || !t->alive || t->id == a.owner || SameTeam(a.owner, targetId)) return false;
         act.x = t->pos.x; act.z = t->pos.z; events.push_back(act);
         if (clock < t->invulnUntil) return true;                              // protected: the swing still happened
         Blow(*t, a.pos, def.damage, owner->id);                               // a roll dodges it, a shield and a guard take their share
@@ -1358,7 +1586,7 @@ class Match {
 
     bool UseAbility(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || state != MatchState::InMatch || !p->hasAbility) return false;
+        if (!p || !p->alive || p->knocked || state != MatchState::InMatch || !p->hasAbility) return false;
         if (clock < p->abilityReadyAt || clock < p->stunUntil || clock < p->frozenUntil) return false;
         const ItemId item = p->ability.item;
         const float cost = AbilityMagic(item);
@@ -1377,7 +1605,7 @@ class Match {
         return TotalsOf(p).speed * (clock < p.speedUntil ? p.speedMult : 1.0f) * (clock < p.adultUntil ? kAdultSpeed : 1.0f);
     }
     bool Revealing(const PlayerState& p) const { return clock < p.revealUntil; }
-    bool Stunned(const PlayerState& p) const { return clock < p.stunUntil || clock < p.frozenUntil; }
+    bool Stunned(const PlayerState& p) const { return clock < p.stunUntil || clock < p.frozenUntil || p.knocked; }   // a knocked player cannot act either
     bool Invulnerable(const PlayerState& p) const { return clock < p.invulnUntil; }
 
     const std::vector<LootEntry>& Loot() const { return loot; }
@@ -1399,11 +1627,11 @@ class Match {
     // Only meaningful once the match is Ending.
     int Score(const PlayerState& p) const { return ScorePoints(p.damageDealt, p.kills, p.chestsOpened, p.placement) + p.bossKills * kPointsPerBossKill; }
 
-    struct Standing { uint32_t id; bool isBot; int placement, kills, chests, score; float damage; };
+    struct Standing { uint32_t id; bool isBot; int placement, kills, chests, score; float damage; int team; };
     // Everyone's results, best score first (ties broken by placement).
     std::vector<Standing> Standings() const {
         std::vector<Standing> out;
-        for (const auto& p : players) out.push_back({p.id, p.isBot, p.placement, p.kills, p.chestsOpened, Score(p), p.damageDealt});
+        for (const auto& p : players) out.push_back({p.id, p.isBot, p.placement, p.kills, p.chestsOpened, Score(p), p.damageDealt, TeamsOn() ? p.team + 1 : 0});
         std::sort(out.begin(), out.end(), [](const Standing& a, const Standing& b) {
             if (a.score != b.score) return a.score > b.score;
             return (a.placement ? a.placement : 99) < (b.placement ? b.placement : 99);
@@ -1787,6 +2015,7 @@ class Match {
             }
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
+                if (SameTeam(s.by, p.id)) continue;   // a teammate's blast goes round you
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast
                 if (s.lightning || s.style == StrikeStyle::Bolt) {
                     Damage(p.id, s.damage, s.by, DamageKind::Normal);
@@ -2526,6 +2755,7 @@ class Match {
 
     const PlayerState* Winner() const {
         if (state != MatchState::Ending) return nullptr;
+        for (const auto& p : players) if (p.alive && !p.knocked) return &p;
         for (const auto& p : players) if (p.alive) return &p;
         return nullptr;
     }
@@ -2760,6 +2990,7 @@ class Match {
     void Enter(MatchState s) {
         if (s == MatchState::Ending) {
             for (auto& p : players) if (p.alive) p.placement = 1;
+            if (TeamsOn()) for (auto& p : players) for (const auto& o : players) if (o.alive && o.team == p.team) p.placement = 1;   // the winning team wins together
         }
         state = s;
         stateTime = 0;
@@ -2773,6 +3004,7 @@ class Match {
     static PlayerState MakePlayer(uint32_t id, bool isBot) {
         PlayerState p;
         p.id = id;
+        p.team = static_cast<int>(id);   // alone on a team until AssignTeams
         p.isBot = isBot;
         if (isBot) p.scene = static_cast<uint8_t>(kHyruleFieldScene);
         return p;
@@ -2789,19 +3021,27 @@ class Match {
 
     // Eliminated players leave everything they carry behind for others (the Skulltula pile in the design doc).
     void Eliminate(PlayerState& p, uint32_t killer) {
-        p.placement = Alive(); // counted while this player still is
+        p.placement = TeamsOn() ? TeamsAlive() : Alive(); // counted while this player (and their team) still is
         p.alive = false;
         p.health = 0;
+        p.knocked = false; p.knockHealth = 0; p.reviveProgress = 0;
+        reviveHolds.erase(p.id);
         DropKit(p);
         for (auto& ally : allies) if (ally.owner == p.id && ally.alive) ReleaseAlly(ally, false);   // their allies are free to hire again
         for (auto& v : vehicles) for (auto& who : v.seat) if (who == p.id) who = kNoPlayer;      // and their seat in a cart is empty
         if (killer != kNoPlayer && killer != p.id) {
-            if (PlayerState* k = Find(killer)) k->kills++;
+            if (PlayerState* k = Find(killer)) { k->kills++; if (k->alive && !k->knocked) Siphon(*k); }
         }
         if (!replay.frames.empty() || state == MatchState::InMatch) replay.kills.push_back({static_cast<uint16_t>((std::max)(0, static_cast<int>(replay.frames.size()) - 1)), killer == kNoPlayer ? static_cast<uint16_t>(0xFFFF) : static_cast<uint16_t>(killer), static_cast<uint16_t>(p.id)});
         MatchEvent e{MatchEvent::Type::Eliminated};
         e.a = p.id; e.b = killer;
         events.push_back(e);
+        if (TeamsOn()) {
+            bool anyLeft = false;
+            for (const auto& o : players) anyLeft = anyLeft || (o.team == p.team && o.alive);
+            if (anyLeft) CascadeIfExtinct(p.team);   // the ones still lying down are out when nobody is left to get them up
+            else for (auto& o : players) if (o.team == p.team) o.placement = p.placement;   // the whole team places together
+        }
     }
     // Only part of the kit is left behind: a random half of the items (at least one, never all of them when there is more than one) and
     // about 60 per cent of the money and ammo. The rest goes with the player.
@@ -2912,7 +3152,7 @@ class Match {
     template <class F>
     void ForOthersNear(const PlayerState& self, float radius, F fn) {
         for (auto& o : players) {
-            if (!o.alive || o.id == self.id) continue;
+            if (!o.alive || o.id == self.id || SameTeam(self, o)) continue;
             if (Distance(o.pos, self.pos) <= radius) fn(o);
         }
     }
@@ -2932,7 +3172,7 @@ class Match {
         PlayerState* best = nullptr;
         float bestDist = range;
         for (auto& o : players) {
-            if (!o.alive || o.id == p.id) continue;
+            if (!o.alive || o.id == p.id || SameTeam(p, o)) continue;
             const float dx = o.pos.x - p.pos.x, dz = o.pos.z - p.pos.z;
             const float d = std::sqrt(dx * dx + dz * dz);
             if (d > bestDist) continue;
@@ -3127,6 +3367,11 @@ class Match {
     Vec2 sandboxSpawn = {};
     Circle sandboxRoom = {};
     std::vector<uint8_t> sandboxRestocked;   // loot entries already put back by SandboxRestock
+    TeamMode teamMode = TeamMode::Solo;
+    std::map<uint32_t, ReviveHold> reviveHolds;   // who is holding A on whom
+    std::vector<Ping> pings;
+    std::vector<Vec2> pads, padSpots;
+    static constexpr float kReviveHoldGrace = 0.4f;   // a hold the reviver's game stops refreshing lapses after this long
     int playerLimit = kMaxPlayers; // the host's game turns bosses on (GameServer::SetBossCount); plain matches and the tests have none
 };
 

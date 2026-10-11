@@ -541,7 +541,7 @@ static void CatalogIsConsistent() {
             case ItemKind::Shield:     CHECK(ShieldReduction(d.id, Rarity::Common) > 0); break;
             case ItemKind::Consumable: {
                 PotionDef p = PotionOf(d.id);
-                CHECK(p.heal > 0 || p.cleanse || p.damageTaken < 1 || p.revive || p.shield > 0);
+                CHECK(p.heal > 0 || p.cleanse || p.damageTaken < 1 || p.revive || p.shield > 0 || d.id == ItemId::DekuLaunchFlower);   // the flower plants a launch pad instead
                 break;
             }
             case ItemKind::Instant:    CHECK(InstantOf(d.id) != InstantEffect::None); break;
@@ -557,9 +557,9 @@ static void CatalogIsConsistent() {
         if (d.kind != ItemKind::Weapon) CHECK(WeaponOf(d.id).damage == 0);
         if (d.kind != ItemKind::Gear) CHECK(static_cast<int>(GearOf(d.id).slot) == kGearSlots);
     }
-    CHECK(kItemCount >= 80 && kPoolItemCount == 90 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
+    CHECK(kItemCount >= 80 && kPoolItemCount == 91 && !InPool(ItemId::BasicSword) && !InPool(ItemId::Rupees) && InPool(ItemId::HomingBombchus));
     CHECK(perKind[static_cast<int>(ItemKind::Weapon)] == 20 && perKind[static_cast<int>(ItemKind::Shield)] == 3);
-    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 11 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
+    CHECK(perKind[static_cast<int>(ItemKind::Consumable)] == 12 && perKind[static_cast<int>(ItemKind::Instant)] == 5);
     CHECK(perKind[static_cast<int>(ItemKind::Ability)] == 20 && perKind[static_cast<int>(ItemKind::Gear)] == 31);
     CHECK(songs == 12 && simple == 4);
     // Every gear slot has several items, so there is always something to find for each.
@@ -4842,6 +4842,322 @@ static void BlocksAreBakedIntoTheCollision() {
     CHECK(tops == 4 && sides == 16);
 }
 
+
+// ---- Teams, Down But Not Out, Siphon, pings and launch pads ----------------------------------------------------------
+
+// A started match in a team mode with `humans` people and bots up to `limit`, past the countdown and drop, and not ticked by the bots.
+static Match TeamMatch(TeamMode mode, int humans, int limit, uint64_t seed = 5) {
+    Match m(seed, MapCircle(), 0);
+    CHECK(m.SetTeamMode(mode));
+    m.SetPlayerLimit(limit);
+    for (int i = 1; i <= humans; i++) m.AddHuman(static_cast<uint32_t>(i));
+    CHECK(m.Start());
+    while (m.State() != MatchState::InMatch) m.Tick(kDt);
+    for (auto& p : m.Players()) p.ammo.fill(60);
+    return m;
+}
+static void Place(Match& m, uint32_t id, Vec2 at) { m.Find(id)->pos = at; }
+static bool SawEvent(std::vector<MatchEvent> events, MatchEvent::Type t, uint32_t a) { for (auto& e : events) if (e.type == t && e.a == a) return true; return false; }
+
+static void TeamsAreMadeAtTheStart() {
+    Match lobby(1, MapCircle(), 0);
+    CHECK(lobby.GetTeamMode() == TeamMode::Solo && lobby.SetTeamMode(TeamMode::Squads) && lobby.GetTeamMode() == TeamMode::Squads);
+    Match solo = TeamMatch(TeamMode::Solo, 1, 8);
+    std::set<int> soloTeams;
+    for (auto& p : solo.Players()) soloTeams.insert(p.team);
+    CHECK(soloTeams.size() == 8 && solo.TeamsAlive() == 8);                               // everyone is a team of one
+    Match duos = TeamMatch(TeamMode::Duos, 2, 8);
+    std::map<int, int> size;
+    for (auto& p : duos.Players()) size[p.team]++;
+    CHECK(size.size() == 4);
+    for (auto& [t, n] : size) { (void)t; CHECK(n == 2); }
+    CHECK(duos.Find(1)->team == duos.Find(2)->team && duos.Find(1)->team != duos.Find(1000)->team);   // the two people are partners; bots fill the other teams
+    Match squads = TeamMatch(TeamMode::Squads, 1, 8);
+    std::map<int, int> sq;
+    for (auto& p : squads.Players()) sq[p.team]++;
+    CHECK(sq.size() == 2 && sq.begin()->second == 4);
+    CHECK(!squads.SetTeamMode(TeamMode::Solo));                                           // lobby only
+    CHECK(squads.SameTeam(1, 1000) && !squads.SameTeam(1, 1004) && !squads.SameTeam(1, 1));
+}
+
+static void TeammatesDoNoDamage() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {60, 0}); Place(m, 1000, {120, 0}); Place(m, 1001, {1500, 0});
+    const float before = m.Find(2)->health;
+    CHECK(!m.Damage(2, 3.0f, 1) && m.Find(2)->health == before);                           // a direct hit from a teammate does nothing
+    m.Find(1)->weapon = {ItemId::KokiriSword, Rarity::Common};
+    const AttackResult own = m.Attack(1, 2);
+    CHECK(!own.ok && !own.hit && m.Find(2)->health == before);                             // and a swing at one is not even a swing
+    m.Damage(2, 1.0f, 1000);
+    CHECK(m.Find(2)->health < before);                                                     // an enemy still hurts
+    // A teammate's blast and ability go round you; your own still hurts you.
+    m.AddStrike({60, 0}, 200.0f, 2.0f, 0.0f, 1, StrikeStyle::Rock);
+    const float h2 = m.Find(2)->health, h1 = m.Find(1)->health;
+    m.Tick(kDt);
+    CHECK(m.Find(2)->health == h2 && m.Find(1)->health < h1);
+    // The same in Solo: nobody is protected.
+    Match solo = TeamMatch(TeamMode::Solo, 2, 4);
+    solo.Damage(2, 1.0f, 1);
+    CHECK(solo.Find(2)->health < kMaxHealth);
+}
+
+static void KnockedInsteadOfEliminatedInTeamModes() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {60, 0}); Place(m, 1000, {500, 0}); Place(m, 1001, {2000, 0});
+    m.DrainEvents();
+    PlayerState* p = m.Find(1);
+    p->armor = 1.0f;
+    CHECK(!m.Damage(1, 50.0f, 1000));                                                      // lethal, but a teammate stands
+    CHECK(p->alive && p->knocked && p->health == 0 && std::abs(p->knockHealth - kKnockHealth) < 0.01f && p->armor == 0);
+    CHECK(SawEvent(m.DrainEvents(), MatchEvent::Type::Knocked, 1) && m.Alive() == 4);
+    CHECK(m.Find(1000)->kills == 0);                                                       // a knock is not an elimination
+    // Down, you cannot fight, use things, pick up, ride or use abilities.
+    p->weapon = {ItemId::KokiriSword, Rarity::Common};
+    p->potions = {{ItemId::RedPotion, Rarity::Common}};
+    p->hasAbility = true; p->ability = {ItemId::DinsFire, Rarity::Common};
+    CHECK(!m.Attack(1, 1000).ok && !m.UsePotion(1) && !m.UseStack(1, ItemId::RedPotion, Rarity::Common) && !m.UseAbility(1) && !m.StartRoll(1));
+    m.AddLoot({{0, 0}, ItemId::GreenPotion, Rarity::Common, false});
+    CHECK(!m.PickUp(1, m.Loot().size() - 1));
+    // The Fairy takes priority over being knocked.
+    PlayerState* q = m.Find(2);
+    q->potions = {{ItemId::Fairy, Rarity::Rare}};
+    CHECK(!m.Damage(2, 50.0f, 1000) && q->alive && !q->knocked && q->potions.empty() && q->health > 0);
+    // Alone in Solo, the same blow eliminates.
+    Match solo = TeamMatch(TeamMode::Solo, 2, 4);
+    CHECK(solo.Damage(1, 50.0f, 1000) && !solo.Find(1)->alive && !solo.Find(1)->knocked);
+    // Duos with a partner already out: no knock, straight out.
+    Match d2 = TeamMatch(TeamMode::Duos, 2, 4);
+    d2.Find(2)->alive = false;
+    CHECK(d2.Damage(1, 50.0f, 1000) && !d2.Find(1)->alive);
+}
+
+static void BleedOutEliminatesAndCreditsTheKnocker() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {1000, 0}); Place(m, 1000, {500, 0}); Place(m, 1001, {2000, 0});
+    m.Damage(1, 50.0f, 1000);
+    CHECK(m.Find(1)->knocked);
+    const int kills = m.Find(1000)->kills;
+    for (int i = 0; i < static_cast<int>(20 * kTickHz); i++) m.Tick(kDt);
+    CHECK(m.Find(1)->alive && m.Find(1)->knockHealth < kKnockHealth - 1.5f && m.Find(1)->knockHealth > 0);   // 0.1 hearts a second
+    for (int i = 0; i < static_cast<int>(12 * kTickHz); i++) m.Tick(kDt);
+    CHECK(!m.Find(1)->alive && m.Find(1000)->kills == kills + 1);                           // credited to whoever knocked them
+    // Enemy hits drain the bar faster; the storm does too.
+    Match d = TeamMatch(TeamMode::Duos, 2, 4);
+    d.Damage(1, 50.0f, 1000);
+    const float bar = d.Find(1)->knockHealth;
+    d.Damage(1, 1.0f, 1001);
+    CHECK(d.Find(1)->knockHealth < bar - 0.5f && d.Find(1)->alive);
+    CHECK(d.Damage(1, 5.0f, 1001) && !d.Find(1)->alive && d.Find(1001)->kills == 1);       // the finishing blow counts for who struck it
+    Match s = TeamMatch(TeamMode::Duos, 2, 4);
+    s.Damage(1, 50.0f, 1000);
+    CHECK(s.Damage(1, 9.0f, kNoPlayer, DamageKind::Storm, false) && s.Find(1000)->kills == 1);   // the storm finishes it: the knocker is credited
+}
+
+static void WholeTeamKnockedMeansEliminated() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 6);
+    Place(m, 1, {0, 0}); Place(m, 2, {40, 0}); Place(m, 1000, {900, 0});
+    m.DrainEvents();
+    m.Damage(2, 50.0f, 1000);
+    CHECK(m.Find(2)->knocked && m.Find(1)->alive && !m.Find(1)->knocked);
+    CHECK(m.Damage(1, 50.0f, 1000));                                                       // the last one standing goes down: nobody is left to get them up
+    CHECK(!m.Find(1)->alive && !m.Find(2)->alive);                                         // so the one lying down is out as well
+    CHECK(m.Find(1)->placement == m.Find(2)->placement && m.Find(1)->placement == 3);      // the team places together (three teams were left)
+    CHECK(m.Find(1000)->kills == 2);
+    // Both knocked at once also ends the team.
+    Match n = TeamMatch(TeamMode::Squads, 1, 8);
+    for (uint32_t id : {1u, 1000u, 1001u}) n.Damage(id, 50.0f, 1004);
+    CHECK(n.Find(1)->knocked && n.Find(1000)->knocked && n.Find(1001)->knocked && n.Find(1002)->alive);
+    n.Damage(1002, 50.0f, 1004);                                                           // the last of four
+    for (uint32_t id : {1u, 1000u, 1001u, 1002u}) CHECK(!n.Find(id)->alive);
+}
+
+static void RevivingTakesThreeSecondsAndTheTeammate() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {80, 0}); Place(m, 1000, {2500, 0}); Place(m, 1001, {2600, 0});
+    m.Damage(1, 50.0f, 1000);
+    m.DrainEvents();
+    CHECK(!m.HoldRevive(1000, 1) && !m.HoldRevive(1, 2));                                  // an enemy, or the one who is down, cannot
+    for (int i = 0; i < static_cast<int>(1.5f * kTickHz); i++) { CHECK(m.HoldRevive(2, 1)); m.Tick(kDt); }
+    CHECK(m.Find(1)->knocked && std::abs(m.Find(1)->reviveProgress - 0.5f) < 0.06f);
+    for (int i = 0; i < static_cast<int>(1.7f * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    PlayerState* p = m.Find(1);
+    CHECK(p->alive && !p->knocked && std::abs(p->health - kReviveHealth) < 0.01f && p->armor == 0 && p->knockHealth == 0);
+    CHECK(SawEvent(m.DrainEvents(), MatchEvent::Type::TeamRevived, 1));
+    CHECK(!m.Damage(1, 3.0f, 1000) && p->health == kReviveHealth);                         // 1.5 seconds of safety
+    for (int i = 0; i < static_cast<int>(1.6f * kTickHz); i++) m.Tick(kDt);
+    m.Damage(1, 0.5f, 1000);
+    CHECK(p->health < kReviveHealth);
+    // Moving away cancels, and it stays cancelled until A is let go and pressed again.
+    m.Damage(1, 50.0f, 1000);
+    CHECK(p->knocked);
+    for (int i = 0; i < static_cast<int>(1.0f * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    CHECK(p->reviveProgress > 0.2f);
+    Place(m, 2, {80 + kReviveRange + 50.0f, 0});
+    m.HoldRevive(2, 1);
+    m.Tick(kDt);
+    CHECK(p->reviveProgress == 0 && p->knocked);
+    Place(m, 2, {80, 0});
+    for (int i = 0; i < static_cast<int>(4 * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    CHECK(p->knocked);                                                                     // back in range but still "cancelled"
+    m.ReleaseRevive(2);
+    for (int i = 0; i < static_cast<int>(3.2f * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    CHECK(!p->knocked);
+    // Taking damage cancels the reviver's hold.
+    for (int i = 0; i < static_cast<int>(2 * kTickHz); i++) m.Tick(kDt);                   // the new life's protection runs out
+    m.Damage(1, 50.0f, 1000);
+    CHECK(p->knocked);
+    for (int i = 0; i < static_cast<int>(1.0f * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    m.Damage(2, 0.3f, 1000);                                                               // the reviver is hit
+    for (int i = 0; i < static_cast<int>(4 * kTickHz); i++) { m.HoldRevive(2, 1); m.Tick(kDt); }
+    CHECK(p->knocked && p->reviveProgress == 0);
+    // A hold that stops being refreshed lapses.
+    m.ReleaseRevive(2);
+    m.HoldRevive(2, 1);
+    for (int i = 0; i < static_cast<int>(2 * kTickHz); i++) m.Tick(kDt);
+    CHECK(p->knocked && p->reviveProgress == 0);
+}
+
+static void LastTeamStandingWins() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {60, 0}); Place(m, 1000, {900, 0}); Place(m, 1001, {960, 0});
+    m.Damage(1000, 50.0f, 1);                                                              // knocked
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::InMatch && m.TeamsAlive() == 2);
+    m.Damage(1001, 50.0f, 2);                                                              // the last of the other team
+    CHECK(!m.Find(1000)->alive && !m.Find(1001)->alive);
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::Ending);
+    CHECK(m.Winner() && (m.Winner()->id == 1 || m.Winner()->id == 2));
+    CHECK(m.Find(1)->placement == 1 && m.Find(2)->placement == 1 && m.Find(1000)->placement == 2 && m.Find(1001)->placement == 2);
+    const auto standings = m.Standings();
+    int team1 = -1;
+    for (auto& s : standings) { CHECK(s.team >= 1); if (s.id == 1) team1 = s.team; if (s.id == 2) CHECK(s.team == team1); }
+    // A team with one member knocked and the other fighting on is still in.
+    Match n = TeamMatch(TeamMode::Duos, 2, 4);
+    n.Damage(1, 50.0f, 1000);
+    n.Find(1000)->alive = false; n.Find(1001)->alive = false;
+    n.Tick(kDt);
+    CHECK(n.State() == MatchState::Ending && n.Winner() && n.Winner()->id == 2);           // the one standing is named, not the one lying down
+}
+
+static void SiphonOnElimination() {
+    Match m = TeamMatch(TeamMode::Solo, 2, 4);
+    PlayerState* k = m.Find(1);
+    k->health = 3.0f; k->armor = 0;
+    CHECK(m.Damage(1000, 99.0f, 1));
+    CHECK(std::abs(k->health - 4.0f) < 0.001f && std::abs(k->armor - kSiphonShield) < 0.001f);   // +1 heart and a third of a shield bar
+    k->health = k->maxHealth - 0.25f; k->armor = 0;
+    CHECK(m.Damage(1001, 99.0f, 1));
+    CHECK(std::abs(k->health - k->maxHealth) < 0.001f && std::abs(k->armor - (0.75f + kSiphonShield)) < 0.001f);   // the overflow goes to the shield
+    Match n = TeamMatch(TeamMode::Solo, 2, 6);
+    PlayerState* a = n.Find(1);
+    a->armor = kMaxShield - 0.2f;
+    n.Damage(1000, 99.0f, 1);
+    CHECK(std::abs(a->armor - kMaxShield) < 0.001f);                                       // capped
+    PlayerState* b = n.Find(1001);                                                          // bots siphon too
+    b->health = 2.0f;
+    n.Damage(1002, 99.0f, 1001);
+    CHECK(std::abs(b->health - 3.0f) < 0.001f && b->armor > 0.9f);
+    n.Find(1003)->alive = true;
+    const float before = n.Find(1001)->health;
+    n.Damage(1003, 99.0f, kNoPlayer, DamageKind::Storm, false);                             // the storm gives nobody anything
+    CHECK(n.Find(1001)->health == before);
+}
+
+static void PingsGoToTheTeamAndExpire() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {200, 0}); Place(m, 1000, {900, 0}); Place(m, 1001, {2600, 0});
+    Match::Ping ping;
+    CHECK(m.PlacePing(1, PingKind::Place, {800, 0}, kNoPlayer, &ping) && ping.kind == PingKind::Place);
+    CHECK(m.PingVisibleTo(ping, 1) && m.PingVisibleTo(ping, 2) && !m.PingVisibleTo(ping, 1000));   // the pinger and their team
+    CHECK(!m.PlacePing(1, PingKind::Place, {kPingReach + 500.0f, 0}, kNoPlayer));            // too far from the sender
+    CHECK(!m.PlacePing(1, PingKind::Place, {5000, 0}, kNoPlayer));                            // off the map
+    CHECK(m.PlacePing(1, PingKind::Enemy, {900, 0}, 1000, &ping) && ping.kind == PingKind::Enemy && ping.target == 1000);
+    CHECK(m.PlacePing(1, PingKind::Enemy, {200, 0}, 2, &ping) && ping.kind == PingKind::Place);   // a teammate is not an enemy
+    CHECK(m.PlacePing(1, PingKind::Loot, {100, 100}, 9999, &ping) && ping.kind == PingKind::Place);   // no such loot
+    int mine = 0;
+    for (auto& g : m.Pings()) mine += g.owner == 1;
+    CHECK(mine == kPingMaxPerPlayer);                                                        // the oldest went
+    CHECK(m.PlacePing(2, PingKind::Place, {0, 300}, kNoPlayer));
+    for (int i = 0; i < static_cast<int>((kPingSeconds - 1.0f) * kTickHz); i++) m.Tick(kDt);
+    CHECK(!m.Pings().empty());
+    for (int i = 0; i < static_cast<int>(1.5f * kTickHz); i++) m.Tick(kDt);
+    CHECK(m.Pings().empty());                                                                // 8 seconds
+    // Solo: only the pinger sees it.
+    Match solo = TeamMatch(TeamMode::Solo, 2, 4);
+    Place(solo, 1, {0, 0});
+    CHECK(solo.PlacePing(1, PingKind::Place, {300, 0}, kNoPlayer, &ping) && solo.PingVisibleTo(ping, 1) && !solo.PingVisibleTo(ping, 2));
+}
+
+static void LaunchPadsAreOnTheMap() {
+    for (uint64_t seed = 1; seed <= 12; seed++) {
+        Match m = TeamMatch(TeamMode::Solo, 1, 4, seed);
+        const auto& pads = m.Pads();
+        CHECK(pads.size() >= static_cast<size_t>(kLaunchPadsMin) && pads.size() <= static_cast<size_t>(kLaunchPadsMax));
+        for (size_t i = 0; i < pads.size(); i++) {
+            CHECK(Distance(pads[i], MapCircle().center) < MapCircle().radius);
+            for (size_t j = i + 1; j < pads.size(); j++) CHECK(Distance(pads[i], pads[j]) > 500.0f);
+        }
+    }
+    // The map's placement rule is respected.
+    Match v(3, MapCircle(), 0);
+    v.SetPlacementValidator([](Vec2 p) { return p.x > 0; });
+    v.AddHuman(1);
+    v.Start();
+    for (const Vec2& p : v.Pads()) CHECK(p.x > 0);
+    // The Deku Launch Flower plants one in front of you, and is spent.
+    Match m = TeamMatch(TeamMode::Solo, 1, 2);
+    PlayerState* p = m.Find(1);
+    p->pos = {0, 0}; p->rot = 0;
+    p->potions = {{ItemId::DekuLaunchFlower, Rarity::Rare}};
+    const size_t had = m.Pads().size();
+    m.DrainEvents();
+    CHECK(m.UseStack(1, ItemId::DekuLaunchFlower, Rarity::Rare) && p->potions.empty() && m.Pads().size() == had + 1);
+    CHECK(std::abs(m.Pads().back().z - kLaunchPadPlaceAhead) < 1.0f && std::abs(m.Pads().back().x) < 1.0f);
+    bool changed = false;
+    for (auto& e : m.DrainEvents()) changed |= e.type == MatchEvent::Type::PadsChanged;
+    CHECK(changed);
+    p->potions = {{ItemId::DekuLaunchFlower, Rarity::Rare}};
+    CHECK(!m.UseStack(1, ItemId::DekuLaunchFlower, Rarity::Rare) && p->potions.size() == 1);   // one is already there
+    p->pos = {1e6f, 0};
+    CHECK(!m.UseStack(1, ItemId::DekuLaunchFlower, Rarity::Rare));                              // no ground off the map
+    // The test map gets exactly one, beside the spawn.
+    Match sb = MakeSandbox();
+    sb.Start();
+    CHECK(sb.Pads().size() == 1 && Distance(sb.Pads()[0], SandboxSpawn()) < 400.0f);
+}
+
+static void BotsReviveAndSparePartners() {
+    Simulation sim(31, MapCircle(), 0);
+    sim.match.SetTeamMode(TeamMode::Duos);
+    sim.match.SetPlayerLimit(4);
+    sim.match.AddHuman(1);
+    sim.match.Start();
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    Match& m = sim.match;
+    CHECK(m.SameTeam(1, 1000));                                                             // the human's partner is a bot
+    FillAmmo(sim);
+    Place(m, 1001, {1900, 0}); Place(m, 1002, {1900, 100});                                // the other team is far across the map
+    Place(m, 1, {0, 0}); Place(m, 1000, {400, 0});
+    m.Find(1)->invulnUntil = 0;
+    m.Damage(1, 50.0f, 1001);
+    CHECK(m.Find(1)->knocked);
+    Run(sim, 12.0f);
+    CHECK(m.State() == MatchState::InMatch);
+    CHECK(m.Find(1)->alive && !m.Find(1)->knocked);                                         // the bot came and got them up
+    CHECK(m.Find(1)->health > 0.5f && m.Find(1000)->health == m.Find(1000)->maxHealth);     // and never attacked its partner
+    // A bot never targets its teammate even with nobody else around.
+    Simulation s2(32, MapCircle(), 0);
+    s2.match.SetTeamMode(TeamMode::Duos);
+    s2.match.SetPlayerLimit(2);
+    s2.match.AddHuman(1);
+    s2.match.Start();
+    while (s2.match.State() != MatchState::InMatch) s2.match.Tick(kDt);
+    s2.match.Find(1)->pos = {0, 0}; s2.match.Find(1000)->pos = {100, 0};
+    Run(s2, 5.0f);
+    CHECK(s2.match.Find(1)->health == s2.match.Find(1)->maxHealth && s2.match.Find(1000)->health == s2.match.Find(1000)->maxHealth);
+}
+
 int main() {
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
@@ -4855,6 +5171,8 @@ int main() {
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
+    TeamsAreMadeAtTheStart(); TeammatesDoNoDamage(); KnockedInsteadOfEliminatedInTeamModes(); BleedOutEliminatesAndCreditsTheKnocker(); WholeTeamKnockedMeansEliminated(); RevivingTakesThreeSecondsAndTheTeammate();
+    LastTeamStandingWins(); SiphonOnElimination(); PingsGoToTheTeamAndExpire(); LaunchPadsAreOnTheMap(); BotsReviveAndSparePartners();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

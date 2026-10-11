@@ -242,7 +242,7 @@ bool OneShotAnim(uint8_t anim) {
     switch (static_cast<Anim>(anim)) {
         case Anim::Attack: case Anim::Shoot: case Anim::Throw: case Anim::Drink: case Anim::Play: case Anim::Cast: case Anim::Roll:
         case Anim::JumpSlash: case Anim::SpinAttack: case Anim::HopL: case Anim::HopR: case Anim::Backflip: case Anim::ItemGet:
-        case Anim::OpenChest: case Anim::Jump: case Anim::Hurt: case Anim::Dead: case Anim::Guard: return true;
+        case Anim::OpenChest: case Anim::Jump: case Anim::Hurt: case Anim::Dead: case Anim::Knocked: case Anim::Guard: return true;
         default: return false;
     }
 }
@@ -343,7 +343,7 @@ AnimSeq SeqFor(uint8_t anim, royale::ItemId weapon, int combo, royale::ItemId ab
         case Anim::Tread: return AnimSeq(RA(swimer_swim_wait), true);    // and treading water
         case Anim::Climb: return AnimSeq(RA(normal_Fclimb_upL), true);   // hand over hand up a cliff or an ivy wall
         case Anim::Hurt: return AnimSeq(RA(normal_front_shit), false);
-        case Anim::Dead: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));
+        case Anim::Dead: case Anim::Knocked: return AnimSeq(RA(normal_front_downA), false).Add(RA(normal_front_downB));   // knocked: lying flat like a fallen player, until a teammate lifts them
         case Anim::SideL: return AnimSeq(SideStepFor(grip, true), true);
         case Anim::SideR: return AnimSeq(SideStepFor(grip, false), true);
         case Anim::Back: return AnimSeq(grip == Grip::Bow || grip == Grip::Hook ? SideStepFor(grip, false) : RA(anchor_back_walk), true);
@@ -962,6 +962,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     // yet, the swing (or the flinch) is shown anyway, so a fight always reads as one.
     using royale::Anim;
     uint8_t want = s.anim;
+    if (s.knocked && s.alive) want = static_cast<uint8_t>(Anim::Knocked);
     bool forced = false;
     {
         auto sw = gSwingFrames.find(s.id);

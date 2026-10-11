@@ -736,6 +736,7 @@ uint8_t ClassifyAnim(Player* player) {
     lastX = player->actor.world.pos.x; lastZ = player->actor.world.pos.z;
     if (gEmote.id >= 0) return royale::EmoteAnim(gEmote.id); // others see the gesture
     if (player->stateFlags1 & PLAYER_STATE1_DEAD) return static_cast<uint8_t>(Anim::Dead);
+    if (gSelfKnocked) return static_cast<uint8_t>(Anim::Knocked);
     const void* a = player->skelAnime.animation;
     auto is = [&](const char* name) { return AnimIs(a, name); };
     if (is(gPlayerAnim_link_fighter_Lside_jump) || is(gPlayerAnim_link_fighter_Lside_jump_end)) return static_cast<uint8_t>(Anim::HopL);

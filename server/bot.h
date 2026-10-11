@@ -158,6 +158,7 @@ class BotController {
             auto& p = players[(first + n) % count];
             if (p.isBot && p.alive) {
                 if (frozen) continue;
+                if (p.knocked) { p.anim = static_cast<uint8_t>(Anim::Knocked); continue; }   // down on the ground, waiting for a teammate
                 Memory& air = Mem(p.id);
                 if (!air.started) {   // a bot that is there from the countdown or the drop starts in the sky, like the players
                     air.started = true;
@@ -241,7 +242,7 @@ class BotController {
             Vec2 foePos = {};
             float best = def.range + 350.0f;
             for (const auto& p : m.Players()) {
-                if (!p.alive || p.id == owner->id || m.Invulnerable(p)) continue;
+                if (!p.alive || p.id == owner->id || m.Invulnerable(p) || m.SameTeam(*owner, p)) continue;
                 const float d = Distance(p.pos, a.pos);
                 if (d < best && Distance(p.pos, owner->pos) < kAllyLeash * 0.8f && (!nav || nav->SightClear(a.pos, nav->FloorAt(a.pos)+45, p.pos, EyeOf(p)))) { best = d; foeId = p.id; foePos = p.pos; }
             }
@@ -1088,7 +1089,7 @@ class BotController {
         PlayerState* best = nullptr;
         float bestScore = 0;
         for (auto& o : m.Players()) {
-            if (&o == &p || !o.alive) continue;
+            if (&o == &p || !o.alive || m.SameTeam(p, o)) continue;   // never a teammate
             const float d = Distance(p.pos, o.pos);
             if (d > sight) continue;
             if (!xray && d > 250.0f && !CanSee(p, o)) continue;   // behind a boulder or over a hill (close by, it is heard)
@@ -1099,6 +1100,7 @@ class BotController {
             if (!MineRanged(p) && o.y - p.y > 120.0f && d > 120.0f) score *= 0.6f;
             if (o.id == mem.target) score *= 1.3f; // stick with the current target unless something is clearly better
             if (!o.isBot) score *= 1.1f;           // humans are the more interesting prey
+            if (o.knocked) score *= 1.5f;          // a knocked foe can't hit back: finish it before its team gets there
             if (score > bestScore) { bestScore = score; best = &o; }
         }
         return best;
@@ -1449,6 +1451,31 @@ class BotController {
         return mem.havePerch;
     }
 
+    // Down But Not Out: a bot with nobody to fight goes to a knocked teammate and holds the revive until they are up (a hit breaks it off).
+    bool TryRevive(Match& m, PlayerState& p, Memory& mem, const PlayerState* foe, float foeDist, float dt) {
+        if (!m.TeamsOn() || p.knocked) return false;
+        const PlayerState* down = nullptr;
+        float best = 2500.0f;
+        for (const auto& o : m.Players()) {
+            if (!o.alive || !o.knocked || !m.SameTeam(p, o)) continue;
+            const float d = Distance(p.pos, o.pos);
+            if (d < best) { best = d; down = &o; }
+        }
+        if (!down) { m.ReleaseRevive(p.id); return false; }
+        if (foe && foeDist < 600.0f && Distance(down->pos, foe->pos) < 900.0f) { m.ReleaseRevive(p.id); return false; }   // not safe: the fight first
+        if (m.GetStorm().DamagePerSecond(down->pos, m.StormTime()) > 0 && best > 800.0f) return false;
+        if (best > kReviveRange * 0.7f) {
+            m.ReleaseRevive(p.id);
+            WantSprint(mem, TuningFor(difficulty), best > 600.0f);
+            Steer(m, p, mem, down->pos, dt, 1.0f);
+            return true;
+        }
+        p.rot = FaceAngle(p.pos, down->pos);
+        p.anim = static_cast<uint8_t>(Anim::Idle);
+        if (!m.HoldRevive(p.id, down->id)) m.ReleaseRevive(p.id);   // broken off: let go, and try again next time
+        return true;
+    }
+
     // ---- the brain ----------------------------------------------------------------------------------------------------------
 
     void Act(Match& m, PlayerState& p, const Circle& soon, float dt) {
@@ -1568,6 +1595,7 @@ class BotController {
         if (TryHeal(m, p, s)) return;
         if (TryShield(m, p, s)) return;
         TryAbility(m, p, mem, s);
+        if (TryRevive(m, p, mem, foe, dist, dt)) return;
 
         // 1. Storm: stay inside 90% of where the zone will be shortly. Shoot while running but never turn to fight.
         if (s.outsideZone) {
@@ -1711,7 +1739,7 @@ class BotController {
             PlayerState* nearest = nullptr;
             float nearestDist = 1e18f;
             for (auto& o : m.Players()) {
-                if (&o == &p || !o.alive) continue;
+                if (&o == &p || !o.alive || m.SameTeam(p, o)) continue;
                 const float d = Distance(p.pos, o.pos);
                 if (d > sight || (!m.Revealing(p) && d > 250 && !CanSee(p, o)) || FailedGoal(mem, o.pos, now)) continue;
                 if (d < nearestDist) { nearestDist = d; nearest = &o; }
