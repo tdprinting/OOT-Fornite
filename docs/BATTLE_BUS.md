@@ -4,48 +4,64 @@ Design and build spec for the match-start vehicle: Fortnite's Battle Bus, made o
 match aboard it, it flies one straight line over the island, each player picks the moment to jump, free-falls, opens the glider and lands.
 This document is the brief for the build thread (model, animation, code). Nothing here is built yet.
 
-Status: design only. Concept blockout (shapes and colours only, not the final model) and the flight-line diagram are in `docs/battle-bus/`
-(`blockout-sheet.png`, `flight-paths.png`); the full-size renders and `bus_blockout.blend` are in the project files under `battle-bus/`.
-`tools/bus/concept_blockout.py` rebuilds the blockout (needs `bpy`) and `tools/bus/flight_path_diagram.py` the diagram (needs Pillow).
+Status: design only. Concept renders (rough, not the final model) and the flight-line diagram are in `docs/battle-bus/`
+(`concept-sheet.png`, `flight-paths.png`); the full-size renders, `bus_concept.blend` and Tee's reference images are in the project files
+under `battle-bus/`. `tools/bus/concept_blockout.py` rebuilds the renders (needs `bpy`) and `tools/bus/flight_path_diagram.py` the diagram
+(needs Pillow).
 Reference video in Tee's message could not be fetched from here (YouTube is blocked for this container), so the bus behaviour below follows
 Fortnite's Battle Bus as it is known to play: a bus under a hot-air balloon, random straight line over the island, horn, jump any time after
 it crosses the coast, forced out at the far end, skydive then glider.
 
 ## 1. The idea in one paragraph
 
-A long Hylian stagecoach, open at the sides, hangs under a huge balloon painted as Majora's Mask's grinning Moon. A Goron pilot at the front
-drives it with a tiller; a Goron firebox (the same bomb-flower stove as the Lon Lon Buggy) heats the balloon and spins a big Deku-leaf
-propeller at the back. Lanterns swing from the eaves, a Hylian crest banner trails behind. Thirty-two seats in two rows. The moon face
-looks down at the island it is about to fall on, which is why the map is called Moonfall Isle.
+A long lacquered royal coach, stretched to a bus and trimmed with gold and glowing Sheikah runes, hangs under the Majora's Mask Moon
+itself: a cratered grey rock with huge glowing eyes and a grin full of teeth. A Goron pilot at the front drives it with a tiller; a Goron
+firebox (the same bomb-flower stove as the Lon Lon Buggy) sends its flame up into the Moon's mouth and spins a big Deku-leaf propeller at
+the back. A bronze horse head rides the prow, lanterns swing from the eaves, a Hylian crest banner trails behind. Thirty-two seats in two
+rows. The Moon looks down at the island it is about to fall on, which is why the map is called Moonfall Isle.
 
 ## 2. Look and silhouette
 
 Style rule (Tee): OoT or the newer stylised 3D Zelda look. Flat colour blocks, chunky shapes, painterly 256x256 atlases, no realistic detail.
-Read against the sky as three stacked shapes: a round moon, four ropes, a long box with a wheel at the back.
+Tee's references (project files, `battle-bus/refs/`): the Majora's Mask Moon, Wind Waker's Deku Leaf, Fortnite's Battle Bus and Breath of the
+Wild's Master Cycle Zero. They are inspiration, not things to copy; the bus is our own.
+
+Read against the sky as three stacked shapes: the cratered Moon, four ropes to a brass burner cage, a long lacquered coach with a horse-head
+prow and a leaf propeller. Proportions follow Fortnite's bus: the body is a little longer than the balloon is wide, the balloon sits one body
+height above the roof.
 
 | Part | What it looks like | Colours (art guide) |
 |---|---|---|
-| Balloon | A sphere, 1100 units across, painted as the MM Moon: pale yellow-cream with grey craters, the grinning face with red-rimmed eyes on the side facing forward-down. A rope net over the lower half, a stitched seam line every 45 degrees. The face is one 256x256 texture; the back is a 128x128 crater tile. | moon cream #F0E2B0, crater grey #9A917A, eye red #AD3725, teeth cream #FFF6DC |
-| Basket ring | A wooden ring under the balloon, four ropes down to the body, with a sandbag at each. | dark wood #4B2F17, rope #C7A96A |
-| Body | A stagecoach 900 long, 300 wide, 260 high at the roof: plank walls to waist height, open above, a curved plank roof with a brass rail, a rear platform with a hand rail, the door frame on the left side (no door; the exit is the open side). Hylian crest painted on both sides. | plank #B98C4D, trim gold #F7D622 to #BE9834, crest red #AD3725 on a blue field #2E4A86 |
-| Seats | Two rows of 16 bench seats facing forward, 32 seats, red saddle cloth with gold stripe. | saddle brown #671E09, red cloth #AD3725 |
-| Pilot cab | Open front with a tiller bar and a brass compass; the Goron pilot (reuse the Goron ally model, `shared/ally_goron_model.h`, with a leather cap) sits on a stool. | leather #86672D |
-| Firebox | The cart's stone stove, scaled x1.6, under the balloon's mouth, with a bomb flower glow and an iron chimney blowing smoke up past the balloon. | stone grey, ember orange #FF8A2A |
-| Propeller | Four Deku leaves on a wooden hub at the rear, 420 across, spinning. | leaf green #4F8A3B, vein #A7C96A |
-| Lanterns | Six paper lanterns under the eaves, warm glow, swinging. | lantern #FFD27A |
-| Banner | A long Hylian crest pennant on a pole off the rear rail, trailing in the slipstream. | crest red and gold |
-| Wheels | Four spoked cart wheels, tucked up, that only matter on the ground in the lobby. | dark wood, iron tyres |
+| The Moon | A grey, cratered rock sphere 1050 units across, the Majora's Mask Moon as it hangs over Clock Town: a heavy brow, two huge yellow-glowing eyes in red-rimmed sockets with slit pupils, flared nostrils, and a wide grin of big square teeth, top and bottom. The face looks forward and down at the island. A rope net over its lower half ends in a dark collar at its mouth, and the burner's flame goes up into the collar (the Moon "swallows" the fire). The face is one 256x256 texture with the eyes as emissive regions; the rest of the sphere tiles a 128x128 crater texture, with the craters also dented in the mesh. | rock #7A7A72, shadow #3E3C38, eye yellow #FFD23A (glowing), socket red #C83A1E, teeth #E9E2CC |
+| Burner cage | A brass cage on the roof holding the Goron firebox (a round iron stove banded with rock, a bomb flower glowing in its mouth); the flame rises from it. Four ropes from the cage's ring up to the net, a sandbag on each. | brass #B98B3C, iron #55585E, flame #FF7A1A |
+| Body | A royal coach stretched to a bus, 1100 long, 320 wide, 300 high, rounded corners: dark red lacquer with gold bands at the waist and skirt, seven arched windows a side with brass frames and round brass portholes over them, a red crest plaque with a gold Triforce on each flank. Sheikah ornament in Master Cycle style: one thin cyan rune line runs the length of the waist and a Sheikah eye glows on every wheel hub. Open glass front for the pilot, a short hood with a brass grille, cyan lamps. | lacquer #6A2A16 and #4A1C0E, gold #E0B93A, crest red #B23A2A, rune cyan #3FD6F2 (glowing) |
+| Horse-head prow | A bronze horse head on the hood, mane of gold fins, a glowing cyan eye, Epona as the Master Cycle shows her. | brass, rune cyan |
+| Seats | Inside, two rows of 16 benches facing forward, 32 seats, red saddle cloth with a gold stripe; the open window band is at head height so you see the island from your seat. | saddle brown #671E09, red #AD3725 |
+| Pilot | The Goron ally model (`shared/ally_goron_model.h`) on a stool in the glass front, one hand on a brass tiller. | as the ally |
+| Propeller | Four Deku leaves on a brass hub at the rear, 450 across, spinning. | leaf #4E9A3C, vein #A9D36A |
+| Wheels | Four big spoked cart wheels on iron arms, tucked up under the skirt, the glowing hub eyes facing out. | dark wood, iron |
+| Rear platform | A wooden deck with a brass rail and three steps (the lobby's boarding ramp), a Hylian crest pennant on a pole off its corner. | wood #8E5A2B, crest red and gold |
+| Lanterns | Eight paper lanterns under the eaves, warm glow, swinging. | lantern #FFCF6E |
 
-Textures: two atlases at most. `bus_atlas` 256x256 (planks, trim, cloth, iron, stone, leaves, lantern, rope, crest) and `moon_face`
-256x256. RGBA16, loaded with a tile load (see docs/ENGINE_LIMITS.md: anything past 2048 texels uses `gDPLoadTextureTile`). Lighting is
-baked into vertex colours with the fixed sun, as every custom model does.
+The glider gets a matching skin: a Deku Leaf (Wind Waker) held overhead, one big green leaf with pale veins and a few sparkles, in place of
+the striped hang glider, as an optional step in the build plan (the existing cloth sim gives it the flutter). The old glider stays as a
+selectable look.
 
-Budget: body 1400 tris, balloon 700 (a 24x12 UV sphere), ropes and basket 120, propeller 80, firebox 160, lanterns 6x24, pilot stool 30,
-wheels 4x60. About 2800 tris in all, plus 32 seated Link puppets, which the game already draws. A far LOD (balloon as a 12x6 sphere and the
-body as a textured box, about 300 tris) draws when the bus is more than 4500 units away, which is how players on the ground will mostly see it.
+Textures: three atlases at most. `bus_atlas` 256x256 (lacquer, gold, brass, iron, wood, cloth, glass, runes, crest), `moon_face` 256x256
+and `moon_rock` 128x128. RGBA16, loaded with a tile load (see docs/ENGINE_LIMITS.md: anything past 2048 texels uses `gDPLoadTextureTile`).
+Lighting is baked into vertex colours with the fixed sun, as every custom model does; the runes, eyes, lamps and flame are drawn with the
+emissive combine so they glow at night.
 
-Scale check: adult Link is 68 units. The roof rail is at 260, so a seated Link's head clears it. Seat pitch 54 along the body, two rows 120
-apart, an aisle between.
+Budget: body with windows 1500 tris, Moon 900 (a 32x16 sphere with the face modelled in: brow, sockets, nose, mouth dent, 18 teeth), ropes
+and net 160, burner cage and firebox 220, propeller 90, horse head 140, lanterns 8x20, wheels 4x70, deck 60. About 3400 tris, plus 32 seated
+Link puppets, which the game already draws. A far LOD (Moon as a 12x6 sphere, body as a textured box, about 350 tris) draws past 4500 units.
+
+Scale check: adult Link is 68 units. The window band is at 230 to 350 above the floor, so a seated Link (about 90 high) looks out of it.
+Seat pitch 54 along the body, two rows 120 apart, an aisle between.
+
+Concept art: the four-view sheet `docs/battle-bus/concept-2d.png` (side, front, rear, top, with callouts; `tools/bus/concept_sheet.py`
+draws it) is the look to model from. Blender blockout renders (rough, not the game model): `docs/battle-bus/concept-sheet.png`; the four full-size views and
+`bus_concept.blend` are in the project files under `battle-bus/`. `tools/bus/concept_blockout.py` rebuilds them.
 
 ## 3. Model parts, pivots and rig
 
@@ -59,28 +75,30 @@ Objects (one mesh per rigid part, origin at its pivot):
 | Object | Pivot | Moves how |
 |---|---|---|
 | `BusBody` | floor centre | the root: translate and yaw along the path, plus sway |
-| `Balloon` | the balloon's mouth (bottom) | pendulum sway: roll and pitch, 2 degrees, period 4 s |
-| `BasketRing` | same as the balloon | follows the balloon |
+| `Moon` | the Moon's mouth collar (bottom) | pendulum sway: roll and pitch, 2 degrees, period 4 s; the eyes' glow pulses slowly |
+| `BurnerCage` | roof centre | fixed to the body; its `Ring` empty is where the ropes tie |
 | `Rope0..3` | top end, on the ring | stretched between ring and body each frame (a scaled unit cylinder) |
 | `Propeller` | hub centre, axis along the body | spins about its axis, 540 degrees per second |
 | `Firebox` | its base | none |
 | `Chimney` | its base | none; smoke spawns from the `Smoke` empty |
 | `Lantern0..5` | the hook | swings 10 degrees opposite to the body sway |
 | `Banner` | the pole top | a strip of cloth sim (shared/cloth.h, as the glider's canopy and the cart's pennant) |
-| `Tiller` | its hinge | 8 degrees left or right as the path curves (it does not; keep it for the lobby pilot idle) |
+| `Tiller` | its hinge | 8 degrees left or right in the pilot's idle |
+| `HorseHead` | neck base | none; its eye is an emissive region |
 | `WheelFL..BR` | axle | roll only in the lobby |
 | `Pilot` | stool | the Goron ally model in its sitting clip; one hand on the tiller |
 
 Empties (exported as constants in `bus_geometry.h`): `Seat00..Seat31` (bench positions, facing +Z), `Exit` (the open left side, where a
-jumping Link is placed for his first frame), `Smoke`, `BannerTop`, `Horn` (sound origin at the front), `LobbyRamp` (where the lobby ramp meets
-the ground), `Bounds` (box).
+jumping Link is placed for his first frame), `Smoke`, `Flame` (the burner's flame, a billboard pair), `BannerTop`, `Horn` (sound origin at the front), `LobbyRamp`
+(the rear steps), `Bounds` (box).
 
 Animation in game is rigid-part matrices, exactly like the cart's `DrawCart` (mod/Royale/features/Vehicles.inc:479-516): push, translate to
 the pivot, rotate, scale 1/8, draw the part's display list. No skinned clips are needed for the bus itself. The pilot reuses the ally
 animator (`shared/ally_anim.h`) with the existing idle clip.
 
-Blender actions to key (20 fps, named so the exporter can read the numbers out): `Sway` (balloon pendulum, 80 frames loop), `Lantern`
-(40 frames loop), `Door` (lobby only: the ramp folds down, 30 frames). The propeller and wheels spin from code.
+Blender actions to key (20 fps, named so the exporter can read the numbers out): `Sway` (Moon pendulum, 80 frames loop), `Lantern`
+(40 frames loop), `Door` (lobby only: the rear steps fold down, 30 frames). The flame is two crossed billboard quads scaled by a 0.3 s
+flicker in code, orange to yellow, drawn on the translucent layer. The propeller and wheels spin from code.
 
 Sounds (OoT sound effects, no new audio): burner whoosh every 2.5 s (`NA_SE_EV_FLAME_IGNITION` or the fire loop the cart's firebox uses),
 propeller hum (the windmill loop), horn (two notes of Epona's Song on the ocarina synth, short), jump (Link's jump voice plus a wind whoosh),
@@ -308,9 +326,12 @@ model and animation are the build thread's own work (Opus 5.5). Each step ends w
 9. **HUD** (Gary): prompts, top lines, minimap line and moon icon, glider aim in free fall, touch JUMP reuse. Check with button prompts on
    and off and in both control schemes.
 10. **Sounds and horn** (Gary): section 3 sounds, the horn anim value, the cooldown. Check: two clients, honk heard on the other.
-11. **Lobby boarding polish** (Opus for the ramp/door and lift-off camera, Gary for the ready bit): section 5 layer 2. Optional; ship 1 to 10
+11. **Deku Leaf glider skin** (Opus): a second `MeshKind` for the glider, one big leaf with the handle bar at the stem (same grip
+    points as `kGripInner/Outer` in `shared/glider_model.h`), the cloth sim on the blade, 128x128 leaf texture; a Graphics toggle
+    picks leaf or striped glider. Optional.
+12. **Lobby boarding polish** (Opus for the ramp/door and lift-off camera, Gary for the ready bit): section 5 layer 2. Optional; ship 1 to 10
     first.
-12. **Docs and memory**: `docs/DESIGN.md` section 4.1 (the Drop is no longer "5 s of invulnerability"; describe the bus), `docs/PLAY.md`
+13. **Docs and memory**: `docs/DESIGN.md` section 4.1 (the Drop is no longer "5 s of invulnerability"; describe the bus), `docs/PLAY.md`
     controls (A jump, A glider, Z dive, C-Right horn), `docs/BALANCE.md` (the new constants), `mod/Royale/FEATURES.md` row, and a team
     memory file `battle-bus`.
 
@@ -319,8 +340,8 @@ Validation that is possible without a device: steps 2 to 6 run under `ctest` loc
 
 ## 8. Open choices made here (change them if Tee disagrees)
 
-- The balloon is the Majora's Mask Moon. Alternative: a plain striped balloon with the Hylian crest, if the moon reads as too creepy from
-  the seat.
+- The balloon is the Majora's Mask Moon itself, not a painted balloon (Tee's reference).
+- The body is a dark red lacquered coach with Sheikah runes, after the Master Cycle Zero, not a blue school bus.
 - The pilot is a Goron (model exists). Alternative: the Happy Mask Salesman, which needs a new model.
 - The glider opens automatically at 600 units up, so nobody splats. Fortnite does the same.
 - No new `MatchState`: the bus sits inside Countdown and Drop, which keeps every `MatchState` switch in the mod untouched.
