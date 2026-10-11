@@ -96,8 +96,13 @@ void WarDraw(GameState* state) {
         if(gWar.page==WarPage::Guide) {
             p.Wrap(38,150,"Drop into Hyrule, gather gear, stay inside the safe zone and be the last survivor.",154,12,wt::theme::Muted,8);
             p.Text(244,121,"BATTLE ROYALE CONTROLS",15,wt::theme::Ink,true);
-            p.Wrap(244,155,"Move with the stick. Use your equipped weapon with B. Interact with A. Your current control prompts appear during play. Open this menu with Start. L / R changes menu pages; A selects, B goes back.",346,12,wt::theme::Ink,8);
-            p.Wrap(244,260,"Practice Tools lets you try equipment, bots, bosses, vehicles and gliding safely.",343,10,0x9EDCFFFF,2);
+            const bool classic=CVarGetInteger(ROYALE_CVAR("ControlScheme"),0)==1;
+            const char* lines[]={"A   Open, take, hire, talk. With nothing else to do it JUMPS","B   Attack with the weapon in hand","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Up   Ability     C-Right   Emote","Stick click   Sprint     Z   Lock on / dive     R   Shield / exit cart"};
+            const char* classicLines[]={"A   Open, take, hire, talk","B   Attack with the weapon in hand","C-Up   JUMP     D-pad Up   Ability","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Right   Emote     Stick click   Sprint"};
+            p.Text(244,143,classic?"CLASSIC LAYOUT":"BATTLE ROYALE LAYOUT",10,wt::theme::Gold);
+            for(int i=0;i<5;++i)p.Text(244,163+i*17,classic?classicLines[i]:lines[i],10,wt::theme::Ink,false,346);
+            p.Text(244,252,"Change it in Settings > Comfort > Options. Menus: L / R pages, A select, B back.",9,wt::theme::Muted,false,346);
+            p.Wrap(244,268,"Practice Tools lets you try equipment, bots, bosses, vehicles and gliding safely.",343,10,0x9EDCFFFF,2);
         }
         if(gWar.page==WarPage::Results) {
             p.Wrap(38,151,h.winnerName.empty()?"Match complete":h.winnerName+" wins!",155,16,wt::theme::Gold,3);

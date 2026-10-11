@@ -866,12 +866,9 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         dl->AddRectFilled(ImVec2(a.x+4*scale,b.y-4*scale),ImVec2(b.x-4*scale,b.y-2*scale),sl.border);
         if (sl.filled) {   // which button uses the slot
             const int nres = royale::kMaxReserveWeapons;
-            const char* hint = i == 0 ? "B" : static_cast<int>(i) <= nres ? "D-pad L/R" : static_cast<int>(i) == nres + 1 ? "C-Left" : static_cast<int>(i) == nres + 2 ? "D-pad Dn" : "D-pad Up";
-            const float hs = 12.5f * scale;
-            const ImVec2 hsz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, hint);
-            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f + 1, b.y + 2 * scale + 1), IM_COL32(0, 0, 0, 220), hint);
-            const ImU32 hintCol = i == 0 ? IM_COL32(100, 230, 110, 255) : static_cast<int>(i) == nres + 1 ? IM_COL32(255, 220, 40, 255) : IM_COL32(210, 205, 190, 235); // B green, C yellow, as on the N64 pad
-            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
+            const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
+            const auto g = i == 0 ? pr.weapon : static_cast<int>(i) <= nres ? pr.swap : static_cast<int>(i) == nres + 1 ? pr.shield : static_cast<int>(i) == nres + 2 ? pr.potion : pr.ability;
+            DrawPadGlyph(dl, font, ImVec2((a.x + b.x) * 0.5f, b.y + 11.0f * scale), 8.5f * scale, g);
         }
         const float ts = 11.5f * scale;
         dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), HudColor(royale::wartable::theme::Ink,sl.filled?255:120), sl.title.c_str());
