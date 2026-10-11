@@ -9,15 +9,18 @@ constexpr int kBoneCount = 18;
 inline constexpr const char* kBoneNames[kBoneCount] = { "root", "hips", "chest", "head", "arm_l", "fore_l", "hand_l", "arm_r", "fore_r", "hand_r",
                                                         "leg_l", "shin_l", "foot_l", "leg_r", "shin_r", "foot_r", "tail1", "tail2" };
 // Every model has the same clips in this order (tools/allies/build_allies.py CLIPS).
-enum Clip : uint8_t { kIdle, kWalk, kInvite, kAttack, kAttack2, kHeal, kHurt, kCheer, kRest, kRise, kClipCount };
-// Three versions of the atlas that differ only in the painted face.
+enum Clip : uint8_t { kIdle, kWalk, kInvite, kAttack, kAttack2, kHeal, kHurt, kCheer, kRest, kRise, kDance, kClipCount };
+// The face texture comes in three expressions.
 enum Face : uint8_t { kFaceNormal, kFaceBlink, kFaceFierce, kFaceCount };
-constexpr int kAtlasW = 64, kAtlasH = 64, kAtlasBytes = kAtlasW * kAtlasH * 2;
+// Two textures: the 256 x 256 body atlas and the 128 x 64 face. Batches say which one they use.
+enum Tex : uint8_t { kTexBody, kTexFace };
+constexpr int kBodyW = 256, kBodyH = 256, kBodyBytes = kBodyW * kBodyH * 2;
+constexpr int kFaceW = 128, kFaceH = 64, kFaceBytes = kFaceW * kFaceH * 2;
 
 // A vertex: position, normal (x127), texel coordinate (in 1/32 texels, the N64's S10.5), two bones and the first one's weight (x255).
 struct Vert { float x, y, z; int8_t nx, ny, nz; int16_t s, t; uint8_t b0, b1, w0; };
-// A batch: up to 32 vertices loaded together and the triangles drawn from them (indices are within the batch).
-struct Batch { uint16_t firstVert; uint8_t vertCount; uint16_t firstTri; uint16_t triCount; };
+// A batch: up to 32 vertices loaded together and the triangles drawn from them (indices are within the batch), all with one texture.
+struct Batch { uint16_t firstVert; uint8_t vertCount; uint16_t firstTri; uint16_t triCount; uint8_t tex; };
 struct ClipInfo { const char* name; uint16_t frames; float fps; bool loops; uint16_t firstFrame; };
 constexpr float kPosFrac = 16.0f;   // bone offsets are stored in 1/16 units
 
@@ -29,12 +32,13 @@ struct Model {
     int batchCount;
     const uint8_t (*tris)[3];
     int triCount;
-    const uint8_t (*atlas)[kAtlasBytes];   // kFaceCount atlases
-    const ClipInfo* clips;                 // kClipCount
-    const int16_t* poses;                  // frameCount * kBoneCount * 7
+    const uint8_t* body;                    // kBodyBytes
+    const uint8_t (*faces)[kFaceBytes];     // kFaceCount
+    const ClipInfo* clips;                  // kClipCount
+    const int16_t* poses;                   // frameCount * kBoneCount * 7
     int frameCount;
-    float walkSpeed;                       // ground speed (units/s) the walk clip is made for
-    float height;                          // top of the model at rest
+    float walkSpeed;                        // ground speed (units/s) the walk clip is made for
+    float height;                           // top of the model at rest
 };
 
 } // namespace allymodel

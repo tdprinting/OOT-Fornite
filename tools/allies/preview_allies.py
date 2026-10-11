@@ -1,4 +1,4 @@
-"""Draw the exported allies the way the game does (same skinning, same lighting, nearest-texel atlas) into contact sheets.
+"""Draw the exported allies the way the game does (same skinning, same lighting, bilinear textures) into contact sheets.
 Run: python tools/allies/export_allies.py --dump /tmp/allies && python tools/allies/preview_allies.py /tmp/allies OUT_DIR
 Needs numpy and Pillow. No Blender and no game needed, so it checks the exported data itself.
 """
@@ -25,19 +25,32 @@ def load(d, kind):
     P = np.array(m['poses'], float).reshape(-1, len(m['bones']), 7)
     m['Q'] = P[:, :, :4] / 32767.0
     m['T'] = P[:, :, 4:] / m['posFrac']
-    tris = []
-    for first, count, tfirst, tcount in m['batches']:
+    tris, ttex = [], []
+    for first, count, tfirst, tcount, tex in m['batches']:
         for t in m['tris'][tfirst:tfirst + tcount]:
             tris.append([first + i for i in t])
+            ttex.append(tex)
     m['TRI'] = np.array(tris)
-    atl = []
-    for a in m['atlas']:
-        b = np.array(a, np.uint8).reshape(64, 64, 2)
+    m['TTEX'] = ttex
+
+    def decode(w, h, a):
+        b = np.array(a, np.uint8).reshape(h, w, 2)
         v = (b[:, :, 0].astype(int) << 8) | b[:, :, 1]
-        rgb = np.stack([(v >> 11) & 31, (v >> 6) & 31, (v >> 1) & 31], -1) * (255.0 / 31)
-        atl.append(rgb)
-    m['ATL'] = atl
+        return np.stack([(v >> 11) & 31, (v >> 6) & 31, (v >> 1) & 31], -1) * (255.0 / 31)
+    m['BODY'] = decode(*m['body'])
+    m['FACE'] = [decode(*f) for f in m['faces']]
     return m
+
+
+def bilinear(tex, s, t):
+    """The game filters textures (bilinear), clamped at the edges; texel centres are at +0.5."""
+    h, w = tex.shape[:2]
+    x = np.clip(s - .5, 0, w - 1)
+    y = np.clip(t - .5, 0, h - 1)
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    return (tex[y0, x0] * (1 - fx) + tex[y0, x1] * fx) * (1 - fy) + (tex[y1, x0] * (1 - fx) + tex[y1, x1] * fx) * fy
 
 
 def sample(m, clip, seconds):
@@ -97,9 +110,9 @@ def render(m, p, n, face=0, yaw=0.5, size=220, span=130.0, centre_y=None, pitch=
     Y = size * .5 - (y2 - centre_y) * k
     img = np.zeros((size, size, 3), float) + [[[70, 78, 92]]]
     zbuf = np.full((size, size), -1e9)
-    atl = m['ATL'][face]
     ST = m['ST']
-    for tri in m['TRI']:
+    for tri, tex in zip(m['TRI'], m['TTEX']):
+        atl = m['BODY'] if tex == 0 else m['FACE'][face]
         a, b, c = tri
         xs, ys = X[tri], Y[tri]
         x0, x1 = int(max(0, math.floor(xs.min()))), int(min(size - 1, math.ceil(xs.max())))
@@ -123,9 +136,7 @@ def render(m, p, n, face=0, yaw=0.5, size=220, span=130.0, centre_y=None, pitch=
             continue
         s = l0 * ST[a, 0] + l1 * ST[b, 0] + l2 * ST[c, 0]
         t = l0 * ST[a, 1] + l1 * ST[b, 1] + l2 * ST[c, 1]
-        si = np.clip(s.astype(int), 0, 63)
-        ti = np.clip(t.astype(int), 0, 63)
-        col = atl[ti, si]
+        col = bilinear(atl, s, t)
         sh = (l0 * lit[a] + l1 * lit[b] + l2 * lit[c])[..., None] * np.array([1.0, .98, .96])
         out = img[y0:y1 + 1, x0:x1 + 1]
         out[win] = (col * sh)[win]
@@ -171,7 +182,7 @@ def turnaround(ms, out, spans):
     img.save(out)
 
 
-def hero(ms, out, spans, shots=(('idle', 0.0, 0.0, 0), ('walk', .2, -1.57, 0), ('attack', .12, -1.1, 2), ('invite', .3, -.5, 0), ('attack', .12, .5, 2), ('rest', 0.0, -.9, 1), ('rise', .4, -.9, 0))):
+def hero(ms, out, spans, shots=(('idle', 0.0, 0.0, 0), ('idle', 0.0, -.7, 0), ('walk', .2, -1.57, 0), ('attack', .12, -1.1, 2), ('dance', .3, -.4, 0), ('dance', 1.5, .4, 0), ('rest', 0.0, -.9, 1))):
     """Larger single frames: (clip, seconds, yaw, face) per column, one kind per row."""
     cells = []
     for kind, m in ms:
@@ -179,7 +190,7 @@ def hero(ms, out, spans, shots=(('idle', 0.0, 0.0, 0), ('walk', .2, -1.57, 0), (
         for clip, sec, yaw, face in shots:
             q, t = sample(m, names.index(clip), sec)
             p, n = skin(m, q, t)
-            cells.append(render(m, p, n, face, yaw=yaw, size=300, span=spans[kind], pitch=.12))
+            cells.append(render(m, p, n, face, yaw=yaw, size=360, span=spans[kind], pitch=.12))
     w, h = cells[0].size
     cols = len(shots)
     img = Image.new('RGB', (w * cols, h * len(ms)), (40, 44, 52))
