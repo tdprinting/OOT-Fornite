@@ -60,7 +60,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - Android: 0005 network permissions, 0006 copy OTRs script, 0007 app/data folders, 0014 ROM loading screen, 0017 exit reason, 0018 updater, 0021 signing key/version code, 0028a menu touch passthrough.
 - Gameplay/engine: 0008 quest option, 0010 title logo, 0019 no first-person aim, 0020 camera lift, 0022 backdrop pass, 0023b no use on take-out, 0025b large collision vertex index, 0027 snow with fairies, 0028b bracelet on adult, 0029 engine limits.
 - Menu: 0025a native War Table, 0026 native menu isolation.
-- `libultraship/`: 0001 gyro semicolon, 0002 data folder, 0003 item surface maps, 0004a vertex layout guard, 0004b shader layout flush, 0005 menu shortcuts, 0006 source texture relief, 0007 renderer limits.
+- `libultraship/`: 0001 gyro semicolon, 0002 data folder, 0003 item surface maps, 0004a vertex layout guard, 0004b shader layout flush, 0005 menu shortcuts, 0006 source texture relief, 0007 renderer limits, 0008 surface-map fallback + embedded shaders, 0009 one archive read at a time (crash fix).
 - `ZAPDTR/`: 0001 never hang on failed files.
 
 ## docs/

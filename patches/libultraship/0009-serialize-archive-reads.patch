@@ -1,0 +1,65 @@
+diff --git a/src/resource/ResourceManager.cpp b/src/resource/ResourceManager.cpp
+index 9454b6e..a6d6dcf 100644
+--- a/src/resource/ResourceManager.cpp
++++ b/src/resource/ResourceManager.cpp
+@@ -146,7 +146,21 @@ std::shared_ptr<IResource> ResourceManager::LoadResourceProcess(const ResourceId
+     }
+ 
+     // Transform the raw data into a resource
+-    auto resource = GetResourceLoader()->LoadResource(identifier.Path, file, initData);
++    // OOT Royale: a loader that throws (bad or half-read data) would end the game from inside a C caller (std::terminate).
++    // Read the file once more and retry; if it still fails, log it and treat it as missing.
++    std::shared_ptr<IResource> resource;
++    try {
++        resource = GetResourceLoader()->LoadResource(identifier.Path, file, initData);
++    } catch (const std::exception& e) {
++        SPDLOG_ERROR("Resource {} failed to load ({}); reading it again", identifier.Path, e.what());
++        try {
++            file = LoadFileProcess(identifier.Path);
++            resource = file ? GetResourceLoader()->LoadResource(identifier.Path, file, initData) : nullptr;
++        } catch (const std::exception& e2) {
++            SPDLOG_ERROR("Resource {} failed again ({})", identifier.Path, e2.what());
++            resource = nullptr;
++        }
++    }
+ 
+     // Another thread could have loaded the resource while we were processing, so we want to check before setting to
+     // the cache.
+diff --git a/src/resource/archive/Archive.h b/src/resource/archive/Archive.h
+index 7152723..2e3d557 100644
+--- a/src/resource/archive/Archive.h
++++ b/src/resource/archive/Archive.h
+@@ -44,6 +44,9 @@ class Archive : public std::enable_shared_from_this<Archive> {
+     void SetLoaded(bool isLoaded);
+     void SetGameVersion(uint32_t gameVersion);
+     void IndexFile(const std::string& filePath);
++    // OOT Royale: one read at a time per archive. StormLib and libzip keep one file position per archive, and the resource
++    // thread pool loads several files at once; overlapping reads handed loaders garbage, which threw and ended the game.
++    std::mutex mLoadMutex;
+ 
+   private:
+     bool mIsLoaded;
+diff --git a/src/resource/archive/O2rArchive.cpp b/src/resource/archive/O2rArchive.cpp
+index 5ffbbfb..fab966a 100644
+--- a/src/resource/archive/O2rArchive.cpp
++++ b/src/resource/archive/O2rArchive.cpp
+@@ -18,6 +18,7 @@ std::shared_ptr<File> O2rArchive::LoadFile(uint64_t hash) {
+ }
+ 
+ std::shared_ptr<File> O2rArchive::LoadFile(const std::string& filePath) {
++    const std::lock_guard<std::mutex> lock(mLoadMutex);
+     if (mZipArchive == nullptr) {
+         SPDLOG_TRACE("Failed to open file {} from zip archive {}. Archive not open.", filePath, GetPath());
+         return nullptr;
+diff --git a/src/resource/archive/OtrArchive.cpp b/src/resource/archive/OtrArchive.cpp
+index aaa6f64..5bf2a3e 100644
+--- a/src/resource/archive/OtrArchive.cpp
++++ b/src/resource/archive/OtrArchive.cpp
+@@ -19,6 +19,7 @@ OtrArchive::~OtrArchive() {
+ }
+ 
+ std::shared_ptr<File> OtrArchive::LoadFile(const std::string& filePath) {
++    const std::lock_guard<std::mutex> lock(mLoadMutex);
+     if (mHandle == nullptr) {
+         SPDLOG_TRACE("Failed to open file {} from mpq archive {}. Archive not open.", filePath, GetPath());
+         return nullptr;
