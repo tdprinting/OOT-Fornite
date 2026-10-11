@@ -242,14 +242,17 @@ class RoyaleSession {
     std::vector<PuppetState> Puppets() const {
         std::vector<PuppetState> out;
         if (!Joined()) return out;
-        for (uint16_t id : client->VisiblePlayers()) {
+        const std::vector<uint16_t> ids = client->VisiblePlayers();
+        out.reserve(ids.size());
+        for (uint16_t id : ids) {
             net::PlayerNet p;
             if (!client->Sample(id, p)) continue;
             PuppetState s;
             s.id = id;
             auto it = client->Roster().find(id);
-            s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
-            s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
+            const bool known = it != client->Roster().end();
+            s.name = known ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
+            s.tunic = known ? it->second.tunic : BotTunic(id);
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
