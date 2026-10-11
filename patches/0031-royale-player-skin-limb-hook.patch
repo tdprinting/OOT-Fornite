@@ -1,9 +1,3 @@
-diff --git a/libultraship b/libultraship
---- a/libultraship
-+++ b/libultraship
-@@ -1 +1 @@
--Subproject commit a8504496746b469a2d5424c58b1e5aae1492f861
-+Subproject commit a8504496746b469a2d5424c58b1e5aae1492f861-dirty
 diff --git a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h b/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
 index ec96b1c..9654b69 100644
 --- a/soh/soh/Enhancements/game-interactor/GameInteractor_HookTable.h
