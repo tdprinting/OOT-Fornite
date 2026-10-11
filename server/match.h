@@ -18,6 +18,10 @@
 #include "../shared/weather.h"
 #include "nav.h"
 #include <algorithm>
+#ifdef ROYALE_BOT_PROFILE
+#include <chrono>
+namespace royale { inline double& HelpersProfileMs() { static double v = 0; return v; } }   // offline harnesses only
+#endif
 #include <array>
 #include <map>
 #include <memory>
@@ -354,7 +358,11 @@ class Match {
                     if (p.hasMark && clock >= p.markExpires) { p.hasMark = false; p.dirty = true; }
                 }
                 TickBosses(dt);
+#ifdef ROYALE_BOT_PROFILE
+                { const auto t0 = std::chrono::steady_clock::now(); TickHelpers(dt); HelpersProfileMs() += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
+#else
                 TickHelpers(dt);
+#endif
                 TickVehicles(dt);
                 if (!sandbox && Alive() <= (soloTest ? 0 : 1)) Enter(MatchState::Ending);
                 break;

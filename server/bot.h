@@ -14,6 +14,34 @@
 
 namespace royale {
 
+// Profiling counters for the offline bot harnesses only (compile with -DROYALE_BOT_PROFILE). The default build has none of this.
+#ifdef ROYALE_BOT_PROFILE
+enum BotBranch { kBrOther, kBrBusy, kBrHazard, kBrCartGo, kBrCover, kBrStorm, kBrHelper, kBrBossAvoid, kBrFlee, kBrFight, kBrLootWalk, kBrLootPick,
+                 kBrSmash, kBrHuntVis, kBrHuntLast, kBrLateClose, kBrWander, kBrBossFight, kBrSkydive, kBrRiding, kBrCount };
+struct BotProfile {
+    long timerRepaths = 0, goalMovedRepaths = 0, searchOk = 0, searchFail = 0, deferred = 0, expanded = 0, maxExp = 0, bigSearches = 0, bigExp = 0;
+    long advanceBlocked = 0, unsticks = 0;
+    long brSearches[kBrCount] = {}, brExp[kBrCount] = {}, brFail[kBrCount] = {};
+    int branch = kBrOther;
+    std::unordered_map<uint32_t, int> lastBranch;
+};
+inline BotProfile& BotProf() { static BotProfile p; return p; }
+inline void BotProfSearch(bool timer, bool ok, const NavGrid::SearchWorkspace& w) {
+    BotProfile& f = BotProf();
+    if (w.deferred) { f.deferred++; return; }
+    (timer ? f.timerRepaths : f.goalMovedRepaths)++;
+    (ok ? f.searchOk : f.searchFail)++;
+    f.expanded += w.expanded; f.maxExp = (std::max)(f.maxExp, static_cast<long>(w.expanded));
+    if (w.expanded >= 20000) { f.bigSearches++; f.bigExp += w.expanded; }
+    f.brSearches[f.branch]++; f.brExp[f.branch] += w.expanded; if (!ok) f.brFail[f.branch]++;
+}
+#define ROYALE_BOT_BRANCH(b) (BotProf().branch = (b))
+#define ROYALE_BOT_PROF(stmt) stmt
+#else
+#define ROYALE_BOT_BRANCH(b) ((void)0)
+#define ROYALE_BOT_PROF(stmt)
+#endif
+
 enum class BotDifficulty : uint8_t { Easy, Normal, Hard };
 
 // Server-side bot brain. Bots are ordinary PlayerState entries (isBot) that this class moves and acts for, using only Match's
@@ -130,10 +158,14 @@ class BotController {
                     air.airborne = state != MatchState::InMatch;
                     if (air.airborne) { air.lift = kSkyHeight; ChooseLanding(m, p, air, soon); }
                 }
+                ROYALE_BOT_BRANCH(kBrSkydive);
                 if (air.airborne) { Glide(m, p, air, soon, dt); continue; }
                 if (state == MatchState::Countdown) continue;
-                if (StepRider(m, p, air, soon, dt)) { UpdateStamina(air, dt); continue; }
+                ROYALE_BOT_BRANCH(kBrRiding);
+                if (StepRider(m, p, air, soon, dt)) { UpdateStamina(air, dt); ROYALE_BOT_PROF(BotProf().lastBranch[p.id] = kBrRiding;) continue; }
+                ROYALE_BOT_BRANCH(kBrOther);
                 Act(m, p, soon, dt);
+                ROYALE_BOT_PROF(BotProf().lastBranch[p.id] = BotProf().branch;)
                 FollowGround(m, p, air, dt);
                 UpdateStamina(air, dt);
                 const Memory& mem = Mem(p.id);
@@ -848,12 +880,14 @@ class BotController {
             const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
             if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
+                ROYALE_BOT_PROF(const bool timerHit = m.Clock() >= mem.repathAt;)
                 mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
                 mem.routeIdx = 0;
                 mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
                 const float startY = mem.upper ? mem.levelY : nav->FloorAt(p.pos);
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route, &context.workspace, &context.budget);
+                ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
                 if (mem.pathFailed) {
                     mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
@@ -873,11 +907,13 @@ class BotController {
             const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
             if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
+                ROYALE_BOT_PROF(const bool timerHit = m.Clock() >= mem.repathAt;)
                 mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
                 mem.pathIdx = 0;
                 mem.repathAt = m.Clock() + 1.5f + static_cast<float>(rng.Unit());
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindPath(p.pos, goal, mem.path, true, &context.workspace, &context.budget);
+                ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
                 if (mem.pathFailed) {
                     mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
@@ -890,6 +926,7 @@ class BotController {
         const float dx = aim.x - p.pos.x, dz = aim.z - p.pos.z;
         const Vec2 before = p.pos;
         const bool moved = Advance(m, p, dx, dz, (std::min)(step, std::hypot(dx, dz)));
+        ROYALE_BOT_PROF(if (!moved && std::hypot(dx, dz) > 1.0f) BotProf().advanceBlocked++;)
         if (mem.upper) {   // keep the feet on the route: up the ramp as fast as the bot walks along it
             const float rate = Distance(before, p.pos) * 1.4f + 1.0f;
             if (routing) mem.levelY += (std::max)(-rate, (std::min)(rate, aimY - mem.levelY));
@@ -909,6 +946,7 @@ class BotController {
                 mem.unstickDir = {std::sin(a), std::cos(a)};
                 mem.unstickUntil = m.Clock() + 0.6f;
                 mem.path.clear();
+                ROYALE_BOT_PROF(BotProf().unsticks++;)
                 Hop(m, mem);   // what a player does at something in the way
             }
             mem.progressPos = p.pos;
@@ -1431,7 +1469,7 @@ class BotController {
         // Standing still for a moment (a chest, a find held up, a look round, a taunt) is dropped the moment there is trouble.
         if (now < mem.busyUntil) {
             const bool trouble = (foe && dist < 450.0f) || now < mem.alertUntil || m.GetStorm().DamagePerSecond(p.pos, m.StormTime()) > 0;
-            if (!trouble) return;
+            if (!trouble) { ROYALE_BOT_BRANCH(kBrBusy); return; }
             mem.busyUntil = 0; mem.actUntil = 0; mem.queuedFor = 0;
         }
         // A fresh elimination: with nobody else about, a player often celebrates it.
@@ -1471,22 +1509,27 @@ class BotController {
         if (s.fleeing && s.advantage > 1.6f && !NeedsGear(m, p)) mem.fleeUntil = 0; // the tables turned
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
+        ROYALE_BOT_BRANCH(kBrHazard);
         if (AvoidHazards(m, p, mem, dt, tune)) return;
         if (DodgeCarts(m, p, mem, tune)) return;
+        ROYALE_BOT_BRANCH(kBrCartGo);
         if (GoForCart(m, p, mem, s, foe, dist, soon, dt, tune)) return;
         // Hurt with a bow (or a slingshot, a bomb...) trained on it: get behind something first, then drink.
         if (foe && !s.outsideZone && WantsToDrink(p, s) && p.health > 1.2f && UnderFire(p, *foe, dist) && FindCover(m, p, mem, *foe) &&
             Distance(p.pos, mem.cover) > 35.0f) {
+            ROYALE_BOT_BRANCH(kBrCover);
             WantSprint(mem, tune, true);
             Steer(m, p, mem, mem.cover, dt);
             return;
         }
+        ROYALE_BOT_BRANCH(kBrOther);
         if (TryHeal(m, p, s)) return;
         if (TryShield(m, p, s)) return;
         TryAbility(m, p, mem, s);
 
         // 1. Storm: stay inside 90% of where the zone will be shortly. Shoot while running but never turn to fight.
         if (s.outsideZone) {
+            ROYALE_BOT_BRANCH(kBrStorm);
             WantSprint(mem, tune, true);
             Steer(m, p, mem, soon.center, dt);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
@@ -1501,6 +1544,7 @@ class BotController {
             if (h.alive && h.mode!=BokoMode::Flee && d<helperDistance && (!nav || nav->LineClear(p.pos,h.pos))) { helper=&h;helperDistance=d; }
         }
         if (helper && p.health>=2.4f && EffectiveDps(p.weapon)>=1.0f && tune.hunt && (!foe || dist>180.0f)) {
+            ROYALE_BOT_BRANCH(kBrHelper);
             const WeaponStats w=Match::StatsOf(p);
             p.rot=FaceAngle(p.pos,helper->pos);
             if (helperDistance>w.range*.75f+kBokoBodyRadius) Steer(m,p,mem,helper->pos,dt,1.0f);
@@ -1520,6 +1564,7 @@ class BotController {
             const float bd = Distance(p.pos, boss->pos);
             const bool dragon = IsDragonKind(boss->kind);
             const WeaponStats bw = Match::StatsOf(p);
+            ROYALE_BOT_BRANCH(kBrBossAvoid);
             if (dragon && boss->y > kDragonAirborneAbove && !bw.ranged) { // swords and hammers can't reach it in the air: stay clear
                 if (bd < 800.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
             } else if (dragon && !(tune.hunt && p.health >= 2.4f && mem.aggression > 0.35f)) {
@@ -1529,6 +1574,7 @@ class BotController {
             if (!strong || p.health < 1.3f) {
                 if (bd < 420.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 500.0f), dt, 1.0f); return; }
             } else if (!foe || dist > 300.0f) {
+                ROYALE_BOT_BRANCH(kBrBossFight);
                 const WeaponStats w = Match::StatsOf(p);
                 const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
                 if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
@@ -1545,6 +1591,7 @@ class BotController {
 
         // 2. Flee: run away from the foe, preferring the way toward the zone centre, and shoot back if we can.
         if (s.fleeing) {
+            ROYALE_BOT_BRANCH(kBrFlee);
             Vec2 away = Away(p.pos, foe->pos, 500.0f);
             const float pull = 0.35f; // blend toward the safe zone so fleeing doesn't run into the storm
             away = {away.x + (soon.center.x - away.x) * pull, away.z + (soon.center.z - away.z) * pull};
@@ -1559,6 +1606,7 @@ class BotController {
 
         // 3. Fight.
         if (engaged && FightWorthIt(m, p, mem, *foe, dist, s.advantage)) {
+            ROYALE_BOT_BRANCH(kBrFight);
             FightEnemy(m, p, mem, *foe, dist, s.advantage, dt, tune);
             return;
         }
@@ -1568,7 +1616,9 @@ class BotController {
             const int idx = ChooseLoot(m, p, mem, soon);
             if (idx >= 0) {
                 const Vec2 where = m.Loot()[static_cast<size_t>(idx)].spawn.pos;
+                ROYALE_BOT_BRANCH(kBrLootWalk);
                 if (Distance(p.pos, where) <= kPickupRange * 0.8f) {
+                    ROYALE_BOT_BRANCH(kBrLootPick);
                     const LootSpawn got = m.Loot()[static_cast<size_t>(idx)].spawn;
                     if (!m.PickUp(p.id, static_cast<size_t>(idx))) mem.lootIdx = -1;
                     else { mem.lootIdx = -1; mem.lootEvalAt = 0; ShowFind(m, p, mem, got); }
@@ -1582,17 +1632,20 @@ class BotController {
         }
 
         // 4b. Cut bushes and break rocks for rupees and ammo when there is nothing better to pick up.
+        ROYALE_BOT_BRANCH(kBrSmash);
         if ((!foe || dist > 800.0f) && SmashProps(m, p, mem, soon, dt)) return;
 
         // 5. Hunt: go where the last target was seen (aggressive, healthy bots), or close in on a visible but distant enemy.
         const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !NeedsGear(m, p);   // with just the starting sword, nobody goes hunting
         if (tune.hunt && armed && s.deficit < p.maxHealth * 0.4f) {
             if (foe && mem.aggression > 0.45f && s.advantage > 1.0f) {
+                ROYALE_BOT_BRANCH(kBrHuntVis);
                 if (dist > 500.0f || GettingAway(mem, p, *foe)) WantSprint(mem, tune, dist < 320.0f);   // closing the last gap on a runner: all it has
                 Steer(m, p, mem, foe->pos, dt);
                 return;
             }
             if (!foe && now - mem.lastSeenAt < 6.0f && mem.aggression > 0.5f && Distance(p.pos, mem.lastSeen) > 80.0f && Circle{soon.center, soon.radius * 0.9f}.Contains(mem.lastSeen)) {
+                ROYALE_BOT_BRANCH(kBrHuntLast);
                 if (Distance(p.pos, mem.lastSeen) > 300.0f) WantSprint(mem, tune, false);   // after it before it gets away round the rock
                 Steer(m, p, mem, mem.lastSeen, dt);
                 return;
@@ -1610,6 +1663,7 @@ class BotController {
                 if (d < nearestDist) { nearestDist = d; nearest = &o; }
             }
             if (nearest && nearestDist > 250.0f) {
+                ROYALE_BOT_BRANCH(kBrLateClose);
                 if (nearestDist > 900.0f) WantSprint(mem, tune, false);
                 Steer(m, p, mem, nearest->pos, dt, 0.9f);
                 return;
@@ -1617,6 +1671,7 @@ class BotController {
         }
 
         // 7. Wander inside the zone, stopping now and then to look round.
+        ROYALE_BOT_BRANCH(kBrWander);
         if (!mem.hasWander || Distance(p.pos, {soon.center.x + mem.wander.x, soon.center.z + mem.wander.z}) < 60.0f) {
             if (mem.hasWander && rng.Unit() < 0.45f) mem.busyUntil = now + 1.0f + 1.5f * static_cast<float>(rng.Unit());
             Vec2 pick = soon.center;
