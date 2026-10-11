@@ -822,3 +822,69 @@ int gLastWeaponSlot = 0;     // the reserve slot last swapped in (D-pad Left swa
 int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
 
 // A swing that finds no player cuts the bush or breaks the rock in front of Link (a boulder needs something heavy or explosive).
+
+// ---- how long the game took to start ----------------------------------------------------------------------------------------
+// Once per launch, at the first frame of the mod's update: seconds since the process began, and whether oot.otr was rebuilt during this launch.
+// One line goes to startup-times.txt (next to oot.otr, last 20 kept) and to the log; the menu shows the newest as gStartupLine.
+const auto gModLoadedAt = std::chrono::steady_clock::now();   // static start-up of the game, used where /proc is missing
+std::string gStartupLine;   // "Last launch took 12.4 s (kept game files)", empty until measured
+
+void MeasureStartup() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    double seconds = -1;
+    double startEpoch = 0;   // process start, seconds since 1970
+#if defined(__linux__) || defined(__ANDROID__)
+    std::ifstream selfStat("/proc/self/stat"), up("/proc/uptime");
+    std::string line;
+    double uptime = 0;
+    if (!std::getline(selfStat, line) || !(up >> uptime)) return;
+    const size_t close = line.rfind(')');   // the process name may hold spaces; field 3 follows ") "
+    if (close == std::string::npos) return;
+    std::istringstream rest(line.substr(close + 2));
+    std::string field;
+    unsigned long long ticks = 0;
+    for (int i = 3; i <= 22 && rest >> field; ++i) {
+        if (i == 22) ticks = std::strtoull(field.c_str(), nullptr, 10);
+    }
+    const long hz = sysconf(_SC_CLK_TCK);
+    if (ticks == 0 || hz <= 0) return;
+    seconds = uptime - static_cast<double>(ticks) / hz;
+    startEpoch = static_cast<double>(time(nullptr)) - seconds;
+#else
+    // Elsewhere (Windows) the mod is linked into the game itself, so its static start-up is within moments of the process start
+    seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - gModLoadedAt).count();
+    startEpoch = static_cast<double>(time(nullptr)) - seconds;
+#endif
+    if (seconds < 0) return;
+    bool rebuilt = false;
+    const std::filesystem::path otr = Ship::Context::GetPathRelativeToAppDirectory("oot.otr");
+    std::error_code ec;
+    const auto written = std::filesystem::last_write_time(otr, ec);
+    if (!ec) {
+        const double age = std::chrono::duration<double>(std::filesystem::file_time_type::clock::now() - written).count();
+        rebuilt = static_cast<double>(time(nullptr)) - age > startEpoch;
+    }
+    char when[32] = "";
+    const time_t nowT = time(nullptr);
+    std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&nowT));
+    char text[160];
+    std::snprintf(text, sizeof(text), "%s  %s  %.1f s  %s", when, ROYALE_BUILD_VERSION, seconds, rebuilt ? "rebuilt game files" : "kept game files");
+    char shown[96];
+    std::snprintf(shown, sizeof(shown), "Last launch took %.1f s (%s)", seconds, rebuilt ? "rebuilt game files" : "kept game files");
+    gStartupLine = shown;
+    SPDLOG_INFO("Startup: {}", text);
+    // Keep only the last 20 lines of startup-times.txt.
+    const std::filesystem::path file = Ship::Context::GetPathRelativeToAppDirectory("startup-times.txt");
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(file);
+        std::string l;
+        while (std::getline(in, l)) if (!l.empty()) lines.push_back(l);
+    }
+    lines.push_back(text);
+    if (lines.size() > 20) lines.erase(lines.begin(), lines.end() - 20);
+    std::ofstream out(file, std::ios::trunc);
+    for (const std::string& l : lines) out << l << "\n";
+}

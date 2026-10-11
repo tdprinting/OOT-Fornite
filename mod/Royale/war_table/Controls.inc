@@ -607,6 +607,7 @@ void WarBuild() {
             WarRow(401,1,"DOWNLOAD UPDATE","Download the available build",[](int){UpdaterCall("download");},state==kUpdChecked&&UpdaterInt("getLatestBuild")>OwnBuildNumber());
             WarRow(402,2,"INSTALL UPDATE","Open Android's installer",[](int){UpdaterCall("install");},state==kUpdNeedPermission||state==kUpdInstalling);
 #endif
+            if(!gStartupLine.empty())WarRow(403,3,gStartupLine,"How long the game took to open, from startup-times.txt",[](int){},false);
         }
         break; }
     case WarPage::Lobby:

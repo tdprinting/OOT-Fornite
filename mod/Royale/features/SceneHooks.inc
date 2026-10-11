@@ -324,6 +324,7 @@ void SyncPauseInventory(const royale::HudState& hud) {
 }
 
 void OnGameFrameUpdate() {
+    MeasureStartup();
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     Feat("session update"); gSession.Update(1.0f / royale::kTickHz);
