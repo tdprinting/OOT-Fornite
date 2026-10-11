@@ -68,21 +68,24 @@ struct AllyActor {
     int kind = 0;
     float x = 0, z = 0, tx = 0, tz = 0;
     int16_t rot = 0, trot = 0;
-    float hp = 1.0f;
+    float hp = 1.0f, shownHp = 1.0f;
     uint16_t owner = royale::net::kNoPlayer16;
-    float moved = 0;
+    uint16_t lastOwner = royale::net::kNoPlayer16;
     float actAge = 10.0f;      // seconds since it attacked or healed
     bool init = false;
-    // The game's own NPC model: its skeleton and animation state (see AllyNpc below)
-    SkelAnime sk = {};   // zeroed like an actor's memory: the game reads the old animation when it changes one
-    Vec3s joint[32] = {};
-    Vec3s morph[32] = {};
-    bool skReady = false;
-    const void* playing = nullptr;
-    float phase = 0.0f;        // walking cycle
-    float walkW = 0.0f;        // 0 standing to 1 walking
-    float bob = 0.0f;
-    bool wasActing = false;
+    // Our own model (shared/ally_anim.h): its animation, and what it is doing
+    royale::allymodel::Animator anim;
+    float speed = 0.0f;        // ground speed, units a second, smoothed
+    bool walking = false;
+    int pending = 0;           // 1 an attack, 2 a heal, started on the next update
+    bool leftFist = false;     // the Goron punches with each fist in turn
+    float busy = 0.0f;         // a one-shot clip (attack, hurt, cheer, getting up) plays until this runs out
+    bool resting = false;      // a free ally sits (a Goron curls into a ball) when nobody is near
+    float lonely = 0.0f;       // seconds with no player close
+    bool rolling = false;      // a Goron hurrying after its owner rolls
+    float rollAngle = 0.0f;
+    float slowFor = 0.0f;
+    float age = 0.0f;
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;
