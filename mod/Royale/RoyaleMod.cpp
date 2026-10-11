@@ -24,6 +24,8 @@
 #include "jones_animation.h"
 #include "jones_sounds.h"
 #include "jones_guns.h"
+#include "peter_animation.h"
+#include "peter_sounds.h"
 #include "bokoblin_sounds.h"
 #include "maya_sounds.h"
 #include "maya_phone.h"

@@ -1,5 +1,5 @@
 #pragma once
-// Hireable allies: five people wandering the map who will join whoever pays them, follow that player and fight for them until the player is
+// Hireable allies: six people wandering the map who will join whoever pays them, follow that player and fight for them until the player is
 // eliminated (then they are free to hire again) or the storm gets them. Their pay is in rupees, which come from bushes, rocks and the pockets
 // of eliminated players.
 #include "storm.h"
@@ -7,7 +7,7 @@
 
 namespace royale {
 
-enum class AllyKind : uint8_t { Kokiri, Zora, Goron, Gerudo, Jones, Count };
+enum class AllyKind : uint8_t { Kokiri, Zora, Goron, Gerudo, Jones, Peter, Count };
 constexpr int kAllyCount = static_cast<int>(AllyKind::Count);
 constexpr int kMaxAlliesPerPlayer = 2;
 constexpr float kHireRange = 230.0f;       // how close you have to be to hire one
@@ -44,6 +44,7 @@ constexpr AllyDef kAllyDefs[kAllyCount] = {
     {"Goron",   "the Brawler",    90,  8.0f, 1.10f, 150.0f, 1.70f, 100.0f, true,   0.0f, 0.0f},
     {"Gerudo",  "the Archer",    110,  4.0f, 0.55f, 950.0f, 1.60f, 128.0f, false,  0.0f, 0.0f},
     {"Jones",   "the Rift Scout",100,  5.0f, 0.45f, 1250.0f,1.30f, 125.0f, false,  0.0f, 0.0f},
+    {"Peter",   "the Quahog Brawler",85,7.0f, 0.90f, 160.0f, 1.50f, 112.0f, true,   0.0f, 0.0f},   // big haymaker, slow; takes phone calls when idle
 };
 constexpr const AllyDef& AllyOf(AllyKind k) { return kAllyDefs[static_cast<int>(k) % kAllyCount]; }
 

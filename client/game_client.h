@@ -590,7 +590,14 @@ class GameClient {
 
         helpers = s.helpers;
         bosses = s.bosses;
-        allies = s.allies;
+        // Allies: the ones in this snapshot, and idle free ones from the last few (they are only sent now and then; see kIdleAllyEvery).
+        for (const auto& a : s.allies) allyHistory[a.index] = {serverTime, a};
+        allies.clear();
+        for (auto it = allyHistory.begin(); it != allyHistory.end();) {
+            const float age = serverTime - it->second.t;   // negative after a new match restarts the clock: stale
+            if (age < 0 || age > net::kAllyKeepSeconds) it = allyHistory.erase(it);
+            else { allies.push_back(it->second.s); ++it; }
+        }
         // Carts: the ones in this snapshot, and parked ones from the last few (they are only sent now and then; see kParkedVehicleEvery).
         for (const auto& v : s.vehicles) {
             auto& h = vehicleHistory[v.index];
@@ -631,6 +638,8 @@ class GameClient {
     std::vector<net::HelperNet> helpers;
     std::vector<net::BossNet> bosses;
     std::vector<net::AllyNet> allies;
+    struct AllySeen { float t; net::AllyNet s; };
+    std::map<uint8_t, AllySeen> allyHistory;
     std::vector<net::VehicleNet> vehicles;
     std::map<int, std::deque<VehicleAt>> vehicleHistory;
     Replay replay;

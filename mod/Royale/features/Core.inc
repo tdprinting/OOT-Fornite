@@ -100,6 +100,14 @@ struct AllyActor {
     uint8_t weapon=0;
     float shotX=0,shotY=0,shotZ=0;
     bool hasShot=false;
+    // Peter (same rigid-rig family as Jones): his idle phone call with Joe.
+    float callAge=-1,stillFor=0;   // seconds into the call (-1: not on the phone); seconds standing idle
+    double nextCallAt=0;
+    float cheerAge=10,quipAge=10;  // "Freakin' sweet!" on hire; the quip bubble
+    int quip=-1;
+    uint8_t attackVariant=0;        // which of his moves is playing
+    unsigned attackCount=0,hireCount=0;
+    bool customCall=false;          // playing the player's own call.wav
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;
