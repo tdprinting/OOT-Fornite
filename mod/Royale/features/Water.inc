@@ -382,6 +382,9 @@ constexpr int kWaterTex = 64, kWaterTexFrames = 32;
 alignas(16) uint8_t gWaterCausticTex[kWaterTexFrames][kWaterTex * kWaterTex];
 alignas(16) uint8_t gWaterGlintTex[kWaterTexFrames][kWaterTex * kWaterTex];
 alignas(16) uint8_t gWaterFoamImage[kWaterTex * kWaterTex];
+alignas(16) uint8_t gWaterSparkleTex[kWaterTexFrames][kWaterTex * kWaterTex];   // the sparse twinkling sparkle (in place of the glint net)
+alignas(16) uint8_t gWaterStreakImage[kWaterTex * kWaterTex];                  // the wind's foam streaks (along s)
+alignas(16) uint8_t gWaterBandTex[kWaterTexFrames][kWaterTex * kWaterTex];      // the rolling swell bands (travelling along s)
 std::atomic<int> gWaterTexState{ 0 };   // 0 not made, 1 being made, 2 ready
 
 bool WaterTexturesReady() {
@@ -391,6 +394,9 @@ bool WaterTexturesReady() {
             royale::water::MakeCaustics(&gWaterCausticTex[0][0], kWaterTex, kWaterTexFrames);
             royale::water::MakeGlints(&gWaterGlintTex[0][0], kWaterTex, kWaterTexFrames);
             royale::water::MakeFoam(gWaterFoamImage, kWaterTex);
+            royale::water::MakeSparkle(&gWaterSparkleTex[0][0], kWaterTex, kWaterTexFrames);
+            royale::water::MakeStreaks(gWaterStreakImage, kWaterTex);
+            royale::water::MakeSwellBands(&gWaterBandTex[0][0], kWaterTex, kWaterTexFrames);
             gWaterTexState.store(2, std::memory_order_release);
         }).detach();
     }
@@ -399,7 +405,7 @@ bool WaterTexturesReady() {
 
 // World units per texel of each texture. Texture coordinates are counted from an origin that moves a whole tile at a time, so they stay small
 // (the renderer holds them in 16 bits) and the pattern never jumps when the grid follows the camera.
-constexpr float kGlintUnits = 3.0f, kFoamUnits = 2.6f, kCausticUnits = 3.4f;
+constexpr float kGlintUnits = 3.0f, kFoamUnits = 2.6f, kCausticUnits = 3.4f, kStreakUnits = 3.2f, kBandUnits = 14.0f;
 float TexOrigin(float c, float units) { const float tile = kWaterTex * units; return std::round(c / tile) * tile; }
 
 void PushVtxT(Vtx& o, float x, float y, float z, float s, float t, float r, float g, float b, float a) {
@@ -545,7 +551,11 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
 //   1. the water itself: its colour (turquoise shallows to deep blue, by depth), the sky mirrored in it (Fresnel), the sun's glitter path, the
 //      green glow of light through the crests, foam;
 //   2. the sparkling ripples: a texture of the light caught on small ripples, in the sky's and the sun's colours, stronger at a low angle;
-//   3. textured foam: lacy foam on the shores, in wakes and on the crests of breaking waves.
+//   3. textured foam: lacy foam on the shores, in wakes and on the crests of breaking waves;
+//   4. (Medium detail and up) the wind's foam streaks: long wisps turned along the wind, on the backs of the swell and the whitecaps;
+//   5. (High detail) the rolling swell bands: a looping texture of mid-sized waves travelling with the wind, lit on their faces, laid over the
+//      coarse grid so the sea rolls and layers at every distance without more geometry (docs/water/README.md).
+// The open-sea look (sparse sparkle, streaks, bands, horizon haze, deep troughs) is shaded in shared/water_look.h; the preview tool draws it too.
 constexpr int kFineSub = 8;      // fine squares per side of a refined coarse square
 constexpr int kMaxFine = 16;     // refined squares per frame (about 1300 vertices)
 constexpr float kWaterPush = 1.7f;   // how much stronger than the raw height field the displacement is drawn (it has to read from a camera behind the swimmer)
@@ -615,6 +625,14 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     look.t = t; look.light = light; look.reach = reach; look.ampTotal = ampTotal; look.wind = windNow;
     look.glintAmt = glintAmt; look.foamAmt = foamAmt; look.skyOn = gWaterSkyOn;
     look.sharpSpec = 0.0f;   // pin-point glints come from the sparkle texture; on a vertex they light a whole square
+    const bool streaksOn = gWaterStreaks && texOk && detail >= 1 && foamAmt > 0.0f, bandsOn = gWaterBands && texOk && detail >= 2;
+    look.sparkle = gWaterSparkle && texOk ? 1.0f : 0.0f;
+    look.streaks = streaksOn ? std::min(2.0f, gWaterFoamAmt) : 0.0f;
+    look.bands = bandsOn ? 1.0f : 0.0f;
+    look.haze = gWaterHaze; look.hazeNear = half * 0.35f; look.hazeFar = half * 0.92f;
+    look.depthTone = gWaterTone;
+    // the wind's heading turns the streaks and the bands along it (steady: the wind turns slowly)
+    const float windAng = std::atan2(wz0, wx0), windC = std::cos(windAng), windS = std::sin(windAng);
     royale::water::LookSky lsky;
     for (int q = 0; q < 3; q++) { lsky.hor[q] = sky.hor[q]; lsky.zen[q] = sky.zen[q]; lsky.sun[q] = sky.sun[q]; lsky.moon[q] = sky.moon[q]; }
     lsky.sunA = sky.sunA; lsky.moonA = sky.moonA; lsky.sunWarm = sky.sunWarm;
@@ -635,15 +653,28 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     WaterCurrentAt(eye.x, eye.z, t, &flowX, &flowZ);
     const float gS = std::fmod(t * 1.7f, static_cast<float>(kWaterTex)), gT = std::fmod(t * 1.1f, static_cast<float>(kWaterTex));
     const float fS = std::fmod(flowX * t / kFoamUnits, static_cast<float>(kWaterTex)), fT = std::fmod(flowZ * t / kFoamUnits, static_cast<float>(kWaterTex));
+    // the streaks and the bands are laid along the wind: (wx, wz) turned so s runs downwind; their origins are taken in that turned frame
+    const float cwx = cx * windC + cz * windS, cwz = -cx * windS + cz * windC;
+    const float osk = TexOrigin(cwx, kStreakUnits), otk = TexOrigin(cwz, kStreakUnits), obs = TexOrigin(cwx, kBandUnits), obt = TexOrigin(cwz, kBandUnits);
+    const float sS = std::fmod(t * (0.6f + 1.2f * windNow), static_cast<float>(kWaterTex));   // the streaks drift downwind
+    const float bS = std::fmod(t * (1.8f + 1.6f * windNow), static_cast<float>(kWaterTex));   // the bands roll downwind (the texture itself travels too)
+    const float fl = 0.6f + 0.4f * light;
     // Writes a point of each pass: (px, py, pz) relative to the grid's origin, (wx, wz) where on the water it is, n its normal (bends the sparkle)
     auto emit = [&](Vtx* base, Vtx* gl, Vtx* fo, size_t at, float px, float py, float pz, float wx, float wz, float nx, float nz, const WaterLook& o) {
         PushVtx4(base[at], px, py, pz, o.col[0], o.col[1], o.col[2], o.col[3]);
         if (gl != nullptr)
             PushVtxT(gl[at], px, py + 0.5f, pz, (wx - og) / kGlintUnits + gS + nx * 9.0f, (wz - ogz) / kGlintUnits + gT + nz * 9.0f, o.glint[0], o.glint[1], o.glint[2], o.glint[3] * textureFade(wx, wz));
         if (fo != nullptr) {
-            const float fl = 0.6f + 0.4f * light;
             PushVtxT(fo[at], px, py + 0.7f, pz, (wx - of) / kFoamUnits + fS + nx * 4.0f, (wz - ofz) / kFoamUnits + fT + nz * 4.0f, 240.0f * fl, 248.0f * fl, 252.0f * fl, o.foam * textureFade(wx, wz));
         }
+    };
+    // the coarse-only passes (the fine squares are small and near; the coarse square under them carries these)
+    auto emitWind = [&](Vtx* sk, Vtx* bd, size_t at, float px, float py, float pz, float wx, float wz, float nx, float nz, const WaterLook& o) {
+        const float wu = wx * windC + wz * windS, wv = -wx * windS + wz * windC;
+        if (sk != nullptr)
+            PushVtxT(sk[at], px, py + 0.9f, pz, (wu - osk) / kStreakUnits - sS + nx * 3.0f, (wv - otk) / kStreakUnits + nz * 3.0f, 236.0f * fl, 248.0f * fl, 250.0f * fl, o.streak * textureFade(wx, wz));
+        if (bd != nullptr)
+            PushVtxT(bd[at], px, py + 0.3f, pz, (wu - obs) / kBandUnits - bS, (wv - obt) / kBandUnits, o.band[0], o.band[1], o.band[2], o.band[3] * textureFade(wx, wz));
     };
 
     const size_t nv = static_cast<size_t>(V) * V;
@@ -651,10 +682,12 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     if (v == nullptr) return;
     Vtx* vg = glintAmt > 0.0f ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
     Vtx* vf = foamAmt > 0.0f ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
+    Vtx* vk = streaksOn ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
+    Vtx* vb = bandsOn ? static_cast<Vtx*>(FrameAlloc(play, nv * sizeof(Vtx))) : nullptr;
     static std::vector<uint8_t> clear;   // a point where there is nothing to show
     static std::vector<float> cSW, cOX, cOZ;   // each coarse point's swell (height and sideways shift), for the fine squares to run into
-    static std::vector<uint8_t> hasGlint, hasFoam;
-    clear.assign(nv, 1); cSW.assign(nv, 0.0f); cOX.assign(nv, 0.0f); cOZ.assign(nv, 0.0f); hasGlint.assign(nv, 0); hasFoam.assign(nv, 0);
+    static std::vector<uint8_t> hasGlint, hasFoam, hasStreak, hasBand;
+    clear.assign(nv, 1); cSW.assign(nv, 0.0f); cOX.assign(nv, 0.0f); cOZ.assign(nv, 0.0f); hasGlint.assign(nv, 0); hasFoam.assign(nv, 0); hasStreak.assign(nv, 0); hasBand.assign(nv, 0);
     float lastSurface = baseY;
     for (int j = 0; j < V; j++) {
         for (int i = 0; i < V; i++) {
@@ -683,8 +716,11 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 }
             }
             emit(v, vg, vf, id, px, y - baseY, pz, wx, wz, nx, nz, o);
+            emitWind(vk, vb, id, px, y - baseY, pz, wx, wz, nx, nz, o);
             hasGlint[id] = vg != nullptr && vg[id].v.cn[3] > 0;
             hasFoam[id] = vf != nullptr && vf[id].v.cn[3] > 0;
+            hasStreak[id] = vk != nullptr && vk[id].v.cn[3] > 0;
+            hasBand[id] = vb != nullptr && vb[id].v.cn[3] > 0;
         }
     }
 
@@ -856,9 +892,14 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         return !refined[j * N + i] && !(clear[j * V + i] && clear[j * V + i + 1] && clear[(j + 1) * V + i] && clear[(j + 1) * V + i + 1]);
     });
     if (fv != nullptr) drawFine(fv);
+    // pass 5 (under the others): the rolling swell bands, on every coarse square that has water (the fine squares sit on top of theirs)
+    if (vb != nullptr) {
+        WaterTexturePass(play, gWaterBandTex[static_cast<int>(t * 7.0f) % kWaterTexFrames]);
+        DrawWaterGrid(play, vb, N, N, [&](int i, int j) { return any4(hasBand, i, j); });
+    }
     // pass 2: the sparkling ripples (the texture is only drawn fairly near: far off it would shimmer)
     if (vg != nullptr) {
-        WaterTexturePass(play, gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
+        WaterTexturePass(play, look.sparkle > 0.0f ? gWaterSparkleTex[static_cast<int>(t * 9.0f) % kWaterTexFrames] : gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
         DrawWaterGrid(play, vg, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasGlint, i, j); });
         if (fg != nullptr) drawFine(fg);
     }
@@ -868,7 +909,12 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         DrawWaterGrid(play, vf, N, N, [&](int i, int j) { return !refined[j * N + i] && any4(hasFoam, i, j); });
         if (ff != nullptr) drawFine(ff);
     }
-    if (vg != nullptr || vf != nullptr) WaterPlainPass(play);
+    // pass 4: the wind's foam streaks and whitecaps
+    if (vk != nullptr) {
+        WaterTexturePass(play, gWaterStreakImage);
+        DrawWaterGrid(play, vk, N, N, [&](int i, int j) { return any4(hasStreak, i, j); });
+    }
+    if (vg != nullptr || vf != nullptr || vk != nullptr || vb != nullptr) WaterPlainPass(play);
     OPEN_DISPS(play->state.gfxCtx);
     // the reflections of whoever stands or swims here: a strip from the feet toward the camera, in their colours, wobbling with the swell
     if (!gWaterRefl.empty() && gWaterSkyOn && gWaterBodiesRefl) {
@@ -918,7 +964,7 @@ void DrawPuddleSheens(PlayState* play) {
     for (int q = 0; q < 3; q++) col[q] = std::min(255.0f, (sky.hor[q] + sky.zen[q]) * 0.6f + 80.0f) * (0.55f + 0.45f * light);
     const float gS = std::fmod(t * 1.2f, static_cast<float>(kWaterTex)), gT = std::fmod(t * 0.8f, static_cast<float>(kWaterTex));
     SetupWaterXlu(play);
-    WaterTexturePass(play, gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
+    WaterTexturePass(play, gWaterSparkle ? gWaterSparkleTex[static_cast<int>(t * 9.0f) % kWaterTexFrames] : gWaterGlintTex[static_cast<int>(t * 9.0f) % kWaterTexFrames]);
     OPEN_DISPS(play->state.gfxCtx);
     gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_AA_ZB_XLU_DECAL2);   // nudged toward the camera, like the puddle under it
     for (size_t k = 0; k < gPuddleSheens.size(); k++) {
