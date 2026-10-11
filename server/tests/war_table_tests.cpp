@@ -1,8 +1,10 @@
 #include "war_table.h"
+#include "controls.h"
 #include <cstdlib>
 #include <iostream>
 #include <set>
 using namespace royale::wartable;
+namespace ctl = royale::controls;
 static void Check(bool ok,const char* message) {if(!ok){std::cerr<<message<<'\n';std::exit(1);}}
 int main() {
     Check(ActivePage(false,false,false,false,true)==Page::Play,"Startup always reaches Play");
@@ -19,6 +21,17 @@ int main() {
     Check(empowered.attack>base.attack&&empowered.defense>50,"Rarity, gear, shield and adult buffs are reflected");
     const auto empty=Loadout(royale::ItemId::FairyBow,royale::Rarity::Legendary,false,1,1,1,0,false);
     Check(std::fabs(empty.attack-royale::WeaponOf(royale::ItemId::BasicSword).damage*royale::kPlayerDamageScale)<.001f,"Empty ranged weapons show the basic melee fallback without rarity");
+    {
+        const auto br=ctl::Scheme::BattleRoyale, classic=ctl::Scheme::Classic;
+        Check(ctl::Clamp(0)==br&&ctl::Clamp(1)==classic&&ctl::Clamp(7)==br&&ctl::Clamp(-3)==br,"Unknown layouts fall back to Battle Royale");
+        Check(ctl::JumpPressed(br,ctl::kA,false,false),"A jumps when it has nothing else to do");
+        Check(!ctl::JumpPressed(br,ctl::kA,true,false),"A opens, takes, hires or talks instead of jumping when it can");
+        Check(!ctl::JumpPressed(br,ctl::kCUp,false,false),"C-Up no longer jumps in the Battle Royale layout");
+        Check(ctl::JumpPressed(classic,ctl::kCUp,true,false)&&!ctl::JumpPressed(classic,ctl::kA,false,false),"Classic keeps C-Up as the jump and A never jumps");
+        Check(ctl::JumpPressed(br,0,true,true)&&ctl::JumpPressed(classic,0,true,true),"The on-screen JUMP button works in both layouts");
+        Check(ctl::AbilityPressed(br,ctl::kCUp)&&ctl::AbilityPressed(br,ctl::kDUp)&&ctl::AbilityPressed(classic,ctl::kDUp)&&!ctl::AbilityPressed(classic,ctl::kCUp),"Ability is on D-pad Up, and C-Up too once the jump has moved");
+        Check(ctl::PromptsFor(br).jump==ctl::Glyph::A&&ctl::PromptsFor(classic).jump==ctl::Glyph::CUp,"Prompts follow the layout");
+    }
     std::set<int> settings;
     for(int section:kSettingsOrder){Check(section>=0&&section<kSettingsCount,"Settings section is valid");settings.insert(section);}
     Check(settings.size()==kSettingsCount&&kSettingsOrder[0]==6,"All settings are reachable and Pets is first");
