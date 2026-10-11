@@ -71,6 +71,19 @@ void TraceBlock(const char* title, const char* text) {
     if (out) out << "---- " << title << " (free memory " << FreeMemoryMb() << " MB) ----\n" << text << "---- end ----\n";
 }
 
+// A game resource that did not load (libultraship patch 0009 calls this, on any thread). The game usually crashes later on the null it
+// got, far from the cause, so the first 24 (missing files included) go into the breadcrumb trail (royale-trace.txt, "Last step" in the crash note) and the log.
+void OnResourceFailed(const char* path, int fileFound) {
+    static std::mutex lock;
+    static int reported = 0;
+    const std::lock_guard<std::mutex> guard(lock);
+    if (path == nullptr || reported >= 24) return;
+    reported++;
+    char step[300];
+    std::snprintf(step, sizeof(step), "resource did not load: %s (%s)", path, fileFound ? "file found, loader failed" : "file not found");
+    Trace(step);
+}
+
 // ---- crash report ---------------------------------------------------------------------------------------------------------------
 // When the game dies from a native crash (a bad pointer, an abort), Android gives the player nothing to send. So a handler writes
 // royale-crash.txt next to the music folder: which signal, where it faulted (library, offset and name for each step of the call stack) and the
