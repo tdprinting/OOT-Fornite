@@ -30,7 +30,7 @@ diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Androi
 index 77a5f55..8715974 100644
 --- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
 +++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
-@@ -135,12 +135,68 @@ public class MainActivity extends SDLActivity{
+@@ -135,12 +135,71 @@ public class MainActivity extends SDLActivity{
      }
  
      private void doVersionCheck(){
@@ -49,17 +49,20 @@ index 77a5f55..8715974 100644
 +        String storedExtractor = stored != null ? stored[0] : (hasRomFiles ? BuildConfig.EXTRACTOR_VERSION : "");
 +        String storedSohOtr = stored != null ? stored[1] : "";
 +
-+        // Crash-loop guard: a launch that did not stay up for LAUNCH_OK_MS leaves LAUNCH_PENDING behind. If it is still there, the
-+        // kept game files may be what crashes the game, so throw them away once and let setup rebuild them from the ROM.
++        // Crash-loop guard: a launch that never drew its first game frame leaves LAUNCH_PENDING behind (the game deletes it, with
++        // LAUNCH_GUARDED, on its first frame: MeasureStartup). If it is still there, the kept game files may be what crashes the game, so
++        // throw them away and let setup rebuild them from the ROM, but only once: LAUNCH_GUARDED stops a crash in the code itself from
++        // costing a full rebuild on every other launch.
 +        File pending = new File(root, LAUNCH_PENDING);
-+        if (pending.exists() && hasRomFiles) {
-+            Log.w("GameFiles", "Last launch did not stay up, rebuilding game files");
++        File guarded = new File(root, LAUNCH_GUARDED);
++        if (pending.exists() && hasRomFiles && !guarded.exists()) {
++            Log.w("GameFiles", "Last launch did not reach the game, rebuilding game files once");
++            try { guarded.createNewFile(); } catch (IOException e) { Log.w("GameFiles", "Could not write " + guarded, e); }
 +            deleteOutdatedAssets();
 +            storedSohOtr = "";
 +        }
 +        if (root.isDirectory()) {
 +            try { pending.createNewFile(); } catch (IOException e) { Log.w("GameFiles", "Could not write " + pending, e); }
-+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> pending.delete(), LAUNCH_OK_MS);
 +        }
 +
 +        if (!BuildConfig.EXTRACTOR_VERSION.equals(storedExtractor)) {
@@ -92,7 +95,7 @@ index 77a5f55..8715974 100644
 +    // Fingerprints of the game files in the data folder: line 1 the extractor files, line 2 soh.otr. Null when not written yet.
 +    private static final String GAME_FILES_VERSION = ".game-files-version";
 +    private static final String LAUNCH_PENDING = ".launch-pending";
-+    private static final long LAUNCH_OK_MS = 15000;
++    private static final String LAUNCH_GUARDED = ".launch-guarded";
 +
 +    private static String[] readGameFilesVersion(File file) {
 +        if (!file.isFile()) return null;

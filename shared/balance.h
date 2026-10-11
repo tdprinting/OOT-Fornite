@@ -26,6 +26,7 @@ constexpr float kFartCloudReach = 450.0f;    // and only within this far of wher
 // World units are OoT units. Link runs about 100 units/s.
 constexpr float kRunSpeed = 100.0f;
 constexpr float kPickupRange = 50.0f;
+constexpr float kDropRegrabSeconds = 5.0f;   // a weapon you drop on purpose is not picked up again by walking over it for this long
 
 // The skydive at the start of the match (players and bots alike): you hang this high above the ground during the countdown, then fall
 // during the drop, steering as you go. Holding Z dives faster.

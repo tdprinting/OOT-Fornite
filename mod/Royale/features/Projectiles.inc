@@ -432,7 +432,10 @@ void ReconcileProjectileActor() {
         a->shape.shadowScale = 0.0f;
         gProjectileActor = a;
     } else if (!AnyWorldFx() && gProjectileActor != nullptr) {
-        gProjectileActor = nullptr;   // the scene is changing: the actor goes with it
+        // Still set means it is alive (Projectile_Destroy clears it on a scene change). The world effects were switched off mid-scene, or a
+        // lobby was joined: kill it, or switching them back on would spawn a second one and draw and step the water twice.
+        if (gPlayState != nullptr) Actor_Kill(gProjectileActor);
+        gProjectileActor = nullptr;
         gProjectiles.clear();
     }
 }

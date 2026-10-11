@@ -1002,6 +1002,18 @@ std::vector<PotionStack> PotionStacks(const royale::HudState& h) {
     return out;
 }
 int gHandStack = -1;               // the stack held in hand (B drinks one), or -1 for the weapon
+royale::ItemId gHandItem{};        // what the stack in hand holds: the bag's order shifts when an earlier slot of the same kind is drunk from
+royale::Rarity gHandRarity{};      // (the server takes the first potion of a kind), so the hand follows the kind and tier, not the slot number
+void TakeStackInHand(const std::vector<PotionStack>& stacks, int i) {
+    gHandStack = i >= 0 && i < static_cast<int>(stacks.size()) ? i : -1;
+    if (gHandStack >= 0) { gHandItem = stacks[static_cast<size_t>(i)].item; gHandRarity = stacks[static_cast<size_t>(i)].rarity; }
+}
+void FollowHandStack(const std::vector<PotionStack>& stacks) {
+    if (gHandStack < 0) return;
+    for (size_t i = 0; i < stacks.size(); i++)
+        if (stacks[i].item == gHandItem && stacks[i].rarity == gHandRarity) { gHandStack = static_cast<int>(i); return; }
+    gHandStack = -1;   // that stack is used up
+}
 bool gStackBPressed = false;       // B was pressed this frame with a stack in hand (taken off the controller so Link doesn't swing)
 double gStackBHold = -1.0;         // when C-Down went down: a tap picks the next stack, a long hold drops the weapon in hand
 
@@ -1043,7 +1055,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
     const std::vector<PotionStack> stacks = PotionStacks(h);
-    if (gHandStack >= static_cast<int>(stacks.size())) gHandStack = -1;
+    FollowHandStack(stacks);
     const bool stackInHand = gHandStack >= 0;
     ImGuiIO& io = ImGui::GetIO();
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
@@ -1148,7 +1160,7 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
             if (hitRect(a, b) && filled) {   // tap a stack to take it in hand, tap it again to drink
                 const PotionStack& st = stacks[static_cast<size_t>(i)];
                 if (gHandStack == i) gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
-                else gHandStack = i;
+                else TakeStackInHand(stacks, i);
             }
             x = a.x - pgap;
         }

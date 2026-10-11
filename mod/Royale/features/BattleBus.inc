@@ -482,7 +482,8 @@ bool UpdateBusRide(Player* player, const royale::HudState& hud) {
     }
     const float ground = GroundY(gPlayState, player->actor.world.pos.x, player->actor.world.pos.z, -1.0e6f);
     float y = player->actor.world.pos.y - royale::kFreefallSpeed * dt;
-    const bool low = ground > -1.0e5f && y - ground <= royale::kAutoGlideHeight;
+    // No floor under you (past the edge of the scene's collision): open the glider at the island's usual height rather than fall forever.
+    const bool low = ground > -1.0e5f ? y - ground <= royale::kAutoGlideHeight : y <= BusBaseY() + royale::kAutoGlideHeight;
     player->actor.world.pos.y = y;
     player->actor.prevPos = player->actor.world.pos;
     player->actor.velocity.y = 0.0f;

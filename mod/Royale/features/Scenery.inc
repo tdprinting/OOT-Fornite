@@ -211,9 +211,10 @@ struct SolidBuilder {
         CollisionPoly& p = gSolidPoly[np++];
         p = {};
         p.type = type;
-        p.flags_vIA = static_cast<u16>(a | (xp << 13));
-        p.flags_vIB = static_cast<u16>(b);
-        p.vIC = static_cast<u16>(c);
+        // Patch 0029 moved the poly flags to bits 29-31 (COLPOLY_FLAG_SHIFT): at bit 13 the "camera passes" flag became part of the vertex number.
+        p.flags_vIA = static_cast<u32>(a) | (static_cast<u32>(xp) << COLPOLY_FLAG_SHIFT);
+        p.flags_vIB = static_cast<u32>(b);
+        p.vIC = static_cast<u32>(c);
         p.normal = { 0, 0x7FFF, 0 };   // filled in properly by the game when it takes the mesh
     }
     // A stone: a ring of `sides` points round the foot, a smaller ring at the top, and a flat top to stand on. A box is the same with four sides.

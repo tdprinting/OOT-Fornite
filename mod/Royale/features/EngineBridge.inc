@@ -152,7 +152,11 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
         const std::vector<royale::fortnite::Block> want = WantedBlocks();
         if (!(want == royale::fortnite::gBlocks)) { royale::fortnite::gBlocks = want; gFortniteBuilt = false; }
     }
-    return FortniteHeader();
+    const bool rebuild = !gFortniteBuilt;
+    CollisionHeader* header = FortniteHeader();
+    Crumb("collision: map %d (%s) island collision %s, %d vertices %d polygons %d water boxes", gMapId, royale::MapOf(gMapId).name,
+          rebuild ? "built" : "reused", static_cast<int>(header->numVertices), static_cast<int>(header->numPolygons), static_cast<int>(header->numWaterBoxes));
+    return header;
 }
 extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }
 extern "C" s32 Royale_HideRooms(void) { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }

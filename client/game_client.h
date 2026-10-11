@@ -513,12 +513,12 @@ class GameClient {
             case net::MsgType::EvPing: {
                 net::EvPing m;
                 if (!net::Decode(data, m)) break;
+                pings.erase(std::remove_if(pings.begin(), pings.end(), [&](const ClientPing& g) { return g.expiresAt <= localClock; }), pings.end());   // first, so an expired one isn't the "oldest" removed below
                 int mine = 0;
-                for (const auto& g : pings) mine += g.owner == m.owner && g.expiresAt > localClock;
+                for (const auto& g : pings) mine += g.owner == m.owner;
                 while (mine >= kPingMaxPerPlayer) {   // the oldest of theirs goes (the server keeps the same rule)
                     for (size_t i = 0; i < pings.size(); i++) if (pings[i].owner == m.owner) { pings.erase(pings.begin() + static_cast<long>(i)); mine--; break; }
                 }
-                pings.erase(std::remove_if(pings.begin(), pings.end(), [&](const ClientPing& g) { return g.expiresAt <= localClock; }), pings.end());
                 pings.push_back({m.owner, m.kind, m.x, m.z, m.target, localClock + kPingSeconds});
                 ClientEvent e{ClientEvent::Type::Pinged};
                 e.id = m.owner; e.x = m.x; e.z = m.z; e.item = m.kind;

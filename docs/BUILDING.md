@@ -73,6 +73,32 @@ stored in `TDawgsBattleRoyale/.game-files-version`. If a change to `patches/ZAPD
 `ROYALE_EXTRACT_REVISION` in patch `0030` so players rebuild once. Each launch's time goes to `TDawgsBattleRoyale/startup-times.txt`
 (PC: next to `oot.otr`) and shows in the Battle Royale menu under Game updates.
 
+## Crash reports and the trace
+
+All in `TDawgsBattleRoyale/` on the phone (`/storage/emulated/0/TDawgsBattleRoyale/`; PC: next to `oot.otr`).
+
+- `royale-crash.txt`: written by the crash handler (`MusicDiagnostics.inc`) on a native crash (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL,
+  SIGTRAP; Android only). Shown at the top of the Battle Royale menu on the next launch until dismissed. In order:
+  1. Header: build, signal, fault address, crashing thread and the game thread's id (equal = crashed on the game thread), the
+     `Feat("...")` feature running, the last `Trace` step, seconds since launch.
+  2. `#N lib+0xOFFSET symbol` call stack. Look offsets up in the unstripped `.so` that `game-build.yml` keeps for that build.
+  3. `---- mod state ----`: snapshot from `CrashContext.inc`, refreshed 4 times a second on the game thread (so up to 0.25 s old). Lines:
+     `Build` (version, protocol), `Where` (menu / regular game / BR lobby / BR match, hosting or joined, solo test, sandbox, native menu),
+     `Scene` (scene, room, entrance, actor count), `Map` (id, name, island collision), `Match` (state, storm, team mode), `Me` (id, alive,
+     knocked, bus seat, skydive and bus phase, cart), `Link` (position, held item action, state flags), `Hands` (weapon, hand stack, reserve),
+     `Counts` (humans, bots, puppets, allies, carts, loot), `Weather`, `Graphics` (layer pool, overflow, shadows, water detail), the
+     regular-game switches and every Debug switch that is off.
+  4. `---- last events ----`: the last 32 breadcrumbs, oldest first, `seconds-since-launch  text`. Every `Trace()` step is one, plus
+     changes the snapshot notices (scene/room/entrance, session, match state, map, bus aboard/off, skydive and bus phase, knocked,
+     eliminated, cart, weapon, hand, allies hired, native menu, graphics overflow) and the island collision build.
+- `royale-trace.txt` (`royale-trace-prev.txt` = the run before): every `Trace` step, and half a second after each scene load the same
+  `mod state` block between `---- state after scene load ----` and `---- end ----`. Use it for bugs that are not crashes.
+- `royale-exit-reason.txt`: Android's own reason the last run ended (patch `0017`), e.g. killed for memory.
+
+Adding context: call `Crumb("fmt", ...)` (printf style, `Core.inc`) at a noteworthy one-off event (not every frame: the ring holds 32).
+It is safe from any thread. Add a line to `BuildCrashState` in `CrashContext.inc` for new state; it runs on the game thread, so it may
+read anything, but keep the block under 3 KB.
+
 ## Playing a match
 
 All players must be running the **same build** (the host rejects a different protocol version). Everyone loads a save and
