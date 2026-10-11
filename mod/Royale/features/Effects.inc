@@ -653,3 +653,137 @@ void DrawHitEffects(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     gFloatingNumbers.erase(std::remove_if(gFloatingNumbers.begin(), gFloatingNumbers.end(), [&](const FloatingNumber& f) { return now - f.at > 1.0; }), gFloatingNumbers.end());
 }
 
+
+// ---- the chests' light ---------------------------------------------------------------------------------------------------------------------
+// Every chest says what is in it by its light, in the colour of the item's rarity (the label that used to float above it is gone):
+//   * shut: a soft glow on the ground round it, and for Rare and up a shaft of light that leans up out of it (short for Rare, tall and golden for
+//     Legendary, so the best chests can be seen from across the map);
+//   * opened: the light that comes out of it (the game's own is a fixed gold): a bright pillar and rays that fan out and turn slowly, strongest on
+//     big chests, rising fast and fading over about three seconds.
+// Soft, translucent shapes (no textures), in the stylised Zelda manner of the game's own beams.
+struct ChestLook { float glow, shaftH, shaftW, shaftA, rays, rayH, openH, openA; };
+constexpr ChestLook kChestLook[royale::kRarityCount] = {
+    //  glow  shaftH shaftW shaftA rays rayH openH openA
+    {  46.0f,   0.0f,  0.0f,   0.0f, 0,  120.0f, 150.0f, 120.0f },   // Common
+    {  56.0f,   0.0f,  0.0f,   0.0f, 4,  150.0f, 190.0f, 140.0f },   // Uncommon
+    {  70.0f,  90.0f, 11.0f,  70.0f, 6,  230.0f, 280.0f, 170.0f },   // Rare
+    {  88.0f, 190.0f, 14.0f,  95.0f, 8,  320.0f, 380.0f, 200.0f },   // Epic
+    { 110.0f, 380.0f, 18.0f, 125.0f, 10, 420.0f, 520.0f, 235.0f },   // Legendary
+};
+
+void ChestVtx(Vtx& o, float x, float y, float z, const Color_RGBA8& c, float a) {   // (positions in quarter units: the matrix scales them back)
+    o.v.ob[0] = static_cast<s16>(std::lround(std::clamp(x * 4.0f, -32000.0f, 32000.0f)));
+    o.v.ob[1] = static_cast<s16>(std::lround(std::clamp(y * 4.0f, -32000.0f, 32000.0f)));
+    o.v.ob[2] = static_cast<s16>(std::lround(std::clamp(z * 4.0f, -32000.0f, 32000.0f)));
+    o.v.flag = 0; o.v.tc[0] = o.v.tc[1] = 0;
+    o.v.cn[0] = c.r; o.v.cn[1] = c.g; o.v.cn[2] = c.b; o.v.cn[3] = static_cast<u8>(std::clamp(a, 0.0f, 255.0f));
+}
+
+void DrawChestLights(PlayState* play) {
+    if (!gSession.Joined() || !InField() || gLoot.empty()) return;
+    const double now = ImGui::GetTime();
+    const Vec3f eye = play->view.eye;
+    // The chests to draw, nearest first (a handful: the glow is cheap, but the rays are not for nothing).
+    struct Item { float d2; const LootActor* la; size_t idx; };
+    static std::vector<Item> items;
+    items.clear();
+    for (const auto& [idx, la] : gLoot) {
+        if (!la.chest || la.actor == nullptr || la.killing) continue;
+        const float dx = la.actor->world.pos.x - eye.x, dz = la.actor->world.pos.z - eye.z, d2 = dx * dx + dz * dz;
+        const bool lit = !la.opened || (la.openedAt >= 0.0 && now - la.openedAt < 3.0);
+        if (!lit || d2 > 2600.0f * 2600.0f) continue;
+        items.push_back({ d2, &la, idx });
+    }
+    if (items.empty()) return;
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.d2 < b.d2; });
+    if (items.size() > 10) items.resize(10);
+
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Xlu(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
+    gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
+    gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
+    CLOSE_DISPS(play->state.gfxCtx);
+    const float t = static_cast<float>(now);
+    for (const Item& it : items) {
+        const LootActor& la = *it.la;
+        const ChestLook& L = kChestLook[static_cast<int>(la.rarity)];
+        const Color_RGBA8 col = la.special ? Color_RGBA8{ 255, 130, 190, 255 } : RarityColor(la.rarity);
+        const Vec3f& at = la.actor->world.pos;
+        const float far = std::clamp((2600.0f - std::sqrt(it.d2)) / 700.0f, 0.0f, 1.0f);
+        if (!GfxHasRoom(play, 60, 4096)) break;
+        DrawIdentity identity(&gLoot, static_cast<int>(it.idx), 0);
+        OPEN_DISPS(play->state.gfxCtx);
+        Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
+        Matrix_Scale(0.25f, 0.25f, 0.25f, MTXMODE_APPLY);
+        gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+        CLOSE_DISPS(play->state.gfxCtx);
+        const float pulse = 0.85f + 0.15f * std::sin(t * 2.4f + static_cast<float>(it.idx));
+        // a soft disc on the ground, fading to nothing at its rim
+        float glowA = (la.opened ? 0.0f : 110.0f) * pulse * far;
+        float openK = 0.0f;   // the opening light's strength, 0..1
+        if (la.opened && la.openedAt >= 0.0) {
+            const float age = static_cast<float>(now - la.openedAt);
+            openK = std::clamp(age / 0.35f, 0.0f, 1.0f) * std::clamp((2.9f - age) / 1.3f, 0.0f, 1.0f);
+            glowA = 190.0f * openK * far;
+        }
+        if (glowA > 1.0f) {
+            Vtx* v = static_cast<Vtx*>(FrameAlloc(play, 17 * sizeof(Vtx)));
+            if (v != nullptr) {
+                const float r = L.glow * (la.opened ? 1.0f + 0.5f * openK : 1.0f);
+                ChestVtx(v[0], 0.0f, 3.0f, 0.0f, col, glowA);
+                for (int i = 0; i < 16; i++) ChestVtx(v[1 + i], std::cos(i * 0.3926991f) * r, 3.0f, std::sin(i * 0.3926991f) * r, col, 0.0f);
+                OPEN_DISPS(play->state.gfxCtx);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v), 17, 0);
+                for (int i = 0; i < 16; i += 2) gSP2Triangles(POLY_XLU_DISP++, 0, 1 + i, 1 + (i + 1) % 16, 0, 0, 1 + (i + 1) % 16, 1 + (i + 2) % 16, 0);
+                CLOSE_DISPS(play->state.gfxCtx);
+            }
+        }
+        // a shaft of light: a thin eight-sided cone, bright at the foot and gone at the top
+        float shaftH = la.opened ? L.openH * openK : L.shaftH * far, shaftW = la.opened ? (L.shaftW + 10.0f) * 1.6f : L.shaftW, shaftA = la.opened ? L.openA * openK : L.shaftA * pulse * far;
+        if (la.opened && L.shaftW < 1.0f) shaftW = 14.0f;
+        if (shaftH > 8.0f && shaftA > 1.0f) {
+            Vtx* v = static_cast<Vtx*>(FrameAlloc(play, 16 * sizeof(Vtx)));
+            if (v != nullptr) {
+                const float spin = t * 0.5f;
+                for (int i = 0; i < 8; i++) {
+                    const float a = spin + i * 0.7853982f, c = std::cos(a), s = std::sin(a);
+                    ChestVtx(v[i], c * shaftW, 20.0f, s * shaftW, col, shaftA);
+                    ChestVtx(v[8 + i], c * shaftW * 0.45f, 20.0f + shaftH, s * shaftW * 0.45f, col, 0.0f);
+                }
+                OPEN_DISPS(play->state.gfxCtx);
+                gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v), 16, 0);
+                for (int i = 0; i < 8; i++) {
+                    const int j = (i + 1) % 8;
+                    gSP2Triangles(POLY_XLU_DISP++, i, j, 8 + j, 0, i, 8 + j, 8 + i, 0);
+                }
+                CLOSE_DISPS(play->state.gfxCtx);
+            }
+        }
+        // the rays of an opening chest: flat blades that fan out of it, wider toward their tips, turning slowly
+        if (la.opened && openK > 0.02f && L.rays > 0) {
+            const int n = L.rays;
+            Vtx* v = static_cast<Vtx*>(FrameAlloc(play, 4 * n * sizeof(Vtx)));
+            if (v != nullptr) {
+                const float age = static_cast<float>(now - la.openedAt), spin = age * 0.45f;
+                for (int i = 0; i < n; i++) {
+                    const float a = spin + i * (6.2831853f / n), c = std::cos(a), s = std::sin(a);
+                    const float lean = 0.25f + 0.55f * ((i * 37) % 10) / 10.0f;   // how far each one leans out
+                    const float len = L.rayH * (0.6f + 0.4f * (((i * 53) % 10) / 10.0f)) * openK, wid = 9.0f + 0.045f * len;
+                    const float tipX = c * len * lean, tipZ = s * len * lean, px = -s * wid, pz = c * wid;
+                    ChestVtx(v[4 * i + 0], c * 8.0f - px * 0.15f, 22.0f, s * 8.0f - pz * 0.15f, col, 0.75f * L.openA * openK);
+                    ChestVtx(v[4 * i + 1], c * 8.0f + px * 0.15f, 22.0f, s * 8.0f + pz * 0.15f, col, 0.75f * L.openA * openK);
+                    ChestVtx(v[4 * i + 2], tipX + px, 22.0f + len, tipZ + pz, col, 0.0f);
+                    ChestVtx(v[4 * i + 3], tipX - px, 22.0f + len, tipZ - pz, col, 0.0f);
+                }
+                OPEN_DISPS(play->state.gfxCtx);
+                for (int base = 0; base < n; base += 8) {   // (the RSP holds 32 vertices: eight blades at a time)
+                    const int m = std::min(8, n - base);
+                    gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(&v[4 * base]), 4 * m, 0);
+                    for (int i = 0; i < m; i++) gSP2Triangles(POLY_XLU_DISP++, 4 * i, 4 * i + 1, 4 * i + 2, 0, 4 * i, 4 * i + 2, 4 * i + 3, 0);
+                }
+                CLOSE_DISPS(play->state.gfxCtx);
+            }
+        }
+    }
+}

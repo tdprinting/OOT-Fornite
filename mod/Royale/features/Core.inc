@@ -56,6 +56,11 @@ bool gWaterFoamTex = true;          // the local option: textured foam on shores
 float gWaterFoamAmt = 1.0f;         // and how much, 0 to 2
 bool gWaterRipples = true;          // the local option: the ripple simulation round the player (rings that spread, cross and interfere)
 float gWaterUnderAmt = 1.0f;        // the local option: how strong the underwater look is, 0 to 2
+bool gWaterSparkle = true;          // the local option: sparse bright sparkle on the sun's path instead of the even glint net
+bool gWaterStreaks = true;          // the local option: wind-blown foam streaks and whitecaps on the swell (Medium detail and up)
+bool gWaterBands = true;            // the local option: rolling swell-band shading between the grid's points (High detail only)
+float gWaterHaze = 1.0f;            // the local option: how much the far water melts into the sky, 0 to 2
+float gWaterTone = 1.0f;            // the local option: how deep the troughs go and how rich the colour is, 0 to 2
 bool gTornadoOn = false;            // the easter egg: a tornado wanders the map (local only, never saved)
 int gMusicMode = 0;                 // the local option: match music, 0 the game's, 1 random songs from the music folder, 2 none
 
