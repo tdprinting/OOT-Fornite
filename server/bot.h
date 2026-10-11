@@ -372,6 +372,7 @@ class BotController {
         bool wasSwimming = false;
         Vec2 pathGoal = {};
         float repathAt = 0, lastSearchAt = -100;
+        float bossAvoidUntil = 0;           // keeping clear of a mini boss that was in its way
         bool leaving = false;               // set out early for the circle the zone will close to (leaveTo), on foot or in a cart
         Circle leaveTo = {};
         bool pathFailed = false;
@@ -1611,14 +1612,25 @@ class BotController {
             const bool dragon = IsDragonKind(boss->kind);
             const WeaponStats bw = Match::StatsOf(p);
             ROYALE_BOT_BRANCH(kBrBossAvoid);
+            // Keep clear of it only when it is close or in the way of where the bot was going (and for a moment after), not whenever it is about.
+            auto avoid = [&](float range) {
+                if (bd >= range) return false;
+                bool keep = bd < 300.0f || now < mem.bossAvoidUntil;
+                if (!keep) {
+                    const float gx = mem.pathGoal.x - p.pos.x, gz = mem.pathGoal.z - p.pos.z, gl = std::hypot(gx, gz);
+                    keep = gl > 1.0f && ((boss->pos.x - p.pos.x) * gx + (boss->pos.z - p.pos.z) * gz) / (bd * gl) > 0.5f && bd < gl + 300.0f;
+                }
+                if (keep && now >= mem.bossAvoidUntil) mem.bossAvoidUntil = now + 1.5f;
+                return keep;
+            };
             if (dragon && boss->y > kDragonAirborneAbove && !bw.ranged) { // swords and hammers can't reach it in the air: stay clear
-                if (bd < 800.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
+                if (avoid(800.0f)) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
             } else if (dragon && !(tune.hunt && p.health >= 2.4f && mem.aggression > 0.35f)) {
-                if (bd < 700.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
+                if (avoid(700.0f)) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
             } else {
             const bool strong = p.health >= 2.4f && EffectiveDps(p.weapon) * TotalsOf(p).melee >= 1.8f && mem.aggression > 0.35f && tune.hunt;
             if (!strong || p.health < 1.3f) {
-                if (bd < 420.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 500.0f, soon), dt, 1.0f); return; }
+                if (avoid(420.0f)) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 500.0f, soon), dt, 1.0f); return; }
             } else if (!foe || dist > 300.0f) {
                 ROYALE_BOT_BRANCH(kBrBossFight);
                 const WeaponStats w = Match::StatsOf(p);
