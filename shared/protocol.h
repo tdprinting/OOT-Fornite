@@ -24,10 +24,12 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 38; // 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 39; // 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
+constexpr uint32_t kIdleAllyEvery = 4;        // a free ally standing still is in every fourth snapshot only (clients keep it for kAllyKeepSeconds)
+constexpr float kAllyKeepSeconds = 0.6f;
 constexpr size_t kMaxNameLen = 24;
 constexpr size_t kMaxLoot = 4096;
 constexpr size_t kSnapshotMaxPlayers = 12; // interest management: nearest N others, plus self (everybody while revealing)
