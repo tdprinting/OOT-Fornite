@@ -10,6 +10,7 @@
 #include "../shared/convergence_data.h"
 #include "../shared/kingdom_data.h"
 #include "../shared/riftlands_data.h"
+#include "../shared/moonfall_data.h"
 #include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
@@ -1450,6 +1451,10 @@ class Match {
             }
             if (mapId == kRiftlandsMapIndex) {
                 for (const auto& region : riftlands::kBossSites)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
+            if (mapId == kMoonfallMapIndex) {
+                for (const auto& region : moonfall::kBossSites)
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
             b.home = b.pos = at;

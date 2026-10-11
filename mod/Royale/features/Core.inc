@@ -646,6 +646,7 @@ bool BlocksAreBaked();   // the climbing blocks are in the island's collision (s
 bool OnAuthoredTerrain() { return OnIsland() && royale::IsAuthoredMap(royale::fortnite::gTerrainMapId); }
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
 bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kRiftlandsMapIndex; }
+bool OnMoonfallTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kMoonfallMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
@@ -665,6 +666,12 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         float lootY;
         if (outY) *outY = royale::RiftlandsLootHeightAt({x,z},&lootY) ? lootY : royale::RiftlandsGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kMoonfallMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::MoonfallLootHeightAt({x,z},&lootY) ? lootY : royale::MoonfallGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -787,9 +794,11 @@ bool HazardFloorAt(float x, float z) {
 
 bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kRiftlandsMapIndex) return royale::RiftlandsPlacementValid(p);
+    if (gMapId == royale::kMoonfallMapIndex) return royale::MoonfallPlacementValid(p);
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;
+    if (gMapId == royale::kMoonfallMapIndex && royale::MoonfallObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -800,7 +809,7 @@ bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
     if (royale::IsTestMap(gMapId) || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;

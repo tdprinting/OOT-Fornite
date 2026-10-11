@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 38; // 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 39; // 39: Moonfall Isle map, 16-bit POI names. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -260,14 +260,14 @@ struct RosterEntry {
 
 inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
     w.U8(static_cast<uint8_t>(pois.size()));
-    for (const Poi& p : pois) { w.U8(p.name); w.F32(p.center.x); w.F32(p.center.z); w.F32(p.radius); }
+    for (const Poi& p : pois) { w.U16(p.name); w.F32(p.center.x); w.F32(p.center.z); w.F32(p.radius); }
 }
 inline bool ReadPois(ByteReader& r, std::vector<Poi>& pois) {
     const size_t n = r.U8();
     if (n > static_cast<size_t>(kNamesPerMap)) return false;
     pois.assign(n, {});
     for (Poi& p : pois) {
-        p.name = r.U8(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
+        p.name = r.U16(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
         if (p.name >= kPoiNameTotal || !Finite(p.center.x) || !Finite(p.center.z) || !Finite(p.radius) || p.radius < 0) return false;
     }
     return r.ok;
