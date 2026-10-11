@@ -481,11 +481,11 @@ void ReconcileProps(const royale::HudState& hud) {
     wants.clear();
     wanted.assign(props.size(), 0);
     for (size_t i = 0; i < props.size(); i++) {
-        if (gBrokenProps.count(i)) continue;
         const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz, d2 = dx * dx + dz * dz;
         const bool town = gPropInTown[i] != 0;
         const float reach = town ? kTownSpawnRadius : kPropSpawnRadius;
         if (d2 > reach * reach) continue;
+        if (gBrokenProps.count(i)) continue;   // (after the cheap distance test: the hash lookup only for the few in reach, same result)
         wants.push_back({town ? d2 * 0.25f : d2, i});
     }
     const bool full = wants.size() > kMaxPropActors;
