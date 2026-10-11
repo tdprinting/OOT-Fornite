@@ -1,5 +1,7 @@
 // ---- local player <-> session ----------------------------------------------------------------------------------------
 
+int gAttackCooldown = 0;     // game frames until B may attack again (the grenade throw and the bomb take-out wait on it)
+
 // ---- emotes -------------------------------------------------------------------------------------------------------------------
 // Your own Link does the emote himself: the game keeps running him as usual (standing still), and just before he is drawn his pose is
 // replaced with the emote's frame. (It used to be done by a stand-in copy of Link while the real one was hidden, which could leave him

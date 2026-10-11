@@ -815,7 +815,6 @@ uint8_t gLastEpoch = 0;
 royale::MatchState gLastState = royale::MatchState::Lobby;
 bool gWasJoined = false;
 int gLastCountdownShown = -1;
-int gAttackCooldown = 0;     // game frames until B may attack again
 bool gPendingStart = false;  // the host pressed Start; waiting to be in Hyrule Field, measure the map, then begin
 bool gSoloStartWanted = false;   // "Fortnite Map solo test" was pressed: start the match as soon as the host is in its own lobby
 int gInFieldFrames = 0;      // frames spent in the field without a transition, so the scene's collision is ready
