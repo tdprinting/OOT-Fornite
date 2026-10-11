@@ -3,6 +3,7 @@
 #include "../shared/ally.h"
 #include "../shared/anim.h"
 #include "../shared/boss.h"
+#include "../shared/bus.h"
 #include "../shared/bokoblin.h"
 #include "../shared/boss_arena.h"
 #include "../shared/combat.h"
@@ -92,6 +93,14 @@ struct PlayerState {
     int chestsOpened = 0;
     int bossKills = 0;
     int placement = 0;      // 1 = winner; set when eliminated (number alive at that moment) or when the match ends. In team modes: the team's place
+    // ---- the Moonfall Bus (shared/bus.h): everyone boards at Start, jumps during the drop, and is safe until kLandedGraceSec after landing
+    bool rodeBus = false;   // started this match on the bus (players added later, and the sandbox, never did)
+    bool aboard = false;
+    int seat = -1;          // bench number (the index in the roster at Start)
+    float jumpedAt = -1;    // match clock when they left the bus
+    float landedAt = -1;    // match clock when they touched down (-1 while still aboard or in the air)
+    float hornReadyAt = 0;
+    Vec2 spawn = {};        // the old random spawn point (LandEveryone puts anyone still aboard there)
     // ---- teams and Down But Not Out (team modes only; in Solo `team` is unique and `knocked` never happens)
     int team = 0;
     bool knocked = false;        // down: alive, crawling, cannot fight; bleeds out
@@ -105,7 +114,7 @@ constexpr uint32_t kNoPlayer = 0xFFFFFFFFu;
 
 // Things that happened inside the match since the last DrainEvents(); the network layer turns these into messages.
 struct MatchEvent {
-    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather, AllyChanged, AllyAction, Knocked, TeamRevived, PadsChanged } type;
+    enum class Type : uint8_t { Damaged, Eliminated, LootTaken, LootAdded, StateChanged, AbilityUsed, Teleported, Revived, BossDown, BossSpawned, Strike, SupplyDrop, Weather, AllyChanged, AllyAction, Knocked, TeamRevived, PadsChanged, BusHorn } type;
     uint32_t a = kNoPlayer; // Damaged: target | Eliminated: victim | LootTaken: taker | AbilityUsed: user | Teleported/Revived: player
     uint32_t b = kNoPlayer; // Damaged/Eliminated: attacker (kNoPlayer = storm, disconnect)
     float amount = 0;       // Damaged: hearts dealt
@@ -114,6 +123,7 @@ struct MatchEvent {
     MatchState state = MatchState::Lobby; // StateChanged
     uint8_t item = 0;       // AbilityUsed: which ability
     float x = 0, z = 0;     // AbilityUsed: where the user stood | BossDown: where it fell (a = boss id, b = who landed the last hit)
+    // BusHorn: a = who honked.
     // Knocked: a = victim, b = who knocked them | TeamRevived: a = the player back on their feet, b = the teammate who revived them | PadsChanged: the pad list changed.
     // AllyChanged: a = ally index, b = its owner (kNoPlayer when free), item = 0 hired / 1 released / 2 fell. AllyAction: a = ally index, b = target id, x/z = target.
 };
@@ -231,7 +241,6 @@ inline GearTotals TotalsOf(const PlayerState& p) {
 class Match {
   public:
     static constexpr float kCountdownSec = royale::kCountdownSec;
-    static constexpr float kDropSec = royale::kDropSec; // spawn protection
     static constexpr float kEndingSec = royale::kEndingSec;
 
     Match(uint64_t seed, Circle map, int lootCount = 400)
@@ -313,8 +322,9 @@ class Match {
             players.back().scene = static_cast<uint8_t>(MapOf(mapId).scene);
         }
         Rng spawn(seed ^ 0x7370776Eull); // "spwn"
-        for (auto& p : players) p.pos = RandomPointIn(spawn, map, placement, 0.9f);
-        if (sandbox) for (auto& p : players) p.pos = sandboxSpawn;
+        for (auto& p : players) p.spawn = p.pos = RandomPointIn(spawn, map, placement, 0.9f);
+        if (sandbox) for (auto& p : players) p.spawn = p.pos = sandboxSpawn;
+        BoardBus();
         AssignTeams();
         PlaceStartingPads();
         SpawnBosses();
@@ -344,14 +354,18 @@ class Match {
         clock += dt;
         switch (state) {
             case MatchState::Countdown:
+                SeatPassengers(0.0f);
                 if (stateTime >= kCountdownSec) Enter(MatchState::Drop);
                 break;
             case MatchState::Drop:
+                TickReplay();   // the replay starts with everyone on the bus
                 TickWeather();
-                if (stateTime >= kDropSec) Enter(MatchState::InMatch);
+                TickBus();
+                if (DropOver()) Enter(MatchState::InMatch);
                 break;
             case MatchState::InMatch:
                 if (!sandbox || sandboxStormRuns) stormTime += dt;
+                for (auto& p : players) if (p.rodeBus && p.landedAt < 0 && stateTime >= kLandedDeadlineSec) p.landedAt = clock - kLandedGraceSec;
                 TickReplay();
                 TickWeather();
                 TickSupplyDrops();
@@ -390,7 +404,7 @@ class Match {
     // (used for the storm and burning, which tick every frame).
     bool Damage(uint32_t id, float hearts, uint32_t attacker = kNoPlayer, DamageKind kind = DamageKind::Normal, bool announce = true) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || state == MatchState::Drop || hearts <= 0) return false;
+        if (!p || !p->alive || hearts <= 0 || BusProtected(*p)) return false;
         if (clock < p->invulnUntil) return false;
         if (sandbox && sandboxGod && !p->isBot) return false;   // the test map: nothing hurts you until you switch it off
         if (attacker != id && SameTeam(attacker, id)) return false;   // teammates (bots, players, their allies and blasts) never hurt each other
@@ -704,7 +718,7 @@ class Match {
 
     bool StartRoll(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || clock < p->rollReadyAt || Stunned(*p)) return false;
+        if (!p || !p->alive || (state != MatchState::InMatch && state != MatchState::Drop) || p->aboard || clock < p->rollReadyAt || Stunned(*p)) return false;
         p->rollUntil = clock + kRollSeconds;
         p->rollReadyAt = clock + kRollCooldown;
         return true;
@@ -788,7 +802,7 @@ class Match {
 
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
-        if (state != MatchState::InMatch) return r;
+        if (const PlayerState* who = Find(attackerId); who ? !OnFoot(*who) : state != MatchState::InMatch) return r;   // nobody fights from the bus or the sky
         if (const PlayerState* knockedCheck = Find(attackerId); knockedCheck && knockedCheck->knocked) return r;   // down: no attacks at all
         if (IsHelperId(targetId) || IsBossId(targetId) || IsVehicleId(targetId)) {   // a Shockwave Grenade at a boss, a cart or a helper
             const PlayerState* a = Find(attackerId);
@@ -993,7 +1007,7 @@ class Match {
 
     bool PickUp(uint32_t id, size_t index, bool force = true) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (!p || !p->alive || p->aboard || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (index >= loot.size() || loot[index].taken || p->knocked) return false;
         const LootSpawn s = loot[index].spawn;
         if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
@@ -1228,7 +1242,7 @@ class Match {
     // Pay an ally to join you. The player must be standing next to it, have the rupees and have a free place (two allies at most).
     bool HireAlly(uint32_t playerId, int index) {
         PlayerState* p = Find(playerId);
-        if (!p || !p->alive || p->knocked || (state != MatchState::InMatch && state != MatchState::Drop) || index < 0 || index >= static_cast<int>(allies.size())) return false;
+        if (!p || !p->alive || p->knocked || (state != MatchState::InMatch && state != MatchState::Drop) || p->aboard || index < 0 || index >= static_cast<int>(allies.size())) return false;
         AllyState& a = allies[static_cast<size_t>(index)];
         const AllyDef& def = AllyOf(a.kind);
         if (!a.alive || a.Hired() || p->rupees < def.price || AlliesOf(playerId) >= kMaxAlliesPerPlayer) return false;
@@ -1368,7 +1382,7 @@ class Match {
     bool EnterVehicle(uint32_t playerId, int index, Seat want) {
         PlayerState* p = Find(playerId);
         VehicleState* v = FindVehicle(index);
-        if (!p || !v || !p->alive || v->wrecked || v->gone || state != MatchState::InMatch || Stunned(*p) || RidingIn(playerId)) return false;
+        if (!p || !v || !p->alive || v->wrecked || v->gone || !OnFoot(*p) || Stunned(*p) || RidingIn(playerId)) return false;
         if (std::fabs(v->body.speed) > 200.0f) return false;
         const Seat order[2] = {want == Seat::Passenger ? Seat::Passenger : Seat::Driver, want == Seat::Passenger ? Seat::Driver : Seat::Passenger};
         for (Seat s : order) {
@@ -1586,7 +1600,7 @@ class Match {
 
     bool UseAbility(uint32_t id) {
         PlayerState* p = Find(id);
-        if (!p || !p->alive || p->knocked || state != MatchState::InMatch || !p->hasAbility) return false;
+        if (!p || !p->alive || p->knocked || !OnFoot(*p) || !p->hasAbility) return false;
         if (clock < p->abilityReadyAt || clock < p->stunUntil || clock < p->frozenUntil) return false;
         const ItemId item = p->ability.item;
         const float cost = AbilityMagic(item);
@@ -2779,6 +2793,84 @@ class Match {
     std::vector<PlayerState>& Players() { return players; }
     uint64_t Seed() const { return seed; }
 
+    // ---- the Moonfall Bus (shared/bus.h, docs/BATTLE_BUS.md) -------------------------------------------------------------------------------
+    // At Start everybody takes a bench on the bus, which waits offshore through the countdown and crosses the map during the drop. A player leaves
+    // it with LeaveBus (a human by sending any anim but BusRide once the bus is over the island, a bot when it chooses); whoever is still aboard
+    // when it leaves the island is pushed off. The first anim that is neither a seat nor the air after a jump is the landing (MarkLanded). Damage
+    // waits until kLandedGraceSec after that; the drop ends once everybody is down (or kDropExtraSec after the bus has left the island).
+    const BusPath& Bus() const { return bus; }
+    // Seconds since the drop began (0 through the countdown): where the bus is on its line.
+    float BusTime() const { return state == MatchState::Drop ? stateTime : 0.0f; }
+    bool BusDoorsOpen() const { return state == MatchState::Drop && bus.valid && BusOverLand(bus, stateTime); }
+    // Bench order: the player sat on each seat (kNoPlayer for empty ones).
+    std::array<uint32_t, kMaxPlayers> BusSeats() const {
+        std::array<uint32_t, kMaxPlayers> out;
+        out.fill(kNoPlayer);
+        for (const auto& p : players) if (p.rodeBus && p.seat >= 0 && p.seat < kMaxPlayers) out[static_cast<size_t>(p.seat)] = p.id;
+        return out;
+    }
+    // Bit n set while seat n is taken.
+    uint32_t AboardMask() const {
+        uint32_t m = 0;
+        for (const auto& p : players) if (p.alive && p.aboard && p.seat >= 0 && p.seat < 32) m |= 1u << p.seat;
+        return m;
+    }
+    int AboardCount() const { int n = 0; for (const auto& p : players) n += p.alive && p.aboard; return n; }
+    // Off the bus (forced or by choice). Returns false if they weren't aboard, or the doors aren't open yet and `forced` is false.
+    bool LeaveBus(uint32_t id, bool forced = false) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || !p->aboard || state != MatchState::Drop) return false;
+        if (!forced && !BusDoorsOpen()) return false;
+        p->aboard = false;
+        p->jumpedAt = clock;
+        p->pos = BusPosAt(bus, stateTime);
+        p->y = bus.altitude;
+        p->anim = static_cast<uint8_t>(Anim::Freefall);
+        p->dirty = true;
+        return true;
+    }
+    // Touched down after a jump.
+    void MarkLanded(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (p && p->rodeBus && !p->aboard && p->jumpedAt >= 0 && p->landedAt < 0) { p->landedAt = clock; p->dirty = true; }
+    }
+    // A honk, at most once per kBusHornCooldown. Only from the bus.
+    bool Honk(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || !p->aboard || clock < p->hornReadyAt) return false;
+        p->hornReadyAt = clock + kBusHornCooldown;
+        MatchEvent e{MatchEvent::Type::BusHorn};
+        e.a = id;
+        events.push_back(e);
+        return true;
+    }
+    // Safe from all harm: through the countdown, aboard, in the air after a jump, and for kLandedGraceSec after landing.
+    bool BusProtected(const PlayerState& p) const {
+        if (state == MatchState::Countdown) return true;
+        if (!p.rodeBus) return false;
+        if (p.aboard || p.landedAt < 0) return true;
+        return clock < p.landedAt + kLandedGraceSec;
+    }
+    // Free to fight and use things: the match is on, or it is the drop and they have landed.
+    bool OnFoot(const PlayerState& p) const {
+        if (state == MatchState::InMatch) return !p.aboard;
+        return state == MatchState::Drop && p.rodeBus && !p.aboard && p.landedAt >= 0;
+    }
+    // Everybody off the bus and on the ground with no protection left: anyone still aboard at their old random spawn point, anyone who jumped
+    // where they are (tools and tests that skip the drop).
+    void LandEveryone() {
+        for (auto& p : players) {
+            if (!p.rodeBus) continue;
+            if (p.aboard) { p.pos = p.spawn; p.y = 0; }
+            p.aboard = false;
+            if (p.jumpedAt < 0) p.jumpedAt = clock - kLandedGraceSec;
+            if (p.landedAt < 0) p.landedAt = clock - kLandedGraceSec;
+            if (IsBusSeat(p.anim) || IsAirborne(p.anim)) { p.anim = static_cast<uint8_t>(Anim::Idle); p.y = 0; }
+        }
+    }
+    // When the drop ends at the latest (seconds into the drop).
+    float DropMaxSec() const { return (bus.valid ? BusCloseSec(bus) : 0.0f) + kDropExtraSec; }
+
     // ---- the Sandbox test map (shared/sandbox_terrain.h) -------------------------------------------------------------------------------------
     // A match with no countdown, no drop, no end and a frozen storm, so every feature can be tried alone. Everything below only works in one (the host's
     // game sends these as buttons). The switches default to the quiet setting: you cannot be hurt, the storm waits, the weather stays where you set it.
@@ -2987,6 +3079,37 @@ class Match {
     }
 
   private:
+    void BoardBus() {
+        bus = BusPath{};
+        if (sandbox) return;   // the test map has no drop
+        bus = MakeBusPath(seed, map);
+        int seat = 0;
+        for (auto& p : players) {
+            p.rodeBus = true; p.aboard = true; p.seat = seat++;
+            p.jumpedAt = -1; p.landedAt = -1; p.hornReadyAt = 0;
+        }
+        SeatPassengers(0.0f);
+    }
+    // Everyone aboard is where the bus is (their own reports are ignored while they sit).
+    void SeatPassengers(float t) {
+        const Vec2 at = BusPosAt(bus, t);
+        for (auto& p : players) {
+            if (!p.aboard) continue;
+            p.pos = at;
+            p.y = bus.altitude;
+            if (!IsBusSeat(p.anim)) p.anim = static_cast<uint8_t>(Anim::BusRide);
+        }
+    }
+    void TickBus() {
+        SeatPassengers(stateTime);
+        if (stateTime >= BusCloseSec(bus)) for (auto& p : players) if (p.alive && p.aboard) LeaveBus(p.id, true);   // the bus is leaving the island
+    }
+    bool DropOver() const {
+        if (stateTime >= DropMaxSec()) return true;
+        for (const auto& p : players) if (p.alive && p.rodeBus && (p.aboard || p.landedAt < 0)) return false;
+        return true;
+    }
+
     void Enter(MatchState s) {
         if (s == MatchState::Ending) {
             for (auto& p : players) if (p.alive) p.placement = 1;
@@ -3319,6 +3442,7 @@ class Match {
 
     uint64_t seed;
     Circle map;
+    BusPath bus;
     Storm storm;
     Rng abilityRng;
     MatchState state = MatchState::Lobby;

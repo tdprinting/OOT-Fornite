@@ -160,12 +160,14 @@ class BotController {
                 if (frozen) continue;
                 if (p.knocked) { p.anim = static_cast<uint8_t>(Anim::Knocked); continue; }   // down on the ground, waiting for a teammate
                 Memory& air = Mem(p.id);
-                if (!air.started) {   // a bot that is there from the countdown or the drop starts in the sky, like the players
+                if (!air.started) {   // a bot that is there from the countdown rides the bus like the players; one dropped in without it starts in the sky
                     air.started = true;
                     air.airborne = state != MatchState::InMatch;
-                    if (air.airborne) { air.lift = kSkyHeight; ChooseLanding(m, p, air, soon); }
+                    if (p.aboard) { air.onBus = true; air.lift = m.Bus().altitude; PlanBusJump(m, p, air, soon); }
+                    else if (air.airborne) { air.lift = kSkyHeight; ChooseLanding(m, p, air, soon); }
                 }
                 ROYALE_BOT_BRANCH(kBrSkydive);
+                if (air.onBus && RideBus(m, p, air)) continue;
                 if (air.airborne) { Glide(m, p, air, soon, dt); continue; }
                 if (state == MatchState::Countdown) continue;
                 ROYALE_BOT_BRANCH(kBrRiding);
@@ -413,6 +415,10 @@ class BotController {
         bool airborne = false;         // still skydiving
         Vec2 landAt = {};              // where it is gliding to
         bool diving = false;
+        bool onBus = false;            // sat on the Moonfall Bus, waiting for jumpT (seconds into the drop)
+        float jumpT = 0, hornT = -1;   // when it jumps; when it honks (-1: never; most bots don't)
+        bool freefall = false;         // off the bus, arms out, the glider still shut
+        float exitAt = -1;             // match clock when it left the bus (it keeps the bus's speed a moment)
         float lift = 0;                // height above the scene's floor, sent to clients as its y: a block or boulder top, a fall, the sky
         float vy = 0;                  // falling speed off a ledge
         float lastFloor = 0;
@@ -731,12 +737,17 @@ class BotController {
     // Where to land: like a player, a bot glides for a spot it can reach with chests close by, inside the first safe zone. Greedy bots want
     // the most loot; aggressive ones don't mind a crowd (a hot drop), the rest look for a spot no other bot is heading for.
     void ChooseLanding(const Match& m, const PlayerState& p, Memory& mem, const Circle& zone) {
-        const float reach = kAirSpeed * (kSkyHeight / kGlideSpeed) * 0.8f;
+        const bool bus = mem.onBus && m.Bus().valid;
+        const float reach = kAirSpeed * ((bus ? m.Bus().altitude : kSkyHeight) / kGlideSpeed) * 0.8f;
         const auto& loot = m.Loot();
         Vec2 best = p.pos;
         float bestScore = -1e9f;
+        // From the bus a spot is as far as the nearest point of the line where the doors are open; otherwise it is as far as the bot is.
+        float open = 0, close = 0;
+        if (bus) BusWindow(m.Bus(), open, close);
+        auto from = [&](Vec2 c) { return bus ? BusPosAt(m.Bus(), std::clamp(BusTimeNearest(m.Bus(), c), open, close)) : p.pos; };
         auto consider = [&](Vec2 c, float bonus) {
-            const float d = Distance(p.pos, c);
+            const float d = Distance(from(c), c);
             if (d > reach || !zone.Contains(c) || !Standable(c)) return;
             int chests = 0;
             for (const LootEntry& l : loot) if (!l.taken && l.spawn.container && Distance(l.spawn.pos, c) < 450.0f) chests++;
@@ -749,25 +760,94 @@ class BotController {
         for (const LootEntry& l : loot) if (!l.taken && l.spawn.container) consider(l.spawn.pos, 0.5f);
         for (int i = 0; i < 6; i++) {   // and a few spots out in the open, for the bots that want to be left alone
             const float a = static_cast<float>(rng.Unit() * 6.283185307179586), d = reach * std::sqrt(static_cast<float>(rng.Unit()));
-            consider({p.pos.x + std::sin(a) * d, p.pos.z + std::cos(a) * d}, 0.2f + 0.8f * (1.0f - mem.aggression));
+            const Vec2 o = bus ? BusPosAt(m.Bus(), open + (close - open) * static_cast<float>(i + 0.5f) / 6.0f) : p.pos;   // under the line, spread along it
+            consider({o.x + std::sin(a) * d, o.z + std::cos(a) * d}, 0.2f + 0.8f * (1.0f - mem.aggression));
         }
         if (nav && !nav->Standable(best)) { Vec2 snapped; if (nav->Snap(best, &snapped, true)) best = snapped; }
         mem.landAt = best;
     }
 
+    // ---- the Moonfall Bus ------------------------------------------------------------------------------------------------------
+
+    // A whole-number hash of the bot's id in [0, 1): for the jump jitter and the honk, so these don't take draws from the shared rng (an extra draw
+    // there moves every later decision of every bot).
+    static float IdUnit(uint32_t id, uint32_t salt) {
+        uint32_t h = id * 2654435761u ^ salt * 2246822519u;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
+        return static_cast<float>(h & 0xFFFFFF) / 16777216.0f;
+    }
+
+    // On the bus: pick a landing spot within glide reach of the line, and the moment to jump for it. A good bot leaves early and glides at an angle
+    // (it gets there before the crowd); a poorer one waits until it is about over the spot, or longer, and some are still aboard when the bus is
+    // pushed off the island. A second or two of jitter so 32 bots don't all leave on the same tick.
+    void PlanBusJump(const Match& m, const PlayerState& p, Memory& mem, const Circle& zone) {
+        ChooseLanding(m, p, mem, zone);
+        const BusPath& b = m.Bus();
+        float open = 0, close = 0;
+        BusWindow(b, open, close);
+        const float over = BusTimeNearest(b, mem.landAt);
+        const float side = BusLineDistance(b, mem.landAt);
+        const float reach = kAirSpeed * (b.altitude / kGlideSpeed) * 0.8f;
+        const float lead = (std::max)(0.0f, reach - side) / b.speed;                // how early it could go and still glide there
+        const float early = lead * (0.15f + 0.6f * mem.skill);
+        const float late = (1.0f - mem.skill) * 6.0f * IdUnit(p.id, 7);
+        const float jitter = 2.0f * IdUnit(p.id, 3);
+        mem.jumpT = std::clamp(over - early + late + jitter - 1.0f, open + 0.25f, close + 1.0f);   // past `close` means: pushed off with the stragglers
+        mem.hornT = IdUnit(p.id, 11) < 0.05f ? kCountdownSec * IdUnit(p.id, 13) : -1.0f;        // one bot in twenty honks once, because it is funny
+    }
+
+    // Sitting on the bus. Returns true while still aboard (nothing else to do this tick).
+    bool RideBus(Match& m, PlayerState& p, Memory& mem) {
+        if (p.aboard) {
+            p.anim = static_cast<uint8_t>(Anim::BusRide);
+            if (mem.hornT >= 0) {
+                const float t = m.State() == MatchState::Countdown ? m.StateTime() : kCountdownSec + m.StateTime();
+                if (t >= mem.hornT && m.Honk(p.id)) mem.hornT = -1;
+            }
+            if (m.State() != MatchState::Drop || m.BusTime() < mem.jumpT || !m.LeaveBus(p.id)) return true;
+        }
+        // Off (it jumped, or the bus pushed it off): free fall from the bus's height, carried along a moment by the bus's speed.
+        mem.onBus = false;
+        mem.airborne = true;
+        mem.freefall = true;
+        mem.exitAt = m.Clock();
+        mem.lift = (std::max)(300.0f, m.Bus().altitude - (nav ? nav->FloorAt(p.pos) : 0.0f));   // a bot's height is above the floor; the bus flies at a world height
+        mem.diving = false;
+        p.anim = static_cast<uint8_t>(Anim::Freefall);
+        return false;
+    }
+
     // Hang in the sky through the countdown, then glide to the landing spot: dive once diving still gets there in time (a good bot dives
     // the moment it can; a poorer one leaves it later), glide otherwise. Still up when the drop ends: straight down.
     void Glide(Match& m, PlayerState& p, Memory& mem, const Circle& zone, float dt) {
-        p.anim = static_cast<uint8_t>(Anim::Idle);
+        const bool fromBus = p.rodeBus;
+        p.anim = static_cast<uint8_t>(fromBus ? (mem.freefall ? Anim::Freefall : Anim::Glide) : Anim::Idle);
         p.y = mem.lift;
         if (m.State() == MatchState::Countdown) return;
         if (!zone.Contains(mem.landAt) && rng.Unit() < 0.05f) ChooseLanding(m, p, mem, zone);
         const float d = Distance(p.pos, mem.landAt);
         const float timeToReach = d / kAirSpeed;
+        const float above = mem.lift - (nav ? LiftAt(p.pos) : 0.0f);
         float fall = kLateFallSpeed;
-        if (m.State() == MatchState::Drop) {
+        if (mem.freefall) {
+            // Arms out until the glider has to open: low enough that it opens by itself, or the spot is too far to reach falling this fast.
+            // A good bot opens late, as players do; a poor one plays it safe.
+            const float fallTime = (std::max)(0.0f, above - kAutoGlideHeight) / kFreefallSpeed + kAutoGlideHeight / kGlideSpeed;
+            if (above <= kAutoGlideHeight || fallTime < timeToReach * (1.25f - 0.3f * mem.skill)) mem.freefall = false;
+            fall = mem.freefall ? kFreefallSpeed : kGlideSpeed;
+        } else if (m.State() == MatchState::Drop) {
             mem.diving = timeToReach <= mem.lift / kDiveSpeed * (0.55f + 0.45f * mem.skill);
             fall = mem.diving ? kDiveSpeed : kGlideSpeed;
+        }
+        if (mem.exitAt >= 0 && m.Bus().valid) {   // the bus's speed, fading over kBusExitPush
+            const float t = m.Clock() - mem.exitAt;
+            if (t < kBusExitPush) {
+                const Vec2 dir = BusDir(m.Bus());
+                const float v = m.Bus().speed * (1.0f - t / kBusExitPush);
+                p.pos = {p.pos.x + dir.x * v * dt, p.pos.z + dir.z * v * dt};
+            } else {
+                mem.exitAt = -1;
+            }
         }
         if (d > 1.0f) {
             const float step = (std::min)(d, kAirSpeed * dt);
@@ -779,8 +859,12 @@ class BotController {
         if (mem.lift <= ground) {   // touched down
             if (nav && !nav->Standable(p.pos)) { Vec2 snapped; if (nav->Snap(p.pos, &snapped, true)) p.pos = snapped; }
             mem.airborne = false;
+            mem.freefall = false;
+            mem.exitAt = -1;
             mem.lift = nav ? LiftAt(p.pos) : 0.0f;
             mem.vy = 0;
+            p.anim = static_cast<uint8_t>(Anim::Idle);
+            m.MarkLanded(p.id);
             mem.haveFloor = false;
             mem.upper = false;
         }

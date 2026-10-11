@@ -8,6 +8,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/bus_geometry.h"
 #include "../../shared/engine_limits.h"
 #include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
@@ -144,23 +145,197 @@ static void FullMatchHasOneWinner() {
     CHECK(m.Alive() <= 1);
     CHECK(guard < kTickHz * 3000);
 }
+constexpr float kDt = 1.0f / kTickHz;
+
 static void SpawnProtection() {
+    // Safe through the countdown and on the bus; once the match is on, someone who never jumped or landed (no game sending anything) loses the
+    // protection after kLandedDeadlineSec.
     Match m(1, MapCircle());
     m.AddHuman(1);
     m.Start();
+    CHECK(!m.Damage(1, 100));
     for (int i = 0; i < kTickHz * 10 + 1; i++) m.Tick(1.0f / kTickHz); // through the countdown
     CHECK(m.State() == MatchState::Drop);
     CHECK(!m.Damage(1, 100));
     CHECK(m.Find(1)->alive);
-    for (int i = 0; i < static_cast<int>(kDropSec * kTickHz) + 1; i++) m.Tick(1.0f / kTickHz);
+    while (m.State() == MatchState::Drop) m.Tick(1.0f / kTickHz);
     CHECK(m.State() == MatchState::InMatch);
+    CHECK(!m.Damage(1, 100));
+    for (int i = 0; i < static_cast<int>(kLandedDeadlineSec * kTickHz) + 1; i++) m.Tick(1.0f / kTickHz);
     CHECK(m.Damage(1, 100));
     CHECK(!m.Find(1)->alive);
 }
 
+// ---- the Moonfall Bus (shared/bus.h) -------------------------------------------------------------------------------------------------------------
+
+// The bus the game draws (tools/bus, shared/bus_geometry.h) has its benches and its exit where the server seats and drops people (shared/bus.h).
+static void BusModelMatchesTheSeats() {
+    namespace BM = busmodel;
+    for (int s = 0; s < BM::kSeatCount; ++s) {
+        float x, y, z;
+        BusSeatLocal(s, &x, &y, &z);
+        CHECK(std::fabs(BM::kSeat[s].x - x) < 0.5f && std::fabs(BM::kSeat[s].y - y) < 0.5f && std::fabs(BM::kSeat[s].z - z) < 0.5f);
+    }
+    CHECK(BM::kSeatCount == kBusSeatRows * kBusSeatsPerRow);
+    CHECK(std::fabs(BM::kExit.x - kBusExitX) < 0.5f && std::fabs(BM::kExit.y - kBusExitY) < 0.5f && std::fabs(BM::kExit.z - kBusExitZ) < 0.5f);
+    CHECK(BM::kExit.x < BM::kMinX + 300.0f);                   // outside the body's flank, not inside a wall
+    for (int k = 0; k < 4; ++k) CHECK(BM::kRopeMoon[k].y > BM::kRopeBody[k].y);   // every rope goes up from the cage to the net
+}
+
+static void BusPathRules() {
+    // Moonfall's circle: every line starts and ends past the shore, passes near the middle and takes 25 to 60 s; the doors are open over land.
+    const Circle moon = {{120, -80}, 7700};
+    for (uint64_t seed = 1; seed <= 1000; seed++) {
+        const BusPath b = MakeBusPath(seed, moon);
+        CHECK(b.valid && b.altitude == kBusAltitude);
+        // kBusMargin past the shore along the line (so at least 0.85 of it out from the circle even on the most off-centre line)
+        CHECK(Distance(b.start, moon.center) > moon.radius + kBusMargin * 0.85f && Distance(b.end, moon.center) > moon.radius + kBusMargin * 0.85f);
+        CHECK(BusLineDistance(b, moon.center) <= moon.radius * kBusCorridor + 1.0f);
+        const float cross = BusCrossSec(b);
+        CHECK(cross >= 25.0f && cross <= kBusMaxCrossSec + 0.01f);
+        CHECK(b.speed >= kBusMinSpeed && b.speed <= (std::max)(kBusSpeed, b.length / kBusMaxCrossSec) + 0.01f);
+        float open = 0, close = 0;
+        BusWindow(b, open, close);
+        CHECK(open > 0 && close > open + 10.0f && close < cross);
+        CHECK(Distance(BusPosAt(b, open), moon.center) <= moon.radius * kBusJumpOpen + 2.0f && Distance(BusPosAt(b, close), moon.center) <= moon.radius * kBusJumpOpen + 2.0f);
+        CHECK(!BusOverLand(b, open - 0.5f) && BusOverLand(b, (open + close) * 0.5f) && !BusOverLand(b, close + 0.5f));
+        CHECK(Distance(BusPosAt(b, -5.0f), b.start) < 0.01f && Distance(BusPosAt(b, cross + 30.0f), b.end) < 0.01f);   // clamped at both ends
+        CHECK(std::fabs(BusTimeNearest(b, BusPosAt(b, open)) - open) < 0.01f);
+    }
+    // The same seed gives the same line; another seed another one.
+    CHECK(Distance(MakeBusPath(7, moon).start, MakeBusPath(7, moon).start) == 0.0f && Distance(MakeBusPath(7, moon).start, MakeBusPath(8, moon).start) > 100.0f);
+    // A small map slows the bus (never under 25 s); a huge one speeds it up (never over 60 s).
+    for (uint64_t seed = 1; seed <= 200; seed++) {
+        CHECK(BusCrossSec(MakeBusPath(seed, {{0, 0}, 1200})) >= 25.0f);
+        CHECK(BusCrossSec(MakeBusPath(seed, {{0, 0}, 14000})) <= kBusMaxCrossSec + 0.01f);
+    }
+    // A jumper is carried on ahead by the bus's speed, fading over kBusExitPush.
+    const BusPath b = MakeBusPath(3, moon);
+    CHECK(BusExitCarry(b, 0) == 0.0f && std::fabs(BusExitCarry(b, kBusExitPush) - b.speed * kBusExitPush * 0.5f) < 0.01f && BusExitCarry(b, 9.0f) == BusExitCarry(b, kBusExitPush));
+    // The rebuilt client copy matches.
+    const BusPath c = BusFromEnds(b.start, b.end, b.altitude, b.speed, moon);
+    CHECK(std::fabs(BusCrossSec(c) - BusCrossSec(b)) < 0.01f && std::fabs(BusOpenSec(c) - BusOpenSec(b)) < 0.01f);
+    CHECK(BusClimbAltitude(b, 0) == kBusClimbFrom && BusClimbAltitude(b, kCountdownSec) == kBusAltitude);
+}
+
+static void EveryoneBoardsTheBus() {
+    Match m(4, MapCircle(), 0);
+    m.AddHuman(1);
+    m.AddHuman(2);
+    m.Start();
+    CHECK(m.Bus().valid && m.AboardCount() == kMaxPlayers && m.AboardMask() == 0xFFFFFFFFu);
+    const auto seats = m.BusSeats();
+    CHECK(seats[0] == 1 && seats[1] == 2 && seats[2] >= 1000);
+    for (const auto& p : m.Players()) CHECK(p.aboard && p.rodeBus && Distance(p.pos, m.Bus().start) < 0.01f && p.y == kBusAltitude && p.anim == static_cast<uint8_t>(Anim::BusRide));
+    // Nothing can be done from a bench.
+    CHECK(!m.StartRoll(1) && !m.PickUp(1, 0) && !m.HireAlly(1, 0) && !m.Attack(1, 2).ok);
+    // Through the countdown the bus waits at the start of its line; in the drop it flies it.
+    while (m.State() == MatchState::Countdown) m.Tick(kDt);
+    for (int i = 0; i < 2 * kTickHz; i++) m.Tick(kDt);
+    CHECK(Distance(m.Find(1)->pos, BusPosAt(m.Bus(), m.BusTime())) < 0.01f && Distance(m.Find(1)->pos, m.Bus().start) > 1.5f * m.Bus().speed);
+    m.Find(1)->pos = {0, 0};   // a seat can't be walked away from
+    m.Tick(kDt);
+    CHECK(Distance(m.Find(1)->pos, BusPosAt(m.Bus(), m.BusTime())) < 0.01f);
+}
+
+static void JumpIgnoredBeforeTheCoast() {
+    Match m(5, MapCircle(), 0);
+    m.AddHuman(1);
+    m.Start();
+    CHECK(!m.LeaveBus(1));                      // not in the countdown
+    while (m.State() == MatchState::Countdown) m.Tick(kDt);
+    CHECK(!m.BusDoorsOpen() && !m.LeaveBus(1)); // still over the sea
+    while (!m.BusDoorsOpen()) m.Tick(kDt);
+    const Vec2 at = BusPosAt(m.Bus(), m.BusTime());
+    CHECK(m.LeaveBus(1));
+    const PlayerState* p = m.Find(1);
+    CHECK(!p->aboard && p->jumpedAt == m.Clock() && Distance(p->pos, at) < 0.01f && p->anim == static_cast<uint8_t>(Anim::Freefall));
+    CHECK(!m.LeaveBus(1));                      // only once
+    CHECK(!(m.AboardMask() & 1u) && m.AboardCount() == kMaxPlayers - 1);
+}
+
+static void BusForcesEveryoneOffAtTheEnd() {
+    Match m(6, MapCircle(), 0);
+    m.AddHuman(1);
+    m.Start();
+    while (m.State() == MatchState::Countdown) m.Tick(kDt);
+    const float close = BusCloseSec(m.Bus());
+    while (m.BusTime() < close - 0.2f) m.Tick(kDt);
+    CHECK(m.AboardCount() == kMaxPlayers);
+    for (int i = 0; i < kTickHz; i++) m.Tick(kDt);
+    CHECK(m.AboardCount() == 0 && m.AboardMask() == 0);
+    for (const auto& p : m.Players()) CHECK(Distance(p.pos, m.MapCircle().center) <= m.MapCircle().radius * kBusJumpOpen + m.Bus().speed * kDt + 1.0f);   // pushed off over the island, not the sea
+    CHECK(m.State() == MatchState::Drop);       // they still have to come down
+}
+
+static void ProtectedUntilTwoSecondsAfterLanding() {
+    Match m(7, MapCircle(), 0);
+    m.AddHuman(1);
+    m.AddHuman(2);
+    m.Start();
+    while (!m.BusDoorsOpen()) m.Tick(kDt);
+    CHECK(m.LeaveBus(1) && m.LeaveBus(2));
+    m.Find(1)->weapon = {ItemId::MasterSword, Rarity::Epic};
+    auto hurt = [&](uint32_t id, uint32_t by) { const float h = m.Find(id)->health; m.Damage(id, 0.5f, by); return m.Find(id)->health < h; };
+    CHECK(!hurt(1, 2));                         // falling
+    m.MarkLanded(1);
+    CHECK(m.Find(1)->landedAt == m.Clock());
+    for (int i = 0; i < kTickHz; i++) m.Tick(kDt);
+    CHECK(!hurt(1, 2));                         // 1 s after landing
+    CHECK(!m.Attack(2, 1).ok);                  // and 2 is still in the air: no fighting from the sky
+    for (int i = 0; i < static_cast<int>(1.1f * kTickHz); i++) m.Tick(kDt);
+    CHECK(m.State() == MatchState::Drop);
+    CHECK(hurt(1, 2));                          // 2.1 s after landing, still in the drop: fair game
+    CHECK(!hurt(2, 1));                         // 2 hasn't landed
+    m.MarkLanded(2);
+    m.Find(1)->pos = {0, 0}; m.Find(2)->pos = {20, 0};
+    m.Find(2)->landedAt = m.Clock() - kLandedGraceSec - 0.1f;
+    CHECK(m.Attack(1, 2).ok);                   // both down: the fight is on before the drop is over
+}
+
+static void DropEndsWhenAllLanded() {
+    Match m(8, MapCircle(), 0);
+    m.AddHuman(1);
+    m.Start();
+    while (!m.BusDoorsOpen()) m.Tick(kDt);
+    for (const auto& p : m.Players()) m.LeaveBus(p.id);
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::Drop);       // in the air
+    for (const auto& p : m.Players()) if (p.id != 1) m.MarkLanded(p.id);
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::Drop);       // one still up
+    m.MarkLanded(1);
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::InMatch && m.StormTime() < 0.01f);
+    // Somebody who never comes down (a game that stopped sending) can't hold the drop open past kDropExtraSec after the bus leaves.
+    Match n(8, MapCircle(), 0);
+    n.AddHuman(1);
+    n.Start();
+    while (n.State() != MatchState::InMatch) n.Tick(kDt);
+    CHECK(n.Clock() > kCountdownSec + n.DropMaxSec() - 0.1f && n.Clock() < kCountdownSec + n.DropMaxSec() + 0.2f);
+}
+
+static void HornHasACooldown() {
+    Match m(9, MapCircle(), 0);
+    m.AddHuman(1);
+    m.Start();
+    m.DrainEvents();
+    CHECK(m.Honk(1) && !m.Honk(1));
+    int horns = 0;
+    for (const auto& e : m.DrainEvents()) horns += e.type == MatchEvent::Type::BusHorn && e.a == 1;
+    CHECK(horns == 1);
+    for (int i = 0; i < static_cast<int>(kBusHornCooldown * kTickHz) + 1; i++) m.Tick(kDt);
+    CHECK(m.Honk(1));
+    // The sandbox has no bus.
+    Match s(9, MapCircle(), 0);
+    s.SetSandbox(true);
+    s.AddHuman(1);
+    s.Start();
+    CHECK(!s.Bus().valid && !s.Find(1)->aboard && !s.Find(1)->rodeBus && !s.Honk(1));
+}
+
 // ---- Bot AI ----------------------------------------------------------------------------------------------------
 
-constexpr float kDt = 1.0f / kTickHz;
 
 // Build a sim with one idle human (id 1) and one bot (id 1000), everyone else dead, no loot, already InMatch.
 // Ranged weapons spend ammo now; most tests are about something else, so they start with plenty.
@@ -170,7 +345,7 @@ static Simulation Duel(uint64_t seed, Vec2 humanPos, Vec2 botPos) {
     Simulation sim(seed, MapCircle(), 0);
     sim.match.AddHuman(1);
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); // no bot movement while setting up
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone(); // no bot movement while setting up
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     FillAmmo(sim);
     sim.match.Find(1)->pos = humanPos;
@@ -407,7 +582,7 @@ static void BotsFightToTheDeath() {
     Simulation sim(3, MapCircle(), 0);
     sim.match.AddHuman(1);
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) p.alive = (p.id == 1000 || p.id == 1001);
     for (auto& p : sim.match.Players()) {
         if (p.id == 1000) { p.pos = {0, 0}; p.weapon = {ItemId::KokiriSword, Rarity::Common}; }
@@ -1618,7 +1793,7 @@ static void MatchReplayIsRecorded() {
     Simulation sim(51, MapCircle(), 20);
     sim.match.AddHuman(1);
     sim.match.Start();
-    for (int i = 0; i < 400 * kTickHz && sim.match.State() != MatchState::Ending; i++) sim.Tick(kDt);
+    for (int i = 0; i < 480 * kTickHz && sim.match.State() != MatchState::Ending; i++) sim.Tick(kDt);
     const Replay& rp = sim.match.GetReplay();
     CHECK(rp.Valid() && rp.ids.size() == static_cast<size_t>(kMaxPlayers));
     CHECK(rp.frames.size() >= 20 && rp.frames.size() <= static_cast<size_t>(kReplayMaxFrames));
@@ -1628,6 +1803,7 @@ static void MatchReplayIsRecorded() {
     // The first frame has everyone in; by the last, most are gone; each elimination is on the list at a frame that exists.
     int goneFirst = 0, goneLast = 0;
     for (size_t i = 0; i < rp.ids.size(); i++) { goneFirst += rp.frames.front()[i * 2] == kReplayGone; goneLast += rp.frames.back()[i * 2] == kReplayGone; }
+    std::printf("  replay: gone first %d last %d, %zu kills, %zu frames, %.0f s\n", goneFirst, goneLast, rp.kills.size(), rp.frames.size(), sim.match.Clock());
     CHECK(goneFirst <= 2 && goneLast >= kMaxPlayers - 3);
     CHECK(rp.kills.size() >= 20);
     bool ok = true;
@@ -2029,7 +2205,7 @@ static void BotsLootBeforeTheyFight() {
         Simulation sim(88, MapCircle(), 0);
         sim.match.AddHuman(1);
         sim.match.Start();
-        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
         for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
         sim.match.Find(1000)->pos = a; sim.match.Find(1001)->pos = b;
         for (uint32_t id : {1000u, 1001u}) { sim.match.Find(id)->weapon = {weapon, Rarity::Rare}; sim.match.Find(id)->maxHealth = sim.match.Find(id)->health = 50.0f; }
@@ -2069,7 +2245,7 @@ static void BotsShowTheirItemUse() {
         sim.bots.SetDifficulty(BotDifficulty::Hard);
         sim.match.AddHuman(1);
         sim.match.Start();
-        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
         for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
         PlayerState* a = sim.match.Find(1000);
         PlayerState* b = sim.match.Find(1001);
@@ -2131,7 +2307,7 @@ static void BotsRollAndLockOn() {
         sim.bots.SetDifficulty(BotDifficulty::Hard);
         sim.match.AddHuman(1);
         sim.match.Start();
-        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
         for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
         PlayerState* a = sim.match.Find(1000);
         PlayerState* b = sim.match.Find(1001);
@@ -2160,7 +2336,7 @@ static void BotsPlayLikePlayers() {
         sim.bots.SetDifficulty(BotDifficulty::Hard);
         sim.match.AddHuman(1);
         sim.match.Start();
-        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
         for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
         PlayerState* a = sim.match.Find(1000);
         PlayerState* b = sim.match.Find(1001);
@@ -2222,7 +2398,7 @@ static void LilosToxicCloud() {
     me->pos = {0, 0};
     CHECK(!sim.match.StartFartCloud(1, {0, 0}));   // not while the match is off
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 2) p.alive = false;
     me = sim.match.Find(1);
     me->pos = {0, 0};
@@ -2242,7 +2418,7 @@ static void LilosToxicCloud() {
     run(kFartGraceSeconds);
     CHECK(me->gasTime == 0.0f);
     const float outside = me->health;
-    run(2.0f);
+    run(1.5f);   // (the cloud is 9.5 s old now: the check below must not land on the tick it runs out)
     CHECK(me->health == outside);
     // and a cloud expires
     CHECK(sim.match.FartClouds().size() == 1);
@@ -2258,7 +2434,7 @@ static void BotsLeaveBlastRings() {
         sim.bots.SetDifficulty(BotDifficulty::Hard);
         sim.match.AddHuman(1);
         sim.match.Start();
-        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+        while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
         for (auto& p : sim.match.Players()) if (p.id != 1000 && p.id != 1001) p.alive = false;
         PlayerState* b = sim.match.Find(1000);
         sim.match.Find(1001)->pos = {1800, 1800};
@@ -2519,6 +2695,8 @@ static void MapsHaveTheirOwnNamesAndBosses() {
         match.SetMajorBoss(true);
         match.AddHuman(1);
         match.Start();
+        while (match.State() != MatchState::Drop) match.Tick(0.05f);
+        match.LandEveryone();
         for (int i = 0; i < 20 * 400 && !match.FindBoss(kDragonId); i++) match.Tick(0.05f);
         const MiniBoss* d = match.FindBoss(kDragonId);
         CHECK(d && d->kind == MapOf(id).major);
@@ -3357,7 +3535,7 @@ static Simulation BossArena(std::vector<Vec2> spots, int bosses, Vec2 human) {
     sim.match.SetBossSpots(std::move(spots));
     sim.match.SetBossCount(bosses);
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     FillAmmo(sim);
     sim.match.Find(1000)->pos = {-1950, -1950}; // one bot far away, so the match doesn't end for lack of opponents
@@ -3373,7 +3551,7 @@ static Simulation DragonArena(int mapId, bool enabled) {
     sim.match.SetMajorBoss(enabled);
     sim.match.AddHuman(1);
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     sim.match.Find(1000)->pos = {-1950, -1950};
     FillAmmo(sim);
@@ -4382,7 +4560,7 @@ static Simulation CartDuel(uint64_t seed, Vec2 humanPos, Vec2 botPos, std::vecto
     sim.match.SetVehicleSpots(spots);
     sim.match.AddHuman(1);
     sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     FillAmmo(sim);
     sim.match.Find(1)->pos = humanPos;
@@ -4510,7 +4688,7 @@ static void BotInStormSkipsFarCart() {
 static void BotsDriveAndRideCarts() {
     // A bot that likes driving (1001 does), with nobody about and a cart close by, gets in and drives off somewhere.
     {
-        Simulation sim = CartDuel(9, {-1900, 0}, {0, 1900}, {{0, 0}});
+        Simulation sim = CartDuel(10, {-1900, 0}, {0, 1900}, {{0, 0}});   // seeds re-picked after the bus changed the storm per seed
         const Vec2 far = FarFromZone(sim, 200.0f);
         sim.match.Find(1000)->alive = false;
         PlayerState* lover = sim.match.Find(1001);
@@ -4595,7 +4773,7 @@ static void FullMatchWithCarts() {
     // 31 bots and a parked human on a map with carts: bots get in, drive, ride and get out, and the match still ends with one winner.
     const float calm = BotController::CalmSeconds();
     BotController::CalmSeconds() = 40.0f;   // a quiet start, as in a real match, when bots go looking for carts
-    Simulation sim(17, MapCircle(), 0);
+    Simulation sim(11, MapCircle(), 0);
     sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
     sim.match.SetVehicleWorld(CartWorld{nullptr, [](float x, float z) { return !NotWall({x, z}) || std::hypot(x, z) > 1960.0f; }});
     sim.match.SetVehicleCount(VehicleCountFor(2000.0f));
@@ -4617,36 +4795,52 @@ static void FullMatchWithCarts() {
     std::printf("  carts: %zu bots drove, %zu rode along, match over after %.0f s\n", drivers.size(), passengers.size(), sim.match.Clock());
 }
 
-static void BotsSkydiveIn() {
-    // From the start of the countdown every bot hangs in the sky, glides during the drop and is on the ground (and on solid ground) soon
-    // after; most come down by a chest.
+static void BotsRideTheBusAndJump() {
+    // From the countdown every bot sits on the bus; during the drop they leave it one by one over the island (good ones early, at an angle),
+    // free-fall, open the glider and come down on solid ground; nobody is left aboard once the bus has gone; most come down by a chest.
     Simulation sim(21, MapCircle(), 0);
     sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
     for (int i = 0; i < 12; i++) sim.match.AddLoot({{-1500.0f + 260.0f * static_cast<float>(i), (i % 2 ? 500.0f : -700.0f)}, ItemId::MasterSword, Rarity::Rare, true, true});
     sim.match.AddHuman(1);
     sim.match.Start();
     sim.Tick(kDt);
-    bool allHigh = true;
-    for (const auto& p : sim.match.Players()) if (p.isBot) allHigh &= std::fabs(p.y - kSkyHeight) < 1.0f;
-    CHECK(allHigh);
-    std::unordered_map<uint32_t, Vec2> startAt;
+    bool seated = true;
+    for (const auto& p : sim.match.Players()) if (p.isBot) seated &= p.aboard && std::fabs(p.y - kBusAltitude) < 1.0f && p.anim == static_cast<uint8_t>(Anim::BusRide);
+    CHECK(seated);
     while (sim.match.State() == MatchState::Countdown) sim.Tick(kDt);
-    for (const auto& p : sim.match.Players()) startAt[p.id] = p.pos;
-    bool falling = true, steered = false;
-    for (int i = 0; i < 3 * kTickHz; i++) sim.Tick(kDt);
-    for (const auto& p : sim.match.Players()) if (p.isBot) { falling &= p.y < kSkyHeight - 3 * kGlideSpeed * 0.9f && p.y > 100.0f; steered |= Distance(p.pos, startAt[p.id]) > 100.0f; }
-    CHECK(falling && steered);
-    while (sim.match.State() == MatchState::Drop) sim.Tick(kDt);
-    Run(sim, 1.0f);
-    int landed = 0, bots = 0, byChest = 0;
-    for (const auto& p : sim.match.Players()) {
-        if (!p.isBot || !p.alive) continue;
-        bots++;
-        landed += (p.y < 1.0f || sim.match.RidingIn(p.id)) && NotWall(p.pos);   // (or already sat in a cart)
-        for (const auto& l : sim.match.Loot()) if (l.spawn.container && Distance(l.spawn.pos, p.pos) < 500.0f) { byChest++; break; }
+    for (const auto& p : sim.match.Players()) if (p.isBot) seated &= p.aboard && Distance(p.pos, sim.match.Bus().start) < 1.0f;
+    CHECK(seated);
+    float open = 0, close = 0;
+    BusWindow(sim.match.Bus(), open, close);
+    std::unordered_map<uint32_t, float> jumpedAt;
+    std::unordered_map<uint32_t, Vec2> exitAt, landedAt;
+    bool freefell = false, glided = false, neverEarly = true, safeInAir = true;
+    while (sim.match.State() == MatchState::Drop) {
+        sim.Tick(kDt);
+        for (const auto& p : sim.match.Players()) {
+            if (!p.isBot) continue;
+            if (!p.aboard && !jumpedAt.count(p.id)) { jumpedAt[p.id] = sim.match.BusTime(); exitAt[p.id] = p.pos; neverEarly &= sim.match.BusTime() >= open - kDt; }
+            if (p.landedAt >= 0 && !landedAt.count(p.id)) landedAt[p.id] = p.pos;
+            freefell |= p.anim == static_cast<uint8_t>(Anim::Freefall);
+            glided |= p.anim == static_cast<uint8_t>(Anim::Glide);
+            safeInAir &= p.alive || p.landedAt >= 0;   // nobody is hurt before landing
+        }
+        if (sim.match.BusTime() > close + kDt) CHECK(sim.match.AboardCount() == 0);
     }
-    CHECK(bots > 20 && landed == bots);
-    CHECK(byChest * 2 > bots);
+    float first = 1e9f, last = -1e9f;
+    for (const auto& [id, t] : jumpedAt) { first = (std::min)(first, t); last = (std::max)(last, t); }
+    int good = 0, byChest = 0, carried = 0;
+    for (const auto& [id, at] : landedAt) {
+        good += NotWall(at) && Distance(at, MapCircle().center) <= MapCircle().radius;
+        for (const auto& l : sim.match.Loot()) if (l.spawn.container && Distance(l.spawn.pos, at) < 500.0f) { byChest++; break; }
+    }
+    for (const auto& [id, at] : exitAt) carried += Distance(at, sim.match.Bus().start) > 1.0f;
+    std::printf("  bus: %zu bots jumped between %.1f and %.1f s (doors open %.1f to %.1f); %d of %zu landed on solid ground, %d by a chest\n",
+                jumpedAt.size(), first, last, open, close, good, landedAt.size(), byChest);
+    CHECK(jumpedAt.size() == static_cast<size_t>(kMaxPlayers - 1) && neverEarly && freefell && glided && safeInAir);
+    CHECK(last - first >= 0.6f * (close - open));
+    CHECK(landedAt.size() == static_cast<size_t>(kMaxPlayers - 1) && good == static_cast<int>(landedAt.size()) && carried == static_cast<int>(exitAt.size()));
+    CHECK(byChest * 2 > static_cast<int>(landedAt.size()));
     // A bot that joins mid-match (or a test that skips the drop) is simply on the ground.
     Simulation duel = Duel(5, {1900, 0}, {0, 0});
     duel.Tick(kDt);
@@ -4853,6 +5047,7 @@ static Match TeamMatch(TeamMode mode, int humans, int limit, uint64_t seed = 5) 
     for (int i = 1; i <= humans; i++) m.AddHuman(static_cast<uint32_t>(i));
     CHECK(m.Start());
     while (m.State() != MatchState::InMatch) m.Tick(kDt);
+    m.LandEveryone();   // the bus is over: everyone on foot
     for (auto& p : m.Players()) p.ammo.fill(60);
     return m;
 }
@@ -5135,6 +5330,7 @@ static void BotsReviveAndSparePartners() {
     sim.match.Start();
     while (sim.match.State() != MatchState::InMatch) sim.match.Tick(kDt);
     Match& m = sim.match;
+    m.LandEveryone();
     CHECK(m.SameTeam(1, 1000));                                                             // the human's partner is a bot
     FillAmmo(sim);
     Place(m, 1001, {1900, 0}); Place(m, 1002, {1900, 100});                                // the other team is far across the map
@@ -5159,6 +5355,8 @@ static void BotsReviveAndSparePartners() {
 }
 
 int main() {
+    BusModelMatchesTheSeats(); BusPathRules(); EveryoneBoardsTheBus(); JumpIgnoredBeforeTheCoast(); BusForcesEveryoneOffAtTheEnd(); ProtectedUntilTwoSecondsAfterLanding();
+    DropEndsWhenAllLanded(); HornHasACooldown();
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;
     LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); PlacementIsPurposeful(); BlocksAreBakedIntoTheCollision(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
@@ -5169,7 +5367,7 @@ int main() {
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
-    NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
+    NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsRideTheBusAndJump(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
     TeamsAreMadeAtTheStart(); TeammatesDoNoDamage(); KnockedInsteadOfEliminatedInTeamModes(); BleedOutEliminatesAndCreditsTheKnocker(); WholeTeamKnockedMeansEliminated(); RevivingTakesThreeSecondsAndTheTeammate();
     LastTeamStandingWins(); SiphonOnElimination(); PingsGoToTheTeamAndExpire(); LaunchPadsAreOnTheMap(); BotsReviveAndSparePartners();

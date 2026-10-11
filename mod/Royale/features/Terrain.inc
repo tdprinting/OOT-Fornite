@@ -864,6 +864,7 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
     if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    if (UpdateBusRide(player, hud)) return;                                   // sat on the Moonfall Bus, or falling from it (BattleBus.inc)
     const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
     const Input& in = gPlayState->state.input[0];
@@ -1291,9 +1292,11 @@ void OnPlayerUpdate() {
             const float ground = GroundY(gPlayState, self->x, self->z, 1500.0f);
             // At the start of a match you spawn high in the sky and fall in; any other teleport (Hookshot, songs) is a plain move.
             gSkydiving = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop;
+            gBusPhase = 0;
             player->actor.world.pos.y = gSkydiving ? ground + kSkyHeight : ground + 20.0f;
             player->actor.prevPos = player->actor.world.pos;
             player->actor.home.pos = player->actor.world.pos;
+            if (gSkydiving) BoardBusAtEpoch(player, hud);                          // a seat on the Moonfall Bus (BattleBus.inc), when there is one
         }
     }
 
@@ -1312,11 +1315,14 @@ void OnPlayerUpdate() {
         const float k = player->actor.scale.x + (target - player->actor.scale.x) * 0.15f;
         player->actor.scale.x = player->actor.scale.y = player->actor.scale.z = k;
     }
+    UpdateBattleBus(hud);
     UpdateSkydive(player, hud);
     UpdateLaunch(player);
     UpdateShockwaveLaunches(player);
-    ReconcileLocalGlider(gSkydiving);
-    if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
+    ReconcileLocalGlider(gSkydiving && gBusPhase == 0);
+    if (gSkydiving && PoseLocalBus(player)) {
+        // sat on the bus or in free fall: posed by BattleBus.inc
+    } else if (gSkydiving) {   // hang from the glider's bar with both hands, like the puppets do
         LinkAnimationHeader* hang = RA(normal_jump_climb_wait);
         if (player->skelAnime.animation != (void*)hang) LinkAnimation_PlayLoop(gPlayState, &player->skelAnime, hang);
         // Load the hanging joints before Link and his glider sample the hands;
@@ -1435,6 +1441,9 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::PlayerLeft:
                 Say("A player left the lobby");
+                break;
+            case royale::ClientEvent::Type::BusHorn:
+                if (e.id != hud.selfId) PlayBusHorn();   // your own honk was played when you pressed it
                 break;
             case royale::ClientEvent::Type::Damaged: {
                 if (e.other == hud.selfId && e.id != hud.selfId && IsLive(hud)) { gMyStats.damage += e.amount; gMyStats.hits++; }   // for the death and end screens

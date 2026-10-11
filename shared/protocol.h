@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 40; // 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 41; // 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -43,6 +43,7 @@ enum class MsgType : uint8_t {
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91,
     EvTeams = 92, EvPing = 93, EvPads = 94, EvKnock = 95,
+    EvBusPath = 96, EvBusHorn = 97,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -386,7 +387,7 @@ struct MatchStateMsg {
 
 // One player as seen in a snapshot. 29 bytes (31 while knocked).
 struct PlayerNet {
-    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8, kKnocked = 16;   // kAdult: under the Adult Power; kKnocked: down but not out (still kAlive)
+    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8, kKnocked = 16, kAboard = 32;   // kAdult: under the Adult Power; kKnocked: down but not out (still kAlive); kAboard: sat on the Moonfall Bus
     uint16_t id = 0;
     float x = 0, y = 0, z = 0;
     int16_t rot = 0;
@@ -419,7 +420,7 @@ struct PlayerNet {
         health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8(); boots = r.U8(); mask = r.U8(); tunicGear = r.U8(); gauntlets = r.U8();
         knock = 0; revive = 0;
         if (flags & kKnocked) { knock = r.U8(); revive = r.U8(); }
-        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 31 && weapon < static_cast<uint8_t>(ItemId::Count) &&
+        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 63 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount &&
                shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount &&
                (boots == kNoGear || boots < static_cast<uint8_t>(ItemId::Count)) && (mask == kNoGear || mask < static_cast<uint8_t>(ItemId::Count)) &&
@@ -530,13 +531,14 @@ struct Snapshot {
     uint8_t alive = 0;
     uint8_t epoch = 0;       // bumped whenever the server teleports this client (match start); inputs with an old epoch are ignored
     uint8_t lobbyLeft = 255; // seconds until the lobby starts the match by itself; 255 when the timer is off
+    uint32_t aboardMask = 0; // the Moonfall Bus: bit n set while bench n is taken (EvBusPath says who sits where), so everyone aboard is drawn on it
     std::vector<PlayerNet> players; // first entry is always the receiving client
     std::vector<HelperNet> helpers;
     std::vector<BossNet> bosses;    // the mini bosses near this client
     std::vector<AllyNet> allies;    // the hireable allies near this client
     std::vector<VehicleNet> vehicles;   // the carts near this client (and the one it is in)
     void Write(ByteWriter& w) const {
-        w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch); w.U8(lobbyLeft);
+        w.U32(tick); w.F32(stormTime); w.U8(state); w.U8(alive); w.U8(epoch); w.U8(lobbyLeft); w.U32(aboardMask);
         w.U8(static_cast<uint8_t>(players.size()));
         for (const auto& p : players) p.Write(w);
         w.U8(static_cast<uint8_t>(bosses.size()));
@@ -549,7 +551,7 @@ struct Snapshot {
         for (const auto& v : vehicles) v.Write(w);
     }
     bool Read(ByteReader& r) {
-        tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8(); lobbyLeft = r.U8();
+        tick = r.U32(); stormTime = r.F32(); state = r.U8(); alive = r.U8(); epoch = r.U8(); lobbyLeft = r.U8(); aboardMask = r.U32();
         size_t n = r.U8();
         if (n > static_cast<size_t>(kMaxPlayers) || state > 4 || !Finite(stormTime)) return false; // up to everyone, while revealing
         players.assign(n, {});
@@ -572,6 +574,36 @@ struct Snapshot {
         for (auto& v : vehicles) if (!v.Read(r)) return false;
         return r.ok;
     }
+};
+
+// The Moonfall Bus's line for this match (shared/bus.h), sent with the countdown: start and end on the map, height and speed, and who sits on each
+// bench (seat n is `seats[n]`, kNoPlayer16 when empty). Every client works out where the bus is from the time since the drop began.
+struct EvBusPath {
+    static constexpr MsgType kType = MsgType::EvBusPath;
+    float sx = 0, sz = 0, ex = 0, ez = 0, altitude = 0, speed = 0;
+    std::vector<uint16_t> seats;
+    void Write(ByteWriter& w) const {
+        w.F32(sx); w.F32(sz); w.F32(ex); w.F32(ez); w.F32(altitude); w.F32(speed);
+        w.U8(static_cast<uint8_t>(seats.size()));
+        for (uint16_t id : seats) w.U16(id);
+    }
+    bool Read(ByteReader& r) {
+        sx = r.F32(); sz = r.F32(); ex = r.F32(); ez = r.F32(); altitude = r.F32(); speed = r.F32();
+        const size_t n = r.U8();
+        if (n > static_cast<size_t>(kMaxPlayers)) return false;
+        seats.assign(n, kNoPlayer16);
+        for (auto& id : seats) id = r.U16();
+        return r.ok && Finite(sx) && Finite(sz) && Finite(ex) && Finite(ez) && Finite(altitude) && Finite(speed) && speed > 0 && speed < 5000.0f &&
+               std::fabs(altitude) < 32000.0f;
+    }
+};
+
+// Somebody aboard the bus honked its horn (everyone near the bus plays it).
+struct EvBusHorn {
+    static constexpr MsgType kType = MsgType::EvBusHorn;
+    uint16_t by = kNoPlayer16;
+    void Write(ByteWriter& w) const { w.U16(by); }
+    bool Read(ByteReader& r) { by = r.U16(); return r.ok; }
 };
 
 struct EvBossDown {

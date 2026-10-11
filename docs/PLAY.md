@@ -59,7 +59,7 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 ## How a match starts
 1. **Splash screen:** each match opens with a title card (Triforce, gold lettering, "Made by Tevin Dahl") for the first 5 seconds of the countdown while everyone is moved to Hyrule Field.
 2. **Hanging in the sky:** you spawn high above your spawn point and wait for the countdown to end.
-3. **Skydive:** when the drop starts you fall from the sky. The stick steers, hold **Z** to dive faster. You are protected from damage until the drop ends (18 seconds), and anyone still in the air then plummets to the ground. Bots land at the same time you do.
+3. **The Moonfall Bus:** you start the match sat on the bus, a flying coach under the Majora's Mask Moon. It crosses the island on a straight line (dashed on the minimap, the little moon is the bus). Once it is over the island press **A** to jump, **C-Right** honks the horn. You free-fall, then **A** opens the glider (it opens by itself near the ground). The stick steers, hold **Z** to dive faster. Anyone still aboard when the bus leaves the island is pushed off. You can't be hurt on the bus, in the air or for 2 seconds after you land; the bots jump when they like, like you.
 
 ## Controls in a match
 - **Treasure chests.** All the loot is in glowing chests, coloured by rarity (grey Common, green Uncommon, blue Rare, purple Epic, gold Legendary). Walk up and press **A** to open one. You see how rare a chest is, not what is inside. Epic and Legendary chests are the big kind with golden light. A beam and glow mark chests on your screen, and the map shows them.
@@ -146,7 +146,7 @@ The host picks the place in the lobby: **Hyrule Field** (a huge arena with place
 - **Glider:** Link hangs from the bar with both hands up.
 
 ## Controls (streamlined)
-- **B** attack · **A** open / take / hire / talk, or **jump** when there is nothing to do · **Left stick click** sprint · **Z** lock on (and dive while skydiving)
+- **B** attack · **A** open / take / hire / talk, or **jump** when there is nothing to do · **Left stick click** sprint · **Z** lock on (and dive while skydiving) · On the bus: **A** jump, **C-Right** horn; falling: **A** opens the glider
 - **L** ping · hold **A** beside a knocked teammate to revive
 - **D-pad Right / Left** next / previous weapon · **D-pad Down** health potion · **C-Left** shield potion · **D-pad Up** or **C-Up** ability · **C-Right** emote
 - Settings > Comfort > Options has **Control layout** (Battle Royale or Classic, where **C-Up** jumps and only **D-pad Up** uses the ability), **Button prompts**, the **on-screen JUMP button** and **Reset controls**. How to play shows the layout in use.

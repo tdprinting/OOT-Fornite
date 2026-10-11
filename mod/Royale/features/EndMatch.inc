@@ -663,8 +663,8 @@ void DrawOverlay() {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
         if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to " + std::string(CurrentMap().name) + "...");
     }
-    if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
-    if (live && gSkydiving) DrawGliderAim(dl, font, ds, scale);
+    if (live && (h.state == royale::MatchState::Drop || gSandboxGlide) && gSkydiving && gBusPhase == 0) centered(ds.y * 0.2f, green, 22 * scale, "Hold Z to dive   Stick to steer");
+    if (live && gSkydiving && gBusPhase != 1) DrawGliderAim(dl, font, ds, scale);
 
     DrawPickupFx(dl, ds, scale);
     DrawFeed(dl, font, ds, scale);
@@ -728,6 +728,7 @@ void DrawOverlay() {
     DrawPings(dl, font, ds, scale);
     DrawSquadHud(dl, font, ds, scale, h);
     DrawControlPrompts(dl, font, ds, scale, h);
+    DrawBusHud(dl, font, ds, scale, h);
 
     DrawOotVitals(dl, scale, h);
     DrawStaminaBar(dl, ds, h);

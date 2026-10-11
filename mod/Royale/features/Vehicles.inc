@@ -126,6 +126,7 @@ void OnEmoteWheelInput() {
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
     if (SquadInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // knocked down: the controller only crawls and pings
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
+    if (BusInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }    // on the Moonfall Bus or falling from it: A jumps, C-Right honks
     // A consumable in hand (taken with C-Down or by tapping its slot): B drinks it, so the press is kept from the game or Link would swing the weapon.
     if (gHandStack >= 0 && LiveAndAlive(hud) && InField()) {
         if (in.press.button & BTN_B) gStackBPressed = true;
