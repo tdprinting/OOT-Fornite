@@ -20,7 +20,7 @@ enum BotBranch { kBrOther, kBrBusy, kBrHazard, kBrCartGo, kBrCover, kBrStorm, kB
                  kBrSmash, kBrHuntVis, kBrHuntLast, kBrLateClose, kBrWander, kBrBossFight, kBrSkydive, kBrRiding, kBrCount };
 struct BotProfile {
     long timerRepaths = 0, goalMovedRepaths = 0, searchOk = 0, searchFail = 0, deferred = 0, expanded = 0, maxExp = 0, bigSearches = 0, bigExp = 0;
-    long advanceBlocked = 0, unsticks = 0;
+    long advanceBlocked = 0, unsticks = 0, failWhy[8] = {}, failExp = 0;
     long brSearches[kBrCount] = {}, brExp[kBrCount] = {}, brFail[kBrCount] = {};
     int branch = kBrOther;
     std::unordered_map<uint32_t, int> lastBranch;
@@ -31,15 +31,16 @@ inline void BotProfSearch(bool timer, bool ok, const NavGrid::SearchWorkspace& w
     if (w.deferred) { f.deferred++; return; }
     (timer ? f.timerRepaths : f.goalMovedRepaths)++;
     (ok ? f.searchOk : f.searchFail)++;
+    if (!ok) f.failExp += w.expanded;
     f.expanded += w.expanded; f.maxExp = (std::max)(f.maxExp, static_cast<long>(w.expanded));
     if (w.expanded >= 20000) { f.bigSearches++; f.bigExp += w.expanded; }
     f.brSearches[f.branch]++; f.brExp[f.branch] += w.expanded; if (!ok) f.brFail[f.branch]++;
 }
 #define ROYALE_BOT_BRANCH(b) (BotProf().branch = (b))
-#define ROYALE_BOT_PROF(stmt) stmt
+#define ROYALE_BOT_PROF(...) __VA_ARGS__
 #else
 #define ROYALE_BOT_BRANCH(b) ((void)0)
-#define ROYALE_BOT_PROF(stmt)
+#define ROYALE_BOT_PROF(...)
 #endif
 
 enum class BotDifficulty : uint8_t { Easy, Normal, Hard };
@@ -600,6 +601,22 @@ class BotController {
         return {from.x + dx / len * dist, from.z + dz / len * dist};
     }
 
+    // Somewhere to run to, `dist` away from `from` (bent `pull` of the way toward the zone), that the bot can actually get to: a point on ground it
+    // is joined to. Failing that, the same bent further toward the zone, then half as far, then the zone itself. (A goal it cannot reach costs a
+    // whole-map search that fails.)
+    Vec2 AwaySafe(const PlayerState& p, const Memory& mem, Vec2 from, float dist, const Circle& soon, float pull = 0.0f) const {
+        auto bend = [&](Vec2 a, float k) { return Vec2{a.x + (soon.center.x - a.x) * k, a.z + (soon.center.z - a.z) * k}; };
+        const Vec2 far = Away(p.pos, from, dist);
+        const Vec2 tries[4] = {bend(far, pull), bend(far, (std::max)(pull, 0.35f) + (pull > 0 ? 0.3f : 0.0f)), bend(Away(p.pos, from, dist * 0.5f), pull), soon.center};
+        if (!nav) return tries[0];
+        const float fromY = mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN();
+        for (const Vec2& x : tries) {
+            Vec2 at;
+            if (nav->Snap(x, &at, true) && nav->Connected(p.pos, at, fromY)) return at;
+        }
+        return soon.center;
+    }
+
     bool Walkable(Vec2 p) const { return !nav || nav->Walkable(p); }
     bool Standable(Vec2 p) const { return !nav || nav->Standable(p); }
 
@@ -888,6 +905,8 @@ class BotController {
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route, &context.workspace, &context.budget);
                 ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
+                ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
+                    int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
                     mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
@@ -914,6 +933,8 @@ class BotController {
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindPath(p.pos, goal, mem.path, true, &context.workspace, &context.budget);
                 ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
+                ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
+                    int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
                     mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
@@ -1566,13 +1587,13 @@ class BotController {
             const WeaponStats bw = Match::StatsOf(p);
             ROYALE_BOT_BRANCH(kBrBossAvoid);
             if (dragon && boss->y > kDragonAirborneAbove && !bw.ranged) { // swords and hammers can't reach it in the air: stay clear
-                if (bd < 800.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
+                if (bd < 800.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
             } else if (dragon && !(tune.hunt && p.health >= 2.4f && mem.aggression > 0.35f)) {
-                if (bd < 700.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 600.0f), dt, 1.0f); return; }
+                if (bd < 700.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 600.0f, soon), dt, 1.0f); return; }
             } else {
             const bool strong = p.health >= 2.4f && EffectiveDps(p.weapon) * TotalsOf(p).melee >= 1.8f && mem.aggression > 0.35f && tune.hunt;
             if (!strong || p.health < 1.3f) {
-                if (bd < 420.0f) { Steer(m, p, mem, Away(p.pos, boss->pos, 500.0f), dt, 1.0f); return; }
+                if (bd < 420.0f) { Steer(m, p, mem, AwaySafe(p, mem, boss->pos, 500.0f, soon), dt, 1.0f); return; }
             } else if (!foe || dist > 300.0f) {
                 ROYALE_BOT_BRANCH(kBrBossFight);
                 const WeaponStats w = Match::StatsOf(p);
@@ -1592,10 +1613,7 @@ class BotController {
         // 2. Flee: run away from the foe, preferring the way toward the zone centre, and shoot back if we can.
         if (s.fleeing) {
             ROYALE_BOT_BRANCH(kBrFlee);
-            Vec2 away = Away(p.pos, foe->pos, 500.0f);
-            const float pull = 0.35f; // blend toward the safe zone so fleeing doesn't run into the storm
-            away = {away.x + (soon.center.x - away.x) * pull, away.z + (soon.center.z - away.z) * pull};
-            if (nav) { Vec2 snapped; if (nav->Snap(away, &snapped, true)) away = snapped; }
+            Vec2 away = AwaySafe(p, mem, foe->pos, 500.0f, soon, 0.35f);   // bent toward the safe zone so fleeing doesn't run into the storm
             // From a bow, break its line of sight: behind the nearest rock or rise that is not back toward it.
             if (UnderFire(p, *foe, dist) && FindCover(m, p, mem, *foe) && Distance(mem.cover, foe->pos) > dist * 0.8f) away = mem.cover;
             if (dist < 380.0f || UnderFire(p, *foe, dist)) WantSprint(mem, tune, true);   // keeps its breath until the foe is close

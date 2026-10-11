@@ -275,6 +275,10 @@ class NavGrid {
         int ax, az, bx, bz;
         if (!ToCell(a, ax, az) || !ToCell(b, bx, bz)) return true;
         int ra = region[Index(ax, az)], rb = region[Index(bx, bz)];
+        // A point inside a wall or a rock: the searches start or end at the nearest ground to it (Snap), so judge that ground's stretch.
+        Vec2 s;
+        if (ra < 0 && Snap(a, &s, true, true) && ToCell(s, ax, az)) ra = region[Index(ax, az)];
+        if (rb < 0 && Snap(b, &s, true) && ToCell(s, bx, bz)) rb = region[Index(bx, bz)];
         if (!std::isnan(aY)) { const int n = UpperNear(a, aY, 70.0f, 80.0f); if (n >= 0) ra = region[cells.size() + static_cast<size_t>(n)]; }
         float gy;
         if (UpperGoal(b, &gy)) {

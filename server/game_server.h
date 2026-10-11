@@ -279,6 +279,9 @@ class GameServer {
     // the lobby. Only meaningful once the match has ended.
     // A different storm, loot layout and spawn spread every match.
     static uint64_t FreshSeedOffset() {
+#ifdef ROYALE_BOT_PROFILE
+        return 0;   // the offline bot harnesses replay the same matches for a given seed
+#endif
         std::random_device rd;
         return (static_cast<uint64_t>(rd()) << 32) ^ rd() ^ 0x9E3779B97F4A7C15ull;
     }
