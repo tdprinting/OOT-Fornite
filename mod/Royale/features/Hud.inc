@@ -814,44 +814,66 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
     }
 }
 
+// The bag's stacks, one per kind and tier in the order they were picked up (the server sends one entry per potion, Fortnite-style stacks are built here).
+struct PotionStack { royale::ItemId item; royale::Rarity rarity; int count; };
+std::vector<PotionStack> PotionStacks(const royale::HudState& h) {
+    std::vector<PotionStack> out;
+    for (const auto& p : h.inv.potions) {
+        const royale::ItemId id = static_cast<royale::ItemId>(p.item);
+        const royale::Rarity r = static_cast<royale::Rarity>(p.rarity);
+        bool found = false;
+        for (auto& st : out) if (st.item == id && st.rarity == r) { st.count++; found = true; break; }
+        if (!found) out.push_back({ id, r, 1 });
+    }
+    return out;
+}
+int gHandStack = -1;               // the stack held in hand (B drinks one), or -1 for the weapon
+bool gStackBPressed = false;       // B was pressed this frame with a stack in hand (taken off the controller so Link doesn't swing)
+double gStackBHold = -1.0;         // when C-Down went down: a tap picks the next stack, a long hold drops the weapon in hand
+
 // The item bar, like Fortnite's: weapons (the one in hand highlighted), shield, potions and your ability. D-pad Left cycles weapons;
 // on a touch screen you can tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; };
+    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; const char* hint = ""; };
     const ImU32 grey = HudColor(royale::wartable::theme::Muted,150);
     const royale::ItemId none = royale::ItemId::DekuStick;
     std::vector<Slot> slots;
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
-    slots.push_back({ ShortName(h.weapon), "", RarityU32(h.weaponRarity), true, true, 0.0f, 0, h.weapon, ammoOf(h.weapon) });
+    const std::vector<PotionStack> stacks = PotionStacks(h);
+    if (gHandStack >= static_cast<int>(stacks.size())) gHandStack = -1;
+    const bool stackInHand = gHandStack >= 0;
+    slots.push_back({ ShortName(h.weapon), "", RarityU32(h.weaponRarity), true, !stackInHand, 0.0f, 0, h.weapon, ammoOf(h.weapon), "B" });
     for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
         if (i < static_cast<int>(h.inv.reserve.size())) {
             const auto& r = h.inv.reserve[i];
             const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            slots.push_back({ "", "", RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id) });
+            slots.push_back({ "", "", RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id), "D-pad L/R" });
         } else {
             slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
         }
     }
-    if (h.hasShield) slots.push_back({ "", "", RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield });
+    if (h.hasShield) slots.push_back({ "", "", RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield, -1, "" });
     else slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
-    if (!h.inv.potions.empty()) {
-        const auto& p = h.inv.potions.front();
-        const royale::ItemId id = static_cast<royale::ItemId>(p.item);
-        slots.push_back({ "", "x" + std::to_string(h.inv.potions.size()), RarityU32(static_cast<royale::Rarity>(p.rarity)), true, false, 0.0f, 10, id });
-    } else {
-        slots.push_back({ "", "", grey, false, false, 0.0f, 10, none });
+    for (int i = 0; i < royale::kPotionSlots; i++) {   // the bag: one slot per kind, stacked, drunk with B once it is in hand (C-Down picks the next one)
+        if (i < static_cast<int>(stacks.size())) {
+            const PotionStack& st = stacks[static_cast<size_t>(i)];
+            slots.push_back({ "", "x" + std::to_string(st.count), RarityU32(st.rarity), true, gHandStack == i, 0.0f, 20 + i, st.item, -1, gHandStack == i ? "B" : "C-Down" });
+        } else {
+            slots.push_back({ "", "", grey, false, false, 0.0f, 20 + i, none });
+        }
     }
     if (h.inv.hasAbility) {
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
         const float cd = royale::AbilityOf(id).cooldown;
         const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
         slots.push_back({ "", h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
-                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id });
+                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id, -1, "D-pad Up" });
     } else {
         slots.push_back({ "", "", grey, false, false, 0.0f, 11, none });
     }
+    if (h.hasShield) slots[static_cast<size_t>(royale::kMaxReserveWeapons) + 1].hint = "C-Left";
 
-    const float w = 84.0f * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
+    const float w = (slots.size() > 8 ? 74.0f : 84.0f) * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
     const float total = slots.size() * w + (slots.size() - 1) * gap;
     float x = (ds.x - total) * 0.5f;
     const float y = ds.y - hgt - 20.0f * scale;
@@ -865,6 +887,13 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
         dl->AddRectFilled(ImVec2(a.x+4*scale,b.y-4*scale),ImVec2(b.x-4*scale,b.y-2*scale),sl.border);
         if (sl.filled) {   // which button uses the slot
+            const char* hint = sl.hint;
+            const float hs = 12.5f * scale;
+            const ImVec2 hsz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, hint);
+            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f + 1, b.y + 2 * scale + 1), IM_COL32(0, 0, 0, 220), hint);
+            const bool isB = hint[0] == 'B' && hint[1] == 0, isC = hint[0] == 'C';
+            const ImU32 hintCol = isB ? IM_COL32(100, 230, 110, 255) : isC ? IM_COL32(255, 220, 40, 255) : IM_COL32(210, 205, 190, 235); // B green, C yellow, as on the N64 pad
+            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
             const int nres = royale::kMaxReserveWeapons;
             const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
             const auto g = i == 0 ? pr.weapon : static_cast<int>(i) <= nres ? pr.swap : static_cast<int>(i) == nres + 1 ? pr.shield : static_cast<int>(i) == nres + 2 ? pr.potion : pr.ability;
@@ -881,7 +910,14 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         }
         if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
             if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
-            else if (sl.action == 10 && !h.inv.potions.empty()) gSession.RequestUsePotion();
+            else if (sl.action >= 20 && sl.action < 20 + royale::kPotionSlots) {   // tap a stack to take it in hand, tap it again to drink
+                const int idx = sl.action - 20;
+                if (idx < static_cast<int>(stacks.size())) {
+                    if (gHandStack == idx) gSession.UseStack(static_cast<uint8_t>(stacks[static_cast<size_t>(idx)].item), static_cast<uint8_t>(stacks[static_cast<size_t>(idx)].rarity));
+                    else gHandStack = idx;
+                }
+            }
+            else if (sl.action == 0 && i == 0 && gHandStack >= 0) gHandStack = -1;
             else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f && h.magic + 0.001f >= royale::AbilityMagic(static_cast<royale::ItemId>(h.inv.ability.item))) gSession.UseAbility();
         }
         x += w + gap;

@@ -1067,8 +1067,8 @@ class BotController {
             }
             case ItemKind::Consumable: {
                 if (PotionOf(s.item).revive) return HasFairy(p) ? 0.0f : 1.3f;
-                if (PotionOf(s.item).shield > 0) return p.armor < PotionOf(s.item).shieldCap - 0.3f && static_cast<int>(p.potions.size()) < kMaxPotions ? 0.55f : 0.0f;
-                if (static_cast<int>(p.potions.size()) >= kMaxPotions) return 0.0f;
+                if (PotionOf(s.item).shield > 0) return p.armor < PotionOf(s.item).shieldCap - 0.3f && Match::PotionRoom(p, s.item, s.rarity) ? 0.55f : 0.0f;
+                if (!Match::PotionRoom(p, s.item, s.rarity)) return 0.0f;
                 const float need = 1.0f + (p.maxHealth - p.health) * 0.3f;
                 return (PotionHeal(s.item, s.rarity) * 0.5f + 0.3f) * need;
             }

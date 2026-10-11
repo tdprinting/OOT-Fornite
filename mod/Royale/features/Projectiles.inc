@@ -162,6 +162,7 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr float kLootSizeScale = 0.5f;   // items on the ground are drawn at half the game's own item-drop size
 constexpr int kGidGilded = 1001;    // the Gilded Sword's own model (shared/gilded_sword_model.h), see DrawItemModel
 constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
 
@@ -214,7 +215,7 @@ void DrawHeldFinds(PlayState* play) {
         if (f == gLastFind.end() || st == gState.end() || actor == nullptr || f->second.gid < 0) continue;
         if (st->second.anim != static_cast<uint8_t>(royale::Anim::ItemGet) || now - f->second.at > kHeldFindSeconds) continue;
         const float size = actor->scale.y / 0.01f;   // grown players hold it higher
-        const float k = GidScale(f->second.gid) * 0.032f * size;   // the size the chest reveal settles at
+        const float k = GidScale(f->second.gid) * 0.032f * kLootSizeScale * size;   // the size the chest reveal settles at
         OPEN_DISPS(play->state.gfxCtx);
         Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
         Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
@@ -287,7 +288,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         const float grow = std::min(1.0f, r.age / 0.6f);
         const Vec3f at = { r.x, r.y + 10.0f + ease * 70.0f, r.z };
         Sparkle(play, at, r.rarity);
-        const float k = GidScale(r.gid) * 0.0016f * (0.4f + 0.6f * grow) * 1.5f;
+        const float k = GidScale(r.gid) * 0.0016f * (0.4f + 0.6f * grow) * 1.5f * kLootSizeScale;
         OPEN_DISPS(play->state.gfxCtx);
         Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
         Matrix_RotateY(r.age * 2.4f, MTXMODE_APPLY);
@@ -562,7 +563,7 @@ void Loot_Draw(Actor* actor, PlayState* play) {
     if (la.gid < 0) return;
     func_8002EBCC(actor, play, 0);   // the same highlights the game's own 3D drops get
     func_8002ED80(actor, play, 0);
-    const float k = GidScale(la.gid);
+    const float k = GidScale(la.gid) * kLootSizeScale;
     Matrix_Scale(k, k, k, MTXMODE_APPLY);
     DrawItemModel(play, la.gid);
 }
@@ -583,6 +584,8 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     if (gLoot[index].gid >= 0) {   // the item's real model instead of the stand-in
         actor->draw = Loot_Draw;
         Actor_SetScale(actor, 0.03f);
+    } else {   // rupee and ammo piles keep the game's own drawing, at half its size like the rest
+        Actor_SetScale(actor, actor->scale.x * kLootSizeScale);
     }
     gLootOf[actor] = index;
     std::string label = LootLabel(l);

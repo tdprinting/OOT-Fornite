@@ -671,7 +671,7 @@ class Match {
         }
         if (!d.any) return d;
         if (d.item == ItemId::Rupees) {
-            p->rupees += d.amount;
+            p->rupees = (std::min)(kWalletMax, p->rupees + d.amount);
         } else {
             const AmmoKind k = AmmoGivenBy(d.item);
             int& n = p->ammo[static_cast<int>(k)];
@@ -686,6 +686,20 @@ class Match {
     // would do nothing (a heart at full health).
     // Would taking this be an improvement? Walking over loot only picks up what passes this; anything else needs the player to ask
     // (force), so a Common stick doesn't replace your Epic sword just because you walked past it.
+    // Is there room in the bag for one more of this? It joins the stack of its own kind and tier, or starts one in a free slot.
+    static bool PotionRoom(const PlayerState& p, ItemId item, Rarity rarity) {
+        int same = 0, stacks = 0;
+        std::vector<std::pair<ItemId, Rarity>> kinds;
+        for (const Equipped& e : p.potions) {
+            if (e.item == item && e.rarity == rarity) same++;
+            bool known = false;
+            for (const auto& k : kinds) known |= k.first == e.item && k.second == e.rarity;
+            if (!known) { kinds.push_back({e.item, e.rarity}); stacks++; }
+        }
+        if (same > 0) return same < PotionStackMax(item);
+        return stacks < kPotionSlots;
+    }
+
     static bool WorthTaking(const PlayerState& p, const LootSpawn& s) {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
@@ -698,7 +712,7 @@ class Match {
             case ItemKind::Shield: return !p.hasShield || ShieldReduction(s.item, s.rarity) > ShieldReduction(p.shield.item, p.shield.rarity) + 0.01f;
             case ItemKind::Consumable:
                 if (PotionOf(s.item).revive) { for (const Equipped& e : p.potions) if (PotionOf(e.item).revive) return false; }
-                return static_cast<int>(p.potions.size()) < kMaxPotions;
+                return PotionRoom(p, s.item, s.rarity);
             case ItemKind::Instant: return true; // refused by UseInstant when it would do nothing
             case ItemKind::Ability: return !p.hasAbility;
             case ItemKind::Gear: {
@@ -750,12 +764,13 @@ class Match {
                 p->hasShield = true;
                 break;
             case ItemKind::Consumable:
-                if (static_cast<int>(p->potions.size()) >= kMaxPotions) return false;
+                if (!PotionRoom(*p, s.item, s.rarity)) return false;
                 p->potions.push_back({s.item, s.rarity});
                 break;
             case ItemKind::Instant:
                 if (InstantOf(s.item) == InstantEffect::Rupees) {
-                    p->rupees += (std::max)(1, static_cast<int>(s.amount));
+                    if (p->rupees >= kWalletMax) return false;                  // wallet full: leave it for someone else
+                    p->rupees = (std::min)(kWalletMax, p->rupees + (std::max)(1, static_cast<int>(s.amount)));
                 } else if (InstantOf(s.item) == InstantEffect::Ammo) {
                     const AmmoKind k = AmmoGivenBy(s.item);
                     int& n = p->ammo[static_cast<int>(k)];
@@ -851,6 +866,44 @@ class Match {
             p->dmgTakenMult = d.damageTaken;
         }
         p->potions.erase(p->potions.begin() + best);
+        p->dirty = true;
+        return true;
+    }
+
+    // Drink the stack the player has in hand. Refused when it would do nothing (full health for a healing potion, a full shield bar...).
+    bool UseStack(uint32_t id, ItemId item, Rarity rarity) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        size_t idx = p->potions.size();
+        for (size_t i = 0; i < p->potions.size(); i++) if (p->potions[i].item == item && p->potions[i].rarity == rarity) { idx = i; break; }
+        if (idx == p->potions.size()) return false;
+        const PotionDef d = PotionOf(item);
+        if (d.revive) return false;
+        if (d.shield > 0) {
+            if (p->armor >= d.shieldCap - 0.01f) return false;
+            p->armor = (std::min)(d.shieldCap, p->armor + d.shield);
+        } else {
+            const bool afflicted = clock < p->burnUntil || clock < p->stunUntil || clock < p->frozenUntil;
+            const bool heals = d.heal > 0 && p->maxHealth - p->health > 0.01f;
+            if (!heals && !(d.cleanse && afflicted) && !(d.damageTaken < 1.0f)) return false;
+            p->health = (std::min)(p->maxHealth, p->health + PotionHeal(item, rarity));
+            if (d.cleanse) Cleanse(*p);
+            if (d.damageTaken < 1.0f) { p->dmgTakenUntil = clock + d.seconds; p->dmgTakenMult = d.damageTaken; }
+        }
+        p->potions.erase(p->potions.begin() + static_cast<long>(idx));
+        p->dirty = true;
+        return true;
+    }
+
+    // Put the weapon in hand on the ground so somebody else can take it; a backup weapon (or the starter sword) takes its place.
+    bool DropWeapon(uint32_t id) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        if (IsStarter(p->weapon)) return false;
+        DropEquipment(*p, p->weapon);
+        if (!p->reserve.empty()) { p->weapon = p->reserve.front(); p->reserve.erase(p->reserve.begin()); }
+        else p->weapon = {ItemId::BasicSword, Rarity::Common};
+        p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
         p->dirty = true;
         return true;
     }

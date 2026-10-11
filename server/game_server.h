@@ -503,6 +503,18 @@ class GameServer {
                 if (!c->isHost || !PlayAgain()) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::UseItemRequest: {
+                net::UseItemRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.UseStack(c->playerId, static_cast<ItemId>(m.item), static_cast<Rarity>(m.rarity))) stats.rejectedActions++;
+                break;
+            }
+            case net::MsgType::DropItemRequest: {
+                net::DropItemRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!sim.match.DropWeapon(c->playerId)) stats.rejectedActions++;
+                break;
+            }
             case net::MsgType::UseShieldRequest: {
                 net::UseShieldRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
