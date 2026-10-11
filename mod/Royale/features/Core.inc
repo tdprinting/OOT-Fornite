@@ -91,6 +91,14 @@ struct AllyActor {
     float rollAngle = 0.0f;
     float slowFor = 0.0f;
     float age = 0.0f;
+    // Jones's own Blender rig and local reactions; the four original allies keep their animator.
+    float phase=0,walkW=0,bob=0;
+    float greetAge=10,hurtAge=10;
+    double nextGreetingAt=0;
+    bool attackSnapshotActive=false;
+    uint8_t weapon=0;
+    float shotX=0,shotY=0,shotZ=0;
+    bool hasShot=false;
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;

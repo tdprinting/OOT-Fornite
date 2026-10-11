@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 36; // 36: UseItemRequest and DropItemRequest, stacking potions (kMaxPotions 30). 35: tunic and gauntlets worn are sent with every player. 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
+constexpr uint16_t kProtocolVersion = 37; // 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -443,10 +443,12 @@ struct AllyNet {
     uint8_t hp = 255;           // health as a fraction of its maximum, 0..255
     uint16_t owner = kNoPlayer16;   // who hired it (kNoPlayer16 while it is free)
     uint8_t flags = 0;          // 1 walking, 2 attacking
-    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(flags); }
+    uint8_t weapon = 0;         // Jones-only equipment, never a player ItemId
+    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(flags); w.U8(weapon); }
     bool Read(ByteReader& r) {
-        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8(); owner = r.U16(); flags = r.U8();
-        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && flags <= 3;
+        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8(); owner = r.U16(); flags = r.U8(); weapon=r.U8();
+        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && flags <= 3 &&
+            (kind==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0);
     }
 };
 
@@ -561,8 +563,10 @@ struct EvAllyAction {
     uint8_t index = 0;
     uint16_t target = kNoPlayer16;
     float x = 0, z = 0;
-    void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); }
-    bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); return r.ok && index < kAllyCount && Finite(x) && Finite(z); }
+    uint8_t weapon=0;
+    void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); w.U8(weapon); }
+    bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); weapon=r.U8(); return r.ok && index < kAllyCount && Finite(x) && Finite(z) &&
+        (index==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0); }
 };
 
 // The replay of the match that just ended, in two kinds of message: this describes it (who, how many frames, who eliminated whom)...

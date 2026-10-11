@@ -956,7 +956,7 @@ class Match {
     }
 
 
-    // ---- allies (shared/ally.h): four people to hire. Their behaviour is in BotController::StepAllies; the rules of hiring are here. ----
+    // ---- allies (shared/ally.h): people to hire. Their behaviour is in BotController::StepAllies; the rules of hiring are here. ----
     void PushEvent(const MatchEvent& e) { events.push_back(e); }
     // The replay (shared/replay.h): where everyone was every kReplayStepSec of the match, and who eliminated whom.
     const Replay& GetReplay() const { return replay; }
@@ -1015,7 +1015,7 @@ class Match {
     }
     // An ally's hit on a player or boss, credited to the ally's owner. Returns true if it landed.
     bool AllyStrike(AllyState& a, uint32_t targetId) {
-        const AllyDef& def = AllyOf(a.kind);
+        AllyDef def = AllyOf(a.kind);
         PlayerState* owner = Find(a.owner);
         if (!owner || !owner->alive || clock < a.attackReadyAt) return false;
         Vec2 targetPos; float targetY = 0, extra = 0;
@@ -1029,12 +1029,19 @@ class Match {
             targetPos = target->pos;
             targetY = target->isBot && nav ? nav->FloorAt(target->pos) + target->y : target->y;
         }
-        if (Distance(a.pos, targetPos) > def.range + extra) return false;
+        const float targetDistance=Distance(a.pos,targetPos);
+        const uint8_t weapon=a.kind==AllyKind::Jones?static_cast<uint8_t>(JonesGunAt(targetDistance)):0;
+        if(a.kind==AllyKind::Jones) {
+            const auto& gun=kJonesGuns[weapon];def.range=gun.range;def.damage=gun.damage;def.cooldown=gun.cooldown;
+        }
+        if (targetDistance > def.range + extra) return false;
         if (nav && !nav->SightClear(a.pos, nav->FloorAt(a.pos) + 45, targetPos, targetY + 45)) return false;
         a.attackReadyAt = clock + def.cooldown;
+        a.weapon = weapon;
         a.actUntil = clock + 0.45f;
         MatchEvent act{MatchEvent::Type::AllyAction};
         act.a = a.index; act.b = targetId;
+        act.item = weapon;
         if (IsBossId(targetId)) {
             for (auto& b : bosses) {
                 if (b.id != targetId || !b.alive) continue;

@@ -15,6 +15,9 @@
 #include "../../shared/ground_patches.h"
 #include "../../shared/placement.h"
 #include "../../shared/island_anchors.h"
+#include "../../shared/jones_animation.h"
+#include "../../shared/jones_sounds.h"
+#include "../../shared/jones_guns.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -1398,7 +1401,37 @@ static void TheSignInTheMiddle() {
 }
 
 static void HireableAllies() {
-    // Four allies, one of each kind, free and healthy, placed apart and on valid ground.
+    {
+        namespace J=royale::jones_model;
+        CHECK(J::kTriangleCount >= 1800 && J::kTriangleCount <= 5000);
+        unsigned corners=0;
+        for(const auto& p:J::kParts) { CHECK(p.first==corners && p.count%3==0);corners+=p.count; }
+        CHECK(corners==std::size(J::kCorners) && corners==J::kTriangleCount*3);
+        CHECK(std::size(J::kParents)==J::kPartCount);
+        for(unsigned p=0;p<J::kPartCount;++p) CHECK(J::kParents[p]>=-1 && J::kParents[p]<static_cast<int>(p));
+        namespace G=royale::jones_guns;
+        CHECK(std::size(G::kGuns)==4 && G::kAttachPart<J::kPartCount && G::kPositionScale==J::kPositionScale);
+        unsigned gunCorners=0;
+        for(const auto& g:G::kGuns) { CHECK(g.first==gunCorners && g.count>0 && g.count%3==0);gunCorners+=g.count; }
+        CHECK(gunCorners==std::size(G::kCorners));
+        for(int clip=J::kIdle;clip<=J::kHurt;++clip) {
+            const auto& c=J::kClips[clip];
+            CHECK(c.duration>0 && c.frames>1 && c.first+c.frames*J::kPartCount<=std::size(J::kRotations));
+            for(unsigned p=0;p<J::kPartCount;++p) {
+                const auto r=J::Sample(clip,p,c.duration*.37f);CHECK(std::isfinite(r.x) && std::isfinite(r.y) && std::isfinite(r.z));
+                const auto end=J::Sample(clip,p,c.duration),after=J::Sample(clip,p,c.duration*2);
+                CHECK(std::fabs(end.x-after.x)<.0001f);
+            }
+        }
+        float jawMotion=0,browMotion=0;
+        for(int i=0;i<20;++i) {
+            jawMotion=std::max(jawMotion,std::fabs(J::Sample(J::kGreet,9,J::kClips[J::kGreet].duration*i/20).x));
+            browMotion=std::max(browMotion,std::fabs(J::Sample(J::kHurt,10,J::kClips[J::kHurt].duration*i/20).y));
+        }
+        CHECK(jawMotion>.1f && browMotion>.1f); // actual authored facial channels
+        for(const auto& s:royale::jones_snd::kClips) { int peak=0;for(unsigned i=0;i<s.count;++i) peak=std::max(peak,std::abs(static_cast<int>(s.data[i])));CHECK(s.count>1000 && peak>1000 && peak<32767); }
+    }
+    // Five allies, one of each kind, free and healthy, placed apart and on valid ground.
     {
         const Circle map = {{0, 0}, 3000};
         auto valid = [](Vec2 p) { return p.x > -2500.0f; };
@@ -1412,6 +1445,44 @@ static void HireableAllies() {
         CHECK(GenerateAllySpots(4, map, layout.pois, valid).size() == spots.size() && Distance(GenerateAllySpots(4, map, layout.pois, valid)[2], spots[2]) < 0.01f);
     }
     for (int i = 0; i < kAllyCount; i++) CHECK(AllyOf(static_cast<AllyKind>(i)).price >= 30 && AllyOf(static_cast<AllyKind>(i)).maxHealth >= 3 && std::string(AllyOf(static_cast<AllyKind>(i)).name).size() > 2);
+    // Jones is a distinct fifth ally and uses the same authoritative hire/follow/combat rules.
+    {
+        CHECK(static_cast<int>(AllyKind::Jones) == 4 && kAllyCount == 5);
+        Simulation sj = Duel(611, {0,0}, {0,1900}); Match& mj = sj.match;
+        auto* p = mj.Find(1); mj.Find(1000)->stunUntil = 1e9f;
+        auto& j = mj.MutableAllies()[4];
+        CHECK(j.kind == AllyKind::Jones && j.health == AllyOf(AllyKind::Jones).maxHealth);
+        j.pos = {100,0}; p->rupees = 99; CHECK(!mj.HireAlly(1,4) && p->rupees == 99);
+        p->rupees = 300; j.pos = {600,0}; CHECK(!mj.HireAlly(1,4) && p->rupees == 300);
+        j.pos = {100,0}; CHECK(mj.HireAlly(1,4) && j.owner == 1 && p->rupees == 200);
+        CHECK(!mj.HireAlly(1,4) && p->rupees == 200);
+        mj.MutableAllies()[0].pos = {100,0}; CHECK(mj.HireAlly(1,0));
+        mj.MutableAllies()[1].pos = {100,0}; CHECK(!mj.HireAlly(1,1));
+        p->pos = {1400,0}; Run(sj,12); CHECK(Distance(j.pos,p->pos) < 450);
+        auto* target=mj.Find(1000);target->pos={j.pos.x+250,j.pos.z};target->invulnUntil=0;
+        j.attackReadyAt=0;const float hp=target->health;
+        CHECK(mj.AllyStrike(j,target->id) && target->health < hp && p->damageDealt > 0);
+        CHECK(j.weapon==static_cast<uint8_t>(JonesGun::Carbine));
+        for(const auto& shot:std::array<std::pair<float,JonesGun>,4>{{{150,JonesGun::Carbine},{400,JonesGun::Assault},{700,JonesGun::Burst},{1000,JonesGun::Scoped}}}) {
+            j.attackReadyAt=0;target->health=target->maxHealth;target->armor=0;target->hasShield=false;target->gearMask=0;
+            target->rollUntil=target->adultUntil=target->dmgTakenUntil=target->frozenUntil=0;target->pos={j.pos.x+shot.first,j.pos.z};
+            CHECK(mj.AllyStrike(j,target->id) && j.weapon==static_cast<uint8_t>(shot.second));
+            CHECK(std::fabs(target->maxHealth-target->health-kJonesGuns[j.weapon].damage*kPlayerDamageScale)<.001f);
+            CHECK(!mj.AllyStrike(j,target->id)); // rifle cooldown enforced
+        }
+        target->pos={j.pos.x+1300,j.pos.z};j.attackReadyAt=0;CHECK(!mj.AllyStrike(j,target->id));
+        auto& kokiri=mj.MutableAllies()[0];kokiri.pos=j.pos;kokiri.weapon=0;kokiri.attackReadyAt=0;
+        target->pos={j.pos.x+300,j.pos.z};CHECK(mj.AllyStrike(kokiri,target->id) && kokiri.weapon==0);
+        const auto lootBefore=mj.Loot().size();
+        mj.ReleaseAlly(j,false); CHECK(!j.Hired() && j.alive);
+        CHECK(mj.Loot().size()==lootBefore);
+        mj.ReleaseAlly(j,true);CHECK(!j.alive && mj.Loot().size()==lootBefore); // private guns never become drops
+        j.alive=true;j.owner=1;
+        p->weapon={ItemId::BasicSword,Rarity::Common};p->reserve.clear();p->potions.clear();p->gearMask=0;
+        p->hasShield=p->hasAbility=false;p->ammo.fill(0);p->rupees=0;p->invulnUntil=0;
+        CHECK(mj.Damage(1,100,1000));
+        CHECK(!j.Hired() && j.alive && mj.Loot().size()==lootBefore); // owner death leaves Jones's rifles with him
+    }
     Simulation sim = Duel(11, {0, 0}, {0, 1900});
     Match& m = sim.match;
     CHECK(m.Allies().size() == static_cast<size_t>(kAllyCount));

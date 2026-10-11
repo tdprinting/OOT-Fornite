@@ -1339,6 +1339,13 @@ static void VehiclesOverTheWire() {
 }
 
 static void AlliesOverTheWire() {
+    { Snapshot a,b; AllyNet n;n.index=n.kind=4;n.weapon=3;a.allies={n};CHECK(RoundTrips(a,b) && b.allies[0].weapon==3); }
+    { Snapshot a,b; AllyNet n;n.kind=0;n.weapon=1;a.allies={n};CHECK(!RoundTrips(a,b)); }
+    { Snapshot a,b; AllyNet n;n.index=n.kind=4;n.weapon=4;a.allies={n};CHECK(!RoundTrips(a,b)); }
+    { EvAllyAction a,b;a.index=4;a.weapon=2;CHECK(RoundTrips(a,b) && b.weapon==2);a.index=0;CHECK(!RoundTrips(a,b)); }
+    { HireAllyRequest a,b; a.index=4; CHECK(RoundTrips(a,b) && b.index==4); }
+    { Snapshot a,b; for(int i=0;i<kAllyCount;++i) { AllyNet n; n.index=n.kind=static_cast<uint8_t>(i); a.allies.push_back(n); }
+      CHECK(RoundTrips(a,b) && b.allies.size()==5 && b.allies.back().kind==static_cast<uint8_t>(AllyKind::Jones)); }
     { HireAllyRequest a, b; a.index = 3; CHECK(RoundTrips(a, b) && b.index == 3); }
     { HireAllyRequest bad, out; bad.index = 9; CHECK(!RoundTrips(bad, out)); }
     { EvAlly a, b; a.index = 2; a.owner = 5; a.status = 1; CHECK(RoundTrips(a, b) && b.index == 2 && b.owner == 5 && b.status == 1); }
@@ -1363,9 +1370,13 @@ static void AlliesOverTheWire() {
     me.HireAlly(0);
     CHECK(rig.RunUntil([&] { for (const auto& a : me.Allies()) if (a.index == 0 && a.owner == me.Self()->id) return true; return false; }, 5));
     CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price);
+    self->pos=rig.M().Allies()[4].pos;
+    me.HireAlly(4);
+    CHECK(rig.RunUntil([&] { for(const auto& a:me.Allies()) if(a.index==4 && a.kind==4 && a.owner==me.Self()->id) return true; return false; },5));
+    CHECK(me.Inventory().rupees==500-AllyOf(AllyKind::Kokiri).price-AllyOf(AllyKind::Jones).price);
     me.HireAlly(0);                                                                    // again: refused, nothing changes
     rig.Run(1.0f);
-    CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price);
+    CHECK(me.Inventory().rupees == 500 - AllyOf(AllyKind::Kokiri).price - AllyOf(AllyKind::Jones).price);
 }
 
 static void ReplayOverTheWire() {
