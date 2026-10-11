@@ -7,11 +7,24 @@
           {
             "type": "command",
             "command": "python",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/rtk.py"],
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/rtk.py"
+            ],
             "timeout": 5
           }
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "caveman@caveman": true
   }
 }

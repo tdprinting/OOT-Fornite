@@ -6,7 +6,7 @@ Before editing:
 2. Find the feature in `mod/Royale/FEATURES.md`. Read only its implementation and relevant dependencies; do not preload every document or the full mod.
 3. Keep explanations brief and clear: approach and reason before substantial work; outcome, validation, and blockers afterward. Preserve useful comments and exact technical details.
 4. Use scoped `rg` searches. `.rgignore` hides dependencies, builds, assets, and generated arrays from routine searches; use explicit paths or `--no-ignore` when needed.
-5. Use `rtk` for supported verbose commands when installed; inspect raw output if needed. Local Windows install: `C:/Users/mexic/.local/bin/rtk.exe`. Caveman means concise prose without losing facts; no skill install is required to follow this preference.
+5. Use `rtk` for supported verbose commands when installed; inspect raw output if needed. Local Windows install: `C:/Users/mexic/.local/bin/rtk.exe`. Caveman means concise prose without losing facts; Claude Code projects enable the `caveman@caveman` plugin, but no install is required to follow this preference.
    Claude's project Bash hook delegates supported rewrites to RTK when installed. Other agents use RTK explicitly. The hook leaves permission decisions unchanged.
 6. Prefer local Git. For GitHub use selected JSON fields, bounded results, or `python scripts/github_brief.py pr NUMBER` / `python scripts/github_brief.py run RUN_ID --errors`. Do not dump full logs or repeatedly poll unchanged state. Never print credentials.
 7. Keep feature include order intact. Run `python scripts/check_mod_layout.py`; add relevant behavior checks and the game compile check for engine edits. Builds do not verify device gameplay.

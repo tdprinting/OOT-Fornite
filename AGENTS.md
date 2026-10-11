@@ -2,7 +2,7 @@
 
 For a new session, read `START-HERE.md` once before editing.
 
-Use one primary agent by default. Start subagents only when explicitly requested for a task. If `../AGENTS.md` exists, apply its shared project preferences alongside these checkout instructions.
+Use one primary agent by default. Claude Code also has a project team in `.claude/agents/` (Leader, Ronnie the Runner, Gary); see `CLAUDE.md`. If `../AGENTS.md` exists, apply its shared project preferences alongside these checkout instructions.
 
 - Before substantial work, briefly state the approach and why. Keep updates and replies clear, concise, and free of repetition.
 - Start with `mod/Royale/FEATURES.md`; read only the relevant feature and dependencies. Verify the branch and preserve existing edits.
