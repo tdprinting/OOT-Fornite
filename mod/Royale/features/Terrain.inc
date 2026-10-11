@@ -1071,6 +1071,10 @@ void ApplyItemCvars(bool on) {
         if (on) { gSavedItemCvars[i] = CVarGetInteger(kItemCvars[i], 0); CVarSetInteger(kItemCvars[i], 1); }
         else CVarSetInteger(kItemCvars[i], gSavedItemCvars[i]);
     }
+    // The game only swaps the child's hand-and-item models onto the adult hand (Kokiri sword, Deku shield, slingshot, boomerang) when a scene
+    // starts, so switching the enhancement on mid-scene left adult Link with a child's fist: only the handle showed. Patch them now.
+    UpdatePatchHand();
+    gRoyaleBraceletOnAdult = on ? 1 : 0;
 }
 // The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
 void SyncRealAmmo(const royale::HudState& hud) {
@@ -1161,7 +1165,10 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
     // even when currentShield is unchanged. Rebuild from the final draw equipment.
     Player_SetModelGroup(player, player->modelGroup);
     gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
-    Player_Draw(&player->actor, play);
+    {
+        NearDetail nearLod(&player->actor, NeedsNearDetail(gLocalDress.weapon, player->currentShield == PLAYER_SHIELD_DEKU));
+        Player_Draw(&player->actor, play);
+    }
     gGildedPlayer = nullptr;
     if (swapped) {
         gSaveContext.equips.buttonItems[0] = button;
