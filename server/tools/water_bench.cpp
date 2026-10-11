@@ -244,6 +244,53 @@ int main() {
                     }
         std::printf("swell: %zu points bit-identical to the old PreparedSwell::Sample\n", checked);
     }
+    // ---- 2. SwellGrid (drawing only): the same swell from per-row and per-column tables. Within 2e-3 of the old Sample for a game that has been
+    //         running up to 5 minutes; after that the old Sample's own float rounding (its phase grows with the clock: ~1e-2 units after an
+    //         hour) is the whole difference, so the grid is also checked against the exact (double) value of the same waves, which it must stay
+    //         within 2e-4 of at any time (it is ~1e-5: closer to the true swell than the old code).
+    {
+        std::vector<float> xs, zs;
+        float worstOld[7] = {}, worstOldExact[7] = {}, worstExact[7] = {};
+        const float times[7] = { 0.5f, 100.0f, 300.0f, 600.0f, 1200.0f, 3600.0f, 14400.0f };
+        for (int ti = 0; ti < 7; ti++)
+            for (float amp : { 0.35f, 1.0f, 3.8f })
+                for (float chop : { 0.0f, 1.0f })
+                    for (int e = 0; e < 6; e++) {
+                        const float t = times[ti] + e * 0.37f, ex = -11000.0f + e * 4321.7f, ez = 9000.0f - e * 3777.3f;
+                        for (const Level& L : kLevels) {
+                            GridOf(L, ex, ez, xs, zs);
+                            const ref::PreparedSwell old(t, amp, chop, 2.5f * L.cell);
+                            const PreparedSwell now(t, amp, chop, 2.5f * L.cell);
+                            SwellGrid grid;
+                            grid.Prepare(now, xs.data(), L.V, zs.data(), L.V);
+                            // the exact value of the same (float) wave constants, in double
+                            const float q = SwellSteepness(amp, chop);
+                            for (int j = 0; j < L.V; j++)
+                                for (int i = 0; i < L.V; i++) {
+                                    const SwellPoint g = grid.Sample(i, j), o = old.Sample(xs[i], zs[j]);
+                                    double h = 0, gx = 0, gz = 0, gy = 0, ox = 0, oz = 0;
+                                    for (const GerstnerWave& w : kSwell) {
+                                        const float k = kTau / w.length, a = w.amp * amp * SwellBandWeight(w.length, 2.5f * L.cell), dx = std::cos(w.angle), dz = std::sin(w.angle), ph = -k * w.speed * t;
+                                        const double th = static_cast<double>(k) * (static_cast<double>(dx) * xs[i] + static_cast<double>(dz) * zs[j]) + ph;
+                                        h += a * std::sin(th); ox += double(q) * a * dx * std::cos(th); oz += double(q) * a * dz * std::cos(th);
+                                        gx += double(dx) * k * a * std::cos(th); gz += double(dz) * k * a * std::cos(th); gy += double(q) * k * a * std::sin(th);
+                                    }
+                                    const double nl = std::sqrt(gx * gx + (1 - gy) * (1 - gy) + gz * gz);
+                                    SwellPoint x;
+                                    x.h = float(h); x.ox = float(ox); x.oz = float(oz); x.nx = float(-gx / nl); x.ny = float((1 - gy) / nl); x.nz = float(-gz / nl);
+                                    x.fold = std::clamp(float(gy / 0.92), 0.0f, 1.0f);
+                                    worstOld[ti] = std::max(worstOld[ti], MaxDiff(g, o));
+                                    worstOldExact[ti] = std::max(worstOldExact[ti], MaxDiff(o, x));
+                                    worstExact[ti] = std::max(worstExact[ti], MaxDiff(g, x));
+                                }
+                        }
+                    }
+        for (int ti = 0; ti < 7; ti++) {
+            std::printf("grid swell, clock ~%6.0f s: max diff grid vs old %.2e, old vs exact %.2e, grid vs exact %.2e\n", times[ti], worstOld[ti], worstOldExact[ti], worstExact[ti]);
+            Require(worstExact[ti] <= 2e-4f, "SwellGrid within 2e-4 of the exact swell");
+            if (times[ti] <= 300.0f) Require(worstOld[ti] <= 2e-3f, "SwellGrid within 2e-3 of the old Sample (first 5 minutes)");
+        }
+    }
     // ---- timings: one frame of the water sheet's swell (all three meshes), old against new
     {
         std::vector<float> xs, zs;
@@ -263,7 +310,11 @@ int main() {
             const PreparedSwell s(t, a, c, 2.5f * L.cell); float acc = 0;
             for (int j = 0; j < L.V; j++) for (int i = 0; i < L.V; i++) acc += s.Sample(xs[i], zs[j]).h;
             return acc; }); });
-        std::printf("swell per frame: old %.1f us, zero waves skipped %.1f us (%.1fx)\n", before, skip, before / skip);
+        const double grid = TimeUs(reps, [&](int r) { frame(r, [&](const Level& L, float t, float a, float c) {
+            const PreparedSwell s(t, a, c, 2.5f * L.cell); SwellGrid g; g.Prepare(s, xs.data(), L.V, zs.data(), L.V); float acc = 0;
+            for (int j = 0; j < L.V; j++) for (int i = 0; i < L.V; i++) acc += g.Sample(i, j).h;
+            return acc; }); });
+        std::printf("swell per frame: old %.1f us, zero waves skipped %.1f us (%.1fx), grid tables %.1f us (%.1fx)\n", before, skip, before / skip, grid, before / grid);
     }
     if (failures) { std::fprintf(stderr, "%d check(s) failed\n", failures); return 1; }
     return 0;

@@ -907,6 +907,11 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         // Only waves this mesh can draw (longer than about two and a half of its squares): shorter ones land on a random phase at each point, so
         // neighbouring squares get unrelated heights, tilts and sun glints, and the water reads as a patchwork of squares.
         const rw::PreparedSwell swell(t, amp, chop, 2.5f * L.cell);
+        // The mesh's points are a regular grid: the swell comes from per-row and per-column tables (rw::SwellGrid, drawing only), made the
+        // first time a point needs it.
+        static rw::SwellGrid swellGrid;
+        static std::vector<float> gridX, gridZ;
+        bool gridReady = false;
         float lastSurface = baseY;
         for (int j = 0; j < V; j++)
             for (int i = 0; i < V; i++) {
@@ -920,7 +925,13 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 alphaA[id] = ss01((c.depth + 8.0f) / 10.0f);   // the waterline: the surface fades in as the floor drops under it, and the floor's depth test cuts it
                 if (alphaA[id] <= 0.0f || fadeA[id] <= 0.0f) continue;
                 shoreA[id] = std::min(1.0f, std::max(0.0f, c.depth) / 90.0f);
-                sps[id] = swell.Sample(wx, wz);
+                if (!gridReady) {
+                    gridX.resize(static_cast<size_t>(V)); gridZ.resize(static_cast<size_t>(V));
+                    for (int k = 0; k < V; k++) { gridX[k] = (L.gi0 + k - n / 2) * L.cell; gridZ[k] = (L.gj0 + k - n / 2) * L.cell; }
+                    swellGrid.Prepare(swell, gridX.data(), V, gridZ.data(), V);
+                    gridReady = true;
+                }
+                sps[id] = swellGrid.Sample(i, j);
                 if (l < 2 && (gWaterWakes || gWaterRipples)) pushRaw[id] = WaterDisplaceAt(wx, wz, &wakeFoam[id]) * kWaterPush;
             }
         for (int j = 0; j < V; j++)

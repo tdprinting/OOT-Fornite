@@ -57,6 +57,7 @@ class PreparedSwell {
     int count_ = 0;   // the waves with any height (in order): a band-limited grid or a zero amplitude leaves the rest at a = 0, and adding
                       // a * sin = 0 changes no sum, so leaving them out gives the very same numbers with fewer sines (a coarse mesh keeps 1 of 8)
     float q_;
+    friend class SwellGrid;
 public:
     PreparedSwell(float t, float amp, float chop, float minLength = 0.0f) : q_(SwellSteepness(std::max(0.0f, amp), chop)) {
         for (int i = 0; i < kSwellCount; ++i) {
@@ -86,6 +87,56 @@ public:
     }
 };
 
+// For drawing only: the same swell on a regular grid (the water mesh), x = xs[i] and z = zs[j]. A wave's phase there is a part that depends on
+// x plus a part that depends on z, so its sine and cosine come from two small tables by the angle-addition rule (sin(A+B) = sin A cos B +
+// cos A sin B) instead of a sine and a cosine per point: about six times faster. The tables are made in double, so the result differs from
+// Sample only by float rounding (at most ~1e-3, as Sample's own rounding at large coordinates; server/tools/water_bench.cpp checks it).
+// Anything gameplay reads (swimming, boats, splashes) keeps calling PreparedSwell::Sample.
+class SwellGrid {
+    struct W { float k, a, dx, dz; };
+    W w_[kSwellCount];
+    int count_ = 0, nx_ = 0;
+    float q_ = 0.0f;
+    std::vector<float> sx_, cx_, sz_, cz_;   // [wave * n + i]: sine and cosine of the x part (with the wave's phase) and of the z part
+public:
+    void Prepare(const PreparedSwell& s, const float* xs, int nx, const float* zs, int nz) {
+        count_ = s.count_; q_ = s.q_; nx_ = nx;
+        sx_.resize(static_cast<size_t>(count_) * nx); cx_.resize(sx_.size());
+        sz_.resize(static_cast<size_t>(count_) * nz); cz_.resize(sz_.size());
+        for (int w = 0; w < count_; ++w) {
+            const auto& v = s.waves_[w];
+            w_[w] = {v.k, v.a, v.dx, v.dz};
+            for (int i = 0; i < nx; ++i) {
+                const double a = static_cast<double>(v.k) * (static_cast<double>(v.dx) * xs[i]) + v.phase;
+                sx_[static_cast<size_t>(w) * nx + i] = static_cast<float>(std::sin(a)); cx_[static_cast<size_t>(w) * nx + i] = static_cast<float>(std::cos(a));
+            }
+            for (int j = 0; j < nz; ++j) {
+                const double b = static_cast<double>(v.k) * (static_cast<double>(v.dz) * zs[j]);
+                sz_[static_cast<size_t>(w) * nz + j] = static_cast<float>(std::sin(b)); cz_[static_cast<size_t>(w) * nz + j] = static_cast<float>(std::cos(b));
+            }
+        }
+    }
+    SwellPoint Sample(int i, int j) const {
+        SwellPoint p;
+        float gx = 0, gz = 0, gy = 0;
+        const size_t nz = count_ > 0 ? sz_.size() / static_cast<size_t>(count_) : 0;
+        for (int k = 0; k < count_; ++k) {
+            const W& w = w_[k];
+            const float sa = sx_[static_cast<size_t>(k) * nx_ + i], ca = cx_[static_cast<size_t>(k) * nx_ + i];
+            const float sb = sz_[k * nz + j], cb = cz_[k * nz + j];
+            const float s = sa * cb + ca * sb, c = ca * cb - sa * sb;
+            p.h += w.a * s;
+            p.ox += q_ * w.a * w.dx * c; p.oz += q_ * w.a * w.dz * c;
+            gx += w.dx * w.k * w.a * c; gz += w.dz * w.k * w.a * c;
+            gy += q_ * w.k * w.a * s;
+        }
+        p.nx = -gx; p.ny = 1 - gy; p.nz = -gz;
+        const float l = std::sqrt(p.nx*p.nx + p.ny*p.ny + p.nz*p.nz);
+        p.nx /= l; p.ny /= l; p.nz /= l;
+        p.fold = std::clamp(gy / 0.92f, 0.0f, 1.0f);
+        return p;
+    }
+};
 inline SwellPoint Swell(float x, float z, float t, float amp, float chop) {
     return PreparedSwell(t, amp, chop).Sample(x, z);
 }
