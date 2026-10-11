@@ -53,7 +53,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kKingdomMapIndex);   // Hyrule Kingdom is the main map
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kMoonfallMapIndex);   // Moonfall Isle is the main map
         if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));

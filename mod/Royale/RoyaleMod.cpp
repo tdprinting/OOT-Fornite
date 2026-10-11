@@ -41,6 +41,12 @@ namespace royale { namespace riftlands {
 using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
 using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 } }
+#include "moonfall_layout.h"
+#include "moonfall_model.h"
+namespace royale { namespace moonfall {
+using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
+using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
+} }
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
