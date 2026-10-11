@@ -149,6 +149,54 @@ inline uint32_t MeshVariant(const Patch& p, bool frozen) {
     }
 }
 
+// ---- lying on the ground: a patch is a rigid mesh, so it is laid on the plane the ground under it makes, not on the level -------------------------
+// The game measures the floor at 17 points of the patch's ellipse (its middle, then two rings of eight at half and full size: FitOffset) and FitPlane
+// lays a plane through them. A patch that would have the ground rising through it (a wall, a ledge, a boulder at its edge) or hanging away
+// from it (a cliff edge) is drawn at half size instead, or left out when even that does not lie flat, so heaps no longer stand on slopes with one
+// side in the air and the other buried, or poke through walls.
+constexpr int kFitPoints = 17;
+constexpr float kFitMaxSlope = 0.85f;   // steeper than this (rise over run, about 40 degrees) and nothing settles
+inline void FitOffset(int i, float a, float b, float yaw, float* ox, float* oz) {
+    float lx = 0.0f, lz = 0.0f;
+    if (i > 0) {
+        const int ring = (i - 1) / 8;
+        const float ang = ((i - 1) % 8) * 0.78539816f, r = ring == 0 ? 0.5f : 1.0f;
+        lx = std::cos(ang) * a * r; lz = std::sin(ang) * b * r;
+    }
+    const float ys = std::sin(yaw), yc = std::cos(yaw);
+    *ox = lx * yc + lz * ys; *oz = -lx * ys + lz * yc;
+}
+struct Fit { bool ok = false; float y = 0, sx = 0, sz = 0, lift = 0, scale = 1; };
+// `h[i]` the floor's height at (ox[i], oz[i]) from the middle (only where `have[i]`), the offsets being FitOffset's. y is the plane's height at the
+// middle, sx and sz its slope along x and z, lift how far to raise the mesh so the highest ground inside it stays under it, scale how much of its
+// size lies flat.
+inline Fit FitPlane(const float* h, const bool* have, const float* ox, const float* oz, float a, float b) {
+    Fit f;
+    for (int rings = 2; rings >= 1; rings--) {
+        const int n = 1 + 8 * rings;
+        bool all = true;
+        for (int i = 0; i < n; i++) all = all && have[i];
+        if (!all) continue;
+        float sum = 0.0f;
+        for (int i = 0; i < n; i++) sum += h[i];
+        const float y0 = sum / static_cast<float>(n);
+        float hx = 0, hz = 0, dxx = 0, dzz = 0, dxz = 0;   // least squares for the slopes; the offsets are turned by the patch's yaw, so the two are coupled
+        for (int i = 1; i < n; i++) { hx += (h[i] - y0) * ox[i]; hz += (h[i] - y0) * oz[i]; dxx += ox[i] * ox[i]; dzz += oz[i] * oz[i]; dxz += ox[i] * oz[i]; }
+        const float det = dxx * dzz - dxz * dxz;
+        const float sx = det > 1.0f ? (hx * dzz - hz * dxz) / det : 0.0f, sz = det > 1.0f ? (hz * dxx - hx * dxz) / det : 0.0f;
+        const float scale = rings == 2 ? 1.0f : 0.5f, tol = 5.0f + 0.12f * std::max(a, b) * scale;
+        float worst = 0.0f, up = 0.0f;
+        for (int i = 0; i < n; i++) {
+            const float r = h[i] - (y0 + sx * ox[i] + sz * oz[i]);
+            worst = std::max(worst, std::fabs(r)); up = std::max(up, r);
+        }
+        if (worst > tol || std::hypot(sx, sz) > kFitMaxSlope) continue;
+        f.ok = true; f.y = y0; f.sx = sx; f.sz = sz; f.lift = std::min(up, tol); f.scale = scale;
+        return f;
+    }
+    return f;
+}
+
 // The mud bank that goes with a puddle (the same outline as the puddle's own shape).
 inline uint32_t BankVariant(const Patch& p) { return kBankFirst + p.shape % kBankShapes; }
 

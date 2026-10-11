@@ -584,7 +584,11 @@ void WarBuild() {
                 {"Underwater effects",ROYALE_CVAR("WaterUnder"),1},{"Water currents",ROYALE_CVAR("WaterCurrent"),1},{"Choppy crests",ROYALE_CVAR("WaterChop"),60,0,200,10},
                 {"Sun glints",ROYALE_CVAR("WaterGlints"),1},{"Glint strength",ROYALE_CVAR("WaterGlintAmt"),100,0,200,10},{"Caustics",ROYALE_CVAR("WaterCaustics"),1},
                 {"Caustic strength",ROYALE_CVAR("WaterCausticAmt"),100,0,200,10},{"Shore foam",ROYALE_CVAR("WaterFoamTex"),1},{"Foam strength",ROYALE_CVAR("WaterFoamAmt"),100,0,200,10},
-                {"Ripple simulation",ROYALE_CVAR("WaterRipples"),1},{"Underwater strength",ROYALE_CVAR("WaterUnderAmt"),100,0,200,10}});
+                {"Ripple simulation",ROYALE_CVAR("WaterRipples"),1},{"Underwater strength",ROYALE_CVAR("WaterUnderAmt"),100,0,200,10},
+                {"Sparse sparkle",ROYALE_CVAR("WaterSparkle"),1,0,1,1,"Bright sparse glints on the sun's path instead of an even net"},
+                {"Foam streaks",ROYALE_CVAR("WaterStreaks"),1,0,1,1,"Wind-blown foam streaks and whitecaps on the swell; needs Water detail 1 or more"},
+                {"Rolling swell shading",ROYALE_CVAR("WaterBands"),1,0,1,1,"Light and shade of rolling waves between the grid; needs Water detail 2"},
+                {"Horizon haze",ROYALE_CVAR("WaterHaze"),100,0,200,10,"How much the far sea melts into the sky"},{"Deep water tone",ROYALE_CVAR("WaterTone"),100,0,200,10,"How deep blue the troughs go and how rich the colour is"}});
         } else if(gWar.section==9) {
             WarOptions({
                 {"Hit particles",ROYALE_CVAR("HitParticles"),1},{"Scale hit effects",ROYALE_CVAR("HitScaled"),1},{"Effects on your Link",ROYALE_CVAR("HitOnSelf"),1},
