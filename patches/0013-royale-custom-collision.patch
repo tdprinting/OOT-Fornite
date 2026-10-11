@@ -1,8 +1,8 @@
 diff --git a/soh/soh/z_scene_otr.cpp b/soh/soh/z_scene_otr.cpp
-index b4f8a29..eba497b 100644
+index b4f8a29..f7a3afe 100644
 --- a/soh/soh/z_scene_otr.cpp
 +++ b/soh/soh/z_scene_otr.cpp
-@@ -71,10 +71,14 @@ bool Scene_CommandUnused2(PlayState* play, SOH::ISceneCommand* cmd) {
+@@ -71,10 +71,29 @@ bool Scene_CommandUnused2(PlayState* play, SOH::ISceneCommand* cmd) {
      return false;
  }
  
@@ -14,7 +14,22 @@ index b4f8a29..eba497b 100644
      SOH::SetCollisionHeader* cmdCol = (SOH::SetCollisionHeader*)cmd;
 -    BgCheck_Allocate(&play->colCtx, play, (CollisionHeader*)cmdCol->GetRawPointer());
 +    CollisionHeader* royaleHeader = Royale_CustomCollision(play);
-+    BgCheck_Allocate(&play->colCtx, play, royaleHeader != NULL ? royaleHeader : (CollisionHeader*)cmdCol->GetRawPointer());
++    CollisionHeader* header = royaleHeader != NULL ? royaleHeader : (CollisionHeader*)cmdCol->GetRawPointer();
++    if (header == NULL) {
++        // OOT Royale: the scene's collision did not load. Use an empty one so the scene still opens (and the log says which
++        // file failed) instead of crashing in BgCheck_Allocate on a null header.
++        static SurfaceType sEmptySurface[1] = {};
++        static CamData sEmptyCam[1] = {};
++        static CollisionHeader sEmptyHeader = {};
++        sEmptyHeader.minBounds = { -32000, -32000, -32000 };
++        sEmptyHeader.maxBounds = { 32000, 32000, 32000 };
++        sEmptyHeader.surfaceTypeList = sEmptySurface;
++        sEmptyHeader.cameraDataList = sEmptyCam;
++        sEmptyHeader.cameraDataListLen = 1;
++        SPDLOG_ERROR("Scene collision {} did not load; using an empty collision", cmdCol->fileName);
++        header = &sEmptyHeader;
++    }
++    BgCheck_Allocate(&play->colCtx, play, header);
  
      return false;
  }
