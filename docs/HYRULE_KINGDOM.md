@@ -14,7 +14,7 @@ Seven of them hold a mini boss at their authored home, matched by place so the k
 
 `tools/maps/kingdom/` holds the Python and Blender sources: `terrain.py` (heightmap, colours, water), `textures.py` (37 hand-painted 128 x 128 textures), `kit.py` (houses with interiors, towers, bridges, walls, trees), `pois.py` (the 17 place builders), `layout.py`/`world.py`, `blender_build.py` (renders and previews). `export.py` bakes the result into `shared/kingdom_data.h` (terrain, collision, obstacles, buildings, walkways, chest sites, regions) and `shared/kingdom_model.h` (drawing data). `surface_maps.py` makes the bump and normal maps. Run `python3 tools/maps/kingdom/export.py` after changing a builder (about a minute).
 
-- Collision is baked terrain plus every solid. Polygon indices go past the 13-bit limit of the original collision loader, so patch 0025 widens the one place that truncated them.
+- Collision is baked terrain plus every solid. Vertex and triangle numbers are 32 bit in the game (patch 0029, docs/ENGINE_LIMITS.md), so the map is not held to the original 13-bit loader.
 - Buildings have furnished interiors, doorways and no loading zones. Upper floors are reached by ramps inside, and roofs by ramps or ivy.
 - Chests sit at 84 authored sites (`kLootSites`, with a height each), balanced by the placement rules in `docs/PLACEMENT.md`.
 - Exterior stone, rock, wood, roof, thatch, cobble, plaster and bark triangles are drawn lit with a fixed sun and use the surface bump and normal maps of the Graphics page ("Surface detail"). Interiors keep their baked light.

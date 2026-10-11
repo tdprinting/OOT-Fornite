@@ -1,6 +1,7 @@
 #include "../game_server.h"
 #include "../../shared/loopback.h"
 #include "../../shared/riftlands_model.h"
+#include "../../shared/engine_limits.h"
 #include <cstdio>
 #include <set>
 #include <string>
@@ -22,9 +23,9 @@ int main() {
     fortnite::UseTerrainForMap(11);
     CHECK(fortnite::gHeightData==riftlands::kHeights);
     auto collision=fortnite::BuildCollision();
-    CHECK(collision.verts.size()<65536 && collision.polys.size()<65536);
+    CHECK(collision.verts.size()<=royale::engine::kCollisionMaxVertices && collision.polys.size()<=royale::engine::kCollisionMaxPolygons);
     for(const auto& p:collision.polys) {
-        CHECK(p.a<8191 && p.b<8191 && p.c<collision.verts.size());
+        CHECK(p.a<collision.verts.size() && p.b<collision.verts.size() && p.c<collision.verts.size());
         CHECK(p.surface<std::size(riftlands::kSurfaces));
         const float length=std::sqrt(float(p.nx)*p.nx+float(p.ny)*p.ny+float(p.nz)*p.nz);
         CHECK(length>32760 && length<32775);

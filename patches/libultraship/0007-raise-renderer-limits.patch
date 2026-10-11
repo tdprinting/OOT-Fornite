@@ -1,0 +1,56 @@
+diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
+index b746729..37d3018 100644
+--- a/src/graphic/Fast3D/gfx_pc.cpp
++++ b/src/graphic/Fast3D/gfx_pc.cpp
+@@ -70,7 +70,7 @@ using namespace std;
+ #define RATIO_Y \
+     ((fbActive ? active_fb->second.applied_height : gfx_current_dimensions.height) / (2.0f * HALF_SCREEN_HEIGHT))
+ 
+-#define TEXTURE_CACHE_MAX_SIZE 500
++#define TEXTURE_CACHE_MAX_SIZE 2048 // OOT Royale: textures kept on the GPU before the cache is flushed (was 500); 256 x 256 is the baseline now
+ 
+ static struct {
+     TextureCacheMap map;
+@@ -1265,6 +1265,13 @@ static void gfx_adjust_width_height_for_scale(uint32_t& width, uint32_t& height,
+ }
+ 
+ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const F3DVtx* vertices) {
++    // OOT Royale: a load past the end of the cache wrote over the rest of the renderer state. Clamp it instead.
++    if (dest_index >= MAX_VERTICES) {
++        return;
++    }
++    if (n_vertices > MAX_VERTICES - dest_index) {
++        n_vertices = MAX_VERTICES - dest_index;
++    }
+     for (size_t i = 0; i < n_vertices; i++, dest_index++) {
+         const F3DVtx_t* v = &vertices[i].v;
+         const F3DVtx_tn* vn = &vertices[i].n;
+@@ -1465,6 +1472,9 @@ static void gfx_sp_vertex(size_t n_vertices, size_t dest_index, const F3DVtx* ve
+ 
+ static void gfx_sp_modify_vertex(uint16_t vtx_idx, uint8_t where, uint32_t val) {
+     SUPPORT_CHECK(where == G_MWO_POINT_ST);
++    if (vtx_idx >= MAX_VERTICES) {
++        return; // OOT Royale: an unchecked number here wrote past the vertex cache (a garbage display list crashed in this handler)
++    }
+ 
+     int16_t s = (int16_t)(val >> 16);
+     int16_t t = (int16_t)val;
+diff --git a/src/graphic/Fast3D/gfx_pc.h b/src/graphic/Fast3D/gfx_pc.h
+index 1743edb..6767ee8 100644
+--- a/src/graphic/Fast3D/gfx_pc.h
++++ b/src/graphic/Fast3D/gfx_pc.h
+@@ -127,10 +127,12 @@ struct ShaderMod {
+     uint8_t type;
+ };
+ 
+-#define MAX_BUFFERED 256
++#define MAX_BUFFERED 1024 // OOT Royale: triangles batched per draw call (was 256): fewer draw calls for big models and maps
+ // #define MAX_LIGHTS 2
+ #define MAX_LIGHTS 32
+-#define MAX_VERTICES 64
++// OOT Royale: the vertex cache (was 64). 128 is the most the F3DEX2 commands can address (G_VTX and G_TRI keep a vertex number in 7 bits), so a
++// gSPVertex can now load up to 128 vertices at once instead of overflowing past 64.
++#define MAX_VERTICES 128
+ 
+ struct RSP {
+     float modelview_matrix_stack[11][4][4];

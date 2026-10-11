@@ -2,8 +2,8 @@
 buildings and trees, 128 x 128 textures). Run:  python3 tools/maps/kingdom/export.py   (about a minute).
 
 Collision is baked into the scene: the terrain's triangles plus every building, tower, bridge and big rock, with a surface per triangle (footsteps,
-climbable ivy and cliffs, hook-shot wood). The game keeps a collision vertex number in 13 bits for the first two corners of a triangle and 16 for the
-third (patches/0025), so every triangle is written with at most one corner in the high range."""
+climbable ivy and cliffs, hook-shot wood). The game keeps collision vertex and triangle numbers in 32 bits (patches/0029, shared/engine_limits.h), so
+the old packing for 13-bit corners (LOW) no longer has to move any vertex; it is kept so a smaller LOW can still be tried."""
 import os, sys, math, argparse
 sys.path.insert(0, os.path.dirname(__file__))
 import numpy as np
@@ -12,7 +12,7 @@ from layout import *
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 KINDS = BOSS_KINDS
-LOW = 8190          # vertex numbers below this are usable in any corner
+LOW = (1 << 29) - 2  # vertex numbers below this are usable in any corner (was 8190 with 13-bit corners)
 
 def arr(f, typ, name, rows, fmt=None):
     f.write('inline constexpr %s %s[] = {\n' % (typ, name))
@@ -212,7 +212,7 @@ def main():
         f.write('inline constexpr char kCover[] =\n' + ''.join('"' + ''.join(cover[j]) + '"\n' for j in range(256)) + ';\n')
         f.write('struct Surface { uint8_t sfx; bool climb, hook; };\n')
         arr(f, 'Surface', 'kSurfaces', [(s, 'true' if c else 'false', 'true' if k else 'false') for s, c, k in surfaces])
-        f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint16_t a,b,c; int16_t nx,ny,nz,dist; uint8_t surface; int16_t y; uint16_t radius; };\n')
+        f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint32_t a,b,c; int16_t nx,ny,nz,dist; uint8_t surface; int16_t y; uint16_t radius; };\n')
         arr(f, 'Vertex', 'kCollisionVertices', verts); arr(f, 'Triangle', 'kCollisionTriangles', tris)
         f.write('struct PropCollider { int16_t x0,y0,z0,x1,y1,z1; const char* name; };\n'); arr(f, 'PropCollider', 'kPropColliders', props)
         f.write('struct Obstacle { float x0,x1,z0,z1; };\n'); arr(f, 'Obstacle', 'kObstacles', obs)
