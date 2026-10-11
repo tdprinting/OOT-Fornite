@@ -158,6 +158,51 @@ index 5314f98..9eddbeb 100644
      /* 0x14 */ ScaleRotPos prevTransform;
      /* 0x34 */ ScaleRotPos curTransform;
      /* 0x54 */ Sphere16 boundingSphere;
+diff --git a/soh/soh/resource/type/CollisionHeader.h b/soh/soh/resource/type/CollisionHeader.h
+index 1514374..509c757 100644
+--- a/soh/soh/resource/type/CollisionHeader.h
++++ b/soh/soh/resource/type/CollisionHeader.h
+@@ -10,20 +10,22 @@ namespace SOH {
+ 
+ typedef struct {
+     /* 0x00 */ u16 type;
++    // OOT Royale: must match CollisionPoly in z64bgcheck.h (32-bit vertex numbers, flags in bits 29-31). The game reads this
++    // resource through that struct; with the old 16-bit layout every scene's polygons were read at the wrong stride.
+     union {
+-        u16 vtxData[3];
++        u32 vtxData[3];
+         struct {
+-            /* 0x02 */ u16 flags_vIA; // 0xE000 is poly exclusion flags (xpFlags), 0x1FFF is vtxId
+-            /* 0x04 */ u16 flags_vIB; // 0xE000 is flags, 0x1FFF is vtxId
+-                                      // 0x2000 = poly IsConveyor surface
+-            /* 0x06 */ u16 vIC;
++            u32 flags_vIA; // 0xE0000000 is poly exclusion flags (xpFlags), 0x1FFFFFFF is vtxId
++            u32 flags_vIB; // 0xE0000000 is flags, 0x1FFFFFFF is vtxId
++                           // 0x20000000 = poly IsConveyor surface
++            u32 vIC;
+         };
+     };
+     /* 0x08 */ Vec3s normal; // Unit normal vector
+                              // Value ranges from -0x7FFF to 0x7FFF, representing -1.0 to 1.0; 0x8000 is invalid
+ 
+     /* 0x0E */ s16 dist; // Plane distance from origin along the normal
+-} CollisionPoly;         // size = 0x10
++} CollisionPoly;         // size = 0x18 (OOT Royale: 32-bit vertex numbers)
+ 
+ typedef struct {
+     /* 0x00 */ s16 xMin;
+@@ -55,9 +57,9 @@ typedef struct {
+ typedef struct {
+     /* 0x00 */ Vec3s minBounds; // minimum coordinates of poly bounding box
+     /* 0x06 */ Vec3s maxBounds; // maximum coordinates of poly bounding box
+-    /* 0x0C */ u16 numVertices;
++    /* 0x0C */ u32 numVertices; // OOT Royale: 32 bit, as in z64bgcheck.h
+     /* 0x10 */ Vec3s* vtxList;
+-    /* 0x14 */ u16 numPolygons;
++    /* 0x14 */ u32 numPolygons; // OOT Royale: 32 bit, as in z64bgcheck.h
+     /* 0x18 */ CollisionPoly* polyList;
+     /* 0x1C */ SurfaceType* surfaceTypeList;
+     /* 0x20 */ CamData* cameraDataList;
 diff --git a/soh/soh/resource/importer/CollisionHeaderFactory.cpp b/soh/soh/resource/importer/CollisionHeaderFactory.cpp
 index 35e51d2..a206555 100644
 --- a/soh/soh/resource/importer/CollisionHeaderFactory.cpp
