@@ -5,22 +5,10 @@ Requires the engine source and Visual Studio C++ tools; never modifies the engin
 """
 from pathlib import Path
 import argparse
-import re
 import subprocess
+from mod_source import function
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def function(source, name):
-    match = re.search(r"^[^\n;]*\b" + name + r"\([^;]*?\)\s*\{", source, re.M)
-    assert match, name
-    start = match.start()
-    depth = 1
-    end = match.end()
-    while depth:
-        depth += (source[end] == "{") - (source[end] == "}")
-        end += 1
-    return source[start:end]
 
 
 def main():

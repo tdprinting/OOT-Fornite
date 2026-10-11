@@ -119,3 +119,13 @@ add_test(NAME royale_bokoblin_model_tests COMMAND royale_bokoblin_model_tests)
 add_executable(royale_ally_model_tests tests/ally_model_tests.cpp)
 target_link_libraries(royale_ally_model_tests PRIVATE royale_core)
 add_test(NAME royale_ally_model_tests COMMAND royale_ally_model_tests)
+
+# Feature smokes (docs/TEST_TOOL_DESIGN.md layer 1): one scripted loopback match per feature. Run: royale_feature_smoke [--list] [--seed N] [name...]
+add_executable(royale_feature_smoke tests/feature_smoke.cpp)
+target_link_libraries(royale_feature_smoke PRIVATE royale_core)
+if(MSVC)
+    target_compile_options(royale_feature_smoke PRIVATE /UNDEBUG /bigobj)
+else()
+    target_compile_options(royale_feature_smoke PRIVATE -UNDEBUG)
+endif()
+add_test(NAME royale_feature_smoke COMMAND royale_feature_smoke)

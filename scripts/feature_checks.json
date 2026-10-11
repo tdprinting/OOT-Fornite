@@ -1,0 +1,184 @@
+{
+  "_doc": "Feature check registry (docs/TEST_TOOL_DESIGN.md). One row per mod feature .inc plus the other parts of the repo. files: globs (path#symbol = that file) that --changed maps to the row. ctest: server test executables (layer 0). run: scripts (layer 0; {cmd, needs} skips when a tool or path is missing). smoke: royale_feature_smoke names (layer 1). fn: scripts/mod_function_tests names (layer 2b). device: SelfTest.inc step names (layer 3). manual: what only a person can confirm. New feature: a row and a check in the same PR.",
+  "core": {
+    "files": ["mod/Royale/features/Core.inc", "mod/Royale/RoyaleMod.cpp", "mod/Royale/build_version.h", "shared/graphics_layers.h", "shared/graphics_stability.h", "shared/frame_cache.h"],
+    "ctest": ["royale_graphics_layers_tests", "royale_graphics_tests"],
+    "fn": ["regular_switches"],
+    "device": ["graphics.pool"]
+  },
+  "link_anims": {
+    "files": ["mod/Royale/features/LinkAnims.inc", "shared/link_anims.h", "tools/link_anims/**"],
+    "fn": ["link_anims"],
+    "device": ["link_anims.jump"],
+    "manual": ["the jump, landing and sprint look right on Link and on other players"]
+  },
+  "players": {
+    "files": ["mod/Royale/features/Players.inc", "shared/anim.h"],
+    "ctest": ["royale_net_tests"],
+    "fn": ["equipment"],
+    "manual": ["other players' animations, sounds and tunics"]
+  },
+  "skins": {
+    "files": ["mod/Royale/features/Skins.inc", "shared/skins.h", "shared/skin_*.h", "tools/skins/**", "patches/0031-*"],
+    "ctest": ["royale_tests", "royale_net_tests"],
+    "smoke": ["skins"],
+    "fn": ["skins_math"],
+    "device": ["skins.draw"],
+    "manual": ["the Link HD body follows every animation (sword, shield, climbing, swimming)"]
+  },
+  "ragdolls": { "files": ["mod/Royale/features/Ragdolls.inc"], "manual": ["death ragdolls and the lobby ragdoll"] },
+  "world_objects": {
+    "files": ["mod/Royale/features/WorldObjects.inc", "mod/Royale/RoyaleBosses.h", "mod/Royale/bosses/**", "mod/Royale/RoyaleBokoblins.h", "mod/Royale/RoyaleChuChu.h", "shared/loot.h", "shared/boss.h", "shared/bokoblin*.h", "shared/chuchu_model.h", "shared/items.h", "shared/combat.h"],
+    "ctest": ["royale_tests", "royale_bokoblin_tests", "royale_boss_arena_tests", "royale_bokoblin_model_tests"],
+    "device": ["loot.actors"],
+    "manual": ["chests, loot and bosses draw"]
+  },
+  "victory_crown": { "files": ["mod/Royale/features/VictoryCrown.inc"], "manual": ["the winner's crown"] },
+  "ground_weather": {
+    "files": ["mod/Royale/features/GroundWeather.inc", "shared/ground_patches.h", "shared/weather.h", "shared/glider_model.h", "shared/cloth.h"],
+    "ctest": ["royale_tests"],
+    "manual": ["glider, foliage and ground patches"]
+  },
+  "atmosphere": {
+    "files": ["mod/Royale/features/Atmosphere.inc", "shared/storm.h", "shared/sky_model.h"],
+    "ctest": ["royale_tests"],
+    "manual": ["storm wall, sky, fog, wind"]
+  },
+  "projectiles": {
+    "files": ["mod/Royale/features/Projectiles.inc", "tools/shockwave_grenade/**"],
+    "smoke": ["shockwave"],
+    "fn": ["equipment"],
+    "manual": ["the Shockwave Grenade bounces, then launches you"]
+  },
+  "hud": {
+    "files": ["mod/Royale/features/Hud.inc", "shared/controls.h"],
+    "device": ["hud.window"],
+    "manual": ["the in-match HUD looks right"]
+  },
+  "oot_vitals": { "files": ["mod/Royale/features/OotVitals.inc"], "manual": ["hearts, magic and shield textures"] },
+  "effects": { "files": ["mod/Royale/features/Effects.inc"], "manual": ["logo, banners, chest/boss/hit effects"] },
+  "start_screen": {
+    "files": ["mod/Royale/features/StartScreen.inc", "shared/title_scene.h", "tools/title_scene/**", "patches/0010-*"],
+    "ctest": ["royale_title_scene_tests"],
+    "manual": ["the start screen: island, logo flames, Press Start, music"]
+  },
+  "end_match": {
+    "files": ["mod/Royale/features/EndMatch.inc", "shared/replay.h"],
+    "ctest": ["royale_net_tests"],
+    "manual": ["death, spectator, results and end screen"]
+  },
+  "squads": {
+    "files": ["mod/Royale/features/Squads.inc", "server/match.h#Knock"],
+    "ctest": ["royale_tests", "royale_net_tests"],
+    "smoke": ["teams"],
+    "fn": ["squads"],
+    "manual": ["L pings and A revives in Duos with a second phone", "a Deku launch pad throws you into the glider"]
+  },
+  "vehicles": {
+    "files": ["mod/Royale/features/Vehicles.inc", "shared/vehicle.h", "shared/cart_*.h"],
+    "ctest": ["royale_tests", "royale_net_tests"],
+    "manual": ["emotes and the Lon Lon Buggy"]
+  },
+  "battle_bus": {
+    "files": ["mod/Royale/features/BattleBus.inc", "shared/bus.h", "shared/bus_*.h"],
+    "ctest": ["royale_tests", "royale_net_tests"],
+    "smoke": ["bus", "match_flow"],
+    "manual": ["the bus ride, the horn and the jump in a real match"]
+  },
+  "music_diagnostics": {
+    "files": ["mod/Royale/features/MusicDiagnostics.inc", "shared/oot_*.h", "shared/basic_pitch*.h", "shared/tune.h", "patches/0030-*", "patches/0017-*"],
+    "ctest": ["royale_music_tests"],
+    "device": ["startup.guard"],
+    "manual": ["a custom song plays"]
+  },
+  "scenery": { "files": ["mod/Royale/features/Scenery.inc", "shared/props.h", "shared/scenery_model.h"], "ctest": ["royale_tests"], "manual": ["angry villagers"] },
+  "water": {
+    "files": ["mod/Royale/features/Water.inc", "shared/water_*.h", "tools/water/**"],
+    "ctest": ["royale_water_tests", "royale_water_bench"],
+    "run": ["scripts/test_water_draw_buffers.py"],
+    "manual": ["water looks right; the game's own water is hidden"]
+  },
+  "terrain": {
+    "files": ["mod/Royale/features/Terrain.inc", "shared/terrain.h", "shared/placement.h", "shared/fortnite_*.h", "shared/sandbox_*.h", "shared/island_anchors.h", "shared/engine_limits.h", "patches/0013-*", "patches/0029-*", "patches/0025b-*"],
+    "ctest": ["royale_tests"],
+    "fn": ["equipment"],
+    "device": ["scene.loaded"],
+    "manual": ["no fall-through or invisible walls on Moonfall and Skyloft"]
+  },
+  "lobby": {
+    "files": ["mod/Royale/features/Lobby.inc", "mod/Royale/RoyaleLobbyFish.h", "shared/lobby_fish*.h", "shared/lobby_reef_geometry.h"],
+    "ctest": ["royale_fish_tests"],
+    "manual": ["the waiting room, sandbox buttons and aquarium"]
+  },
+  "maya": { "files": ["mod/Royale/features/Maya.inc", "shared/maya_*.h", "tools/maya/**"], "ctest": ["royale_maya_tests"] },
+  "lilo_model": { "files": ["mod/Royale/features/LiloModel.inc", "shared/lilo_*.h", "tools/lilo/**"], "manual": ["Lilo and the toxic cloud"] },
+  "avriella": { "files": ["mod/Royale/features/Avriella.inc", "shared/avriella_*.h", "tools/avriella/**"], "ctest": ["royale_lobby_pets_tests"] },
+  "avriella_toys": { "files": ["mod/Royale/features/AvriellaToys.inc", "mod/Royale/RoyaleLobbyPets.h", "shared/avriella_toys.h", "shared/lobby_pets.h", "shared/tail_swing.h"], "ctest": ["royale_lobby_pets_tests"] },
+  "companions": {
+    "files": ["mod/Royale/features/Companions.inc", "mod/Royale/RoyaleJones.h", "mod/Royale/RoyalePeter.h", "mod/Royale/RoyaleChief.h", "shared/ally*.h", "shared/jones_*.h", "shared/chief_*.h", "shared/peter_*.h", "tools/allies/**", "tools/jones/**", "tools/peter/**", "tools/chief/**"],
+    "ctest": ["royale_tests", "royale_net_tests", "royale_ally_model_tests"],
+    "smoke": ["allies_chief_peter"],
+    "manual": ["hire Peter and Master Chief in a match; Chief shoots, Peter talks"]
+  },
+  "equipment": {
+    "files": ["mod/Royale/features/Equipment.inc", "shared/gilded_sword_*.h", "tools/gilded_sword/**", "patches/0009-*", "patches/0015-*", "patches/0023a-*"],
+    "fn": ["equipment"],
+    "manual": ["clothes, cloth and the Gilded Sword on Link"]
+  },
+  "scene_hooks": { "files": ["mod/Royale/features/SceneHooks.inc"], "manual": ["map sign and pause inventory"] },
+  "menus": { "files": ["mod/Royale/features/Menus.inc"], "ctest": ["royale_war_table_tests"] },
+  "updater": { "files": ["mod/Royale/features/Updater.inc", "patches/0018-*"], "manual": ["the in-game updater installs a new build"] },
+  "lighting": {
+    "files": ["mod/Royale/features/Lighting.inc", "shared/dynamic_shadows.h"],
+    "ctest": ["royale_shadow_tests"],
+    "device": ["shadows.lights"],
+    "manual": ["shadows and lights look right"]
+  },
+  "engine_bridge": { "files": ["mod/Royale/features/EngineBridge.inc"], "manual": ["engine compile (--engine) covers it"] },
+  "crash_context": { "files": ["mod/Royale/features/CrashContext.inc"], "device": ["crash.context"] },
+  "self_test": {
+    "files": ["mod/Royale/features/SelfTest.inc", "scripts/feature_check.py", "scripts/feature_checks.json", "scripts/test_mod_functions.py", "scripts/mod_function_tests/**", "server/tests/feature_smoke.cpp"],
+    "run": ["scripts/check_mod_layout.py"],
+    "device": ["frame.time"]
+  },
+  "session": {
+    "files": ["mod/Royale/RoyaleSession.h", "shared/enet_transport.*", "shared/transport.h", "third_party/enet"],
+    "ctest": ["royale_session_tests", "royale_enet_tests", "royale_net_tests"],
+    "device": ["session.host", "session.start", "session.leave"],
+    "manual": ["two phones join one lobby over Wi-Fi"]
+  },
+  "server": {
+    "files": ["server/**", "shared/balance.h", "shared/rng.h", "shared/names.h", "shared/nav*.h"],
+    "ctest": ["royale_tests", "royale_net_tests", "royale_performance_tests"],
+    "smoke": ["match_flow"]
+  },
+  "client": { "files": ["client/**"], "ctest": ["royale_net_tests"], "smoke": ["match_flow"] },
+  "protocol": { "files": ["shared/protocol.h", "shared/bytes.h", "shared/loopback.h"], "ctest": ["royale_net_tests", "royale_tests"], "smoke": ["skins", "bus"] },
+  "maps": {
+    "files": ["shared/map.h", "shared/poi.h", "shared/*_layout.h", "shared/*_data.h", "shared/*_model.h", "shared/boss_arena.h", "shared/asset_relief.h", "shared/meshes.h", "shared/objmodel.h", "tools/maps/**", "map-concepts/**", "assets/maps/**"],
+    "ctest": ["royale_moonfall_tests", "royale_skyloft_tests", "royale_riftlands_tests", "royale_kingdom_tests", "royale_convergence_tests", "royale_asset_relief_tests"],
+    "run": ["scripts/test_moonfall_authoring.py", "scripts/test_skyloft_authoring.py", "scripts/test_riftlands_integration.py", "scripts/test_kingdom_authoring.py"],
+    "smoke": ["map_skyloft", "match_flow"]
+  },
+  "patches": {
+    "files": ["patches/**", "scripts/apply_patches.sh", "scripts/check_patch_apply.sh", "scripts/link_mod.sh", "scripts/engine_setup.sh", "scripts/check_mod_compile.sh"],
+    "run": [
+      {"cmd": "scripts/check_patch_apply.sh", "needs": "third_party/Shipwright-Android/soh"},
+      {"cmd": "scripts/check_surface_patch_stack.py", "needs": "third_party/Shipwright-Android/soh"},
+      {"cmd": "scripts/test_surface_renderer_state.py", "needs": "third_party/Shipwright-Android/soh"},
+      "scripts/test_item_surface_maps.py",
+      {"cmd": "scripts/test_item_surface_shaders.py", "needs": "glslangValidator"}
+    ],
+    "manual": ["the Android build (game-build.yml) runs on the Odin 2"]
+  },
+  "war_table": {
+    "files": ["mod/Royale/RoyaleWarTable.h", "mod/Royale/war_table/**", "shared/war_table*.h", "tools/*war_table*", "patches/0025a-*", "patches/0026-*"],
+    "ctest": ["royale_war_table_tests"],
+    "manual": ["the native menu opens and every page works"]
+  },
+  "shared": { "files": ["shared/**"], "ctest": ["royale_tests"] },
+  "scripts": { "files": ["scripts/**"], "run": ["scripts/check_mod_layout.py"] },
+  "docs": { "files": ["docs/**", "*.md", "**/*.md", "mod/Royale/FEATURES.md"] },
+  "tools": { "files": ["tools/**", "assets/**", "cmake/**"] },
+  "repo": { "files": [".github/**", ".claude/**", ".gitignore", ".rgignore", ".gitmodules", "third_party/**", "AGENTS.md", "mod/Royale/logo_data.h", "mod/Royale/gilded_sword_icon.h"] }
+}

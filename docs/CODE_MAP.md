@@ -23,7 +23,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `bot.h` bot brain (movement, looting, combat, carts).
 - `nav.h` walkability grid for bot paths.
 - `game_server.h` host server: owns the match and bots, talks through a `Transport`.
-- `tests/` one `*_tests.cpp` per system (`tests.cpp` is the big core suite; `net_tests.cpp` loopback, `enet_tests.cpp` real UDP, `session_tests.cpp` `RoyaleSession`).
+- `tests/` one `*_tests.cpp` per system (`tests.cpp` is the big core suite; `net_tests.cpp` loopback, `enet_tests.cpp` real UDP, `session_tests.cpp` `RoyaleSession`). `feature_smoke.cpp` one scripted loopback match per feature (`royale_feature_smoke`, feature check layer 1).
 - `tools/balance_sim.cpp` headless bot-only balance runs; `tools/performance_bench.cpp` nav/sim timing; `tools/placement_preview.cpp` dumps a map layout (draw with `tools/maps/placement_preview.py`).
 
 ## client/
@@ -37,13 +37,15 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `RoyaleWarTable.h` native menu; its fragments in `war_table/` (index: [`war_table/INDEX.md`](../mod/Royale/war_table/INDEX.md)).
 - `build_version.h` build number, overwritten by `game-build.yml`.
 - `features/StartScreen.inc` start screen: holds the boot until Start, draws `shared/title_scene.h` with ImGui, title music.
+- `features/SelfTest.inc` on-device self-test (Settings > Debug > SelfTest): scripted checks, writes `royale-selftest.txt`.
 - `features/CrashContext.inc` crash context: state snapshot and change breadcrumbs printed into `royale-crash.txt` and each scene load's block in `royale-trace.txt` (see `docs/BUILDING.md`).
 - `logo_data.h` [gen: scripts/make_logo_assets.py]; `gilded_sword_icon.h` [gen: scripts/make_gilded_sword_icon.py].
 
 ## scripts/
 - Build: `apply_patches.sh` applies `patches/` to the fork; `link_mod.sh` copies the mod into the fork; `apply_logo.sh` icons; `royale-debug.keystore` debug signing key.
-- Checks: `check_mod_layout.py` feature packaging (`--baseline` proves byte-identical TU); `check_mod_compile.sh` compiles `RoyaleMod.cpp` against the fork; `check_surface_patch_stack.py` engine patch stack; `mod_source.py` expands the TU for checks.
-- Tests run by CI (`ci.yml`): `test_water_draw_buffers.py`, `test_item_surface_maps.py`, `test_item_surface_shaders.py`, `test_kingdom_authoring.py`, `test_moonfall_authoring.py`, `test_skyloft_authoring.py`, `test_riftlands_integration.py`. `game-build.yml`: `test_surface_renderer_state.py`. Manual: `test_war_table_matrix.py`, `test_playtest_equipment.py` (Windows).
+- Checks: `check_mod_layout.py` feature packaging and registry rows (`--baseline` proves byte-identical TU); `check_mod_compile.sh` compiles `RoyaleMod.cpp` against the fork; `check_surface_patch_stack.py` engine patch stack; `check_patch_apply.sh` every patch applies to the pinned commits and reruns clean; `mod_source.py` expands the TU and extracts functions for checks.
+- Feature check (`docs/TEST_TOOL_DESIGN.md`): `feature_check.py` the one command (PASS/FAIL per feature); `feature_checks.json` the registry (feature -> files, checks per layer, device steps, manual); `test_mod_functions.py` + `mod_function_tests/*.cpp` mod functions compiled with stubs (g++); `engine_setup.sh` one-time engine submodule, deps, patches, configure.
+- Tests run by CI (`ci.yml`): `test_water_draw_buffers.py`, `test_item_surface_maps.py`, `test_item_surface_shaders.py`, `test_kingdom_authoring.py`, `test_moonfall_authoring.py`, `test_skyloft_authoring.py`, `test_riftlands_integration.py`. `game-build.yml`: `test_surface_renderer_state.py`. Manual: `test_war_table_matrix.py` (Windows).
 - Generators (`make_*.py`): each writes the header named in its docstring (see generated lists above).
 - `github_brief.py` bounded PR/run summaries.
 

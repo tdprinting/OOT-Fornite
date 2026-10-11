@@ -72,3 +72,12 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           cmake --build build
           ctest --test-dir build --output-on-failure
+      - name: Feature check (server tests, feature smokes, mod functions; docs/TEST_TOOL_DESIGN.md)
+        run: python3 scripts/feature_check.py --layers 0,1,2 --json build-check/feature_check.json
+      - name: Keep the feature check table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-check
+          path: build-check/feature_check.json
+          if-no-files-found: ignore

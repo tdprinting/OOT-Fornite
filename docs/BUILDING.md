@@ -113,6 +113,20 @@ stands in **Hyrule Field**: players only see each other there.
    spawn point; the storm closes in; health is controlled by the server.
 5. Keep the game in the foreground on Android while hosting: a backgrounded app can have its sockets paused and players will time out.
 
+## Self-test (on the phone) and the feature check
+
+`royale-selftest.txt`, next to `royale-crash.txt`, says which recent features work in the real game. To make one: load any save (no lobby),
+open the Battle Royale menu, Settings > Debug, switch **SelfTest** on. The game hosts a solo Sandbox, starts it, runs about a dozen checks
+(scene and island collision, crash context, loot actors, player skin drawing, the jump clip, graphics pool, lights, HUD, the startup guard,
+frame time), leaves, and writes the file (the run before becomes `royale-selftest-prev.txt`; while running, `royale-selftest-running.txt`
+names the step). Takes under a minute. The switch turns itself off. Send the file; it reads like
+`PASS  scene.loaded  actors 212, ...` / `FAIL  skins.draw  ...`, then the mod state and the last breadcrumbs. The code is
+`features/SelfTest.inc`; its CVar is `gSettings.Royale.Debug.SelfTest`.
+
+In the container: `python scripts/feature_check.py` runs every feature's checks (server tests, scripted loopback matches, mod functions
+with stubs) and prints one row each; `--device-report royale-selftest.txt` adds the phone's rows; `--changed` only the features a branch
+touched; `--engine` also compiles the mod against the engine (once: `scripts/engine_setup.sh`). Design and layers: `docs/TEST_TOOL_DESIGN.md`.
+
 ## Fast compile check (Linux only, for development)
 
 Compiling the whole game takes a long time. This checks only the mod's game-facing file against the fork's real headers and

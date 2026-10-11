@@ -13,6 +13,7 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 - [SKINS.md](SKINS.md): Player skins: new bodies for Link on the game's own animations, and how to add one
 - [PLAY.md](PLAY.md): How to get and install OOT Royale (no building needed)
 - [CODE_MAP.md](CODE_MAP.md): Code map
+- [TEST_TOOL_DESIGN.md](TEST_TOOL_DESIGN.md): Feature check tool: one command per feature, smokes, mod functions, on-device self-test
 - [CLEANUP_PLAN.md](CLEANUP_PLAN.md): Cleanup plan: fewer tokens, easier navigation, zero gameplay change
 
 ## Maps

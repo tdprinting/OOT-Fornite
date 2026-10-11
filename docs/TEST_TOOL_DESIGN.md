@@ -1,6 +1,9 @@
 # Feature check tool: design
 
-Design only. Nothing here is implemented yet. One command for agents, one tap for the user, one row per feature.
+Implemented 2026-10-11 (steps 1-8; step 9 open, see "Implementation notes"). One command for agents, one tap for the user, one row per feature.
+
+Run it: `python scripts/feature_check.py` (all features, layers 0-2b, ~2 min warm). Phone: Settings > Debug > SelfTest, then
+`python scripts/feature_check.py --device-report royale-selftest.txt`.
 
 ## Goals
 
@@ -269,9 +272,57 @@ From the last ~60 commits. "Layer" is where the check lives; "today" is what exi
 - **Android file writes.** `royale-selftest.txt` uses the same directory and API as `royale-crash.txt` (proven on device). Keep it under 8 KB; write once at the end plus a one-line progress file `royale-selftest-running.txt` so a crash mid-run still shows which step.
 - **Protocol drift.** Smokes decode real packets; a `kProtocolVersion` bump with a missed field shows up as a `badPackets` count. `Rig` asserts `server.stats.badPackets == 0` after every smoke.
 
+## Implementation notes (choices the design left open)
+
+- Trigger: the self-test is a Debug switch, `SelfTest` (CVar `gSettings.Royale.Debug.SelfTest`), not a new `Royale.SelfTest.Run` CVar or a
+  `Controls.inc` row: the Debug page lists every switch already, so the user gets a menu button with no war_table edit. It defaults to off
+  and turns itself off when a run starts (a crash mid-run does not loop). `gSelfTestLine` is kept and crumbed; showing it on the Settings
+  page and the menu top line waits for the war_table work.
+- Self-test steps done: 1-7, 11-13, 15, 17, 18 (`skins.draw` via `gSkinStats` in `Skins.inc`, `hud.window` via `gHudDraws` in
+  `EndMatch.inc`, `link_anims.jump` reads `link_clip::gJumpW`, no new export). Not yet: 8 `bus.model`, 9 `squads.pad`, 10 `water.surface`,
+  14 `allies.hire`, 16 `peter.voices`. A failed `session.host`/`session.start` skips to `session.leave`.
+- The self-test runs in the Sandbox only; the Moonfall (`--map 12`) variant from the inventory table is not built.
+- Smokes: each runs seeds 1-3 in one process; the 60 s kill is the CLI's subprocess timeout (180 s per smoke for three seeds), not a thread.
+  `regular_switches` became `fn.regular_switches` (its table lives in `Core.inc`, not the server). The Chief's "13 bytes" assert was dropped
+  (`AllyNet` is encoded field by field; `net_tests` round-trips it). Bots carry no skin on the wire, so `smoke.skins` checks the roster only.
+  `smoke.shockwave` checks a shove, not damage: the grenade does no damage since 837f96c. A bus rider who never jumps is pushed off at
+  `BusCloseSec` (the island's far shore, `Match::TickBus`), not `BusCrossSec`.
+- `KNOWN(cond, note)` in `feature_smoke.cpp`: a reported, unfixed bug prints `KNOWN ...` every run and the row's note says "known issue", but
+  it does not fail (so CI stays green). Turn it into `CHECK` with the fix.
+- A failing ctest or smoke is rerun once; passing then is `FLAKY` (not a failure). `royale_tests` and the others run once and are shared by
+  every row that names them.
+- `--changed` diffs the working tree against BASE (default `origin/main`) plus untracked files; `path#symbol` in `files` means the whole file.
+  Catch-all rows (`shared`, `docs`, `tools`, `scripts`, `repo`) keep every path owned.
+- Layer 2a: `--engine` compiles with `check_mod_compile.sh` in `--engine-build` (default `build-engine/`, or `$ROYALE_ENGINE_BUILD`).
+  `check_patch_apply.sh` runs `apply_patches.sh` twice on `git archive` copies (`ROYALE_FORK`), so it also proves a rerun is clean.
+- `test_playtest_equipment.py` deleted; its body is `scripts/mod_function_tests/equipment.cpp` (one stub added: `InRegularGame`).
+- `.claude/settings.json` deny was not changed: `build-check/` and `build-engine/` are build output (gitignored, `.rgignore` `/build-*/`),
+  not generated sources. Step 9 (CLAUDE.md and agent lines) is left to the user: suggested line "New feature: a row in
+  `scripts/feature_checks.json` and a check in the same PR. Run `python scripts/feature_check.py --changed` before the handoff; paste its
+  summary line."
+
+## Findings from the first run (2026-10-11)
+
+- Fixed: `scripts/apply_patches.sh` was not idempotent. On a fully patched fork a rerun stopped at `0005` ("neither applies nor is already
+  applied") because `0018` adds lines next to `0005`'s (and `0009` next to later limb hooks), so their exact reverse check fails. It now
+  finds the top of the applied stack (the last patch whose reverse applies and forward does not) and skips everything up to it. Test:
+  `check_patch_apply.sh` (fails on the old script, passes now). This broke every second run of `check_mod_compile.sh`/`engine_setup.sh`.
+- Known, not fixed (map decision): authored chest sites outside the map circle start inside the storm. Moonfall: the Death Mountain summit
+  site (4700, -5000) is 6862 from the centre of the 6500 circle, picked every seed. Skyloft: about 5 of 84 sites per match on the Lumpy
+  Pumpkin islet and Beedle's Perch (up to 7226 out). `shared/map.h` circles `{{0,0},6500}`; sites from `tools/maps/{moonfall,skyloft}`.
+  Fix: grow those maps' circles (and `maxRadius`) to cover the islets, or drop sites outside the circle in `GameServer::Reconfigure`'s
+  `MoonfallPlacementValid`/`SkyloftPlacementValid` wrappers. `KNOWN` in `smoke.match_flow` and `smoke.map_skyloft`.
+- Not a bug, noted: in a field with mini bosses, an unannounced hit on the reviver cancels a revive (by design); `smoke.teams` runs with
+  bosses off.
+
 ## Status (measured 2026-10-11, this container)
 
 - `royale_tests`: build 59 s cold, run 1 s, all pass. `royale_balance 1 normal 12 32`: seconds. `royale_session_tests`: 51 s and 3 failures under load; 11 s and 0 failures quiet.
 - Fork clone at `c9d8f4a` + libultraship: 8 s, 196 MB. Patches: 32/32 and 10/10 apply in order. apt dep install: works with sudo.
 - Fork CMake configure (`cmake -S <fork> -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`, patches applied, ZAPDTR and OTRExporter submodules at depth 1): rc 0 in 25 s, after installing exactly `libsdl2-dev libzip-dev libspdlog-dev nlohmann-json3-dev libtinyxml2-dev libglew-dev libgl-dev libboost-dev libpng-dev` (adding `libzip-tools zlib1g-dev libbz2-dev` to that line made apt fail; leave them out). FetchContent downloads went through the proxy.
-- `RoyaleMod.cpp.o` compile: not measured here. Patch 0002 only activates when the fork sits at `third_party/Shipwright-Android`, so the implementer measures it in step 5 with the real submodule path and appends the time.
+- `RoyaleMod.cpp.o` compile (`check_mod_compile.sh`, gcc object + clang `-fsyntax-only` + `nm`): 4 min 5 s on 4 cores with `SelfTest.inc`;
+  passes. `engine_setup.sh` on a configured build: 0.3 s (no-op).
+- `feature_check.py` warm (server already built, no `--engine`): 128 s, 81 pass, 2 skip (glslangValidator absent; engine), 13 device.
+  The two map authoring scripts are 83 s of that. With `--engine`: 491 s. Cold `build-check/` build of every target: about 5 min here.
+- `royale_feature_smoke`: 7 smokes x 3 seeds in 6 s (match_flow 3.8 s; matches end at 314-441 sim s). `test_mod_functions.py`: 5 files, ~10 s.
+- `check_patch_apply.sh`: 43 patches, two passes, 10 s.
