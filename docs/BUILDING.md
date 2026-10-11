@@ -67,6 +67,12 @@ Press the controller's **Back/Select/-** button to open the menu.
 
 CI builds the APK too (see `.github/workflows/game-build.yml`) and uploads it as a workflow artifact.
 
+**Updates keep the game files** (patch `0030`). The ROM-built `oot.otr` is kept across updates and rebuilt only when the packed
+extractor files change; `soh.otr` is replaced on its own when it changes. Fingerprints of both are made in `app/build.gradle` and
+stored in `TDawgsBattleRoyale/.game-files-version`. If a change to `patches/ZAPDTR` changes what the extractor writes, bump
+`ROYALE_EXTRACT_REVISION` in patch `0030` so players rebuild once. Each launch's time goes to `TDawgsBattleRoyale/startup-times.txt`
+(PC: next to `oot.otr`) and shows in the Battle Royale menu under Game updates.
+
 ## Playing a match
 
 All players must be running the **same build** (the host rejects a different protocol version). Everyone loads a save and

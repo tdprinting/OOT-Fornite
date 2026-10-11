@@ -98,6 +98,10 @@ using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 #include <vector>
 #include <sstream>
 #include <cstdarg>
+#include <chrono>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <unistd.h>   // sysconf, for the start-up timer in features/MusicDiagnostics.inc
+#endif
 #ifdef __ANDROID__
 #include <csignal>
 #include <dlfcn.h>
