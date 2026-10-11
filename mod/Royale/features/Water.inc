@@ -896,14 +896,14 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const float ecx = TexOrigin(eye.x, kCloudUnits), ecz = TexOrigin(eye.z, kCloudUnits);
 
     static std::vector<rw::SwellPoint> sps;
-    static std::vector<float> pushRaw, wakeFoam, surfA, shoreA, alphaA, fadeA;
+    static std::vector<float> pushRaw, wakeFoam, surfA, shoreA, alphaA, fadeA, distA;
     for (int l = kWaterLevels - 1; l >= 0; l--) {
         WaterLevel& L = gWaterLevel[l];
         const int n = L.n, V = L.V;
         const size_t nv = static_cast<size_t>(V) * V;
         L.pt.assign(nv, WaterPoint{});
         sps.assign(nv, rw::SwellPoint{}); pushRaw.assign(nv, 0.0f); wakeFoam.assign(nv, 0.0f); surfA.assign(nv, 0.0f);
-        shoreA.assign(nv, 0.0f); alphaA.assign(nv, 0.0f); fadeA.assign(nv, 0.0f);
+        shoreA.assign(nv, 0.0f); alphaA.assign(nv, 0.0f); fadeA.assign(nv, 0.0f); distA.assign(nv, 0.0f);
         // Only waves this mesh can draw (longer than about two and a half of its squares): shorter ones land on a random phase at each point, so
         // neighbouring squares get unrelated heights, tilts and sun glints, and the water reads as a patchwork of squares.
         const rw::PreparedSwell swell(t, amp, chop, 2.5f * L.cell);
@@ -921,6 +921,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 if (!c.have) { surfA[id] = lastSurface; continue; }
                 lastSurface = c.surface; surfA[id] = c.surface;
                 const float d = std::hypot(wx - eye.x, wz - eye.z);
+                distA[id] = d;
                 fadeA[id] = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
                 alphaA[id] = ss01((c.depth + 8.0f) / 10.0f);   // the waterline: the surface fades in as the floor drops under it, and the floor's depth test cuts it
                 if (alphaA[id] <= 0.0f || fadeA[id] <= 0.0f) continue;
@@ -958,7 +959,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     rw::ShadeWater(look, lsky, wx, wz, y, depth, nx, ny, nz, wakeFoam[id], sp.fold * shore, sp.h * shore, Flora01(static_cast<int>(wx / 16.0f), static_cast<int>(wz / 16.0f), 611), fade, o);
                     // over the game's own water on lakes and rivers, ours has to hide it (it is the same height, just under)
                     if (!island) o.col[3] = std::max(o.col[3], 232.0f * ss01((depth - 3.0f) / 22.0f) * fade);
-                    const float d = std::hypot(wx - eye.x, wz - eye.z);
+                    const float d = distA[id];   // (worked out in the first pass: the same point)
                     const float fine = ss01((reachFine - d) / 300.0f), wide = ss01((reachWide - d) / 800.0f);
                     o.col[3] *= ak; o.glint[3] *= ak * fine; o.foam *= ak * fine; o.streak *= ak * wide; o.band[3] *= ak * wide; o.cloud[3] *= ak;
                 }

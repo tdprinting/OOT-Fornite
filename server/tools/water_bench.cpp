@@ -316,6 +316,65 @@ int main() {
             return acc; }); });
         std::printf("swell per frame: old %.1f us, zero waves skipped %.1f us (%.1fx), grid tables %.1f us (%.1fx)\n", before, skip, before / skip, grid, before / grid);
     }
+    // ---- 3. ShadeWater (drawing only): powers by multiplying, the pin-point glint and its twinkle skipped when it is off, sqrt for hypot.
+    //         Every output (0-255 colours and alphas) within 2e-3 of the old one.
+    {
+        auto lookOf = [](int v, LookParams& P, LookSky& sky) {
+            P = LookParams{};
+            P.eye[0] = 100.0f + 37.0f * (v % 7); P.eye[1] = (v % 5 == 4) ? -30.0f : 20.0f + 90.0f * (v % 4); P.eye[2] = -200.0f + 53.0f * (v % 11);
+            P.t = 17.0f + v * 0.7f; P.light = 0.38f + 0.62f * ((v % 9) / 8.0f); P.wind = (v % 6) / 5.0f; P.ampTotal = 16.0f;
+            P.glintAmt = 1.0f; P.foamAmt = (v % 3) ? 1.0f : 0.0f; P.skyOn = v % 13 != 0;
+            P.sharpSpec = (v % 4 == 0) ? 1.0f : 0.0f;   // the game's mesh draws with 0; the preview tool with 1
+            P.sparkle = v % 2; P.streaks = (v % 3) * 0.7f; P.bands = v % 2; P.haze = 1.0f; P.hazeNear = 900; P.hazeFar = 2400;
+            P.depthTone = 1.0f; P.clouds = (v % 3) ? 1.0f : 0.0f; P.cover = 0.6f;
+            sky = LookSky{};
+            for (int q = 0; q < 3; q++) { sky.hor[q] = 150.0f + 30.0f * q; sky.zen[q] = 60.0f + 50.0f * q; }
+            const float sa = 0.3f + 0.1f * (v % 10), sh = 0.05f + 0.09f * (v % 10);
+            sky.sun[0] = std::cos(sa) * std::sqrt(1 - sh * sh); sky.sun[1] = sh; sky.sun[2] = std::sin(sa) * std::sqrt(1 - sh * sh);
+            sky.moon[0] = -sky.sun[0]; sky.moon[1] = 0.3f; sky.moon[2] = -sky.sun[2];
+            sky.sunA = (v % 3) / 2.0f; sky.moonA = 1.0f - sky.sunA; sky.sunWarm = (v % 4) / 3.0f;
+        };
+        float worst = 0.0f;
+        size_t checked = 0;
+        for (int v = 0; v < 240; v++) {
+            LookParams P; LookSky sky;
+            lookOf(v, P, sky);
+            const PreparedSwell sw(P.t, 1.9f, 0.7f);
+            for (int k = 0; k < 600; k++) {
+                const float wx = (k % 30) * 61.0f - 900.0f + v, wz = (k / 30) * 97.0f - 950.0f, depth = 0.5f + (k % 17) * 23.0f;
+                const SwellPoint sp = sw.Sample(wx, wz);
+                Look a{}, b{};
+                ref::ShadeWaterRef(P, sky, wx, wz, sp.h, depth, sp.nx, sp.ny, sp.nz, (k % 5) * 0.2f, sp.fold, sp.h, (k % 97) / 96.0f, 0.3f + 0.7f * ((k % 7) / 6.0f), a);
+                ShadeWater(P, sky, wx, wz, sp.h, depth, sp.nx, sp.ny, sp.nz, (k % 5) * 0.2f, sp.fold, sp.h, (k % 97) / 96.0f, 0.3f + 0.7f * ((k % 7) / 6.0f), b);
+                const float* fa = &a.col[0]; const float* fb = &b.col[0];
+                for (size_t f = 0; f < sizeof(Look) / sizeof(float); f++) worst = std::max(worst, std::fabs(fa[f] - fb[f]));
+                checked++;
+            }
+        }
+        std::printf("shading: %zu points, max diff of any colour or alpha (0-255) %.2e\n", checked, worst);
+        Require(worst <= 2e-3f, "ShadeWater within 2e-3 of the old one");
+        // timing: one frame's worth of points (2803) with the game's settings (sharpSpec 0, the open-sea passes on)
+        LookParams P; LookSky sky;
+        lookOf(1, P, sky);
+        P.sharpSpec = 0.0f; P.skyOn = true; P.sparkle = 1; P.streaks = 1; P.bands = 1; P.clouds = 1;
+        sky.sunA = 0.8f; sky.moonA = 0.1f;
+        std::vector<SwellPoint> pts(2803);
+        const PreparedSwell sw(50.0f, 1.9f, 0.7f);
+        for (size_t k = 0; k < pts.size(); k++) pts[k] = sw.Sample((k % 53) * 31.0f - 800.0f, (k / 53) * 29.0f - 700.0f);
+        auto run = [&](auto&& shade) {
+            float acc = 0.0f;
+            for (size_t k = 0; k < pts.size(); k++) {
+                Look o{};
+                const SwellPoint& sp = pts[k];
+                shade(P, sky, (k % 53) * 31.0f - 800.0f, (k / 53) * 29.0f - 700.0f, sp.h, 40.0f + (k % 300), sp.nx, sp.ny, sp.nz, 0.0f, sp.fold, sp.h, (k % 97) / 96.0f, 1.0f, o);
+                acc += o.col[0] + o.glint[3];
+            }
+            gSink = gSink + acc;
+        };
+        const double before = TimeUs(400, [&](int) { run(ref::ShadeWaterRef); });
+        const double after = TimeUs(400, [&](int) { run(ShadeWater); });
+        std::printf("shading per frame (2803 points): old %.1f us, new %.1f us (%.1fx)\n", before, after, before / after);
+    }
     if (failures) { std::fprintf(stderr, "%d check(s) failed\n", failures); return 1; }
     return 0;
 }
