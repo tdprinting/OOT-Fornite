@@ -72,12 +72,12 @@ void TraceBlock(const char* title, const char* text) {
 }
 
 // A game resource that did not load (libultraship patch 0009 calls this, on any thread). The game usually crashes later on the null it
-// got, far from the cause, so the first few go into the breadcrumb trail (royale-trace.txt, "Last step" in the crash note) and the log.
+// got, far from the cause, so the first 24 (missing files included) go into the breadcrumb trail (royale-trace.txt, "Last step" in the crash note) and the log.
 void OnResourceFailed(const char* path, int fileFound) {
     static std::mutex lock;
     static int reported = 0;
     const std::lock_guard<std::mutex> guard(lock);
-    if (path == nullptr || reported >= 8) return;
+    if (path == nullptr || reported >= 24) return;
     reported++;
     char step[300];
     std::snprintf(step, sizeof(step), "resource did not load: %s (%s)", path, fileFound ? "file found, loader failed" : "file not found");

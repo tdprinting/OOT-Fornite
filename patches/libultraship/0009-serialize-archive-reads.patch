@@ -2,7 +2,15 @@ diff --git a/src/resource/ResourceManager.cpp b/src/resource/ResourceManager.cpp
 index 9454b6e..a6d6dcf 100644
 --- a/src/resource/ResourceManager.cpp
 +++ b/src/resource/ResourceManager.cpp
-@@ -146,7 +146,28 @@ std::shared_ptr<IResource> ResourceManager::LoadResourceProcess(const ResourceId
+@@ -142,11 +142,36 @@ std::shared_ptr<IResource> ResourceManager::LoadResourceProcess(const ResourceId
+     if (file == nullptr) {
+         SPDLOG_TRACE("Failed to load resource file at path {}", identifier.Path);
+         mResourceCache[identifier] = ResourceLoadError::NotFound;
++        // OOT Royale: a missing file is reported too (alternate-asset probes miss by design)
++        if (!identifier.Path.starts_with(IResource::gAltAssetPrefix) && Archive::sRoyaleResourceFailed != nullptr) {
++            Archive::sRoyaleResourceFailed(identifier.Path.c_str(), 0);
++        }
+         return nullptr;
      }
  
      // Transform the raw data into a resource
@@ -24,9 +32,9 @@ index 9454b6e..a6d6dcf 100644
 +    }
 +    // OOT Royale: say which resource failed (the game then finds a null pointer far from here). Alternate-asset probes fail by design.
 +    if (resource == nullptr && !identifier.Path.starts_with(IResource::gAltAssetPrefix)) {
-+        SPDLOG_ERROR("Resource {} did not load ({})", identifier.Path, file == nullptr ? "file not found" : "no loader result");
++        SPDLOG_ERROR("Resource {} did not load (no loader result)", identifier.Path);
 +        if (Archive::sRoyaleResourceFailed != nullptr) {
-+            Archive::sRoyaleResourceFailed(identifier.Path.c_str(), file != nullptr ? 1 : 0);
++            Archive::sRoyaleResourceFailed(identifier.Path.c_str(), 1);
 +        }
 +    }
  
@@ -36,15 +44,22 @@ diff --git a/src/resource/archive/Archive.h b/src/resource/archive/Archive.h
 index 7152723..2e3d557 100644
 --- a/src/resource/archive/Archive.h
 +++ b/src/resource/archive/Archive.h
-@@ -44,6 +44,11 @@ class Archive : public std::enable_shared_from_this<Archive> {
+@@ -35,6 +35,8 @@ class Archive : public std::enable_shared_from_this<Archive> {
+     uint32_t GetGameVersion();
+     const std::string& GetPath();
+     bool IsLoaded();
++    // OOT Royale: called when a resource does not load (its path, and 1 if its file was found); the mod adds it to the crash trail.
++    static inline void (*sRoyaleResourceFailed)(const char* path, int fileFound) = nullptr;
+ 
+     virtual bool Open() = 0;
+     virtual bool Close() = 0;
+@@ -44,6 +46,9 @@ class Archive : public std::enable_shared_from_this<Archive> {
      void SetLoaded(bool isLoaded);
      void SetGameVersion(uint32_t gameVersion);
      void IndexFile(const std::string& filePath);
 +    // OOT Royale: one read at a time per archive. StormLib and libzip keep one file position per archive, and the resource
 +    // thread pool loads several files at once; overlapping reads handed loaders garbage, which threw and ended the game.
 +    std::mutex mLoadMutex;
-+    // OOT Royale: called when a resource does not load (its path, and 1 if its file was found); the mod adds it to the crash trail.
-+    static inline void (*sRoyaleResourceFailed)(const char* path, int fileFound) = nullptr;
  
    private:
      bool mIsLoaded;
