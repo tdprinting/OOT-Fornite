@@ -273,27 +273,6 @@ inline DrumSound DrumSoundOf(const std::vector<DrumHit>& hits) {
     return out;
 }
 
-// ---- bass is the low notes, melody the top voice, harmony what is left (for MIDI input) -----------------------------------------------
-inline void AssignParts(std::vector<Note>& notes, int bassBelow = 50) {
-    if (!bassBelow) bassBelow = 50;
-    std::vector<size_t> live;
-    for (size_t i = 0; i < notes.size(); i++) { notes[i].part = notes[i].pitch < bassBelow ? Part::Bass : Part::Harmony; if (notes[i].part != Part::Bass) live.push_back(i); }
-    std::vector<double> ev;
-    for (size_t i : live) { ev.push_back(notes[i].start); ev.push_back(notes[i].end); }
-    std::sort(ev.begin(), ev.end());
-    ev.erase(std::unique(ev.begin(), ev.end()), ev.end());
-    std::vector<size_t> byStart(live);
-    std::stable_sort(byStart.begin(), byStart.end(), [&](size_t a, size_t b) { return notes[a].start < notes[b].start; });
-    std::vector<double> top(notes.size(), 0.0);
-    for (size_t i = 0; i + 1 < ev.size(); i++) {
-        const double mid = 0.5 * (ev[i] + ev[i + 1]);
-        long long best = -1;
-        for (size_t k : byStart) { if (notes[k].start > mid) break; if (notes[k].end > mid && (best < 0 || notes[k].pitch > notes[static_cast<size_t>(best)].pitch)) best = static_cast<long long>(k); }
-        if (best >= 0) top[static_cast<size_t>(best)] = top[static_cast<size_t>(best)] + ev[i + 1] - ev[i];
-    }
-    for (size_t i : live) if (top[i] > 0.5 * (notes[i].end - notes[i].start)) notes[i].part = Part::Melody;
-}
-
 // ---- tidying what the note finder heard, and splitting it into melody, harmony and bass --------------------------------------------
 // A recording gives held notes heard as several, and blips. These are mended or dropped,
 // then the bass (the lowest line), the melody (the strongest, smoothest high line) and the harmony (the rest, at most 4 at once) are found.

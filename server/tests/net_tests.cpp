@@ -97,6 +97,18 @@ static void MessagesRoundTrip() {
     { Welcome a = SampleWelcome(), b; CHECK(RoundTrips(a, b));
       CHECK(b.playerId == 7 && b.seed == a.seed && b.map.radius == 3000 && b.loot.size() == 2 && b.roster[1].name == "Zelda");
       CHECK(b.loot[0].chest && !b.loot[0].taken && b.loot[1].taken && b.stormEnds[5].radius == 95.0f); }
+    { SetTeamModeRequest a, b; a.mode = 2; CHECK(RoundTrips(a, b) && b.mode == 2); SetTeamModeRequest bad, out; bad.mode = 3; CHECK(!RoundTrips(bad, out)); }
+    { ReviveRequest a, b; a.target = 1004; a.active = false; CHECK(RoundTrips(a, b) && b.target == 1004 && !b.active); }
+    { PingRequest a, b; a.kind = 2; a.x = -10.5f; a.z = 99; a.target = 17; CHECK(RoundTrips(a, b) && b.kind == 2 && b.x == -10.5f && b.target == 17); PingRequest bad, out; bad.kind = 3; CHECK(!RoundTrips(bad, out)); }
+    { PingRequest bad, out; bad.x = std::nanf(""); CHECK(!RoundTrips(bad, out)); }
+    { EvTeams a, b; a.mode = 1; a.members = {{1, 0}, {2, 0}, {1000, 1}}; CHECK(RoundTrips(a, b) && b.mode == 1 && b.members.size() == 3 && b.members[2].first == 1000 && b.members[2].second == 1); EvTeams bad, out; bad.mode = 9; CHECK(!RoundTrips(bad, out)); }
+    { EvPing a, b; a.owner = 3; a.kind = 1; a.x = 5; a.z = -6; a.target = 1002; CHECK(RoundTrips(a, b) && b.owner == 3 && b.kind == 1 && b.target == 1002 && b.z == -6); }
+    { EvPads a, b; a.pads = {{1, 2}, {-3, 4}}; CHECK(RoundTrips(a, b) && b.pads.size() == 2 && b.pads[1].first == -3); EvPads bad, out; bad.pads.assign(kMaxLaunchPads + 1, {0, 0}); CHECK(!RoundTrips(bad, out)); }
+    { EvKnock a, b; a.victim = 4; a.by = 1001; a.kind = 1; CHECK(RoundTrips(a, b) && b.victim == 4 && b.by == 1001 && b.kind == 1); EvKnock bad, out; bad.kind = 2; CHECK(!RoundTrips(bad, out)); }
+    { Welcome a = SampleWelcome(), b; a.teamMode = 2; CHECK(RoundTrips(a, b) && b.teamMode == 2); Welcome bad = SampleWelcome(), out; bad.teamMode = 3; CHECK(!RoundTrips(bad, out)); }
+    { Snapshot a, b; PlayerNet p; p.id = 4; p.flags = PlayerNet::kAlive | PlayerNet::kKnocked; p.knock = 200; p.revive = 77; a.players = {p};
+      CHECK(RoundTrips(a, b) && (b.players[0].flags & PlayerNet::kKnocked) && b.players[0].knock == 200 && b.players[0].revive == 77); }
+    { EvResults a, b; ResultRow r; r.id = 1; r.placement = 2; r.team = 3; a.rows = {r}; CHECK(RoundTrips(a, b) && b.rows[0].team == 3 && b.rows[0].placement == 2); }
     { Reject a, b; a.reason = RejectReason::LobbyFull; CHECK(RoundTrips(a, b) && b.reason == RejectReason::LobbyFull); }
     { MatchStateMsg a, b; a.state = 3; a.alive = 17; a.winner = 1003; CHECK(RoundTrips(a, b) && b.state == 3 && b.alive == 17 && b.winner == 1003); }
     { SetReady a, b; a.ready = true; CHECK(RoundTrips(a, b) && b.ready); }
@@ -110,7 +122,7 @@ static void MessagesRoundTrip() {
       CHECK(RoundTrips(a, b) && b.players.size() == 2 && b.players[0].id == 1031 && b.players[1].potions == 2 && b.players[0].scene == 0x51 && b.players[0].shield == 17 && b.players[0].shieldRarity == 3 &&
             b.players[1].boots == 52 && b.players[1].mask == 60 && b.players[1].tunicGear == 40 && b.players[1].gauntlets == 41);
       CHECK(std::abs(b.players[0].Health() - 1.5f) < 0.01f);
-      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 29); } // documented per-player size
+      ByteWriter w; p.Write(w); CHECK(w.buf.size() == 29); p.flags |= PlayerNet::kKnocked; ByteWriter w2; p.Write(w2); CHECK(w2.buf.size() == 31); } // documented per-player size
     { EvDamaged a, b; a.target = 1; a.attacker = 2; a.amount = 1.5f; a.health = 0.5f; CHECK(RoundTrips(a, b) && b.amount == 1.5f && b.attacker == 2); }
     { EvEliminated a, b; a.victim = 3; CHECK(RoundTrips(a, b) && b.victim == 3 && b.killer == kNoPlayer16); }
     { EvLootTaken a, b; a.index = 9; a.by = 4; CHECK(RoundTrips(a, b) && b.index == 9 && b.by == 4); }
@@ -688,6 +700,93 @@ static void PlayerLimitOverTheWire() {
     CHECK(!rig.server.SetPlayerLimit(10));                                                        // lobby only
     { MatchStateMsg a2, b2; a2.limit = 12; CHECK(RoundTrips(a2, b2) && b2.limit == 12); }
     { MatchStateMsg bad, out; bad.limit = 1; CHECK(!RoundTrips(bad, out)); }
+}
+
+// Duos over the wire: the host picks the mode, everyone learns it and (once the match starts) who is on whose team; teammates are always in your
+// snapshots; a knocked player is revived by a teammate holding A; pings reach the pinger's team only; the launch pads reach everyone.
+static void TeamsOverTheWire() {
+    Rig rig(91, 0);
+    rig.server.SetHostToken(0xABCDEF12345ull);
+    GameClient host(rig.network.NewClient(), "Host", 0xABCDEF12345ull);
+    GameClient& a = rig.Add("A");
+    GameClient& b = rig.Add("B");
+    GameClient& c = rig.Add("C");
+    auto stepAll = [&](int n = 1) { for (int i = 0; i < n; i++) { rig.Step(); host.Update(kDt); } };
+    CHECK(rig.RunUntil([&] { host.Update(kDt); return rig.AllJoined() && host.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.SetPlayerLimit(6));
+    stepAll(10);
+    CHECK(host.GetTeamMode() == TeamMode::Solo && a.GetTeamMode() == TeamMode::Solo);
+    a.SetTeamMode(TeamMode::Duos);                                                         // a guest cannot
+    stepAll(20);
+    CHECK(rig.server.GetTeamMode() == TeamMode::Solo && a.GetTeamMode() == TeamMode::Solo);
+    host.SetTeamMode(TeamMode::Duos);
+    stepAll(20);
+    CHECK(rig.server.GetTeamMode() == TeamMode::Duos && a.GetTeamMode() == TeamMode::Duos && c.GetTeamMode() == TeamMode::Duos && host.GetTeamMode() == TeamMode::Duos);
+    GameClient late(rig.network.NewClient(), "Late");
+    rig.server.SetPlayerLimit(8);
+    for (int i = 0; i < 20; i++) { rig.Step(); host.Update(kDt); late.Update(kDt); }
+    CHECK(late.GetStatus() == GameClient::Status::Joined && late.GetTeamMode() == TeamMode::Duos);   // a later joiner learns it from Welcome
+    CHECK(rig.server.StartMatch());
+    auto live = [&] { host.Update(kDt); late.Update(kDt); return rig.M().State() == MatchState::InMatch; };
+    CHECK(rig.RunUntil(live, 400));
+    rig.M().LandEveryone();   // the bus is over: everyone on foot
+    stepAll(10); late.Update(kDt);
+    // Humans first, in joining order: Host+A, B+C, Late+bot.
+    const uint16_t hostId = host.PlayerId(), aId = a.PlayerId(), bId = b.PlayerId(), cId = c.PlayerId();
+    CHECK(host.Teammate(aId) && !host.Teammate(bId) && b.Teammate(cId) && !a.Teammate(cId) && host.Teammates().size() == 1);
+    CHECK(a.TeamOf(hostId) == host.TeamOf(hostId) && host.TeamOf(bId) != host.TeamOf(hostId));
+    // A teammate on the far side of the map is still in your snapshots; the other team's player is not unless near.
+    for (auto& p : rig.M().Players()) p.pos = {1000.0f, 1000.0f};
+    rig.M().Find(hostId)->pos = {-1000.0f, -1000.0f};
+    rig.M().Find(aId)->pos = {-900.0f, -1000.0f};
+    stepAll(10);
+    net::PlayerNet seen;
+    CHECK(host.Sample(aId, seen));
+    // Pings: the host's goes to the host and A, not to B or C.
+    rig.M().Find(hostId)->rot = 0;
+    host.SendPing(PingKind::Place, -1000.0f, -600.0f);
+    stepAll(20);
+    CHECK(host.Pings().size() == 1 && a.Pings().size() == 1 && b.Pings().empty() && c.Pings().empty());
+    if (a.Pings().empty()) return;
+    CHECK(a.Pings()[0].owner == hostId && a.Pings()[0].z == -600.0f && a.Pings()[0].kind == static_cast<uint8_t>(PingKind::Place));
+    for (int i = 0; i < 4; i++) host.SendPing(PingKind::Place, -1000.0f, -700.0f + 20.0f * i);
+    stepAll(20);
+    CHECK(host.Pings().size() == static_cast<size_t>(kPingMaxPerPlayer) && a.Pings().size() == static_cast<size_t>(kPingMaxPerPlayer));
+    stepAll(static_cast<int>((kPingSeconds + 1.0f) * kTickHz));
+    CHECK(host.Pings().empty() && a.Pings().empty());                                       // eight seconds
+    // The launch pads were announced at the start.
+    CHECK(host.LaunchPads().size() >= static_cast<size_t>(kLaunchPadsMin) && host.LaunchPads().size() == rig.M().Pads().size() && b.LaunchPads().size() == host.LaunchPads().size());
+    // Knock the host: everyone sees it; A revives with A held for three seconds.
+    rig.M().Find(hostId)->invulnUntil = 0;
+    rig.M().Damage(hostId, 50.0f, 1000);
+    stepAll(10);
+    CHECK(host.Self() && (host.Self()->flags & net::PlayerNet::kKnocked) && host.Self()->knock > 200);
+    net::PlayerNet down;
+    CHECK(a.Sample(hostId, down) && (down.flags & net::PlayerNet::kKnocked) && (down.flags & net::PlayerNet::kAlive));
+    bool knockEvent = false;
+    for (auto& e : a.DrainEvents()) knockEvent |= e.type == ClientEvent::Type::Knocked && e.id == hostId;
+    CHECK(knockEvent);
+    for (int i = 0; i < static_cast<int>(1.0f * kTickHz); i++) { if (i % 2 == 0) a.HoldRevive(hostId, true); stepAll(); }
+    a.Update(kDt);
+    CHECK(host.Self()->revive > 40 && (host.Self()->flags & net::PlayerNet::kKnocked));
+    for (int i = 0; i < static_cast<int>(2.6f * kTickHz); i++) { if (i % 2 == 0) a.HoldRevive(hostId, true); stepAll(); }
+    a.HoldRevive(hostId, false);
+    stepAll(10);
+    CHECK(host.Self() && !(host.Self()->flags & net::PlayerNet::kKnocked) && std::abs(host.Self()->Health() - kReviveHealth) < 0.1f);
+    bool revived = false;
+    for (auto& e : host.DrainEvents()) revived |= e.type == ClientEvent::Type::TeamRevived && e.id == hostId && e.other == aId;
+    CHECK(revived);
+    // A stranger far away cannot revive (the server counts only teammates in reach).
+    const uint64_t rejected = rig.server.GetStats().rejectedActions;
+    b.HoldRevive(hostId, true);
+    stepAll(5);
+    CHECK(rig.server.GetStats().rejectedActions > rejected);
+    // Results carry the team and the team's place.
+    for (auto& p : rig.M().Players()) if (p.team != rig.M().Find(hostId)->team) p.alive = false;
+    CHECK(rig.RunUntil([&] { host.Update(kDt); return rig.M().State() == MatchState::Ending && !host.Results().empty(); }));
+    int hostTeam = -1;
+    for (auto& r : host.Results()) { CHECK(r.team >= 1); if (r.id == hostId) hostTeam = r.team; }
+    for (auto& r : host.Results()) if (r.id == aId) CHECK(r.team == hostTeam && r.placement == 1);
 }
 
 static void LobbyTimer() {
@@ -1595,8 +1694,8 @@ static void BusMessagesRoundTrip() {
     { EvBusPath bad, out; bad.speed = 300; bad.sx = std::nanf(""); CHECK(!RoundTrips(bad, out)); }
     { EvBusHorn a, b; a.by = 1017; CHECK(RoundTrips(a, b) && b.by == 1017); }
     { Snapshot a, b; a.aboardMask = 0x80000005u; PlayerNet n; n.flags = PlayerNet::kAlive | PlayerNet::kAboard; n.anim = static_cast<uint8_t>(Anim::BusRide); a.players = {n};
-      CHECK(RoundTrips(a, b) && b.aboardMask == 0x80000005u && b.players[0].flags == (PlayerNet::kAlive | PlayerNet::kAboard) && b.players[0].anim == 37); }
-    { Snapshot bad, out; PlayerNet n; n.flags = 32; bad.players = {n}; CHECK(!RoundTrips(bad, out)); }
+      CHECK(RoundTrips(a, b) && b.aboardMask == 0x80000005u && b.players[0].flags == (PlayerNet::kAlive | PlayerNet::kAboard) && b.players[0].anim == 38); }
+    { Snapshot bad, out; PlayerNet n; n.flags = 64; bad.players = {n}; CHECK(!RoundTrips(bad, out)); }
 }
 
 static void BusOverTheWire() {
@@ -1647,7 +1746,7 @@ int main() {
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
     JoinAndWelcome(); RejectedJoins(); StartNeedsAHuman();
     TeleportEpochIgnoresOldInputs(); SpeedClamp(); OldAndDuplicateInputsIgnored(); NaNInputNeverAccepted();
-    ShieldOverTheWire(); SmashingPropsOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
+    ShieldOverTheWire(); SmashingPropsOverTheWire(); SelectingTheMap(); TheDragonOverTheWire(); BackupWeaponsReachTheOwner(); LobbyTimer(); PlayerLimitOverTheWire(); TeamsOverTheWire(); BossesOverTheWire(); SkinsTravelToEveryone(); AttackOverTheWire(); PickupAndPotionOverTheWire(); ResultsAndRematchOverTheWire(); DisconnectHandling(); InterestManagement();
     InterpolationIsSmoothUnderJitter(); InterpolatesAngleAcrossWrap(); StormMatchesAcrossTheWire();
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     SandboxServerBuildsTheTestMap(); SandboxOverTheWire(); SandboxBotsWalkTheTestMap(); ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();

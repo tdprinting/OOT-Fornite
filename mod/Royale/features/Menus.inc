@@ -9,6 +9,7 @@ struct UiState {
     bool waitingRoom = true;
     int botDifficulty = 1; // 0 easy, 1 normal, 2 hard
     int playerLimit = royale::kMaxPlayers; // the host's slider
+    int teamMode = 0;                      // royale::TeamMode: Solo, Duos, Squads
     bool autoStart = true;                 // the lobby starts the match by itself after two minutes
     int mapId = 0;                         // which place to play (host)
     bool majorBoss = true;                 // the map's major boss arrives halfway through (host)
@@ -52,6 +53,7 @@ UiState& Ui() {
         ui.botDifficulty = std::clamp(CVarGetInteger(ROYALE_CVAR("BotDifficulty"), 1), 0, 2);
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
+        ui.teamMode = std::clamp(CVarGetInteger(ROYALE_CVAR("TeamMode"), 0), 0, 2);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
         ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kMoonfallMapIndex);   // Moonfall Isle is the main map
         if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
@@ -125,6 +127,7 @@ UiState& Ui() {
         gSession.SelectMap(ui.mapId);
         gSession.SetMajorBoss(ui.majorBoss);
         gSession.SetPlayerLimit(ui.playerLimit);
+        gSession.SetTeamMode(static_cast<royale::TeamMode>(ui.teamMode));
         gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
         ui.skin = std::clamp(CVarGetInteger(ROYALE_CVAR("Skin"), 0), 0, royale::kCustomSkin);
         const uint32_t saved = static_cast<uint32_t>(CVarGetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(royale::SkinRgb(0))));
@@ -143,6 +146,7 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("BotDifficulty"), ui.botDifficulty);
     CVarSetInteger(ROYALE_CVAR("Skin"), ui.skin);
     CVarSetInteger(ROYALE_CVAR("PlayerLimit"), ui.playerLimit);
+    CVarSetInteger(ROYALE_CVAR("TeamMode"), ui.teamMode);
     CVarSetInteger(ROYALE_CVAR("AutoStart"), ui.autoStart ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("Map"), ui.mapId);
     CVarSetInteger(ROYALE_CVAR("MajorBoss"), ui.majorBoss ? 1 : 0);

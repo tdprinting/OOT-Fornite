@@ -5,7 +5,7 @@ int gReefRetry = 0;
 
 bool LobbyReefActive() {
     return gPlayState != nullptr && gSession.Joined() && gPlayState->sceneNum == SCENE_TEMPLE_OF_TIME &&
-           gSession.Hud().state == royale::MatchState::Lobby && DebugOn(kDbgLobbyFish);
+           gSession.State() == royale::MatchState::Lobby && DebugOn(kDbgLobbyFish);
 }
 
 // Triangle soup in batches of ten: stays below the N64's 32-vertex load limit.

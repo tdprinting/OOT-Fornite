@@ -258,10 +258,6 @@ inline bool AddOutpost(PoiLayout& out, Rng& rng, Outpost what, Vec2 at, int dir,
 constexpr float kTownRadius = 500.0f;   // a town's area: its buildings and cave (its climb stands at the edge, up to 300 further out)
 enum class TownKind : uint8_t { Hamlet, Fort, Quarry, Shrine, Ruins, Camp, Count };
 constexpr int kTownKindCount = static_cast<int>(TownKind::Count);
-inline const char* TownKindName(TownKind k) {
-    static const char* names[kTownKindCount] = {"hamlet", "fort", "quarry", "shrine", "ruins", "camp"};
-    return names[static_cast<int>(k) % kTownKindCount];
-}
 
 inline void BuildTown(PoiLayout& out, Rng& rng, TownKind kind, Vec2 c, float base, const PlacementFn& valid) {
     using namespace poi_detail;

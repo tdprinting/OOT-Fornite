@@ -56,6 +56,14 @@ class GameServer {
         return true;
     }
     int PlayerLimit() const { return playerLimit; }
+    // The host's team mode (Solo, Duos or Squads). Lobby only. Everyone is told; it survives Reconfigure.
+    bool SetTeamMode(TeamMode m) {
+        if (!sim.match.SetTeamMode(m)) return false;
+        teamMode = m;
+        SendTeams();
+        return true;
+    }
+    TeamMode GetTeamMode() const { return teamMode; }
     // Test mode (see Match::SetSoloTest): no bots, and the match goes on with one player. Survives Reconfigure.
     void SetSoloTest(bool on) { soloTest = on; sim.match.SetSoloTest(on); }
     // The Sandbox test map (shared/sandbox_layout.h): used when the map chosen is the Sandbox. Survives Reconfigure.
@@ -205,6 +213,8 @@ class GameServer {
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
+        sim.match.SetTeamMode(teamMode);
+        sim.match.SetPadSpots(PadSpots(layout.pois, map, seed));
         sim.match.SetSoloTest(soloTest);
         sim.match.SetSandbox(sandboxMap && sandbox);
         if (sandboxMap) { sim.match.SetSandboxSpawn(IsBossArena(mapId)?arena::kSpawn:SandboxSpawn()); sim.match.SetSandboxLootRoom(IsBossArena(mapId)?Circle{arena::kArmory,kSandboxLootRadius}:SandboxLootRoom()); }
@@ -291,6 +301,32 @@ class GameServer {
         cfg.pois = pois;
         Broadcast(cfg);
         return true;
+    }
+
+    // Where the Deku Flower launch pads may go: open ground just outside each town.
+    static std::vector<Vec2> PadSpots(const std::vector<Poi>& towns, const Circle& map, uint64_t seed) {
+        std::vector<Vec2> out;
+        Rng rng(seed ^ 0x70616473ull);   // "pads"
+        for (const Poi& t : towns) {
+            const float a = static_cast<float>(rng.Unit() * 6.283185307179586);
+            const float d = t.radius + 220.0f;
+            const Vec2 at = {t.center.x + std::sin(a) * d, t.center.z + std::cos(a) * d};
+            if (Distance(at, map.center) < map.radius * 0.9f) out.push_back(at);
+        }
+        return out;
+    }
+    // Who is on whose team (just the mode in the lobby, and in Solo).
+    void SendTeams() {
+        net::EvTeams t;
+        t.mode = static_cast<uint8_t>(teamMode);
+        if (teamMode != TeamMode::Solo && sim.match.State() != MatchState::Lobby)
+            for (const auto& p : sim.match.Players()) t.members.push_back({static_cast<uint16_t>(p.id), static_cast<uint8_t>(p.team)});
+        Broadcast(t);
+    }
+    void SendPads() {
+        net::EvPads pads;
+        for (const Vec2& p : sim.match.Pads()) pads.pads.push_back({p.x, p.z});
+        Broadcast(pads);
     }
 
     // How many carts a match has: -1 (the default) picks by the map's size, 0 turns them off. Survives Reconfigure.
@@ -532,6 +568,30 @@ class GameServer {
                 if (!c->isHost || !SelectMap(m.map)) stats.rejectedActions++;
                 break;
             }
+            case net::MsgType::SetTeamModeRequest: {
+                net::SetTeamModeRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!c->isHost || !SetTeamMode(static_cast<TeamMode>(m.mode))) stats.rejectedActions++;
+                break;
+            }
+            case net::MsgType::ReviveRequest: {
+                net::ReviveRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                if (!m.active) sim.match.ReleaseRevive(c->playerId);
+                else if (!sim.match.HoldRevive(c->playerId, m.target)) stats.rejectedActions++;
+                break;
+            }
+            case net::MsgType::PingRequest: {
+                net::PingRequest m;
+                if (!net::Decode(data, m)) { stats.badPackets++; break; }
+                Match::Ping ping;
+                if (!sim.match.PlacePing(c->playerId, static_cast<PingKind>(m.kind), {m.x, m.z}, m.target == net::kNoPlayer16 ? kNoPlayer : m.target, &ping)) { stats.rejectedActions++; break; }
+                net::EvPing ev;
+                ev.owner = static_cast<uint16_t>(ping.owner); ev.kind = static_cast<uint8_t>(ping.kind); ev.x = ping.pos.x; ev.z = ping.pos.z;
+                ev.target = ping.target == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(ping.target);
+                for (const auto& o : clients) if (o.joined && sim.match.PingVisibleTo(ping, o.playerId)) SendTo(o, ev);   // the pinger's team only
+                break;
+            }
             case net::MsgType::RematchRequest: {
                 net::RematchRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
@@ -662,6 +722,7 @@ class GameServer {
         w.seed = sim.match.Seed();
         w.mapId = static_cast<uint8_t>(mapId);
         w.limit = static_cast<uint8_t>(playerLimit);
+        w.teamMode = static_cast<uint8_t>(teamMode);
         w.map = mapCircle;
         w.stormEnds = sim.match.GetStorm().PhaseEnds();
         for (const auto& l : sim.match.Loot()) w.loot.push_back(ToNet(l));
@@ -707,7 +768,7 @@ class GameServer {
         Vec2 target = {in.x, in.z};
         if (sim.match.State() != MatchState::Lobby) {
             float elapsed = (std::min)(std::max(clock - c.lastInputClock, kStep), kMaxInputGap);
-            float maxMove = kMaxPlausibleSpeed * elapsed + kMovementSlack;
+            float maxMove = (p->knocked ? kRunSpeed * 1.5f : kMaxPlausibleSpeed) * elapsed + kMovementSlack;
             float d = Distance(p->pos, target);
             if (d > maxMove) {
                 float k = maxMove / d;
@@ -773,6 +834,7 @@ class GameServer {
                         for (size_t i = 0; i < used; i++) bp.seats.push_back(seats[i] == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(seats[i]));
                         Broadcast(bp);
                     }
+                    if (e.state != MatchState::Lobby && e.state != MatchState::Ending) { SendTeams(); SendPads(); }   // teams and pads are fixed when the match begins
                     if (e.state == MatchState::Ending) {
                         net::EvResults res;
                         for (const auto& s : sim.match.Standings()) {
@@ -783,6 +845,7 @@ class GameServer {
                             row.chests = static_cast<uint8_t>((std::min)(s.chests, 255));
                             row.damageTenths = static_cast<uint16_t>((std::min)(s.damage * 10.0f, 65535.0f));
                             row.score = static_cast<uint32_t>(s.score);
+                            row.team = static_cast<uint8_t>(s.team);
                             res.rows.push_back(row);
                         }
                         Broadcast(res);
@@ -887,6 +950,17 @@ class GameServer {
                     Broadcast(a);
                     break;
                 }
+                case MatchEvent::Type::Knocked: case MatchEvent::Type::TeamRevived: {
+                    net::EvKnock k;
+                    k.victim = static_cast<uint16_t>(e.a);
+                    k.by = e.b == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(e.b);
+                    k.kind = e.type == MatchEvent::Type::Knocked ? 0 : 1;
+                    Broadcast(k);
+                    break;
+                }
+                case MatchEvent::Type::PadsChanged:
+                    SendPads();
+                    break;
                 case MatchEvent::Type::Teleported: {
                     // The server moved this player (Hookshot pull, Farore's Wind, Nocturne). Bumping the epoch makes the owner's game
                     // jump there too, and makes the server ignore the position the client reports until it has seen the move.
@@ -967,7 +1041,11 @@ class GameServer {
         n.health = net::PlayerNet::QuantizeHealth(p.health);
         n.flags = static_cast<uint8_t>((p.alive ? net::PlayerNet::kAlive : 0) | (p.hasShield ? net::PlayerNet::kShield : 0) |
                                        (p.isBot ? net::PlayerNet::kBot : 0) | (sim.match.Clock() < p.adultUntil ? net::PlayerNet::kAdult : 0) |
-                                       (p.aboard ? net::PlayerNet::kAboard : 0));
+                                       (p.knocked ? net::PlayerNet::kKnocked : 0) | (p.aboard ? net::PlayerNet::kAboard : 0));
+        if (p.knocked) {
+            n.knock = static_cast<uint8_t>(std::lround(std::clamp(p.knockHealth / kKnockHealth, 0.0f, 1.0f) * 255.0f));
+            n.revive = static_cast<uint8_t>(std::lround(std::clamp(p.reviveProgress, 0.0f, 1.0f) * 255.0f));
+        }
         n.weapon = static_cast<uint8_t>(p.weapon.item);
         n.weaponRarity = static_cast<uint8_t>(p.weapon.rarity);
         n.potions = static_cast<uint8_t>(p.potions.size());
@@ -1013,6 +1091,14 @@ class GameServer {
             std::partial_sort(nearby.begin(), nearby.begin() + static_cast<long>(keep), nearby.end(),
                               [](const auto& a, const auto& b) { return a.first < b.first || (a.first == b.first && a.second->id < b.second->id); });
             for (size_t i = 0; i < keep; i++) s.players.push_back(ToNet(*nearby[i].second));
+            if (sim.match.TeamsOn()) {   // your teammates are always in your snapshots (the squad list and the minimap need them), however far, down or out
+                for (const auto& o : players) {
+                    if (!sim.match.SameTeam(*self, o)) continue;
+                    bool have = false;
+                    for (const auto& n : s.players) have = have || n.id == o.id;
+                    if (!have) s.players.push_back(ToNet(o));
+                }
+            }
             for (const MiniBoss& b : sim.match.Bosses()) {
                 if (!b.alive || (!IsDragonKind(b.kind) && Distance(self->pos, b.pos) > 4500.0f)) continue; // only the ones that could matter to this player (the dragon is always visible)
                 net::BossNet n;
@@ -1104,6 +1190,7 @@ class GameServer {
     static constexpr size_t kVehicleSendMax = 5;
     std::vector<std::pair<float, const VehicleState*>> vehicleNear;
     int playerLimit = kMaxPlayers;
+    TeamMode teamMode = TeamMode::Solo;
     bool soloTest = false;
     bool sandbox = false;
     float autoStartSec = 0;

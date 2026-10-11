@@ -56,12 +56,14 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
     if (vy >= 0.0f) {
         if (P.skyOn) {
             // Fresnel: the lower you look across the water, the more it is a mirror of the sky
-            fres = 0.04f + 0.96f * std::pow(1.0f - cosv, 4.0f);
+            const float u = 1.0f - cosv, u2 = u * u;   // (powers by multiplying: std::pow costs several times more, per point per frame)
+            fres = 0.04f + 0.96f * (u2 * u2);
             const float kz = std::pow(cosv, 0.6f), m = std::min(0.88f, fres);
             for (int q = 0; q < 3; q++) { const float skyc = sky.hor[q] + (sky.zen[q] - sky.hor[q]) * kz; c[q] = c[q] * (1.0f - m) + skyc * m; }
             a += 150.0f * fres;
             // the glitter path of the sun and the moon, twinkling
-            const float tw = 0.6f + 0.4f * std::sin(P.t * 5.0f + twinkle * 40.0f);
+            const bool sharp = P.sharpSpec != 0.0f;   // the water mesh draws with it off: then the twinkle and the pin-point glint are skipped
+            const float tw = sharp ? 0.6f + 0.4f * std::sin(P.t * 5.0f + twinkle * 40.0f) : 0.0f;
             for (int body = 0; body < 2; body++) {
                 const float* l = body == 0 ? sky.sun : sky.moon;
                 const float amt = body == 0 ? sky.sunA : sky.moonA;
@@ -69,19 +71,20 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
                 const float hxv = l[0] + vx, hyv = l[1] + vy, hzv = l[2] + vz;
                 const float hl = std::max(0.001f, std::sqrt(hxv * hxv + hyv * hyv + hzv * hzv));
                 const float nh = std::max(0.0f, (nx * hxv + ny * hyv + nz * hzv) / hl);
-                const float s = (std::pow(nh, 160.0f) * tw * P.sharpSpec + 0.22f * std::pow(nh, 18.0f)) * amt * (body == 0 ? 1.0f : 0.55f);
+                const float n2 = nh * nh, n4 = n2 * n2, n8 = n4 * n4, n16 = n8 * n8;
+                const float s = ((sharp ? std::pow(nh, 160.0f) * tw * P.sharpSpec : 0.0f) + 0.22f * (n16 * n2)) * amt * (body == 0 ? 1.0f : 0.55f);
                 const float cr = body == 0 ? 255.0f : 215.0f, cg = body == 0 ? 236.0f - 80.0f * sky.sunWarm : 225.0f, cb = body == 0 ? 205.0f - 120.0f * sky.sunWarm : 245.0f;
                 const float mix = std::min(1.0f, s * 2.0f);
                 c[0] += (cr - c[0]) * mix; c[1] += (cg - c[1]) * mix; c[2] += (cb - c[2]) * mix;
                 a += 220.0f * s;
                 if (s > spec) { spec = s; o.glint[0] = cr; o.glint[1] = cg; o.glint[2] = cb; }
-                const float pk = std::pow(nh, 10.0f) * amt * (body == 0 ? 1.0f : 0.6f);
+                const float pk = (n8 * n2) * amt * (body == 0 ? 1.0f : 0.6f);
                 if (pk > path) { path = pk; if (s <= spec) { o.glint[0] = cr; o.glint[1] = cg; o.glint[2] = cb; } }
             }
         }
         // P.light through the crests: a wave's thin top glows green-turquoise, most when you look toward the sun (subsurface scattering)
         const float crestK = std::clamp(crest / (P.ampTotal * 0.55f + 0.5f), 0.0f, 1.0f);
-        const float back = std::max(0.0f, -(vx * sky.sun[0] + vz * sky.sun[2]) / std::max(0.001f, std::hypot(vx, vz)) / std::max(0.001f, std::hypot(sky.sun[0], sky.sun[2])));
+        const float back = std::max(0.0f, -(vx * sky.sun[0] + vz * sky.sun[2]) / std::max(0.001f, std::sqrt(vx * vx + vz * vz)) / std::max(0.001f, std::sqrt(sky.sun[0] * sky.sun[0] + sky.sun[2] * sky.sun[2])));
         const float glow = crestK * crestK * (0.35f + 0.65f * back) * (0.15f + 0.85f * sky.sunA) * P.light;
         const float gm = std::min(0.65f, glow * 0.9f);
         c[0] += (70.0f - c[0]) * gm; c[1] += (250.0f - c[1]) * gm; c[2] += (205.0f - c[2]) * gm;

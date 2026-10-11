@@ -24,10 +24,11 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         Swim = 34,        // swimming strokes (bots; older clients draw them as Idle)
                         Tread = 35,       // treading water
                         Climb = 36,       // going up a cliff or an ivy wall, hand over hand
-                        BusRide = 37,     // sat on the Moonfall Bus (shared/bus.h)
-                        Freefall = 38,    // jumped off the bus, arms out, the glider not open yet
-                        Glide = 39,       // hanging from the glider (the server takes the first other anim after a jump as landing)
-                        BusHorn = 40,     // sat on the bus and honking its horn (one tick; everyone near the bus hears it)
+                        Knocked = 37,     // down but not out: lying on the ground, crawling (team modes; older clients draw it as Idle)
+                        BusRide = 38,     // sat on the Moonfall Bus (shared/bus.h)
+                        Freefall = 39,    // jumped off the bus, arms out, the glider not open yet
+                        Glide = 40,       // hanging from the glider (the server takes the first other anim after a jump as landing)
+                        BusHorn = 41,     // sat on the bus and honking its horn (one tick; everyone near the bus hears it)
                         Count };
 
 // In the air after leaving the bus.
@@ -60,12 +61,6 @@ constexpr bool IsEmote(uint8_t a) {
 constexpr uint8_t EmoteAnim(int index) {
     const int i = index < 0 ? 0 : index >= kEmoteCount ? kEmoteCount - 1 : index;
     return static_cast<uint8_t>(i < 5 ? static_cast<int>(Anim::Emote1) + i : static_cast<int>(Anim::Emote6) + (i - 5));
-}
-// Which emote an anim value is (the inverse of EmoteAnim), or -1.
-constexpr int EmoteIndex(uint8_t a) {
-    if (a >= static_cast<uint8_t>(Anim::Emote1) && a <= static_cast<uint8_t>(Anim::Emote5)) return a - static_cast<uint8_t>(Anim::Emote1);
-    if (a >= static_cast<uint8_t>(Anim::Emote6) && a <= static_cast<uint8_t>(Anim::Emote8)) return 5 + (a - static_cast<uint8_t>(Anim::Emote6));
-    return -1;
 }
 
 } // namespace royale

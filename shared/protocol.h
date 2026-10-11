@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 40; // 40: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 41; // 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -38,9 +38,12 @@ constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "use
 enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13, NpcHitRequest = 14,
     VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17, UseItemRequest = 18, DropItemRequest = 19,
+    SetTeamModeRequest = 20, ReviveRequest = 21, PingRequest = 22,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
-    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91, EvBusPath = 92, EvBusHorn = 93,
+    EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91,
+    EvTeams = 92, EvPing = 93, EvPads = 94, EvKnock = 95,
+    EvBusPath = 96, EvBusHorn = 97,
 };
 
 enum class RejectReason : uint8_t { VersionMismatch = 1, LobbyFull = 2, MatchInProgress = 3, BadHello = 4 };
@@ -208,6 +211,35 @@ struct VehicleDrive {
     }
 };
 
+// The host picks Solo, Duos or Squads (lobby only). The server tells everyone with EvTeams.
+struct SetTeamModeRequest {
+    static constexpr MsgType kType = MsgType::SetTeamModeRequest;
+    uint8_t mode = 0;
+    void Write(ByteWriter& w) const { w.U8(mode); }
+    bool Read(ByteReader& r) { mode = r.U8(); return r.ok && mode < kTeamModeCount; }
+};
+
+// Hold A beside a knocked teammate: sent about ten times a second while held, and once with active false on letting go. The server decides
+// whether the revive is on (distance, team, standing) and counts the three seconds itself.
+struct ReviveRequest {
+    static constexpr MsgType kType = MsgType::ReviveRequest;
+    uint16_t target = 0;
+    bool active = true;
+    void Write(ByteWriter& w) const { w.U16(target); w.U8(active ? 1 : 0); }
+    bool Read(ByteReader& r) { target = r.U16(); const uint8_t a = r.U8(); active = a == 1; return r.ok && a <= 1; }
+};
+
+// L: a marker at (x, z). `kind` is a PingKind; `target` is the enemy's id (Enemy) or the loot index (Loot), else kNoPlayer16. The server checks the
+// kind and distance, then tells the pinger's team (the pinger only, in Solo) with EvPing.
+struct PingRequest {
+    static constexpr MsgType kType = MsgType::PingRequest;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    uint16_t target = kNoPlayer16;
+    void Write(ByteWriter& w) const { w.U8(kind); w.F32(x); w.F32(z); w.U16(target); }
+    bool Read(ByteReader& r) { kind = r.U8(); x = r.F32(); z = r.F32(); target = r.U16(); return r.ok && kind <= 2 && Finite(x) && Finite(z); }
+};
+
 // The host picks which place the match is played in (lobby only).
 struct SelectMapRequest {
     static constexpr MsgType kType = MsgType::SelectMapRequest;
@@ -300,6 +332,7 @@ struct Welcome {
     uint64_t seed = 0;
     uint8_t limit = kMaxPlayers;
     uint8_t mapId = 0;
+    uint8_t teamMode = 0;   // TeamMode, picked by the host
     Circle map;
     std::array<Circle, kStormPhaseCount> stormEnds;
     std::vector<LootNet> loot;
@@ -307,7 +340,7 @@ struct Welcome {
     std::vector<Poi> pois;
     std::vector<RosterEntry> roster;
     void Write(ByteWriter& w) const {
-        w.U16(playerId); w.U16(version); w.U64(seed); w.U8(limit); w.U8(mapId);
+        w.U16(playerId); w.U16(version); w.U64(seed); w.U8(limit); w.U8(mapId); w.U8(teamMode);
         WriteCircle(w, map);
         for (const auto& c : stormEnds) WriteCircle(w, c);
         w.U16(static_cast<uint16_t>(loot.size()));
@@ -318,8 +351,8 @@ struct Welcome {
         for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); }
     }
     bool Read(ByteReader& r) {
-        playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8(); mapId = r.U8();
-        if (limit < kMinPlayers || limit > kMaxPlayers || mapId >= kMapCount) return false;
+        playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8(); mapId = r.U8(); teamMode = r.U8();
+        if (limit < kMinPlayers || limit > kMaxPlayers || mapId >= kMapCount || teamMode >= kTeamModeCount) return false;
         map = ReadCircle(r);
         for (auto& c : stormEnds) c = ReadCircle(r);
         size_t n = r.U16();
@@ -352,9 +385,9 @@ struct MatchStateMsg {
     bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); limit = r.U8(); return r.ok && state <= 4 && limit >= kMinPlayers && limit <= kMaxPlayers; }
 };
 
-// One player as seen in a snapshot. 29 bytes.
+// One player as seen in a snapshot. 29 bytes (31 while knocked).
 struct PlayerNet {
-    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8, kAboard = 16;   // kAdult: under the Adult Power; kAboard: sat on the Moonfall Bus
+    static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8, kKnocked = 16, kAboard = 32;   // kAdult: under the Adult Power; kKnocked: down but not out (still kAlive); kAboard: sat on the Moonfall Bus
     uint16_t id = 0;
     float x = 0, y = 0, z = 0;
     int16_t rot = 0;
@@ -370,6 +403,8 @@ struct PlayerNet {
     static constexpr uint8_t kNoGear = 0xFF;
     uint8_t boots = kNoGear, mask = kNoGear;
     uint8_t tunicGear = kNoGear, gauntlets = kNoGear;   // the tunic and the bracelet or gauntlets worn (an ItemId, or kNoGear)
+    uint8_t knock = 0;    // while knocked: the bleed-out bar left, 0..255 over kKnockHealth
+    uint8_t revive = 0;   // while knocked: how far a teammate's revive has got, 0..255 over kReviveSeconds
     static uint8_t QuantizeHealth(float h) {
         float v = h / kMaxHealthCap * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -378,11 +413,14 @@ struct PlayerNet {
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
         w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity); w.U8(boots); w.U8(mask); w.U8(tunicGear); w.U8(gauntlets);
+        if (flags & kKnocked) { w.U8(knock); w.U8(revive); }   // only a knocked player carries these two bytes
     }
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
         health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8(); boots = r.U8(); mask = r.U8(); tunicGear = r.U8(); gauntlets = r.U8();
-        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 31 && weapon < static_cast<uint8_t>(ItemId::Count) &&
+        knock = 0; revive = 0;
+        if (flags & kKnocked) { knock = r.U8(); revive = r.U8(); }
+        return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 63 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount &&
                shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount &&
                (boots == kNoGear || boots < static_cast<uint8_t>(ItemId::Count)) && (mask == kNoGear || mask < static_cast<uint8_t>(ItemId::Count)) &&
@@ -793,19 +831,20 @@ struct ResultRow {
     uint8_t placement = 0, kills = 0, chests = 0;
     uint16_t damageTenths = 0; // hearts of damage dealt, in tenths
     uint32_t score = 0;
+    uint8_t team = 0;          // team number in Duos and Squads (placement is the team's); 0 in Solo
 };
 struct EvResults {
     static constexpr MsgType kType = MsgType::EvResults;
     std::vector<ResultRow> rows;
     void Write(ByteWriter& w) const {
         w.U8(static_cast<uint8_t>(rows.size()));
-        for (const auto& r : rows) { w.U16(r.id); w.U8(r.placement); w.U8(r.kills); w.U8(r.chests); w.U16(r.damageTenths); w.U32(r.score); }
+        for (const auto& r : rows) { w.U16(r.id); w.U8(r.placement); w.U8(r.kills); w.U8(r.chests); w.U16(r.damageTenths); w.U32(r.score); w.U8(r.team); }
     }
     bool Read(ByteReader& r) {
         const size_t n = r.U8();
         if (n > static_cast<size_t>(kMaxPlayers)) return false;
         rows.assign(n, {});
-        for (auto& row : rows) { row.id = r.U16(); row.placement = r.U8(); row.kills = r.U8(); row.chests = r.U8(); row.damageTenths = r.U16(); row.score = r.U32(); }
+        for (auto& row : rows) { row.id = r.U16(); row.placement = r.U8(); row.kills = r.U8(); row.chests = r.U8(); row.damageTenths = r.U16(); row.score = r.U32(); row.team = r.U8(); }
         return r.ok;
     }
 };
@@ -887,6 +926,63 @@ struct EvAbility {
         user = r.U16(); item = r.U8(); x = r.F32(); z = r.F32();
         return r.ok && (item < static_cast<uint8_t>(ItemId::Count) || item == kRevivedItem) && Finite(x) && Finite(z);
     }
+};
+
+// Who is on whose team. Sent to everyone whenever the host changes the mode (no members: it is the lobby setting) and when a match begins.
+// In Solo no teams are listed.
+struct EvTeams {
+    static constexpr MsgType kType = MsgType::EvTeams;
+    uint8_t mode = 0;
+    std::vector<std::pair<uint16_t, uint8_t>> members;   // player id, team number
+    void Write(ByteWriter& w) const {
+        w.U8(mode); w.U8(static_cast<uint8_t>(members.size()));
+        for (const auto& m : members) { w.U16(m.first); w.U8(m.second); }
+    }
+    bool Read(ByteReader& r) {
+        mode = r.U8();
+        const size_t n = r.U8();
+        if (mode >= kTeamModeCount || n > static_cast<size_t>(kMaxPlayers)) return false;
+        members.assign(n, {});
+        for (auto& m : members) { m.first = r.U16(); m.second = r.U8(); }
+        return r.ok;
+    }
+};
+
+// A teammate (or you) placed a ping. Sent to the pinger's team only.
+struct EvPing {
+    static constexpr MsgType kType = MsgType::EvPing;
+    uint16_t owner = 0;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    uint16_t target = kNoPlayer16;
+    void Write(ByteWriter& w) const { w.U16(owner); w.U8(kind); w.F32(x); w.F32(z); w.U16(target); }
+    bool Read(ByteReader& r) { owner = r.U16(); kind = r.U8(); x = r.F32(); z = r.F32(); target = r.U16(); return r.ok && kind <= 2 && Finite(x) && Finite(z); }
+};
+
+// Every Deku Flower launch pad there is now (the whole list, whenever it changes).
+struct EvPads {
+    static constexpr MsgType kType = MsgType::EvPads;
+    std::vector<std::pair<float, float>> pads;   // x, z
+    void Write(ByteWriter& w) const {
+        w.U8(static_cast<uint8_t>(pads.size()));
+        for (const auto& p : pads) { w.F32(p.first); w.F32(p.second); }
+    }
+    bool Read(ByteReader& r) {
+        const size_t n = r.U8();
+        if (n > static_cast<size_t>(kMaxLaunchPads)) return false;
+        pads.assign(n, {});
+        for (auto& p : pads) { p.first = r.F32(); p.second = r.F32(); if (!Finite(p.first) || !Finite(p.second)) return false; }
+        return r.ok;
+    }
+};
+
+// A player was knocked down (kind 0, `by` knocked them) or got back up (kind 1, `by` revived them).
+struct EvKnock {
+    static constexpr MsgType kType = MsgType::EvKnock;
+    uint16_t victim = 0, by = kNoPlayer16;
+    uint8_t kind = 0;
+    void Write(ByteWriter& w) const { w.U16(victim); w.U16(by); w.U8(kind); }
+    bool Read(ByteReader& r) { victim = r.U16(); by = r.U16(); kind = r.U8(); return r.ok && kind <= 1; }
 };
 
 struct EvPlayerLeft {

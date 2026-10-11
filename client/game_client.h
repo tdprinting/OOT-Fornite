@@ -16,9 +16,9 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction, FartCloud, BusPath, BusHorn } type;
-    uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player
-    uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect)
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction, FartCloud, Knocked, TeamRevived, Pinged, PadsChanged, TeamsChanged, BusPath, BusHorn } type;
+    uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player | Knocked/TeamRevived: the player who went down / got up | Pinged: the pinger
+    uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect) | Knocked: who knocked them | TeamRevived: who revived them
     float amount = 0;    // Damaged: hearts
     float health = 0;    // Damaged: what the target has left
     uint16_t count = 0;  // PropBroken: how many rupees or pieces of ammo were inside (item 255 = nothing)
@@ -26,8 +26,17 @@ struct ClientEvent {
     MatchState state = MatchState::Lobby;
     bool ready = false;  // ReadyChanged
     uint8_t item = 0;    // PropBroken: what was inside | AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
-    float x = 0, z = 0;  // AbilityUsed: where the user was | Strike / BossSpawned / BossDown: where
+    float x = 0, z = 0;  // AbilityUsed: where the user was | Strike / BossSpawned / BossDown / Pinged: where
     // BusPath: the line arrived (read it with GameClient::Bus) | BusHorn: id = who honked
+};
+
+// A ping (L) your team can see: where, what kind (PingKind) and what it points at (the enemy's id or the loot index, else kNoPlayer16).
+struct ClientPing {
+    uint16_t owner = 0;
+    uint8_t kind = 0;
+    float x = 0, z = 0;
+    uint16_t target = net::kNoPlayer16;
+    float expiresAt = 0;   // on the client's clock
 };
 
 // Everything the local player carries and the timed effects on them, as last reported by the server. The "left" values count down by
@@ -124,6 +133,29 @@ class GameClient {
     void UseShield() { SendIfJoined(net::UseShieldRequest{}); }
     // Swap the weapon in hand with backup slot 1 or 2.
     void SelectWeapon(int slot) { net::SelectWeaponRequest m; m.slot = static_cast<uint8_t>(slot); SendIfJoined(m); }
+    // ---- teams, revives, pings (protocol 37) ----
+    void SetTeamMode(TeamMode m) { net::SetTeamModeRequest r; r.mode = static_cast<uint8_t>(m); SendIfJoined(r); }   // host only, lobby only
+    // Hold A beside a knocked teammate: call about ten times a second while held, and once with active false on letting go.
+    void HoldRevive(uint16_t target, bool active) { net::ReviveRequest r; r.target = target; r.active = active; SendIfJoined(r); }
+    void SendPing(PingKind kind, float x, float z, uint16_t target = net::kNoPlayer16) { net::PingRequest r; r.kind = static_cast<uint8_t>(kind); r.x = x; r.z = z; r.target = target; SendIfJoined(r); }
+    TeamMode GetTeamMode() const { return teamMode; }
+    // Team number of a player (their own id in Solo, or when unknown), and whether two players are on the same team (never in Solo).
+    int TeamOf(uint16_t id) const { auto it = teams.find(id); return it == teams.end() ? 1000 + id : it->second; }
+    bool Teammate(uint16_t id) const { return teamMode != TeamMode::Solo && id != playerId && TeamOf(id) == TeamOf(playerId); }
+    // Your teammates (not you), in id order, whether or not they are alive.
+    std::vector<uint16_t> Teammates() const {
+        std::vector<uint16_t> out;
+        for (const auto& [id, team] : teams) if (Teammate(id)) out.push_back(id);
+        return out;
+    }
+    // The pings your team has up right now (at most three each, the oldest dropped), and the Deku launch pads on the map.
+    std::vector<ClientPing> Pings() const {
+        std::vector<ClientPing> out;
+        for (const auto& g : pings) if (g.expiresAt > localClock) out.push_back(g);
+        return out;
+    }
+    const std::vector<std::pair<float, float>>& LaunchPads() const { return pads; }
+    float Now() const { return localClock; }   // the client's clock (pings count down on it)
     // The mini bosses in the latest snapshot (the ones near you).
     const std::vector<net::HelperNet>& Helpers() const { return helpers; }
     const std::vector<net::BossNet>& Bosses() const { return bosses; }
@@ -464,6 +496,47 @@ class GameClient {
                 events.push_back(e);
                 break;
             }
+            case net::MsgType::EvTeams: {
+                net::EvTeams m;
+                if (!net::Decode(data, m)) break;
+                teamMode = static_cast<TeamMode>(m.mode);
+                teams.clear();
+                for (const auto& [id, team] : m.members) teams[id] = team;
+                ClientEvent e{ClientEvent::Type::TeamsChanged};
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvPing: {
+                net::EvPing m;
+                if (!net::Decode(data, m)) break;
+                int mine = 0;
+                for (const auto& g : pings) mine += g.owner == m.owner && g.expiresAt > localClock;
+                while (mine >= kPingMaxPerPlayer) {   // the oldest of theirs goes (the server keeps the same rule)
+                    for (size_t i = 0; i < pings.size(); i++) if (pings[i].owner == m.owner) { pings.erase(pings.begin() + static_cast<long>(i)); mine--; break; }
+                }
+                pings.erase(std::remove_if(pings.begin(), pings.end(), [&](const ClientPing& g) { return g.expiresAt <= localClock; }), pings.end());
+                pings.push_back({m.owner, m.kind, m.x, m.z, m.target, localClock + kPingSeconds});
+                ClientEvent e{ClientEvent::Type::Pinged};
+                e.id = m.owner; e.x = m.x; e.z = m.z; e.item = m.kind;
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvPads: {
+                net::EvPads m;
+                if (!net::Decode(data, m)) break;
+                pads = m.pads;
+                ClientEvent e{ClientEvent::Type::PadsChanged};
+                events.push_back(e);
+                break;
+            }
+            case net::MsgType::EvKnock: {
+                net::EvKnock m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{m.kind == 0 ? ClientEvent::Type::Knocked : ClientEvent::Type::TeamRevived};
+                e.id = m.victim; e.other = m.by;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvReplayHeader: {
                 net::EvReplayHeader m;
                 if (!net::Decode(data, m)) break;
@@ -565,6 +638,7 @@ class GameClient {
                 props = m.props;
                 pois = m.pois;
                 results.clear();
+                pings.clear(); pads.clear();
                 ClientEvent e{ClientEvent::Type::MapChanged};
                 events.push_back(e);
                 break;
@@ -594,6 +668,7 @@ class GameClient {
         props = w.props;
         playerLimit = w.limit;
         mapId = w.mapId;
+        teamMode = static_cast<TeamMode>(w.teamMode);
         pois = w.pois;
         roster.clear();
         for (const auto& r : w.roster) {
@@ -677,6 +752,10 @@ class GameClient {
     size_t replayGot = 0;
     float bossesAt = 0;
     int playerLimit = kMaxPlayers;
+    TeamMode teamMode = TeamMode::Solo;
+    std::map<uint16_t, uint8_t> teams;        // player id to team number (team modes, once the match has begun)
+    std::vector<ClientPing> pings;
+    std::vector<std::pair<float, float>> pads;
     uint8_t lobbyLeftAtSnapshot = 255;
     BusPath bus;
     std::vector<uint16_t> busSeats;
