@@ -39,7 +39,7 @@ including on untextured blades; they do not reproduce the original shield
 crest as sculpted relief. Custom Link models that replace native equipment
 textures may need their own material assignments.
 
-`scripts/make_item_surface_maps.py` regenerates twelve 64 x 64 RGBA8 PNGs in
+`tools/make_item_bump_maps.py` regenerates twelve 256 x 256 RGBA8 PNGs (soft, painterly OoT relief) in
 `assets/items/surface_maps` and `shared/item_surface_maps.h`. Maps are linear
 data with explicit bytes, avoiding the native-word colour bug fixed in PR #79.
 Normals use the OpenGL tangent convention; grayscale heights have independent
@@ -107,3 +107,9 @@ different count (for example when a material changes how many attributes a shade
 shows as huge wedges flung across the screen. Patch 0004 checks, after each triangle, that exactly the number of floats the program reads were written; a
 triangle that does not match is left out and one line is logged ("a triangle wrote N floats but its shader reads M"). It also leaves out triangles whose
 vertices are not finite numbers. If that log line ever appears, it names whether a surface map was on, which narrows the bug down.
+
+## Fallback (libultraship patch 0008)
+The Android APK ships the fork's prebuilt `soh.otr`, whose OpenGL shaders predate surface maps. The renderer now uses
+built-in copies of the patched shaders when the archive's lack `o_surface_map`, and if a surface-mapped triangle ever
+mismatches its program it switches surface maps off and redraws the triangle plain. Untextured blades use the
+item's painted maps (planar); textured parts keep the relief derived from their own texture.
