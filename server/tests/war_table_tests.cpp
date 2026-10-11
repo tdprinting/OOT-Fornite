@@ -1,8 +1,10 @@
 #include "war_table.h"
+#include "controls.h"
 #include <cstdlib>
 #include <iostream>
 #include <set>
 using namespace royale::wartable;
+namespace ctl = royale::controls;
 static void Check(bool ok,const char* message) {if(!ok){std::cerr<<message<<'\n';std::exit(1);}}
 int main() {
     Check(ActivePage(false,false,false,false,true)==Page::Play,"Startup always reaches Play");
@@ -19,6 +21,17 @@ int main() {
     Check(empowered.attack>base.attack&&empowered.defense>50,"Rarity, gear, shield and adult buffs are reflected");
     const auto empty=Loadout(royale::ItemId::FairyBow,royale::Rarity::Legendary,false,1,1,1,0,false);
     Check(std::fabs(empty.attack-royale::WeaponOf(royale::ItemId::BasicSword).damage*royale::kPlayerDamageScale)<.001f,"Empty ranged weapons show the basic melee fallback without rarity");
+    {
+        const auto br=ctl::Scheme::BattleRoyale, classic=ctl::Scheme::Classic;
+        Check(ctl::Clamp(0)==br&&ctl::Clamp(1)==classic&&ctl::Clamp(7)==br&&ctl::Clamp(-3)==br,"Unknown layouts fall back to Battle Royale");
+        Check(ctl::JumpPressed(br,ctl::kA,false,false),"A jumps when it has nothing else to do");
+        Check(!ctl::JumpPressed(br,ctl::kA,true,false),"A opens, takes, hires or talks instead of jumping when it can");
+        Check(!ctl::JumpPressed(br,ctl::kCUp,false,false),"C-Up no longer jumps in the Battle Royale layout");
+        Check(ctl::JumpPressed(classic,ctl::kCUp,true,false)&&!ctl::JumpPressed(classic,ctl::kA,false,false),"Classic keeps C-Up as the jump and A never jumps");
+        Check(ctl::JumpPressed(br,0,true,true)&&ctl::JumpPressed(classic,0,true,true),"The on-screen JUMP button works in both layouts");
+        Check(ctl::AbilityPressed(br,ctl::kCUp)&&ctl::AbilityPressed(br,ctl::kDUp)&&ctl::AbilityPressed(classic,ctl::kDUp)&&!ctl::AbilityPressed(classic,ctl::kCUp),"Ability is on D-pad Up, and C-Up too once the jump has moved");
+        Check(ctl::PromptsFor(br).jump==ctl::Glyph::A&&ctl::PromptsFor(classic).jump==ctl::Glyph::CUp,"Prompts follow the layout");
+    }
     std::set<int> settings;
     for(int section:kSettingsOrder){Check(section>=0&&section<kSettingsCount,"Settings section is valid");settings.insert(section);}
     Check(settings.size()==kSettingsCount&&kSettingsOrder[0]==6,"All settings are reachable and Pets is first");
@@ -49,6 +62,17 @@ int main() {
     Check(Neighbor(buttons,0,1,0)==3,"Navigation skips disabled actions");
     Check(Neighbor(buttons,2,1,0)==3,"Right reaches adjacent control");
     Check(Neighbor(buttons,3,1,0)==3,"Focus remains valid at edge");
+    buttons[3].touchOnly=true;
+    Check(Neighbor(buttons,2,1,0)==2,"Touch-only footer buttons are skipped by the controller");
+    Check(HitTest(buttons,50,10)==0&&HitTest(buttons,150,50)==3,"Taps inside a button hit it, touch-only ones too");
+    Check(HitTest(buttons,50,30)==0||HitTest(buttons,50,30)==2,"Taps in a narrow gap reach a neighbouring button");
+    Check(HitTest(buttons,50,-6)==0&&HitTest(buttons,50,-20)==-1,"Near misses count, far misses do not");
+    const Rect full=GameViewport(1920,1080,false,0,0);
+    Check(full.x==0&&full.w==1920,"Without boxing the game fills the window");
+    const Rect n64=GameViewport(1920,1080,true,0,0);
+    Check(std::fabs(n64.w-1440)<.01f&&std::fabs(n64.x-240)<.01f,"N64 mode pillarboxes to 4:3");
+    const Rect wide=GameViewport(1920,1080,false,21,9);
+    Check(std::fabs(wide.w-1920)<.01f&&wide.y>0,"Ultra-wide letterboxes a 16:9 window");
     Repeat repeat;
     Check(repeat.Tick(1,.05f),"First stick direction responds immediately");
     Check(!repeat.Tick(1,.05f),"Holding does not repeat every frame");

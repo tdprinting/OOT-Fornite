@@ -758,6 +758,7 @@ bool PuppetRide(PlayState* play, Player* player, PuppetMotion& m, uint16_t id);
 bool CartInput(Input& in, const royale::HudState& hud);
 std::string CartPromptText();
 void DrawCartHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 void DrawCartsOnMap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap, const std::function<bool(ImVec2)>& inside);
 bool CartTargetAt(uint16_t id, float* x, float* z);
 
@@ -913,15 +914,15 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 
     if (s.alive) HeldGlow(play, player, s.weaponRarity, false);
 
-    // The nameplate shows the player's name, hearts left and weapon (colour coded by rarity), so you can size up everyone you see.
+    // Only real players get a nameplate (their name, nothing else). Bots wear none.
     {
-        const int hearts = static_cast<int>(std::ceil(std::max(0.0f, s.health)));
-        const std::string plate = s.name + "  " + std::to_string(hearts) + " hearts  " + ItemLabel(s.weapon, s.weaponRarity);
         std::string& shown = gPlate[actor];
-        if (shown != plate) {
+        if (s.isBot) {
+            if (!shown.empty()) { NameTag_RemoveAllForActor(actor); shown.clear(); }
+        } else if (shown != s.name) {
             NameTag_RemoveAllForActor(actor);
-            NameTag_RegisterForActorWithOptions(actor, plate.c_str(), NameTagOptions{ "royale-puppet", 0, RarityColor(s.weaponRarity) });
-            shown = plate;
+            NameTag_RegisterForActorWithOptions(actor, s.name.c_str(), NameTagOptions{ "royale-puppet", 0, { 255, 255, 255, 255 } });
+            shown = s.name;
         }
     }
 
@@ -1124,15 +1125,52 @@ const Player* gGildedPlayer = nullptr;
 
 void DrawVictoryCrown(PlayState* play, const Player* player, uint16_t id);
 
+// The child's Kokiri sword, slingshot, boomerang and Deku shield are put on adult Link's hand by patching the game's near (full detail) hand lists
+// only (EquipmentAlwaysVisible, see UpdatePatchHand), so whoever holds one is drawn at full detail even when far from the camera: the far
+// lists would show a child's fist on an adult arm.
+bool NeedsNearDetail(royale::ItemId weapon, bool dekuShield) {
+    using royale::ItemId;
+    return dekuShield || weapon == ItemId::BasicSword || weapon == ItemId::KokiriSword || weapon == ItemId::Slingshot ||
+           weapon == ItemId::TripleSlingshot || weapon == ItemId::Boomerang;
+}
+struct NearDetail {
+    Actor* actor = nullptr;
+    float z = 0;
+    NearDetail(Actor* a, bool on) { if (on && a != nullptr) { actor = a; z = a->projectedPos.z; a->projectedPos.z = 0; } }   // (the game picks the detail from this depth)
+    ~NearDetail() { if (actor != nullptr) actor->projectedPos.z = z; }
+};
+// The gauntlets or bracelet a player wears are drawn from the save's strength upgrade, which is the local player's: lend each player their own.
+struct WornStrength {
+    bool on = false;
+    u32 saved = 0;
+    explicit WornStrength(royale::ItemId gauntlets) {
+        const int level = gauntlets == royale::ItemId::GoronBracelet ? 1 : gauntlets == royale::ItemId::SilverGauntlets ? 2 : gauntlets == royale::ItemId::GoldenGauntlets ? 3 : 0;
+        saved = gSaveContext.inventory.upgrades;
+        on = true;
+        gSaveContext.inventory.upgrades = (saved & ~gUpgradeMasks[UPG_STRENGTH]) | (static_cast<u32>(level) << gUpgradeShifts[UPG_STRENGTH]);
+    }
+    ~WornStrength() { if (on) gSaveContext.inventory.upgrades = saved; }
+};
+// Goron and Zora tunics colour the tunic red and blue, as in the game; any other tunic is the player's chosen colour.
+uint32_t PuppetTunicColour(const royale::PuppetState& s) {
+    if (s.tunicGear == royale::ItemId::GoronTunic) return royale::PackRgb(100, 20, 0);
+    if (s.tunicGear == royale::ItemId::ZoraTunic) return royale::PackRgb(0, 60, 100);
+    return s.tunic;
+}
+
 void Puppet_Draw(Actor* actor, PlayState* play) {
     Feat("other players: draw");
     // Player_Draw reads the local player's equipped item to pick the held model, so show the puppet's own.
     const royale::PuppetState* st = StateOf(actor);
     u8 original = gSaveContext.equips.buttonItems[0];
     gSaveContext.equips.buttonItems[0] = st ? PuppetLook(*st).buttonItem : ITEM_NONE;
-    if (st && gTunicApplied) SetTunicCosmetics(st->tunic); // this player's own colour
+    if (st && gTunicApplied) SetTunicCosmetics(PuppetTunicColour(*st)); // this player's own colour (red or blue under a Goron or Zora tunic)
     gGildedPlayer = st != nullptr && st->weapon == royale::ItemId::GildedSword ? reinterpret_cast<const Player*>(actor) : nullptr;
-    Player_Draw(actor, play);
+    {
+        NearDetail nearLod(actor, st != nullptr && NeedsNearDetail(st->weapon, st->shield == royale::ItemId::DekuShield));
+        WornStrength strength(st != nullptr ? st->gauntlets : royale::ItemId::Count);
+        Player_Draw(actor, play);
+    }
     if (st != nullptr) DrawVictoryCrown(play,reinterpret_cast<const Player*>(actor),st->id);
     gGildedPlayer = nullptr;
     if (st && gTunicApplied) SetTunicCosmetics(gLocalWearTunic);

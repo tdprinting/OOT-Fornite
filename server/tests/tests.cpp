@@ -1438,6 +1438,17 @@ static void HireableAllies() {
     bool acted = false;
     for (int i = 0; i < 15 * kTickHz && foe->alive; i++) { sim.Tick(kDt); for (const auto& e : m.DrainEvents()) acted |= e.type == MatchEvent::Type::AllyAction; }
     CHECK(acted && me->damageDealt > dealtBefore + 0.2f);
+    // Two hired allies standing on the same spot ease apart instead of staying piled inside each other.
+    {
+        Simulation s3 = Duel(13, {0, 0}, {0, 1900});
+        Match& m3 = s3.match;
+        m3.Find(1000)->stunUntil = 1e9f;
+        m3.Find(1)->rupees = 1000;
+        m3.MutableAllies()[0].pos = {90, 0}; m3.MutableAllies()[1].pos = {90, 0};
+        CHECK(m3.HireAlly(1, 0) && m3.HireAlly(1, 1));
+        Run(s3, 4.0f);
+        CHECK(Distance(m3.Allies()[0].pos, m3.Allies()[1].pos) >= 50.0f);
+    }
     // A Goron hits hard, up close; a Zora mends a hurt owner.
     Simulation s2 = Duel(12, {0, 0}, {0, 1900});
     Match& m2 = s2.match;

@@ -112,6 +112,9 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     DrawVictoryCrown(play,player,gSession.Hud().selfId);
 }
 
+// Does A have something to do right here: a chest or item to take, an ally to hire, somebody to talk to, a text box to dismiss?
+bool AHasTarget() { return MessageBoxUp() || NearestLootIndex() != kNoLoot || NearbyFreeAlly() >= 0 || TalkTargetNear(); }
+
 // The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
 // choose an emote instead of moving Link.
 void OnEmoteWheelInput() {
@@ -125,6 +128,12 @@ void OnEmoteWheelInput() {
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
     if (gSkydiving) in.cur.button &= ~BTN_Z, in.press.button &= ~BTN_Z, in.rel.button &= ~BTN_Z;
+    // Battle Royale layout: A with nothing to open, take, hire or say is the jump. Taken off the pad here so the game does not also roll with it.
+    if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && LiveAndAlive(hud) && InField() &&
+        !gSkydiving && !AHasTarget()) {
+        gTouchJump = true;
+        in.cur.button &= ~BTN_A; in.press.button &= ~BTN_A; in.rel.button &= ~BTN_A;
+    }
     if (!gWheel.open) {
         if (!(in.press.button & BTN_CRIGHT) || !CanEmote(hud)) return;
         OpenEmoteWheel(false);
@@ -1026,13 +1035,47 @@ void DrawCartHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const float hp = std::clamp(v->hp, 0.0f, 1.0f);
     const ImU32 col = hp > 0.5f ? IM_COL32(150, 110, 60, 255) : hp > 0.25f ? IM_COL32(230, 150, 50, 255) : IM_COL32(230, 60, 40, 255);
     dl->AddRectFilled(a, ImVec2(a.x + w * hp, a.y + hgt), col, 2.0f);
-    const char* help = gRide.seat == royale::Seat::Driver ? "A go   B brake/back   Stick steer   Z slide   R get out"
-                                                          : (v->driver == royale::net::kNoPlayer16 ? "A take the reins   R get out   B shoot" : "R get out   B shoot");
-    const float hs = 15.0f * scale;
-    sz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, help);
-    dl->AddText(font, hs, ImVec2((ds.x - sz.x) * 0.5f + 1.0f, a.y + hgt + 5.0f * scale + 1.0f), IM_COL32(0, 0, 0, 220), help);
-    dl->AddText(font, hs, ImVec2((ds.x - sz.x) * 0.5f, a.y + hgt + 5.0f * scale), IM_COL32(235, 235, 235, 255), help);
+    using G = royale::controls::Glyph;
+    std::vector<PromptChip> chips;
+    if (gRide.seat == royale::Seat::Driver) chips = { { G::A, "Go" }, { G::B, "Brake / back" }, { G::Z, "Slide" }, { G::R, "Get out" } };
+    else if (v->driver == royale::net::kNoPlayer16) chips = { { G::A, "Take the reins" }, { G::R, "Get out" }, { G::B, "Shoot" } };
+    else chips = { { G::R, "Get out" }, { G::B, "Shoot" } };
+    DrawPromptRow(dl, font, ds.x * 0.5f, a.y + hgt + 16.0f * scale, scale, chips);
 }
+// ---- button prompts ----------------------------------------------------------------------------------------------------------------
+// The one thing A would do right now, in a small chip above the item bar ("A Open chest"), and the round JUMP button on the right for touch screens.
+// In the Battle Royale layout A also jumps when it has nothing else to do, so the jump chip is a quiet reminder when nothing else is offered.
+void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!LiveAndAlive(h) || !InField() || WarMenuOpen() || EndScreenUp(h)) return;
+    using G = royale::controls::Glyph;
+    const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
+    const float cx = ds.x * 0.5f, y = ds.y - 76.0f * scale - 88.0f * scale;
+    if (CVarGetInteger(CVAR_SETTING("Royale.ButtonPrompts"), 1) && !MessageBoxUp() && !gSkydiving && !gRide.seated) {
+        std::string label;
+        const size_t loot = NearestLootIndex();
+        int cart; royale::Seat seat;
+        if (loot != kNoLoot) { auto it = gLoot.find(loot); label = it != gLoot.end() && it->second.chest ? "Open" : "Take"; }
+        else if (const int ally = NearbyFreeAlly(); ally >= 0) label = std::string("Hire the ") + royale::kAllyDefs[ally].name + " (" + std::to_string(royale::kAllyDefs[ally].price) + ")";
+        else if (NearbyCartSeat(&cart, &seat)) label = seat == royale::Seat::Driver ? "Drive" : "Ride along";
+        else if (TalkTargetNear()) label = "Talk";
+        if (!label.empty()) DrawPromptRow(dl, font, cx, y, scale, { { pr.interact, label } });
+    }
+    // Touch JUMP button, above EMOTE at the bottom right.
+    if (gSkydiving || gRide.seated || gWheel.open || !CVarGetInteger(CVAR_SETTING("Royale.TouchJump"), 1)) return;
+    ImGuiIO& io = ImGui::GetIO();
+    const float rad = 30.0f * scale;
+    const ImVec2 c(ds.x - 18.0f * scale - 64.0f * scale, ds.y - 40.0f * scale - 24.0f * scale - 18.0f * scale - rad);
+    const bool over = std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= rad;
+    const bool down = over && ImGui::IsMouseDown(0) && !io.WantCaptureMouse;
+    dl->AddCircleFilled(ImVec2(c.x + 2 * scale, c.y + 3 * scale), rad, IM_COL32(6, 15, 36, 192), 28);
+    dl->AddCircleFilled(c, rad, OotPanel(down ? 255 : 205), 28);
+    dl->AddCircle(c, rad, HudColor(down ? royale::wartable::theme::Focus : royale::wartable::theme::Gold), 28, 2.5f * scale);
+    DrawPadGlyph(dl, font, ImVec2(c.x, c.y - 7.0f * scale), 13.0f * scale, pr.jump);
+    const ImVec2 tsz = font->CalcTextSizeA(12.0f * scale, FLT_MAX, 0.0f, "JUMP");
+    dl->AddText(font, 12.0f * scale, ImVec2(c.x - tsz.x * 0.5f, c.y + 9.0f * scale), IM_COL32(240, 236, 220, 255), "JUMP");
+    if (over && ImGui::IsMouseClicked(0) && !io.WantCaptureMouse) gTouchJump = true;
+}
+
 // On the minimap: a little brown cart for each one you can see (white edged when somebody is in it, grey when it is a wreck).
 void DrawCartsOnMap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap, const std::function<bool(ImVec2)>& inside) {
     for (const auto& [i, v] : gCarts) {

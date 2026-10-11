@@ -10,8 +10,9 @@
 
 namespace royale::wartable {
 // Pets stay visible on the first settings page; every category remains reachable.
-inline constexpr int kSettingsOrder[]={6,0,1,2,3,4,7,8,9,10,5};
-inline constexpr int kSettingsCount=11, kSettingsPageSize=6;
+// Section 11 is Display (resolution, aspect, draw distance, performance presets).
+inline constexpr int kSettingsOrder[]={6,0,11,1,2,3,4,7,8,9,10,5};
+inline constexpr int kSettingsCount=12, kSettingsPageSize=6;
 inline int SettingsPage(int section) {
     for(int i=0;i<kSettingsCount;++i)if(kSettingsOrder[i]==section)return i/kSettingsPageSize;
     return 0;
@@ -53,6 +54,8 @@ struct Widget {
     std::string hint;
     bool enabled = true;
     bool adjustable = false;
+    bool touchOnly = false; // footer shortcuts for touch; controller navigation skips them
+    bool ghost = false;     // tappable area over existing art; no button face is drawn
 };
 inline int CycleMap(int current, int direction) {
     for (int n = 0; n < kMapCount; ++n) {
@@ -83,7 +86,7 @@ inline int Neighbor(const std::vector<Widget>& widgets, int selected, int dx, in
     float best = 1e9f;
     int result = selected;
     for (int i = 0; i < static_cast<int>(widgets.size()); ++i) {
-        if (i == selected || !widgets[i].enabled) continue;
+        if (i == selected || !widgets[i].enabled || widgets[i].touchOnly) continue;
         const Rect& b = widgets[i].rect;
         const float x = b.x + b.w / 2 - a.x - a.w / 2;
         const float y = b.y + b.h / 2 - a.y - a.h / 2;
@@ -108,6 +111,32 @@ inline bool ValidPort(const std::string& s, uint16_t* out) {
     if (n < 1024 || n > 65535) return false;
     if (out) *out = static_cast<uint16_t>(n);
     return true;
+}
+// Taps land on the button under the finger, or the nearest one within a small margin,
+// so the thin pager and tab buttons are as easy to hit with a thumb as the big ones.
+inline int HitTest(const std::vector<Widget>& widgets, float px, float py, float slop = 9.0f) {
+    int best = -1;
+    float bestDistance = slop;
+    for (int i = 0; i < static_cast<int>(widgets.size()); ++i) {
+        const Rect& r = widgets[i].rect;
+        if (r.Contains(px, py)) return i;
+        const float dx = std::max({r.x - px, 0.0f, px - (r.x + r.w)});
+        const float dy = std::max({r.y - py, 0.0f, py - (r.y + r.h)});
+        const float distance = std::sqrt(dx * dx + dy * dy);
+        if (distance < bestDistance) { bestDistance = distance; best = i; }
+    }
+    return best;
+}
+// The game picture inside the window. libultraship boxes it for N64 mode and for a
+// fixed aspect ratio; taps must be mapped through the same box.
+inline Rect GameViewport(float width, float height, bool n64Mode, float aspectX, float aspectY) {
+    if (n64Mode) { const float w = height * 4.0f / 3.0f; return {(width - w) / 2, 0, w, height}; }
+    if (aspectX > 0 && aspectY > 0) {
+        float w = height * aspectX / aspectY, h = height;
+        if (w > width) { w = width; h = width * aspectY / aspectX; }
+        return {(width - w) / 2, (height - h) / 2, w, h};
+    }
+    return {0, 0, width, height};
 }
 struct Canvas {
     float scale, left, top;

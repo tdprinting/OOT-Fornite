@@ -76,6 +76,15 @@ bool SignNear() {
     return std::hypot(pl->actor.world.pos.x - gSignPos.x, pl->actor.world.pos.z - gSignPos.z) < 220.0f;
 }
 
+// Is somebody or something within reach that A would talk to? (Then A talks; in the Battle Royale layout it jumps only when this is false.)
+bool TalkTargetNear() {
+    if (!InField()) return false;
+    Player* player = GET_PLAYER(gPlayState);
+    Actor* companion = gMayaCompanion.actor;
+    if (companion && std::hypot(player->actor.world.pos.x-companion->world.pos.x, player->actor.world.pos.z-companion->world.pos.z) < 140.0f) return true;
+    return MayaNear() || LiloNear() || SignNear();
+}
+
 // A next to Lilo, Maya or the sign when the game did not already start the talk itself: open the same text box directly.
 void PressedATalk() {
     Player* player = GET_PLAYER(gPlayState);

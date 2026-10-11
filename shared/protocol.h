@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 34; // 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
+constexpr uint16_t kProtocolVersion = 35; // 35: tunic and gauntlets worn are sent with every player. 34: 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -335,7 +335,7 @@ struct MatchStateMsg {
     bool Read(ByteReader& r) { state = r.U8(); alive = r.U8(); winner = r.U16(); limit = r.U8(); return r.ok && state <= 4 && limit >= kMinPlayers && limit <= kMaxPlayers; }
 };
 
-// One player as seen in a snapshot. 27 bytes.
+// One player as seen in a snapshot. 29 bytes.
 struct PlayerNet {
     static constexpr uint8_t kAlive = 1, kShield = 2, kBot = 4, kAdult = 8;   // kAdult: under the Adult Power
     uint16_t id = 0;
@@ -352,6 +352,7 @@ struct PlayerNet {
     // face (an ItemId, or kNoGear when that gear slot is empty).
     static constexpr uint8_t kNoGear = 0xFF;
     uint8_t boots = kNoGear, mask = kNoGear;
+    uint8_t tunicGear = kNoGear, gauntlets = kNoGear;   // the tunic and the bracelet or gauntlets worn (an ItemId, or kNoGear)
     static uint8_t QuantizeHealth(float h) {
         float v = h / kMaxHealthCap * 255.0f + 0.5f;
         return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -359,15 +360,16 @@ struct PlayerNet {
     float Health() const { return health / 255.0f * kMaxHealthCap; }
     void Write(ByteWriter& w) const {
         w.U16(id); w.F32(x); w.F32(z); w.F32(y); w.I16(rot);
-        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity); w.U8(boots); w.U8(mask);
+        w.U8(health); w.U8(flags); w.U8(weapon); w.U8(weaponRarity); w.U8(potions); w.U8(anim); w.U8(scene); w.U8(shield); w.U8(shieldRarity); w.U8(boots); w.U8(mask); w.U8(tunicGear); w.U8(gauntlets);
     }
     bool Read(ByteReader& r) {
         id = r.U16(); x = r.F32(); z = r.F32(); y = r.F32(); rot = r.I16();
-        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8(); boots = r.U8(); mask = r.U8();
+        health = r.U8(); flags = r.U8(); weapon = r.U8(); weaponRarity = r.U8(); potions = r.U8(); anim = r.U8(); scene = r.U8(); shield = r.U8(); shieldRarity = r.U8(); boots = r.U8(); mask = r.U8(); tunicGear = r.U8(); gauntlets = r.U8();
         return r.ok && Finite(x) && Finite(y) && Finite(z) && flags <= 15 && weapon < static_cast<uint8_t>(ItemId::Count) &&
                weaponRarity < kRarityCount &&
                shield < static_cast<uint8_t>(ItemId::Count) && shieldRarity < kRarityCount &&
-               (boots == kNoGear || boots < static_cast<uint8_t>(ItemId::Count)) && (mask == kNoGear || mask < static_cast<uint8_t>(ItemId::Count));
+               (boots == kNoGear || boots < static_cast<uint8_t>(ItemId::Count)) && (mask == kNoGear || mask < static_cast<uint8_t>(ItemId::Count)) &&
+               (tunicGear == kNoGear || tunicGear < static_cast<uint8_t>(ItemId::Count)) && (gauntlets == kNoGear || gauntlets < static_cast<uint8_t>(ItemId::Count));
     }
 };
 
