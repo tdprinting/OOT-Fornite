@@ -835,6 +835,8 @@ void MeasureStartup() {
     static bool done = false;
     if (done) return;
     done = true;
+    // The game stayed up past its first frame: the crash-loop guard in MainActivity (patches/0030) need not rebuild the game files
+    { std::error_code rm; std::filesystem::remove(Ship::Context::GetPathRelativeToAppDirectory(".launch-pending"), rm); }
     double seconds = -1;
     double startEpoch = 0;   // process start, seconds since 1970
 #if defined(__linux__) || defined(__ANDROID__)
