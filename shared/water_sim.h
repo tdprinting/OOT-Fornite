@@ -54,19 +54,23 @@ inline float SwellBandWeight(float length, float minLength) {
 class PreparedSwell {
     struct Wave { float k, a, dx, dz, phase; };
     Wave waves_[kSwellCount];
+    int count_ = 0;   // the waves with any height (in order): a band-limited grid or a zero amplitude leaves the rest at a = 0, and adding
+                      // a * sin = 0 changes no sum, so leaving them out gives the very same numbers with fewer sines (a coarse mesh keeps 1 of 8)
     float q_;
 public:
     PreparedSwell(float t, float amp, float chop, float minLength = 0.0f) : q_(SwellSteepness(std::max(0.0f, amp), chop)) {
         for (int i = 0; i < kSwellCount; ++i) {
             const auto& w = kSwell[i];
             const float k = kTau / w.length;
-            waves_[i] = {k, w.amp * std::max(0.0f, amp) * SwellBandWeight(w.length, minLength), std::cos(w.angle), std::sin(w.angle), -k * w.speed * t};
+            const Wave wave = {k, w.amp * std::max(0.0f, amp) * SwellBandWeight(w.length, minLength), std::cos(w.angle), std::sin(w.angle), -k * w.speed * t};
+            if (wave.a != 0.0f) waves_[count_++] = wave;
         }
     }
     SwellPoint Sample(float x, float z) const {
         SwellPoint p;
         float gx = 0, gz = 0, gy = 0;
-        for (const auto& w : waves_) {
+        for (int i = 0; i < count_; ++i) {
+            const Wave& w = waves_[i];
             const float th = w.k * (w.dx * x + w.dz * z) + w.phase;
             const float s = std::sin(th), c = std::cos(th);
             p.h += w.a * s;
@@ -81,6 +85,7 @@ public:
         return p;
     }
 };
+
 inline SwellPoint Swell(float x, float z, float t, float amp, float chop) {
     return PreparedSwell(t, amp, chop).Sample(x, z);
 }

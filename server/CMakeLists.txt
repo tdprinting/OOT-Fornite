@@ -98,6 +98,12 @@ target_link_libraries(royale_performance_bench PRIVATE royale_core)
 add_executable(royale_sim_bench tools/sim_bench.cpp)
 target_link_libraries(royale_sim_bench royale_net)
 
+# Water drawing benchmark and check: times the water sheet's swell and shading old (kept in the file) against new and fails if they differ
+# more than allowed (bit-identical where exact, 2e-3 for drawing-only approximations). Also a test. Run: royale_water_bench
+add_executable(royale_water_bench tools/water_bench.cpp)
+target_link_libraries(royale_water_bench PRIVATE royale_core)
+add_test(NAME royale_water_bench COMMAND royale_water_bench)
+
 add_executable(royale_bokoblin_model_tests tests/bokoblin_model_tests.cpp)
 target_link_libraries(royale_bokoblin_model_tests PRIVATE royale_core)
 add_test(NAME royale_bokoblin_model_tests COMMAND royale_bokoblin_model_tests)
