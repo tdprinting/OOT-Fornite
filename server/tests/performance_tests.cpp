@@ -53,7 +53,7 @@ static void TerrainTransitions() {
 static Simulation Duel() {
     Simulation sim(5, {{0,0},3000},0);
     sim.match.AddHuman(1); sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(0.05f);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(0.05f); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     sim.match.Find(1)->pos = {2000,0}; sim.match.Find(1000)->pos = {-400,0};
     sim.match.SetSupplyDrops(false);

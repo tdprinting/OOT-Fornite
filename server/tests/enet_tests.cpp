@@ -114,6 +114,8 @@ static void JoinPlayAndLeaveOverUdp() {
 
     // Start, wait for the match to go live (virtual time).
     CHECK(rig.server->StartMatch());
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Drop; }, 15));
+    rig.M().LandEveryone();   // nobody plays the jump here: down where the bus left them
     CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::InMatch; }, 15));
     CHECK(rig.RunUntil([&] { return a.State() == MatchState::InMatch && a.Self() && b.Epoch() == 1; }));
     for (auto& p : rig.M().Players()) if (p.isBot) p.alive = false;

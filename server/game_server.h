@@ -653,6 +653,16 @@ class GameServer {
 
         PlayerState* p = sim.match.Find(c.playerId);
         if (!p || !p->alive) return;
+        if (p->aboard) {   // on the Moonfall Bus: the seat is where they are. Anything but a seat anim, once the doors are open, is the jump.
+            c.lastInputClock = clock;
+            p->scene = in.scene;
+            if (in.anim == static_cast<uint8_t>(Anim::BusHorn)) sim.match.Honk(p->id);
+            if (IsBusSeat(in.anim) || !sim.match.LeaveBus(p->id)) return;
+            // they are off: from here on their game reports where they fall, as on foot (the next input is measured from the exit point)
+            p->rot = in.rot;
+            return;
+        }
+        if (p->rodeBus && p->landedAt < 0 && p->jumpedAt >= 0 && !IsAirborne(in.anim) && !IsBusSeat(in.anim)) sim.match.MarkLanded(p->id);
         if (sim.match.RidingIn(p->id)) {   // in a cart: where they are is the seat (the match keeps it there); the rest is theirs
             c.lastInputClock = clock;
             p->anim = in.anim;
@@ -718,6 +728,16 @@ class GameServer {
                     m.limit = static_cast<uint8_t>(playerLimit);
                     if (const PlayerState* w = sim.match.Winner()) m.winner = static_cast<uint16_t>(w->id);
                     Broadcast(m);
+                    if (e.state == MatchState::Countdown && sim.match.Bus().valid) {
+                        const BusPath& b = sim.match.Bus();
+                        net::EvBusPath bp;
+                        bp.sx = b.start.x; bp.sz = b.start.z; bp.ex = b.end.x; bp.ez = b.end.z; bp.altitude = b.altitude; bp.speed = b.speed;
+                        const auto seats = sim.match.BusSeats();
+                        size_t used = 0;
+                        for (size_t i = 0; i < seats.size(); i++) if (seats[i] != kNoPlayer) used = i + 1;
+                        for (size_t i = 0; i < used; i++) bp.seats.push_back(seats[i] == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(seats[i]));
+                        Broadcast(bp);
+                    }
                     if (e.state == MatchState::Ending) {
                         net::EvResults res;
                         for (const auto& s : sim.match.Standings()) {
@@ -795,6 +815,12 @@ class GameServer {
                     a.index = static_cast<uint8_t>(e.a); a.target = e.b == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(e.b); a.x = e.x; a.z = e.z;
                     a.weapon = e.item;
                     Broadcast(a);
+                    break;
+                }
+                case MatchEvent::Type::BusHorn: {
+                    net::EvBusHorn h;
+                    h.by = static_cast<uint16_t>(e.a);
+                    Broadcast(h);
                     break;
                 }
                 case MatchEvent::Type::Weather: {
@@ -905,7 +931,8 @@ class GameServer {
         n.rot = p.rot;
         n.health = net::PlayerNet::QuantizeHealth(p.health);
         n.flags = static_cast<uint8_t>((p.alive ? net::PlayerNet::kAlive : 0) | (p.hasShield ? net::PlayerNet::kShield : 0) |
-                                       (p.isBot ? net::PlayerNet::kBot : 0) | (sim.match.Clock() < p.adultUntil ? net::PlayerNet::kAdult : 0));
+                                       (p.isBot ? net::PlayerNet::kBot : 0) | (sim.match.Clock() < p.adultUntil ? net::PlayerNet::kAdult : 0) |
+                                       (p.aboard ? net::PlayerNet::kAboard : 0));
         n.weapon = static_cast<uint8_t>(p.weapon.item);
         n.weaponRarity = static_cast<uint8_t>(p.weapon.rarity);
         n.potions = static_cast<uint8_t>(p.potions.size());
@@ -937,6 +964,7 @@ class GameServer {
             s.state = static_cast<uint8_t>(sim.match.State());
             s.alive = static_cast<uint8_t>(sim.match.Alive());
             s.epoch = c.epoch;
+            s.aboardMask = sim.match.AboardMask();
             { const float left = LobbyLeft(); s.lobbyLeft = left < 0 ? 255 : static_cast<uint8_t>((std::min)(254.0f, std::ceil(left))); }
             s.players.push_back(ToNet(*self));
 

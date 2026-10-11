@@ -54,6 +54,8 @@ struct Rig {
     // Start the match and run until the match is live (past countdown and drop).
     void StartAndGoLive() {
         CHECK(server.StartMatch());
+        CHECK(RunUntil([&] { return M().State() == MatchState::Drop; }));
+        M().LandEveryone();   // nobody here plays the jump: everyone is simply down where the bus left them
         CHECK(RunUntil([&] { return M().State() == MatchState::InMatch; }));
     }
 };
@@ -218,7 +220,7 @@ static void DecodeRejectsBadValues() {
     Snapshot s, sOut;
     s.players.resize(2);
     bytes = Encode(s);
-    bytes[1 + 4 + 4 + 1 + 1 + 1 + 1] = 200; // player count far above the cap
+    bytes[1 + 4 + 4 + 1 + 1 + 1 + 1 + 4] = 200; // player count far above the cap
     CHECK(!Decode(bytes, sOut));
     ByteWriter huge; huge.U8(static_cast<uint8_t>(MsgType::Welcome)); huge.U16(1); huge.U16(kProtocolVersion); huge.U64(0);
     for (int i = 0; i < 3 + 3 * kStormPhaseCount; i++) huge.F32(1);
@@ -407,7 +409,14 @@ static void TeleportEpochIgnoresOldInputs() {
     CHECK(rig.server.GetStats().staleInputs >= 1);
     CHECK(a.Epoch() == 1);                    // learned about the teleport from a snapshot
     CHECK(a.Self() && std::abs(a.Self()->x - spawn.x) < 1 && std::abs(a.Self()->z - spawn.z) < 1);
-    // Now the client sits at the spawn point and its inputs are accepted.
+    // The spawn point is a bench on the Moonfall Bus: while sat there the seat wins over whatever the client reports.
+    CHECK(rig.M().Find(1)->aboard && Distance(spawn, BusPosAt(rig.M().Bus(), 0)) < 0.01f);
+    a.SendInput(spawn.x + 10, 0, spawn.z, 0, static_cast<uint8_t>(Anim::BusRide));
+    rig.Run(0.3f);
+    CHECK(rig.M().Find(1)->pos.x == spawn.x);
+    // Down on the ground, its inputs are accepted.
+    rig.M().LandEveryone();
+    spawn = rig.M().Find(1)->pos;
     a.SendInput(spawn.x + 10, 0, spawn.z, 0, 0);
     rig.Run(0.3f);
     CHECK(std::abs(rig.M().Find(1)->pos.x - (spawn.x + 10)) < 0.01f);
@@ -1277,8 +1286,8 @@ static void WeatherOverTheWire() {
     CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
     WeatherOptions o; o.season = static_cast<uint8_t>(Season::Winter); o.intensity = 100; o.change = 100;
     rig.server.SetWeatherOptions(o);
-    CHECK(rig.server.StartMatch());
-    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    rig.StartAndGoLive();
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 5));
     CHECK(me.CurrentWeather().season == Season::Winter);                       // the season arrives with the first spell
     bool changed = false;
     CHECK(rig.RunUntil([&] { changed = changed || me.CurrentWeather().sky != Sky::Clear; return changed; }, 400));
@@ -1305,8 +1314,8 @@ static void VehiclesOverTheWire() {
     GameClient& me = rig.Add("Driver");
     GameClient& other = rig.Add("Watcher");
     CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined && other.GetStatus() == GameClient::Status::Joined; }));
-    CHECK(rig.server.StartMatch());
-    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    rig.StartAndGoLive();
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 5));
     CHECK(rig.M().Vehicles().size() == 4);
     const VehicleState& v = rig.M().Vehicles()[0];
     PlayerState* self = rig.M().Find(me.Self()->id);
@@ -1357,8 +1366,8 @@ static void AlliesOverTheWire() {
     Rig rig(41, 0);
     GameClient& me = rig.Add("Hirer");
     CHECK(rig.RunUntil([&] { return me.GetStatus() == GameClient::Status::Joined; }));
-    CHECK(rig.server.StartMatch());
-    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 40));
+    rig.StartAndGoLive();
+    CHECK(rig.RunUntil([&] { return me.State() == MatchState::InMatch; }, 5));
     rig.Run(1.0f);
     PlayerState* self = rig.M().Find(me.Self()->id);
     CHECK(self != nullptr);
@@ -1446,9 +1455,11 @@ static void ReconfigureRebuildsTheLobbyWorld() {
     GameClient& c = rig.Add("Late");
     CHECK(rig.RunUntil([&] { return c.GetStatus() == GameClient::Status::Joined; }));
     CHECK(c.Map().radius == 800 && c.Loot().size() == rig.M().Loot().size() && c.Pois().size() == rig.server.Pois().size() && !c.Props().empty());
-    // Match start puts everyone on walkable ground.
+    // Match start puts everyone on the bus, whose line crosses the new map (its doors open over it).
     CHECK(rig.server.StartMatch());
-    for (auto& p : rig.M().Players()) CHECK(walkable(p.pos));
+    for (auto& p : rig.M().Players()) CHECK(p.aboard);
+    const BusPath& line = rig.M().Bus();
+    CHECK(line.valid && line.radius == 800 && BusLineDistance(line, real.center) <= 800 * kBusCorridor + 1.0f && BusCloseSec(line) > BusOpenSec(line));
     // And it can no longer be reconfigured.
     CHECK(!rig.server.Reconfigure({{0, 0}, 500}));
     CHECK(!rig.server.Reconfigure({{0, 0}, 0}));
@@ -1573,6 +1584,63 @@ static void SandboxBotsWalkTheTestMap() {
     fn::UseTerrain(false);
 }
 
+// ---- the Moonfall Bus over the wire ------------------------------------------------------------------------------------------------------------
+
+static void BusMessagesRoundTrip() {
+    { EvBusPath a, b; a.sx = -9000; a.sz = 120.5f; a.ex = 8800; a.ez = -40; a.altitude = kBusAltitude; a.speed = 298.5f; a.seats = {1, 2, kNoPlayer16, 1003};
+      CHECK(RoundTrips(a, b) && b.sx == -9000 && b.ez == -40 && b.speed == 298.5f && b.seats.size() == 4 && b.seats[2] == kNoPlayer16 && b.seats[3] == 1003); }
+    { EvBusPath bad, out; bad.speed = 0; CHECK(!RoundTrips(bad, out)); }
+    { EvBusPath bad, out; bad.speed = 300; bad.seats.assign(33, 1); CHECK(!RoundTrips(bad, out)); }
+    { EvBusPath bad, out; bad.speed = 300; bad.sx = std::nanf(""); CHECK(!RoundTrips(bad, out)); }
+    { EvBusHorn a, b; a.by = 1017; CHECK(RoundTrips(a, b) && b.by == 1017); }
+    { Snapshot a, b; a.aboardMask = 0x80000005u; PlayerNet n; n.flags = PlayerNet::kAlive | PlayerNet::kAboard; n.anim = static_cast<uint8_t>(Anim::BusRide); a.players = {n};
+      CHECK(RoundTrips(a, b) && b.aboardMask == 0x80000005u && b.players[0].flags == (PlayerNet::kAlive | PlayerNet::kAboard) && b.players[0].anim == 37); }
+    { Snapshot bad, out; PlayerNet n; n.flags = 32; bad.players = {n}; CHECK(!RoundTrips(bad, out)); }
+}
+
+static void BusOverTheWire() {
+    // Both players get the line and their benches with the countdown, ride it, honk, jump once the doors open, fall and land.
+    Rig rig(57, 0);
+    GameClient& a = rig.Add("Rider");
+    GameClient& b = rig.Add("Watcher");
+    CHECK(rig.RunUntil([&] { return a.GetStatus() == GameClient::Status::Joined && b.GetStatus() == GameClient::Status::Joined; }));
+    CHECK(rig.server.StartMatch());
+    CHECK(rig.RunUntil([&] { return a.Bus().valid && b.Bus().valid && a.Self() && a.Epoch() == 1; }));
+    const BusPath& line = rig.M().Bus();
+    CHECK(Distance(a.Bus().start, line.start) < 0.01f && Distance(a.Bus().end, line.end) < 0.01f && std::fabs(a.Bus().speed - line.speed) < 0.001f);
+    CHECK(std::fabs(BusOpenSec(a.Bus()) - BusOpenSec(line)) < 0.01f);
+    CHECK(a.MySeat() == 0 && b.MySeat() == 1 && a.BusSeats().size() == static_cast<size_t>(kMaxPlayers));
+    CHECK(rig.RunUntil([&] { return a.Aboard() && b.Aboard() && a.AboardMask() == 0xFFFFFFFFu; }));
+    CHECK(a.Self() && (a.Self()->flags & PlayerNet::kAboard));
+    b.DrainEvents();
+    // A honk is heard by the other player.
+    const uint8_t ride = static_cast<uint8_t>(Anim::BusRide);
+    auto sit = [&](uint8_t anim) { const net::PlayerNet* me = a.Self(); a.SendInput(me->x, me->y, me->z, 0, anim); };
+    sit(static_cast<uint8_t>(Anim::BusHorn));
+    bool heard = false;
+    CHECK(rig.RunUntil([&] { for (auto& e : b.DrainEvents()) heard |= e.type == ClientEvent::Type::BusHorn && e.id == a.PlayerId(); return heard; }, 2));
+    // Trying to jump before the doors open does nothing.
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Drop; }, 12));
+    sit(static_cast<uint8_t>(Anim::Freefall));
+    rig.Run(0.2f);
+    CHECK(rig.M().Find(a.PlayerId())->aboard && !rig.M().BusDoorsOpen());
+    // The client's own clock agrees with the server's about where the bus is.
+    CHECK(Distance(BusPosAt(a.Bus(), a.BusTime()), BusPosAt(line, rig.M().BusTime())) < line.speed * 0.25f);
+    CHECK(rig.RunUntil([&] { sit(ride); return rig.M().BusDoorsOpen(); }, 40));
+    sit(static_cast<uint8_t>(Anim::Freefall));
+    CHECK(rig.RunUntil([&] { return !rig.M().Find(a.PlayerId())->aboard; }, 1));
+    CHECK(rig.RunUntil([&] { return !a.Aboard() && b.Aboard(); }, 1));
+    const PlayerState* p = rig.M().Find(a.PlayerId());
+    CHECK(p->jumpedAt >= 0 && p->landedAt < 0);
+    // Falling and gliding are not landing; the first thing after that is.
+    Vec2 at = p->pos;
+    for (int i = 0; i < 10; i++) { at.x += 20; a.SendInput(at.x, 2000, at.z, 0, static_cast<uint8_t>(i < 5 ? Anim::Freefall : Anim::Glide)); rig.Run(0.05f); }
+    CHECK(p->landedAt < 0 && std::fabs(p->pos.x - at.x) < 0.01f);
+    a.SendInput(at.x, 0, at.z, 0, static_cast<uint8_t>(Anim::Idle));
+    CHECK(rig.RunUntil([&] { return p->landedAt >= 0; }, 1));
+    CHECK(rig.server.GetStats().badPackets == 0);
+}
+
 int main() {
     ByteReaderBounds(); MessagesRoundTrip(); DecodeRejectsMangled(); DecodeRejectsBadValues(); FuzzNeverCrashes();
     LoopbackLatencyAndLoss(); LoopbackKeepsOrderUnderJitter();
@@ -1583,6 +1651,7 @@ int main() {
     ReadyFlowAndRosterFlags(); HostIsIdentifiedByToken(); NoTokenMeansNoHost(); SceneIsRelayedBetweenPlayers(); BotsReportTheFieldScene();
     SandboxServerBuildsTheTestMap(); SandboxOverTheWire(); SandboxBotsWalkTheTestMap(); ReconfigureRebuildsTheLobbyWorld(); ReconfigureRejectedOnceTheMatchHasStarted(); ShieldAndWeaponReachTheSnapshot();
     WeatherOverTheWire(); AlliesOverTheWire(); VehiclesOverTheWire(); ReplayOverTheWire(); OldProtocolVersionIsRejected(); EmptyNameGetsADefault(); WinnerIsAnnounced(); CountdownElapsedTracksState();
+    BusMessagesRoundTrip(); BusOverTheWire();
     ReliableEventsSurviveLoss(); FullMatchOverTheNetwork(); BandwidthWith32Players(); ServerSurvivesHostileClient();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all network tests passed\n");

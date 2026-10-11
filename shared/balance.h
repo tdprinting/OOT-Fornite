@@ -10,7 +10,7 @@ constexpr int kTickHz = 20;
 
 // Match timing, shared so clients can show the same countdown the server runs.
 constexpr float kCountdownSec = 10.0f; // from Start to the drop
-constexpr float kDropSec = 18.0f;      // the skydive: spawn protection while everyone falls from the sky
+// The drop has no fixed length any more: it lasts while the Moonfall Bus crosses the island and everybody comes down (see the bus block below).
 constexpr float kEndingSec = 10.0f;
 
 // Lilo's accidents: a toxic green cloud that lingers where she made it. Stand in it for kFartGraceSeconds without leaving and it starts to hurt
@@ -34,6 +34,25 @@ constexpr float kGlideSpeed = 190.0f;   // units per second falling normally (th
 constexpr float kDiveSpeed = 380.0f;    // diving
 constexpr float kAirSpeed = 130.0f;     // steering speed
 constexpr float kLateFallSpeed = 700.0f;   // still in the air when the drop ends: down you come
+
+// The Moonfall Bus (docs/BATTLE_BUS.md, shared/bus.h): everyone starts the match aboard. It flies one straight line across the map, decided by the
+// seed; you jump when you like once it is over the island, free-fall, open the glider and land. Whoever is still aboard when it leaves the island is
+// pushed off. Players are safe while aboard, while falling, and for kLandedGraceSec after touching down.
+constexpr float kBusAltitude = 3200.0f;      // how high it flies (world height; Moonfall's peaks are under 2000)
+constexpr float kBusSpeed = 300.0f;          // units per second: a big map takes about 50 s to cross, as in Fortnite
+constexpr float kBusMinSpeed = 120.0f;       // small maps slow it down, so a crossing is never short
+constexpr float kBusMaxCrossSec = 60.0f;     // and a huge map speeds it up, so no crossing takes longer than this
+constexpr float kBusMargin = 1500.0f;        // the line starts and ends this far outside the map circle
+constexpr float kBusCorridor = 0.45f;        // the line passes the centre no further away than this share of the map radius
+constexpr float kBusJumpOpen = 0.92f;        // jumping is allowed while the bus is inside this share of the map radius (over land)
+constexpr float kBusClimbFrom = 600.0f;      // during the countdown the bus climbs from this height to kBusAltitude (only drawn)
+constexpr float kFreefallSpeed = kDiveSpeed; // falling after the jump, before the glider opens
+constexpr float kAutoGlideHeight = 600.0f;   // the glider opens by itself this high above the ground
+constexpr float kBusExitPush = 1.0f;         // seconds a jumper keeps the bus's speed, so a jump carries you on ahead of it
+constexpr float kLandedGraceSec = 2.0f;      // protection ends this long after touching down
+constexpr float kDropExtraSec = 25.0f;       // the drop ends at the latest this long after the bus leaves the island
+constexpr float kLandedDeadlineSec = 8.0f;   // anyone still not down this long into the match loses the protection anyway
+constexpr float kBusHornCooldown = 1.5f;     // one honk per player this often
 
 // Sprinting: faster running that drains a stamina bar, which refills after a short rest.
 constexpr float kSprintMult = 1.35f;        // run speed while sprinting
