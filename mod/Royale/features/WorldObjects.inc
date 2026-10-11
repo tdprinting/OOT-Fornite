@@ -10,6 +10,8 @@ struct LootActor {
     bool big = false;         // Epic and Legendary chests are the big kind
     bool supply = false;      // from a supply drop
     bool special = false;     // a Heart Container chest: pink
+    bool silent = false;      // somebody else opened it: its sounds are not for us (see gMuteChestSfx)
+    double openedAt = -1.0;   // when it was opened (ImGui time), for the light that comes out of it; -1 = it was already open when it appeared
     royale::Rarity rarity = royale::Rarity::Common;
     int gid = -1;             // the game's own model for this item (GetItemDrawID), or -1 to keep the stand-in's
     ActorFunc origUpdate = nullptr, origDestroy = nullptr;
@@ -17,9 +19,11 @@ struct LootActor {
 std::unordered_map<size_t, LootActor> gLoot;        // loot index -> its actor
 std::unordered_map<const Actor*, size_t> gLootOf;   // actor -> loot index
 constexpr float kLootSpawnRadius = 1500.0f;          // only draw what is near you
-constexpr size_t kMaxLootActors = 56;
+constexpr size_t kMaxLootActors = 128;   // was 56 (raised for modern phones; the play heap is 8x bigger, patches/0029)
 constexpr float kLootPickupRange = 55.0f;            // the server allows 75 for items on the ground
 constexpr float kChestOpenRange = 90.0f;             // and 100 for chests (they are solid, so you stop a little way off)
+bool gMuteChestSfx = false;                          // true while a chest somebody else opened plays its animation: Royale_NativeMenuAllowSfx drops its sounds
+std::unordered_set<size_t> gMyChestOpens;            // chests we opened ourselves (loot indices), so ReconcileLoot knows whose they are
 bool gSpawningLoot = false;                          // true while we spawn an item actor, so the "no stray item drops" rule lets it through
 
 // ---- turning a world position into a spot on the screen ---------------------------------------------------------------------
@@ -61,6 +65,7 @@ bool SignNear();
 bool MessageBoxUp();
 bool TalkTargetNear();
 void PressedATalk();   // A next to Lilo, Maya or the sign: the game's own text box (see "talking")
+bool PetMayTalk();     // a pet may take A for a talk only when nothing else is in reach and Link is not fighting (below, with PressedATalk)
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);
@@ -149,7 +154,12 @@ void Chest_Update(Actor* actor, PlayState* play) {
         }
         return;
     }
+    // Somebody else's chest opens without its sounds (the animation's creak and the fanfare are for the one who opened it).
+    gMuteChestSfx = la.silent;
     la.origUpdate(actor, play);
+    gMuteChestSfx = false;
+    // The game's own golden light (a child actor) is swapped for ours, coloured by the item's rarity (DrawChestLights).
+    if (actor->child != nullptr && actor->child->id == ACTOR_DEMO_TRE_LGT) actor->child->draw = nullptr;
 }
 
 void Chest_Destroy(Actor* actor, PlayState* play) {
@@ -164,18 +174,24 @@ void Chest_Destroy(Actor* actor, PlayState* play) {
     if (orig) orig(actor, play); // removes the chest's collision
 }
 
-void OpenChest(LootActor& la) {
+void OpenChest(LootActor& la, bool mine) {
     if (la.opened) return;
     la.opened = true;
+    la.silent = !mine;
+    la.openedAt = ImGui::GetTime();
     EnBox* box = reinterpret_cast<EnBox*>(la.actor);
-    box->unk_1F4 = la.big ? 1 : -1; // the game's "Link opened this" marker: 1 = the slow opening with golden light, -1 = quick
+    // The game's "Link opened this" marker: 1 = the slow opening with a fanfare (and a golden light, which Chest_Update swaps for ours), -1 = quick.
+    // Only the one who opened it gets the fanfare.
+    box->unk_1F4 = la.big && mine ? 1 : -1;
     NameTag_RemoveAllForActor(la.actor);
 }
 
 void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
     const royale::Rarity rarity = static_cast<royale::Rarity>(l.rarity);
-    const bool big = rarity >= royale::Rarity::Epic;
-    const s16 params = static_cast<s16>(((big ? ENBOX_TYPE_BIG_DEFAULT : ENBOX_TYPE_SMALL) << 12) | (GI_RUPEE_GREEN << 5) | kChestFlag);
+    // The chest says what is in it: plain small chests for the common finds, big chests for Rare and Epic, and the ornate boss-key chest for Legendary.
+    const bool big = rarity >= royale::Rarity::Rare;
+    const int boxType = rarity == royale::Rarity::Legendary ? ENBOX_TYPE_DECORATED_BIG : big ? ENBOX_TYPE_BIG_DEFAULT : ENBOX_TYPE_SMALL;
+    const s16 params = static_cast<s16>((boxType << 12) | (GI_RUPEE_GREEN << 5) | kChestFlag);
     if (l.taken) Flags_SetTreasure(gPlayState, kChestFlag); else ClearChestFlag(); // opened chests are spawned already open
     const s16 rot = static_cast<s16>((index * 2654435761u) >> 16);
     gSpawningLoot = true;
@@ -191,12 +207,6 @@ void SpawnChest(size_t index, const royale::net::LootNet& l, float groundY) {
     gLootOf[actor] = index;
     actor->update = Chest_Update;
     actor->destroy = Chest_Destroy;
-    if (!l.taken) {
-        std::string label = l.special ? std::string("Heart Container Chest") : std::string(RarityName(rarity)) + " Chest";
-        Color_RGBA8 labelColour = RarityColor(rarity);
-        if (l.special) labelColour = { 255, 130, 190, 255 };
-        NameTag_RegisterForActorWithOptions(actor, label.c_str(), NameTagOptions{ "royale-loot", static_cast<int16_t>(big ? 50 : 34), labelColour });
-    }
 }
 
 // ---- scenery -----------------------------------------------------------------------------------------------------------------
@@ -267,7 +277,7 @@ std::unordered_set<size_t> gBrokenProps;              // rocks and bushes player
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
 constexpr float kTownSpawnRadius = 3400.0f;   // the pieces of a town (and the climbing blocks) show from further off, so you see a place before you reach it
-constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
+constexpr size_t kMaxPropActors = 400;   // a town is a lot of wall pieces (was 170)
 
 void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
 

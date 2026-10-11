@@ -1,4 +1,4 @@
-// The four hireable-ally models (shared/ally_anim.h): N64 budgets, data bounds, every clip moves, feet stay on the ground while walking, and the
+// The four hireable-ally models (shared/ally_anim.h): budgets, data bounds, every clip moves, feet stay on the ground while walking, and the
 // curled-up Goron really is a ball.
 #include "../../shared/ally_anim.h"
 #include "../../shared/ally.h"
@@ -10,19 +10,23 @@ int main() {
     auto check = [&](bool ok, const char* what, const char* model) { if (!ok) { std::printf("FAIL %s: %s\n", model, what); ++failures; } };
     for (int kind = 0; kind < royale::kAllyCount; kind++) {
         const Model& m = ModelOf(kind);
-        check(m.triCount > 600 && m.triCount < 3000, "N64 triangle budget", m.name);
-        check(m.vertCount < 2400, "vertex budget", m.name);
+        check(m.triCount > 2000 && m.triCount < 14000, "triangle budget", m.name);
+        check(m.vertCount < 18000, "vertex budget (skinned on the CPU every frame)", m.name);
         int tris = 0;
         for (int b = 0; b < m.batchCount; b++) {
             const Batch& bt = m.batches[b];
             check(bt.vertCount <= 32 && bt.firstVert + bt.vertCount <= m.vertCount && bt.firstTri + bt.triCount <= m.triCount, "batch bounds", m.name);
             tris += bt.triCount;
             for (int t = bt.firstTri; t < bt.firstTri + bt.triCount; t++) for (int i = 0; i < 3; i++) check(m.tris[t][i] < bt.vertCount, "triangle indices", m.name);
+            check(bt.tex == kTexBody || bt.tex == kTexFace, "batch texture", m.name);
+            const int w = bt.tex == kTexBody ? kBodyW : kFaceW, h = bt.tex == kTexBody ? kBodyH : kFaceH;
+            for (int i = bt.firstVert; i < bt.firstVert + bt.vertCount; i++)
+                check(m.verts[i].s >= 0 && m.verts[i].s <= w * 32 && m.verts[i].t >= 0 && m.verts[i].t <= h * 32, "UV bounds", m.name);
         }
         check(tris == m.triCount, "all triangles in batches", m.name);
         for (int i = 0; i < m.vertCount; i++) {
             const Vert& v = m.verts[i];
-            check(v.b0 < kBoneCount && v.b1 < kBoneCount && v.s >= 0 && v.s <= kAtlasW * 32 && v.t >= 0 && v.t <= kAtlasH * 32, "skin and UV bounds", m.name);
+            check(v.b0 < kBoneCount && v.b1 < kBoneCount, "skin bounds", m.name);
         }
         check(m.walkSpeed > 50 && m.height > 40 && m.height < 160, "walk speed and height", m.name);
         for (int c = 0; c < kClipCount; c++) {

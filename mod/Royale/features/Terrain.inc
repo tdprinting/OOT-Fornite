@@ -643,6 +643,48 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         else { gSession.UseShield(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, true)); DrinkSounds(player); }
     }
 
+    // C-Down: a tap takes the next consumable stack in hand (B then drinks one; the last tap puts the weapon back); holding it drops the weapon in hand
+    // on the ground so somebody else can take it. A stack in hand is also dropped by switching weapons.
+    {
+        const std::vector<PotionStack> stacks = PotionStacks(hud);
+        if (gHandStack >= static_cast<int>(stacks.size())) gHandStack = -1;
+        const double now = ImGui::GetTime();
+        if (in.press.button & BTN_CDOWN) gStackBHold = now;
+        if (gStackBHold >= 0.0) {
+            if (in.cur.button & BTN_CDOWN) {
+                if (now - gStackBHold > 0.6) {
+                    gStackBHold = -1.0;
+                    if (hud.weapon == royale::ItemId::BasicSword && hud.weaponRarity == royale::Rarity::Common) Say("Your starting sword stays with you");
+                    else { gSession.DropWeapon(); Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
+                }
+            } else {
+                gStackBHold = -1.0;
+                if (stacks.empty()) Say("Nothing in your bag");
+                else {
+                    gHandStack = gHandStack + 1 >= static_cast<int>(stacks.size()) ? -1 : gHandStack + 1;
+                    Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    if (gHandStack >= 0 && royale::PotionOf(stacks[static_cast<size_t>(gHandStack)].item).revive) Say("A Fairy revives you by itself when you would fall");
+                }
+            }
+        }
+        if (gStackBPressed) {
+            gStackBPressed = false;
+            if (gHandStack >= 0) {
+                const PotionStack& st = stacks[static_cast<size_t>(gHandStack)];
+                const royale::PotionDef d = royale::PotionOf(st.item);
+                if (d.revive) Say("A Fairy revives you by itself when you would fall");
+                else if (d.shield > 0 && hud.inv.shield >= d.shieldCap - 0.05f) Say(d.shieldCap < royale::kMaxShield ? "Your shield is over half full" : "Your shield is full");
+                else if (d.shield <= 0 && d.damageTaken >= 1.0f && !d.cleanse && hud.selfHealth >= hud.inv.maxHealth - 0.05f) Say("Your health is full");
+                else {
+                    gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
+                    StartAction(royale::Anim::Drink, kDrinkSeconds, st.item);
+                    DrinkSounds(player);
+                    if (st.count <= 1) gHandStack = -1;
+                }
+            }
+        }
+    }
+
     // A: open the chest in front of you, take or swap the item on the ground, hire an ally or talk. Walking over an upgrade picks it up on its own.
     // While a text box is up, A belongs to it.
     if ((in.press.button & BTN_A) && !MessageBoxUp()) {
@@ -663,6 +705,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // D-pad Right: your next weapon; D-pad Left: back to the one before (like the bumpers on a hotbar). With spares B and C, the hand goes A, B, C, A...
     if (in.press.button & (BTN_DLEFT | BTN_DRIGHT)) {
         const int spares = static_cast<int>(hud.inv.reserve.size());
+        gHandStack = -1;
         if (spares == 0) {
             Say("No other weapon: open chests to find more");
         } else if (in.press.button & BTN_DRIGHT) {
@@ -715,8 +758,9 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
     if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        // At somebody in reach it rolls to their feet; with nobody it bounces to a stop just ahead and launches you (the same spots the server marks).
         SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
-                            player->actor.world.pos.z, aim, hud.weaponRarity);
+                            player->actor.world.pos.z, aim, hud.weaponRarity, bestDist < 1e8f ? bestDist : royale::kShockwaveSelfThrow);
     } else if (hud.weapon == royale::ItemId::Hookshot) {
         Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     }
@@ -860,7 +904,7 @@ void LaunchSelfFromShockwave(Player* player, float x, float z, royale::Rarity ra
     if (player == nullptr) return;
     const float dx = player->actor.world.pos.x - x, dz = player->actor.world.pos.z - z;
     const float distance = std::hypot(dx, dz);
-    constexpr float radius = 180.0f;
+    const float radius = royale::WeaponOf(royale::ItemId::ShockwaveGrenade).splashRadius;   // the server's blast (180)
     if (distance <= radius) LaunchSelf(player, rarity, dx, dz);
 }
 
@@ -977,7 +1021,9 @@ u8 RealItemFor(royale::ItemId w) {
         case ItemId::Bombs: return ITEM_BOMB;
         case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
         case ItemId::DekuNuts: return ITEM_NUT;
-        case ItemId::Hookshot: return ITEM_HOOKSHOT;
+        // The real hookshot is never put on B: its chain and "reel in" are the game's own (they would pull Link to a wall, and with no wall the chain
+        // sound looped forever with the game stuck waiting for it). The mod's hookshot is the Pull weapon effect; Link only holds it up while he shoots.
+        case ItemId::Hookshot: return ITEM_NONE;
         default: return ITEM_NONE;
     }
 }
@@ -1135,7 +1181,15 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
         if (gUseRetry > 0) { gUseRetry--; return; }
         gLocalWeaponShown = hud.weapon;
         gUseRetry = 10;
-        Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
+        // Whatever bomb or bombchu is still in his hands from the last weapon goes away with it: put down it would sit there with its fuse running.
+        if (Actor* held = player->heldActor; held != nullptr && held->parent == &player->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU)) {
+            Actor_Kill(held);
+            player->heldActor = nullptr; player->actor.child = nullptr; player->interactRangeActor = nullptr;
+            player->stateFlags1 &= ~PLAYER_STATE1_CARRYING_ACTOR;
+        }
+        // The game uses a Deku Nut the moment it is selected (the flash goes off in his hand); here the nut waits in his hand for B, which the game
+        // handles on the press itself, so a nut is shown but not "used" to take it out.
+        if (item != ITEM_NUT) Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
         if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
             player->itemAction = player->heldItemAction = look.itemAction;
             Player_SetModelGroup(player, look.modelGroup);
@@ -1458,6 +1512,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyChestOpens.insert(e.index);
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyStats.chests++;
                 if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
                     gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };
@@ -1541,6 +1596,16 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto owner = gState.find(e.id);
                     if (e.id != hud.selfId && owner != gState.end()) rarity = owner->second.weaponRarity;
                     gPendingShockwaveLaunches.push_back({ e.x, e.z, rarity, ImGui::GetTime() + std::max(0.0f, e.health) });
+                    if (e.id != hud.selfId && owner != gState.end()) {   // somebody else threw it: their ball, from their hand to the spot (mine left on B)
+                        const auto& o = owner->second;
+                        const auto actor = gActorOf.find(e.id);
+                        float y = 0.0f;
+                        if (actor != gActorOf.end() && actor->second != nullptr) y = actor->second->world.pos.y;
+                        else if (!FloorAt(o.x, o.z, &y)) y = GET_PLAYER(gPlayState)->actor.world.pos.y;
+                        const float dx = e.x - o.x, dz = e.z - o.z;
+                        const s16 yaw = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+                        SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade, o.x, y + 45.0f, o.z, yaw, rarity, std::hypot(dx, dz));
+                    }
                 }
                 break;
             }

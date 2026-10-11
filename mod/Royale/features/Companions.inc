@@ -136,14 +136,14 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 }
 
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
-// Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
+// Five people wait around the map (the original four allies and Jones); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
-// The models are original low-poly ones in the Ocarina of Time style with their own rig and clips (tools/allies, shared/ally_anim.h): they
+// The models are original stylised ones (Ocarina of Time x Majora's Mask x Fortnite) with their own rig and clips (tools/allies, shared/ally_anim.h): they
 // walk, wave you over, sit down when nobody is about (a Goron curls into his rock ball), get up when you come near, cheer when hired, flinch
-// when hit and fight their own way: the Kokiri's slingshot, the Zora's thrown magic, the Goron's left and right punches, the Gerudo's bow. A
-// Goron who falls behind curls up and rolls after his owner.
+// when hit, dance along when their owner does an emote or wins, and fight their own way: the Kokiri's slingshot, the Zora's thrown magic, the
+// Goron's left and right punches, the Gerudo's bow. A Goron who falls behind curls up and rolls after his owner.
 
-// Draws an ally's model in a pose: skinned on the CPU, lit by the sun in the vertex colours, the face picked by swapping the atlas.
+// Draws an ally's model in a pose: skinned on the CPU, lit by the sun in the vertex colours, the face picked from its three textures.
 void DrawAllyModel(PlayState* play, float x, float y, float z, float yaw, const royale::allymodel::Model& m, const royale::allymodel::Pose& pose,
                    int face, float roll, float rollPivot) {
     GfxLayer layer(play, GfxLayerId::Characters);
@@ -182,12 +182,21 @@ void DrawAllyModel(PlayState* play, float x, float y, float z, float yaw, const 
     }
     Matrix_Scale(1.0f / kSub, 1.0f / kSub, 1.0f / kSub, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    const uint8_t* atlas = m.atlas[std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1)];
-    // LOADBLOCK clamps at 2048 texels; LOADTILE keeps the whole 64x64 atlas in Shipwright.
-    gDPLoadTextureTile(POLY_OPA_DISP++, atlas, G_IM_FMT_RGBA, G_IM_SIZ_16b, A::kAtlasW, A::kAtlasH, 0, 0, A::kAtlasW - 1, A::kAtlasH - 1, 0,
-                       G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+    // Two textures: the 256 x 256 body atlas, then the face in the expression asked for (the batches come body first). LOADBLOCK stops at
+    // 2048 texels; LOADTILE takes the whole texture in Shipwright, as the 128-wide Hyrule Kingdom textures do.
+    int loaded = -1;
     for (int b = 0; b < m.batchCount; b++) {
         const A::Batch& bt = m.batches[b];
+        if (bt.tex != loaded) {
+            loaded = bt.tex;
+            if (bt.tex == A::kTexBody)
+                gDPLoadTextureTile(POLY_OPA_DISP++, m.body, G_IM_FMT_RGBA, G_IM_SIZ_16b, A::kBodyW, A::kBodyH, 0, 0, A::kBodyW - 1, A::kBodyH - 1, 0,
+                                   G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            else
+                gDPLoadTextureTile(POLY_OPA_DISP++, m.faces[std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1)], G_IM_FMT_RGBA, G_IM_SIZ_16b,
+                                   A::kFaceW, A::kFaceH, 0, 0, A::kFaceW - 1, A::kFaceH - 1, 0, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP,
+                                   G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+        }
         gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
         const int end = bt.firstTri + bt.triCount;
         int t = bt.firstTri;
@@ -212,7 +221,7 @@ float GoronBallPivot() {
     return pivot;
 }
 
-constexpr float kAllyShadow[royale::kAllyCount] = { 13.0f, 17.0f, 30.0f, 17.0f };
+constexpr float kAllyShadow[royale::kAllyCount] = { 13.0f, 17.0f, 30.0f, 17.0f, 18.0f };
 
 void AllyDust(PlayState* play, float x, float y, float z, int count, float spread, s16 scale) {
     for (int i = 0; i < count; i++) {
@@ -220,6 +229,34 @@ void AllyDust(PlayState* play, float x, float y, float z, int count, float sprea
         Vec3f vel = { Rand_CenteredFloat(2.0f), 0.6f + Rand_ZeroOne(), Rand_CenteredFloat(2.0f) }, accel = { 0.0f, 0.1f, 0.0f };
         Color_RGBA8 prim = { 200, 180, 150, 255 }, env = { 130, 110, 90, 255 };
         EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, scale, 8, 14, 0);
+    }
+}
+
+// Whether the person an ally works for is dancing (doing an emote) or has just won the match: the ally dances along.
+bool AllyOwnerCelebrates(uint16_t owner) {
+    if (owner == royale::net::kNoPlayer16) return false;
+    const auto& h = gSession.Hud();
+    if (h.winnerId == owner) return true;
+    if (owner == h.selfId) return gEmote.id >= 0;
+    auto it = gState.find(owner);
+    return it != gState.end() && it->second.alive && royale::IsEmote(it->second.anim);
+}
+
+#include "../RoyaleJones.h"
+
+void UpdateJones(Actor* actor, PlayState* play, AllyActor& a, float dt) {
+    actor->focus.pos=actor->world.pos;actor->focus.pos.y+=105.0f;
+    actor->shape.shadowScale=18.0f;actor->targetMode=3;
+    actor->flags|=ACTOR_FLAG_ATTENTION_ENABLED;actor->flags&=~ACTOR_FLAG_HOSTILE;
+    const float moving=std::clamp(a.speed/180.0f,0.0f,1.0f);
+    a.walkW+=(moving-a.walkW)*.25f;
+    a.phase+=(.35f+.3f*a.walkW)*a.walkW;
+    a.bob=a.walkW*std::fabs(std::sin(a.phase))*3.0f;
+    a.greetAge+=dt;a.hurtAge+=dt;
+    Player* player=GET_PLAYER(play);const double now=ImGui::GetTime();
+    if(a.owner==royale::net::kNoPlayer16 && player &&
+       std::hypot(player->actor.world.pos.x-a.x,player->actor.world.pos.z-a.z)<royale::kHireRange && now>=a.nextGreetingAt) {
+        a.greetAge=0;a.nextGreetingAt=now+12.0;PlayJonesSound(0,a.x,a.z);
     }
 }
 
@@ -242,6 +279,7 @@ void Ally_Update(Actor* actor, PlayState* play) {
     actor->world.pos.y = GroundY(play, a.x, a.z, actor->world.pos.y);
     actor->shape.rot.y = a.rot;
     actor->world.rot.y = a.rot;
+    if(a.kind==static_cast<int>(royale::AllyKind::Jones)) { UpdateJones(actor,play,a,dt); return; }
     const A::Model& m = A::ModelOf(a.kind);
     a.anim.model = &m;
     actor->focus.pos = actor->world.pos;
@@ -340,9 +378,10 @@ void Ally_Update(Actor* actor, PlayState* play) {
         a.lonely = 0.0f;
     }
 
-    // Otherwise: walking, waving you over (free, and you are close enough to see), or the ready stance.
+    // Otherwise: walking, dancing along when its owner dances or wins, waving you over (free, and you are close enough to see), or the ready
+    // stance.
     if (a.busy <= 0.0f && !a.rolling && !a.resting) {
-        const int base = a.walking ? A::kWalk : (free && playerDist < 1600.0f) ? A::kInvite : A::kIdle;
+        const int base = a.walking ? A::kWalk : AllyOwnerCelebrates(a.owner) ? A::kDance : (free && playerDist < 1600.0f) ? A::kInvite : A::kIdle;
         a.anim.Play(base, 0.22f);
     }
     const float rate = a.anim.clip == A::kWalk ? std::clamp(a.speed / std::max(1.0f, m.walkSpeed), 0.6f, 1.8f) : 1.0f;
@@ -354,6 +393,7 @@ void Ally_Draw(Actor* actor, PlayState* play) {
     auto of = gAllyOf.find(actor);
     if (of == gAllyOf.end()) return;
     AllyActor& a = gAllies[of->second];
+    if(a.kind==static_cast<int>(royale::AllyKind::Jones)) { Jones_Draw(actor,play,a); return; }
     const A::Model& m = A::ModelOf(a.kind);
     A::Pose pose;
     a.anim.model = &m;
@@ -394,10 +434,13 @@ void ReconcileAllies(const royale::HudState& hud) {
                 AllyActor a;
                 a.actor = actor; a.origDestroy = actor->destroy; a.kind = n.kind; a.owner = n.owner;
                 a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.rot = n.rot; a.x = n.x; a.z = n.z; a.init = true;
+                a.weapon = n.weapon;
                 a.lastOwner = n.owner;   // one already working for someone when it comes into view does not cheer
                 a.hp = a.shownHp = n.hp / 255.0f;
-                a.anim.model = &royale::allymodel::ModelOf(n.kind);
-                a.anim.Play(royale::allymodel::kIdle, 0.0f, true);
+                if(n.kind!=static_cast<int>(royale::AllyKind::Jones)) {
+                    a.anim.model=&royale::allymodel::ModelOf(n.kind);
+                    a.anim.Play(royale::allymodel::kIdle,0.0f,true);
+                }
                 gAllies[n.index] = a;
                 gAllyOf[actor] = n.index;
                 actor->update = Ally_Update;
@@ -408,8 +451,14 @@ void ReconcileAllies(const royale::HudState& hud) {
                 actor->shape.shadowScale = kAllyShadow[n.kind % royale::kAllyCount];
             } else {
                 AllyActor& a = it->second;
-                a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.hp = n.hp / 255.0f; a.owner = n.owner;
-                if ((n.flags & 2) && a.actAge > 0.5f) { a.actAge = 0.0f; a.pending = 1; }
+                a.weapon=n.weapon;
+                if(a.kind==static_cast<int>(royale::AllyKind::Jones)) {
+                    if(n.owner!=a.owner && n.owner!=royale::net::kNoPlayer16) { a.greetAge=0;PlayJonesSound(1,n.x,n.z); }
+                    if(n.hp/255.0f<a.hp-.001f && a.hurtAge>.35f) { a.hurtAge=0;PlayJonesSound(3,n.x,n.z); }
+                    if((n.flags&2) && !a.attackSnapshotActive && a.actAge>.5f) { PlayJonesSound(2,n.x,n.z,a.weapon);a.actAge=0;a.hasShot=false; }
+                    a.attackSnapshotActive=(n.flags&2)!=0;
+                } else if((n.flags&2) && a.actAge>.5f) { a.actAge=0;a.pending=1; }
+                a.tx=n.x;a.tz=n.z;a.trot=n.rot;a.hp=n.hp/255.0f;a.owner=n.owner;
             }
         }
     }
@@ -439,7 +488,7 @@ void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const 
         const bool mine = a.owner == h.selfId, free = a.owner == royale::net::kNoPlayer16;
         if (d > (free ? 2600.0f : 1800.0f)) continue;
         ImVec2 at;
-        const float top = (a.resting || a.rolling) ? 70.0f : royale::allymodel::ModelOf(a.kind).height + 28.0f;
+        const float top = a.kind==static_cast<int>(royale::AllyKind::Jones)?170.0f:(a.resting || a.rolling)?70.0f:royale::allymodel::ModelOf(a.kind).height+28.0f;
         if (!WorldToScreen(a.x, a.actor->world.pos.y + top, a.z, &at)) continue;
         const royale::AllyDef& def = royale::kAllyDefs[a.kind];
         const float k = std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f), ts = 18.0f * scale * k;
@@ -468,6 +517,10 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
     auto it = gAllies.find(static_cast<uint8_t>(e.index));
     if (it == gAllies.end() || it->second.actor == nullptr || gPlayState == nullptr) return;
     AllyActor& a = it->second;
+    if(a.kind==static_cast<int>(royale::AllyKind::Jones)) {
+        a.weapon=e.item;if(a.actAge>.5f) PlayJonesSound(2,a.x,a.z,a.weapon);
+        a.actAge=0;JonesShotFx(a,e.x,e.z);return;
+    }
     a.actAge = 0.0f;
     a.pending = e.id == a.owner ? 2 : 1;   // the model plays its attack (or the Zora's healing) on its next update
     const float ay = a.actor->world.pos.y;

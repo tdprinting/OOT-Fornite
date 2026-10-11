@@ -618,7 +618,7 @@ inline PoiLayout GenerateFieldPois(uint64_t seed, Circle map, int towns, const P
     return out;
 }
 
-// Where the four allies wait: spread across the middle rings of the map, well apart from each other and from the towns (so you have to go and find them).
+// Where the allies wait: spread across the middle rings of the map, well apart from each other and from the towns (so you have to go and find them).
 inline std::vector<Vec2> GenerateAllySpots(uint64_t seed, Circle map, const std::vector<Poi>& pois, const PlacementFn& valid = nullptr) {
     Rng rng(seed ^ 0x616C6C79ull ^ 0x73706F74ull);   // "ally" "spot"
     std::vector<Vec2> out;

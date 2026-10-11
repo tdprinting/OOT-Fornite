@@ -138,7 +138,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::NocturneOfShadow, "Nocturne of Shadow", kAbility, rR, rE, "Vanish and reappear somewhere else"},
     {ItemId::RequiemOfSpirit, "Requiem of Spirit", kAbility, rR, rE, "Stuns and hurts everyone near you"},
     {ItemId::PreludeOfLight, "Prelude of Light", kAbility, rR, rE, "Heals 1 heart and protects you briefly"},
-    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kWeapon, rC, rL, "B throws it: launches nearby players away without damage"},
+    {ItemId::ShockwaveGrenade, "Shockwave Grenade", kWeapon, rC, rL, "B throws it: bounces, then launches everyone near it, you too"},
     // gear: tunics
     {ItemId::KokiriTunic, "Kokiri Tunic", kGear, rC, rU, "Plain: slightly less damage taken"},
     {ItemId::GoronTunic, "Goron Tunic", kGear, rU, rE, "Half damage from fire and explosions"},
@@ -285,6 +285,16 @@ constexpr PotionDef PotionOf(ItemId id) {
         case ItemId::SmallShieldPotion: return {0, false, 1, 0, false, 1.0f, 1.5f};
         case ItemId::LargeShieldPotion: return {0, false, 1, 0, false, 2.0f, 3.0f};
         default:                  return {};
+    }
+}
+
+// How many of one kind fit in a single bag slot.
+constexpr int PotionStackMax(ItemId id) {
+    switch (id) {
+        case ItemId::Fairy: return 1;
+        case ItemId::SmallShieldPotion: case ItemId::Fish: return 6;
+        case ItemId::LargeShieldPotion: case ItemId::Poe: case ItemId::BluePotion: return 3;
+        default: return 4;
     }
 }
 

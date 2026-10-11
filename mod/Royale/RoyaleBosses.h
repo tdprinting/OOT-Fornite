@@ -1335,6 +1335,7 @@ bool StrikeFlies(const StrikeFx& s, const BossActor** from) {
 void StrikeWarning(PlayState* play, StrikeFx& s, float ground, double now) {
     const float span = static_cast<float>(std::max(0.3, s.land - s.start));
     const float danger = std::clamp(1.0f - static_cast<float>(s.land - now) / span, 0.0f, 1.0f);   // sparks come faster as the blow gets close
+    if (s.style == royale::StrikeStyle::Shockwave) return;   // the grenade gives no warning ring: the ball itself is the warning (Projectiles.inc)
     StyleColours c = StyleColoursOf(s.style);
     if (s.style == royale::StrikeStyle::Fire) c.prim.g = static_cast<u8>(210 - danger * 150.0f);
     const int n = 5 + static_cast<int>(danger * 9.0f);
@@ -1406,11 +1407,28 @@ void StrikeBlast(PlayState* play, const StrikeFx& s, float ground) {
             SoundAt(s.x, ground, s.z, NA_SE_EN_TWINROBA_MS_FREEZE);
             break;
         }
-        case royale::StrikeStyle::Shockwave: {
+        case royale::StrikeStyle::Shockwave: {   // the Shockwave Grenade (docs/BOUNCEBALL-MECHANICS.md 3): a purple dome, white bolts, a white flash
             Color_RGBA8 pr = c.prim, en = c.env;
-            EffectSsBlast_SpawnShockwave(play, &pos, &zero, &zero, &pr, &en, 14);
-            SparkBurst(play, s.x, ground + 20.0f, s.z, c.prim, 28, 8.0f);
+            Vec3f low = { s.x, ground + 4.0f, s.z };
+            EffectSsBlast_SpawnShockwave(play, &low, &zero, &zero, &pr, &en, 14);           // the ring flat on the ground
+            Color_RGBA8 pr2 = { 250, 235, 255, 255 }, en2 = { 150, 70, 255, 255 };
+            EffectSsBlast_SpawnShockwave(play, &pos, &zero, &zero, &pr2, &en2, 9);          // and a brighter, quicker one inside it
+            for (int i = 0; i < 18; i++) {   // the dome: sparkles over a half sphere the size of the blast, drifting outward
+                const float a = i * (6.2831853f / 18.0f), up = 0.25f + 0.7f * static_cast<float>((i * 7) % 5) / 4.0f;
+                const float r = s.radius * 0.55f * std::cos(up), h = s.radius * 0.55f * std::sin(up);
+                Glitter(play, s.x + std::cos(a) * r, ground + h, s.z + std::sin(a) * r, { 235, 200, 255, 255 }, { 140, 60, 255, 255 }, 0.4f, 150, 14);
+            }
+            for (int k = 0; k < 3; k++) {    // white forks of lightning out of the middle, in the game's own lightning
+                Vec3f p = { s.x, ground + 30.0f, s.z };
+                Color_RGBA8 lp = { 255, 255, 255, 255 }, le = { 170, 90, 255, 255 };
+                EffectSsLightning_Spawn(play, &p, &lp, &le, 150, static_cast<s16>(Rand_ZeroOne() * 0xFFFF), 5, 3);
+            }
+            SparkBurst(play, s.x, ground + 20.0f, s.z, c.prim, 24, 7.0f);
+            Player* me = GET_PLAYER(play);
+            if (me != nullptr && royale::Distance({ me->actor.world.pos.x, me->actor.world.pos.z }, { s.x, s.z }) < s.radius * 2.0f)
+                gBoltFlashUntil = std::max(gBoltFlashUntil, ImGui::GetTime() + 0.16);    // a quick white flash for whoever is close (frame 944)
             SoundAt(s.x, ground, s.z, NA_SE_IT_BOMB_EXPLOSION);
+            SoundAt(s.x, ground, s.z, NA_SE_EN_FANTOM_THUNDER);
             break;
         }
         case royale::StrikeStyle::Water: {   // a geyser

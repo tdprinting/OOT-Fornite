@@ -190,7 +190,7 @@ std::unordered_map<uint16_t, int> gFlinchFrames; // player id -> frames of a fli
 std::unordered_map<uint16_t, royale::ItemId> gLastAbility;   // player id -> the ability they last used (which spell or song a cast or a tune is)
 std::unordered_map<uint16_t, double> gLastAbilityAt;         // and when
 
-void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity = royale::Rarity::Common); // below, with the other custom models
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity = royale::Rarity::Common, float reach = -1.0f); // below, with the other custom models
 
 // ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
 
@@ -448,8 +448,7 @@ void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo
             PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
             break;
         case Anim::Guard: PuppetSfx(&player->actor, NA_SE_IT_SHIELD_POSTURE); break;
-        case Anim::OpenChest: PuppetSfx(&player->actor, NA_SE_EV_TBOX_OPEN); break;
-        case Anim::ItemGet: PuppetSfx(&player->actor, NA_SE_SY_GET_ITEM); break;
+        case Anim::OpenChest: case Anim::ItemGet: break;   // chests are quiet for everyone but whoever opens them
         case Anim::Emote1: PuppetVoice(player, NA_SE_VO_LI_SURPRISE); break;
         case Anim::Hurt: PuppetVoice(player, NA_SE_VO_LI_DAMAGE_S); break;
         case Anim::Dead: PuppetVoice(player, NA_SE_VO_LI_DOWN); break;
@@ -944,7 +943,9 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     {   // somebody has just loosed an arrow or thrown something: show it in flight
         static std::unordered_map<uint16_t, uint8_t> previous;
         uint8_t& before = previous[s.id];
-        if (s.anim != before && s.alive && (s.anim == static_cast<uint8_t>(royale::Anim::Shoot) || s.anim == static_cast<uint8_t>(royale::Anim::Throw)))
+        // (Not the Shockwave Grenade: the pose does not say where it goes, so its ball is thrown when the server marks the blast, see Terrain.inc.)
+        if (s.anim != before && s.alive && s.weapon != royale::ItemId::ShockwaveGrenade &&
+            (s.anim == static_cast<uint8_t>(royale::Anim::Shoot) || s.anim == static_cast<uint8_t>(royale::Anim::Throw)))
             SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot, s.weaponRarity);
         before = s.anim;
     }

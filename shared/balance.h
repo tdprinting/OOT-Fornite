@@ -44,7 +44,9 @@ constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
 constexpr float kMaxHealth = 7.0f; // hearts everyone starts a match with (Heart Containers and Pieces still add up to kMaxHealthCap)
 constexpr float kRareChestHeartPieceChance = 0.10f; // a Rare chest holds a Piece of Heart instead of its roll this often
 constexpr int kChestRupeesMin = 2, kChestRupeesMax = 3; // rupees (green or blue) that spill out of an opened chest
-constexpr int kMaxPotions = 3;
+constexpr int kPotionSlots = 5;   // the bag holds this many kinds of consumable; each kind stacks (see PotionStackMax in items.h), like Fortnite's med kits and shield potions
+constexpr int kMaxPotions = 30;   // most single potions carried in all (kPotionSlots stacks of up to six)
+constexpr int kWalletMax = 1000;  // the most rupees you can carry
 constexpr float kLobbyAutoStartSec = 120.0f; // the lobby starts the match by itself after this long (the host can turn it off)
 constexpr float kLobbyStartGraceSec = 30.0f; // if the host's game hasn't started it by then, the server does
 constexpr float kMaxShield = 3.0f;   // the shield bar under the hearts, in hearts' worth of damage it soaks up (shown as 0 to 100)
@@ -64,7 +66,7 @@ constexpr float kAdultTaken = 0.8f;      // damage taken
 constexpr float kAdultSpeed = 1.1f;
 constexpr float kAdultScale = 1.35f;     // how much bigger Link is drawn
 
-constexpr int kMaxProps = 1200;
+constexpr int kMaxProps = 4000;   // was 1200 (a prop number is 16 bit on the wire, so 65535 is the ceiling)
 
 // Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.
 constexpr float kSupplyFirstSec = 55.0f;   // match time of the first drop

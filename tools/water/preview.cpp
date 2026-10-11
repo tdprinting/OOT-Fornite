@@ -3,7 +3,8 @@
 // player, coarse ones of 232 further off), then lays the caustics, the water, the sparkle and the foam over the floor the way the game's
 // translucent passes do. It does not draw the game's models, only a sandy floor, a beach and a sky.
 // Build and run:  g++ -O2 -std=c++17 -Ishared tools/water/preview.cpp -o /tmp/water_preview && /tmp/water_preview out_dir
-// It writes before.ppm, midday.ppm, sunset.ppm, underwater.ppm.
+// It writes before.ppm, midday.ppm, sunset.ppm, underwater.ppm. A second argument `raw` draws the swell unfiltered (as before the
+// band limit), for comparison.
 #include "water_look.h"
 #include "water_sim.h"
 #include <cstdio>
@@ -14,12 +15,16 @@
 namespace rw = royale::water;
 namespace {
 constexpr int W = 640, H = 360, kTex = 64, kFrames = 32;
+bool gBandLimit = true;   // the game's band-limited swell and no per-vertex pin-point glint
 std::vector<uint8_t> gCaus(kTex * kTex * kFrames), gGlint(kTex * kTex * kFrames), gFoam(kTex * kTex);
+std::vector<uint8_t> gSparkle(kTex * kTex * kFrames), gStreaks(kTex * kTex), gBands(kTex * kTex * kFrames);
 
 struct Scene {
     float eye[3], yaw, pitch;
     float day, twilight, sunH;   // as the game's SkyLightNow
     float amp, chop, glintAmt, foamAmt, causticAmt, clarity, wind, t;
+    // the open-sea look (0 = the old look): sparse sparkle, foam streaks, swell bands, horizon haze, depth tone
+    float sparkle = 1.0f, streaks = 1.0f, bands = 1.0f, haze = 1.0f, depthTone = 1.0f;
 };
 
 float Tex(const std::vector<uint8_t>& img, int frame, float s, float t) {   // bilinear, wrapping, in texels
@@ -63,6 +68,12 @@ void Render(const Scene& sc, const char* path) {
     P.eye[0] = sc.eye[0]; P.eye[1] = sc.eye[1]; P.eye[2] = sc.eye[2];
     P.t = sc.t; P.light = light; P.reach = 60.0f + 320.0f * sc.clarity; P.ampTotal = ampTotal; P.wind = sc.wind;
     P.glintAmt = sc.glintAmt; P.foamAmt = sc.foamAmt;
+    P.sharpSpec = gBandLimit ? 0.0f : 1.0f;
+    P.sparkle = sc.sparkle; P.streaks = sc.streaks; P.bands = sc.bands; P.haze = sc.haze; P.depthTone = sc.depthTone;
+    P.hazeNear = 2550.0f * 0.35f; P.hazeFar = 2550.0f * 0.92f;   // as the game on the island sea
+    const float windAng = 0.6f + 0.35f;   // the wind's heading (the game turns the streaks and the bands along the wind)
+    const float wc = std::cos(windAng), ws = std::sin(windAng);
+    const rw::PreparedSwell swell(sc.t, sc.amp, sc.chop, gBandLimit ? 2.5f * 232.0f : 0.0f);   // the fine squares share the coarse grid's swell
     const bool under = sc.eye[1] < 0.0f;
     // the game's grid points, shaded once each
     std::unordered_map<uint64_t, Point> cache;
@@ -72,7 +83,7 @@ void Render(const Scene& sc, const char* path) {
         if (it != cache.end()) return it->second;
         const float wx = gi * g, wz = gj * g, depth = std::max(0.0f, FloorDepth(wx, wz));
         const float shore = std::min(1.0f, depth / 90.0f);
-        const rw::SwellPoint sp = rw::Swell(wx, wz, sc.t, sc.amp, sc.chop);
+        const rw::SwellPoint sp = swell.Sample(wx, wz);
         float nx = sp.nx * shore, ny = sp.ny, nz = sp.nz * shore;
         const float l = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= l; ny /= l; nz /= l;
         Point p;
@@ -143,18 +154,32 @@ void Render(const Scene& sc, const char* path) {
                         L.glint[q] = bl(p00.look.glint[q], p10.look.glint[q], p01.look.glint[q], p11.look.glint[q]);
                     }
                     L.foam = bl(p00.look.foam, p10.look.foam, p01.look.foam, p11.look.foam);
+                    L.streak = bl(p00.look.streak, p10.look.streak, p01.look.streak, p11.look.streak);
+                    for (int q = 0; q < 4; q++) L.band[q] = bl(p00.look.band[q], p10.look.band[q], p01.look.band[q], p11.look.band[q]);
                     const float nx = bl(p00.nx, p10.nx, p01.nx, p11.nx), nz = bl(p00.nz, p10.nz, p01.nz, p11.nz);
                     const float a = std::clamp(L.col[3] / 255.0f, 0.0f, 1.0f);
                     for (int q = 0; q < 3; q++) col[q] += (std::clamp(L.col[q], 0.0f, 255.0f) - col[q]) * a;
                     if (sc.glintAmt > 0.0f) {
-                        const float ga = std::clamp(L.glint[3] / 255.0f, 0.0f, 1.0f) * Tex(gGlint, gframe, x / 3.0f + sc.t * 1.7f + nx * 9.0f, z / 3.0f + sc.t * 1.1f + nz * 9.0f);
+                        const float ga = std::clamp(L.glint[3] / 255.0f, 0.0f, 1.0f) * Tex(sc.sparkle > 0.0f ? gSparkle : gGlint, gframe, x / 3.0f + sc.t * 1.7f + nx * 9.0f, z / 3.0f + sc.t * 1.1f + nz * 9.0f);
                         for (int q = 0; q < 3; q++) col[q] += (std::clamp(L.glint[q], 0.0f, 255.0f) - col[q]) * ga;
+                    }
+                    if (sc.bands > 0.0f) {   // the swell bands pass, turned along the wind, rolling with it
+                        const float bu = (x * wc + z * ws) / 14.0f - sc.t * 2.6f, bv = (-x * ws + z * wc) / 14.0f;
+                        const float ba = std::clamp(L.band[3] / 255.0f, 0.0f, 1.0f) * Tex(gBands, static_cast<int>(sc.t * 7.0f) % kFrames, bu, bv);
+                        for (int q = 0; q < 3; q++) col[q] += (std::clamp(L.band[q], 0.0f, 255.0f) - col[q]) * ba;
                     }
                     if (sc.foamAmt > 0.0f) {
                         const float fa = std::clamp(L.foam / 255.0f, 0.0f, 1.0f) * Tex(gFoam, 0, x / 2.6f + nx * 4.0f, z / 2.6f + nz * 4.0f);
                         const float fl = 0.6f + 0.4f * light;
                         const float fc[3] = { 240 * fl, 248 * fl, 252 * fl };
                         for (int q = 0; q < 3; q++) col[q] += (fc[q] - col[q]) * fa;
+                    }
+                    if (sc.streaks > 0.0f) {   // the foam streaks pass, along the wind
+                        const float su = (x * wc + z * ws) / 3.2f - sc.t * 1.4f + nx * 3.0f, sv = (-x * ws + z * wc) / 3.2f + nz * 3.0f;
+                        const float sa = std::clamp(L.streak / 255.0f, 0.0f, 1.0f) * Tex(gStreaks, 0, su, sv);
+                        const float fl = 0.6f + 0.4f * light;
+                        const float fc[3] = { 236 * fl, 248 * fl, 250 * fl };
+                        for (int q = 0; q < 3; q++) col[q] += (fc[q] - col[q]) * sa;
                     }
                     if (under) {
                         const float k = 1.0f - std::exp(-waterT / 520.0f);
@@ -197,15 +222,32 @@ void Render(const Scene& sc, const char* path) {
 
 int main(int argc, char** argv) {
     const std::string out = argc > 1 ? argv[1] : ".";
+    gBandLimit = !(argc > 2 && std::string(argv[2]) == "raw");
     rw::MakeCaustics(gCaus.data(), kTex, kFrames);
     rw::MakeGlints(gGlint.data(), kTex, kFrames);
     rw::MakeFoam(gFoam.data(), kTex);
+    rw::MakeSparkle(gSparkle.data(), kTex, kFrames);
+    rw::MakeStreaks(gStreaks.data(), kTex);
+    rw::MakeSwellBands(gBands.data(), kTex, kFrames);
     //                 eye                    yaw    pitch   day  twi  sunH   amp   chop glint foam caus clar wind  t
-    const Scene before{ { 0, 70, 140 },        0.35f, -0.16f, 1.0f, 0.0f, 0.9f, 0.3f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.2f, 7.3f };
-    const Scene midday{ { 0, 70, 140 },        0.35f, -0.16f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.2f, 7.3f };
+    const Scene before{ { 0, 70, 140 },        0.35f, -0.16f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.5f, 7.3f, 0, 0, 0, 0, 0 };   // the look before the open-sea features
+    const Scene midday{ { 0, 70, 140 },        0.35f, -0.16f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.5f, 7.3f };
     const Scene sunset{ { 0, 80, 140 },        0.92f, -0.10f, 0.45f, 1.0f, 0.08f, 1.2f, 0.7f, 1.0f, 1.0f, 1.0f, 1.0f, 0.4f, 7.3f };
     const Scene under{ { 0, -60, 600 },        0.35f, 0.5f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.2f, 7.3f };
+    const Scene high{ { 0, 420, 900 },         0.35f, -0.55f, 1.0f, 0.0f, 0.7f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 7.3f };   // from a glider, where squares showed
+    const Scene opensea{ { 0, 90, 1900 },      0.35f, -0.14f, 1.0f, 0.0f, 0.8f, 1.3f, 0.7f, 1.0f, 1.0f, 1.0f, 1.0f, 0.7f, 7.3f };   // out at sea in a fresh wind, as the reference
+    const Scene opensea0{ { 0, 90, 1900 },     0.35f, -0.14f, 1.0f, 0.0f, 0.8f, 1.3f, 0.7f, 1.0f, 1.0f, 1.0f, 1.0f, 0.7f, 7.3f, 0, 0, 0, 0, 0 };
+    if (argc > 2 && std::string(argv[2]) == "parts") {   // each open-sea feature on its own, for tuning
+        Scene b = opensea0; b.bands = 1.0f; Render(b, (out + "/part-bands.ppm").c_str());
+        Scene k = opensea0; k.streaks = 1.0f; Render(k, (out + "/part-streaks.ppm").c_str());
+        Scene g = opensea0; g.sparkle = 1.0f; Render(g, (out + "/part-sparkle.ppm").c_str());
+        Scene h = opensea0; h.haze = 1.0f; h.depthTone = 1.0f; Render(h, (out + "/part-haze-tone.ppm").c_str());
+        return 0;
+    }
     Render(before, (out + "/before.ppm").c_str());
+    Render(opensea, (out + "/opensea.ppm").c_str());
+    Render(opensea0, (out + "/opensea-before.ppm").c_str());
+    Render(high, (out + "/high.ppm").c_str());
     Render(midday, (out + "/midday.ppm").c_str());
     Render(sunset, (out + "/sunset.ppm").c_str());
     Render(under, (out + "/underwater.ppm").c_str());

@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 36; // 36: Moonfall Isle map, 16-bit POI names. 35: tunic and gauntlets worn are sent with every player. 34: 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
+constexpr uint16_t kProtocolVersion = 39; // 39: Moonfall Isle map, 16-bit POI names. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -35,7 +35,7 @@ constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "use
 
 enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13, NpcHitRequest = 14,
-    VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17,
+    VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17, UseItemRequest = 18, DropItemRequest = 19,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91,
@@ -117,6 +117,21 @@ struct SelectWeaponRequest {
 };
 
 // Drink a shield potion from the bag (the server picks the one that fits best).
+// Drink one particular stack from the bag (the one the player has in hand). The server checks it would do something.
+struct UseItemRequest {
+    static constexpr MsgType kType = MsgType::UseItemRequest;
+    uint8_t item = 0, rarity = 0;
+    void Write(ByteWriter& w) const { w.U8(item); w.U8(rarity); }
+    bool Read(ByteReader& r) { item = r.U8(); rarity = r.U8(); return r.ok && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount; }
+};
+
+// Put the weapon in hand on the ground in front of you (a backup weapon, if you have one, comes into your hand).
+struct DropItemRequest {
+    static constexpr MsgType kType = MsgType::DropItemRequest;
+    void Write(ByteWriter&) const {}
+    bool Read(ByteReader& r) { return r.ok; }
+};
+
 struct UseShieldRequest {
     static constexpr MsgType kType = MsgType::UseShieldRequest;
     void Write(ByteWriter&) const {}
@@ -428,10 +443,17 @@ struct AllyNet {
     uint8_t hp = 255;           // health as a fraction of its maximum, 0..255
     uint16_t owner = kNoPlayer16;   // who hired it (kNoPlayer16 while it is free)
     uint8_t flags = 0;          // 1 walking, 2 attacking
-    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(flags); }
+    uint8_t weapon = 0;         // Jones-only equipment, never a player ItemId
+    // Position to the nearest unit as 16 bits (maps fit +-32000); Jones's rifle rides in bits 2..3 of the flags byte. 13 bytes an ally.
+    void Write(ByteWriter& w) const {
+        auto unit = [](float f) { return static_cast<int16_t>(std::lround(std::clamp(f, -32000.0f, 32000.0f))); };
+        w.U8(index); w.U8(kind); w.I16(unit(x)); w.I16(unit(z)); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(static_cast<uint8_t>(flags | (weapon << 2)));
+    }
     bool Read(ByteReader& r) {
-        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8(); owner = r.U16(); flags = r.U8();
-        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && flags <= 3;
+        index = r.U8(); kind = r.U8(); x = r.I16(); z = r.I16(); rot = r.I16(); hp = r.U8(); owner = r.U16();
+        const uint8_t packed = r.U8(); flags = packed & 3; weapon = packed >> 2;
+        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && packed < 16 &&
+            (kind==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0);
     }
 };
 
@@ -546,8 +568,10 @@ struct EvAllyAction {
     uint8_t index = 0;
     uint16_t target = kNoPlayer16;
     float x = 0, z = 0;
-    void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); }
-    bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); return r.ok && index < kAllyCount && Finite(x) && Finite(z); }
+    uint8_t weapon=0;
+    void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); w.U8(weapon); }
+    bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); weapon=r.U8(); return r.ok && index < kAllyCount && Finite(x) && Finite(z) &&
+        (index==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0); }
 };
 
 // The replay of the match that just ended, in two kinds of message: this describes it (who, how many frames, who eliminated whom)...

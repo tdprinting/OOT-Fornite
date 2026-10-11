@@ -8,12 +8,16 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/engine_limits.h"
 #include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
 #include "../../shared/fortnite_puddles.h"
 #include "../../shared/ground_patches.h"
 #include "../../shared/placement.h"
 #include "../../shared/island_anchors.h"
+#include "../../shared/jones_animation.h"
+#include "../../shared/jones_sounds.h"
+#include "../../shared/jones_guns.h"
 #include <set>
 #include <unordered_set>
 #include "cloth.h"
@@ -636,14 +640,31 @@ static void PickupRulesForEveryKind() {
     CHECK(grab(ItemId::NayrusLove, Rarity::Epic) && p->hasAbility && p->ability.item == ItemId::NayrusLove && p->abilityReadyAt <= m.Clock());
     CHECK(grab(ItemId::SunsSong, Rarity::Rare) && p->ability.item == ItemId::SunsSong);
 
-    // Consumables: bag holds kMaxPotions, then refuses.
-    for (int i = 0; i < kMaxPotions; i++) CHECK(grab(ItemId::Milk, Rarity::Common));
+    // Consumables stack like Fortnite's: one slot per kind, a full stack refuses more, and the bag has kPotionSlots slots.
+    for (int i = 0; i < PotionStackMax(ItemId::Milk); i++) CHECK(grab(ItemId::Milk, Rarity::Common));
     size_t taken = 0;
     for (auto& e : m.Loot()) taken += e.taken;
-    CHECK(!grab(ItemId::Fish, Rarity::Common));
+    CHECK(!grab(ItemId::Milk, Rarity::Common));                                    // the Milk stack is full
     size_t takenAfter = 0;
     for (auto& e : m.Loot()) takenAfter += e.taken;
-    CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(kMaxPotions));
+    CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(PotionStackMax(ItemId::Milk)));
+    CHECK(grab(ItemId::Fish, Rarity::Common) && grab(ItemId::Bug, Rarity::Common) && grab(ItemId::GreenPotion, Rarity::Common) && grab(ItemId::SmallShieldPotion, Rarity::Common));
+    CHECK(!grab(ItemId::BlueFire, Rarity::Uncommon));                              // a sixth kind has no slot
+
+    // Drinking the stack in hand, dropping the weapon in hand, and the wallet cap.
+    {
+        PlayerState* q = m.Find(1000);
+        q->armor = 0;
+        const size_t before = q->potions.size();
+        CHECK(m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common) && q->armor > 0.9f && q->potions.size() == before - 1);
+        CHECK(!m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common));                  // none left
+        q->weapon = {ItemId::MasterSword, Rarity::Epic};
+        q->reserve.clear();
+        CHECK(m.DropWeapon(1000) && q->weapon.item == ItemId::BasicSword);
+        CHECK(!m.DropWeapon(1000));                                                           // the starter sword stays
+        q->rupees = kWalletMax;
+        CHECK(!grab(ItemId::Rupees, Rarity::Common) || q->rupees == kWalletMax);
+    }
 
     // Everyone starts with 7 hearts; opening a chest spills a few rupees, and some Rare chests hold a Piece of Heart.
     {
@@ -1380,7 +1401,37 @@ static void TheSignInTheMiddle() {
 }
 
 static void HireableAllies() {
-    // Four allies, one of each kind, free and healthy, placed apart and on valid ground.
+    {
+        namespace J=royale::jones_model;
+        CHECK(J::kTriangleCount >= 1800 && J::kTriangleCount <= 5000);
+        unsigned corners=0;
+        for(const auto& p:J::kParts) { CHECK(p.first==corners && p.count%3==0);corners+=p.count; }
+        CHECK(corners==std::size(J::kCorners) && corners==J::kTriangleCount*3);
+        CHECK(std::size(J::kParents)==J::kPartCount);
+        for(unsigned p=0;p<J::kPartCount;++p) CHECK(J::kParents[p]>=-1 && J::kParents[p]<static_cast<int>(p));
+        namespace G=royale::jones_guns;
+        CHECK(std::size(G::kGuns)==4 && G::kAttachPart<J::kPartCount && G::kPositionScale==J::kPositionScale);
+        unsigned gunCorners=0;
+        for(const auto& g:G::kGuns) { CHECK(g.first==gunCorners && g.count>0 && g.count%3==0);gunCorners+=g.count; }
+        CHECK(gunCorners==std::size(G::kCorners));
+        for(int clip=J::kIdle;clip<=J::kHurt;++clip) {
+            const auto& c=J::kClips[clip];
+            CHECK(c.duration>0 && c.frames>1 && c.first+c.frames*J::kPartCount<=std::size(J::kRotations));
+            for(unsigned p=0;p<J::kPartCount;++p) {
+                const auto r=J::Sample(clip,p,c.duration*.37f);CHECK(std::isfinite(r.x) && std::isfinite(r.y) && std::isfinite(r.z));
+                const auto end=J::Sample(clip,p,c.duration),after=J::Sample(clip,p,c.duration*2);
+                CHECK(std::fabs(end.x-after.x)<.0001f);
+            }
+        }
+        float jawMotion=0,browMotion=0;
+        for(int i=0;i<20;++i) {
+            jawMotion=std::max(jawMotion,std::fabs(J::Sample(J::kGreet,9,J::kClips[J::kGreet].duration*i/20).x));
+            browMotion=std::max(browMotion,std::fabs(J::Sample(J::kHurt,10,J::kClips[J::kHurt].duration*i/20).y));
+        }
+        CHECK(jawMotion>.1f && browMotion>.1f); // actual authored facial channels
+        for(const auto& s:royale::jones_snd::kClips) { int peak=0;for(unsigned i=0;i<s.count;++i) peak=std::max(peak,std::abs(static_cast<int>(s.data[i])));CHECK(s.count>1000 && peak>1000 && peak<32767); }
+    }
+    // Five allies, one of each kind, free and healthy, placed apart and on valid ground.
     {
         const Circle map = {{0, 0}, 3000};
         auto valid = [](Vec2 p) { return p.x > -2500.0f; };
@@ -1394,6 +1445,44 @@ static void HireableAllies() {
         CHECK(GenerateAllySpots(4, map, layout.pois, valid).size() == spots.size() && Distance(GenerateAllySpots(4, map, layout.pois, valid)[2], spots[2]) < 0.01f);
     }
     for (int i = 0; i < kAllyCount; i++) CHECK(AllyOf(static_cast<AllyKind>(i)).price >= 30 && AllyOf(static_cast<AllyKind>(i)).maxHealth >= 3 && std::string(AllyOf(static_cast<AllyKind>(i)).name).size() > 2);
+    // Jones is a distinct fifth ally and uses the same authoritative hire/follow/combat rules.
+    {
+        CHECK(static_cast<int>(AllyKind::Jones) == 4 && kAllyCount == 5);
+        Simulation sj = Duel(611, {0,0}, {0,1900}); Match& mj = sj.match;
+        auto* p = mj.Find(1); mj.Find(1000)->stunUntil = 1e9f;
+        auto& j = mj.MutableAllies()[4];
+        CHECK(j.kind == AllyKind::Jones && j.health == AllyOf(AllyKind::Jones).maxHealth);
+        j.pos = {100,0}; p->rupees = 99; CHECK(!mj.HireAlly(1,4) && p->rupees == 99);
+        p->rupees = 300; j.pos = {600,0}; CHECK(!mj.HireAlly(1,4) && p->rupees == 300);
+        j.pos = {100,0}; CHECK(mj.HireAlly(1,4) && j.owner == 1 && p->rupees == 200);
+        CHECK(!mj.HireAlly(1,4) && p->rupees == 200);
+        mj.MutableAllies()[0].pos = {100,0}; CHECK(mj.HireAlly(1,0));
+        mj.MutableAllies()[1].pos = {100,0}; CHECK(!mj.HireAlly(1,1));
+        p->pos = {1400,0}; Run(sj,12); CHECK(Distance(j.pos,p->pos) < 450);
+        auto* target=mj.Find(1000);target->pos={j.pos.x+250,j.pos.z};target->invulnUntil=0;
+        j.attackReadyAt=0;const float hp=target->health;
+        CHECK(mj.AllyStrike(j,target->id) && target->health < hp && p->damageDealt > 0);
+        CHECK(j.weapon==static_cast<uint8_t>(JonesGun::Carbine));
+        for(const auto& shot:std::array<std::pair<float,JonesGun>,4>{{{150,JonesGun::Carbine},{400,JonesGun::Assault},{700,JonesGun::Burst},{1000,JonesGun::Scoped}}}) {
+            j.attackReadyAt=0;target->health=target->maxHealth;target->armor=0;target->hasShield=false;target->gearMask=0;
+            target->rollUntil=target->adultUntil=target->dmgTakenUntil=target->frozenUntil=0;target->pos={j.pos.x+shot.first,j.pos.z};
+            CHECK(mj.AllyStrike(j,target->id) && j.weapon==static_cast<uint8_t>(shot.second));
+            CHECK(std::fabs(target->maxHealth-target->health-kJonesGuns[j.weapon].damage*kPlayerDamageScale)<.001f);
+            CHECK(!mj.AllyStrike(j,target->id)); // rifle cooldown enforced
+        }
+        target->pos={j.pos.x+1300,j.pos.z};j.attackReadyAt=0;CHECK(!mj.AllyStrike(j,target->id));
+        auto& kokiri=mj.MutableAllies()[0];kokiri.pos=j.pos;kokiri.weapon=0;kokiri.attackReadyAt=0;
+        target->pos={j.pos.x+300,j.pos.z};CHECK(mj.AllyStrike(kokiri,target->id) && kokiri.weapon==0);
+        const auto lootBefore=mj.Loot().size();
+        mj.ReleaseAlly(j,false); CHECK(!j.Hired() && j.alive);
+        CHECK(mj.Loot().size()==lootBefore);
+        mj.ReleaseAlly(j,true);CHECK(!j.alive && mj.Loot().size()==lootBefore); // private guns never become drops
+        j.alive=true;j.owner=1;
+        p->weapon={ItemId::BasicSword,Rarity::Common};p->reserve.clear();p->potions.clear();p->gearMask=0;
+        p->hasShield=p->hasAbility=false;p->ammo.fill(0);p->rupees=0;p->invulnUntil=0;
+        CHECK(mj.Damage(1,100,1000));
+        CHECK(!j.Hired() && j.alive && mj.Loot().size()==lootBefore); // owner death leaves Jones's rifles with him
+    }
     Simulation sim = Duel(11, {0, 0}, {0, 1900});
     Match& m = sim.match;
     CHECK(m.Allies().size() == static_cast<size_t>(kAllyCount));
@@ -2398,7 +2487,7 @@ static void FortniteMapIsSound() {
     CHECK(fn::kMapId < kMapCount && std::string(MapOf(fn::kMapId).name) == "Fortnite Map" && MapOf(fn::kMapId).scene == kHyruleFieldScene);
     const fn::Mesh m = fn::BuildCollision();
     CHECK(m.verts.size() == static_cast<size_t>(fn::kVerts * fn::kVerts) && m.polys.size() == static_cast<size_t>(fn::kCells * fn::kCells * 2));
-    CHECK(m.verts.size() < 8192 && m.polys.size() < 32767);   // the game's vertex numbers have 13 bits, its triangle numbers 15
+    CHECK(m.verts.size() <= royale::engine::kCollisionMaxVertices && m.polys.size() <= royale::engine::kCollisionMaxPolygons);   // 32-bit numbers (patches/0029)
     // Every triangle points up, has a unit normal and sits on its plane; and the ground height query agrees with the triangles.
     bool sound = true;
     float steep = 0;
@@ -2865,6 +2954,30 @@ static void IslandPuddles() {
 // Snow that is walked in: a footprint is a smooth dent (deepest in the middle, a low rim just outside, nothing far away, no creases), the deepest pit
 // wins where prints overlap, prints fill in over time, a hard landing digs a bigger crater than a soft one, feet alternate sides of the line walked,
 // and the new puddle, snow and bank meshes are smooth (soft rim alpha on the puddle, no step at the edge of the snow, lip that stands above the ground).
+// A patch lies on the plane of the ground under it: it takes a slope's lean, shrinks where a wall or ledge rises through it, and is left out when
+// even half its size does not lie flat.
+static void GroundFit() {
+    namespace gp = royale::ground;
+    auto fit = [](auto heightAt, float a, float b, float yaw) {
+        float h[gp::kFitPoints], ox[gp::kFitPoints], oz[gp::kFitPoints];
+        bool have[gp::kFitPoints];
+        for (int i = 0; i < gp::kFitPoints; i++) { gp::FitOffset(i, a, b, yaw, &ox[i], &oz[i]); have[i] = heightAt(ox[i], oz[i], &h[i]); }
+        return gp::FitPlane(h, have, ox, oz, a, b);
+    };
+    const gp::Fit level = fit([](float, float, float* y) { *y = 40.0f; return true; }, 80.0f, 50.0f, 0.7f);
+    CHECK(level.ok && level.scale == 1.0f && std::fabs(level.y - 40.0f) < 1e-3f && std::fabs(level.sx) < 1e-4f && level.lift < 1e-3f);
+    const gp::Fit slope = fit([](float x, float z, float* y) { *y = 10.0f + 0.3f * x - 0.2f * z; return true; }, 90.0f, 60.0f, 2.1f);
+    CHECK(slope.ok && slope.scale == 1.0f && std::fabs(slope.sx - 0.3f) < 1e-3f && std::fabs(slope.sz + 0.2f) < 1e-3f && std::fabs(slope.y - 10.0f) < 1e-2f);
+    const gp::Fit wall = fit([](float x, float, float* y) { *y = x > 45.0f ? 200.0f : 0.0f; return true; }, 90.0f, 90.0f, 0.0f);   // a wall across the far side
+    CHECK(wall.ok ? wall.scale < 1.0f : true);
+    const gp::Fit inWall = fit([](float x, float, float* y) { *y = x > 10.0f ? 200.0f : 0.0f; return true; }, 90.0f, 90.0f, 0.0f);   // a wall right by the middle
+    CHECK(!inWall.ok);
+    const gp::Fit edge = fit([](float x, float, float* y) { *y = 0.0f; return x < 30.0f; }, 80.0f, 80.0f, 0.0f);   // no floor past a cliff edge
+    CHECK(!edge.ok);
+    const gp::Fit cliff = fit([](float x, float, float* y) { *y = 3.0f * x; return true; }, 80.0f, 80.0f, 0.0f);   // far too steep
+    CHECK(!cliff.ok);
+}
+
 static void SnowDeformation() {
     namespace gp = royale::ground;
     const gp::Dent d = {100.0f, 50.0f, 0.7f, 11.0f, 6.5f, 8.0f};
@@ -3748,11 +3861,21 @@ static void ShockwaveGrenade() {
         user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
         user->attackReadyAt = 0;
         const float before = target->health;
+        m.DrainEvents();
         CHECK(m.Attack(1, 1000).ok && target->health == before && !m.Stunned(*target));
         CHECK(!m.Stunned(*user) && user->health == user->maxHealth);
         CHECK(!m.Attack(1, 1000).ok);   // recharging: a grenade is slow
+        bool marked = false;   // the blast is marked at the target's feet, after the fuse
+        for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(StrikeStyle::Shockwave))
+            marked = std::fabs(e.x - 300.0f) < 0.01f && std::fabs(e.z) < 0.01f && std::fabs(e.health - kShockwaveFuse) < 0.001f;
+        CHECK(marked);
+        CHECK(target->pos.x == 300.0f);   // not before the fuse runs out
+        for (int i = 0; i < static_cast<int>(kShockwaveFuse * kTickHz) + 2; i++) m.Tick(kDt);
+        // The bot is thrown away from the centre (people launch themselves on their own screens), and nobody is hurt.
+        CHECK(target->alive && target->health == before && Distance(target->pos, {300, 0}) > kShockwaveBotShove * 0.25f);
+        CHECK(user->health == user->maxHealth && Distance(user->pos, {0, 0}) < 0.01f);
     }
-    {   // Throws with no locked target still announce a blast downrange for every client.
+    {   // Thrown with nobody in reach it stops just ahead, inside its own blast, so it launches the thrower; every client is told.
         Simulation sim = Duel(5, {100, 0}, {0, 0});
         Match& m = sim.match;
         PlayerState* user = m.Find(1);
@@ -3763,7 +3886,8 @@ static void ShockwaveGrenade() {
         CHECK(m.ShootAtNothing(1).ok);
         bool announced = false;
         for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(StrikeStyle::Shockwave)) {
-            announced = true; CHECK(std::fabs(e.x) < 0.01f && std::fabs(e.z - 520.0f) < 0.01f && e.health > 0.0f);
+            announced = true; CHECK(std::fabs(e.x) < 0.01f && std::fabs(e.z - kShockwaveSelfThrow) < 0.01f && e.health > 0.0f);
+            CHECK(e.amount >= kShockwaveSelfThrow + 20.0f);   // close enough that the thrower is inside the blast: it launches them
         }
         CHECK(announced);
     }
@@ -4648,7 +4772,7 @@ static void BlocksAreBakedIntoTheCollision() {
     const fn::Mesh withBlocks = fn::BuildCollision();
     fn::gBlocks.clear();
     CHECK(withBlocks.verts.size() == plain.verts.size() + 16 && withBlocks.polys.size() == plain.polys.size() + 20);
-    CHECK(withBlocks.verts.size() < 8191);
+    CHECK(withBlocks.verts.size() <= royale::engine::kCollisionMaxVertices);
     int tops = 0, sides = 0;
     for (size_t i = plain.polys.size(); i < withBlocks.polys.size(); i++) {
         const fn::Poly& p = withBlocks.polys[i];
@@ -4675,7 +4799,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();

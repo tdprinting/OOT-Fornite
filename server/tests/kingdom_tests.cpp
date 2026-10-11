@@ -2,6 +2,7 @@
 #include "game_server.h"
 #include "loopback.h"
 #include "fortnite_map.h"
+#include "engine_limits.h"
 #include "kingdom_layout.h"
 #include "kingdom_model.h"
 #include <cstdio>
@@ -35,15 +36,15 @@ int main() {
     fortnite::UseTerrainForMap(kKingdomMapIndex);
     CHECK(fortnite::gTerrainMapId==kKingdomMapIndex && fortnite::gHeightData==kingdom::kHeights);
     auto collision=fortnite::BuildCollision();
-    // The game keeps a vertex number in 13 bits in the first two corners of a triangle (the third has 16: patches/0025).
-    CHECK(collision.verts.size()<65536 && collision.polys.size()<65536);
-    CHECK(collision.verts.size()>8191);   // this map needs the third corner's extra bits, so keep the test honest about it
+    // Vertex and triangle numbers are 32 bit in the game (patches/0029, shared/engine_limits.h).
+    CHECK(collision.verts.size()<=royale::engine::kCollisionMaxVertices && collision.polys.size()<=royale::engine::kCollisionMaxPolygons);
+    CHECK(collision.verts.size()>8191);   // more than the old 13-bit limit, so the wide numbers are really used
     size_t highCorners=0;
     for (const auto& p:collision.polys) {
-        CHECK(p.a<8191 && p.b<8191 && p.c<collision.verts.size());
+        CHECK(p.a<collision.verts.size() && p.b<collision.verts.size() && p.c<collision.verts.size());
         CHECK(p.surface<sizeof(kingdom::kSurfaces)/sizeof(kingdom::kSurfaces[0]));
         CHECK(std::abs(p.nx)+std::abs(p.ny)+std::abs(p.nz)>100);
-        highCorners+=p.c>=8191;
+        highCorners+=p.a>=8191||p.b>=8191||p.c>=8191;
     }
     CHECK(highCorners>0);
     CHECK(sizeof(kingdom::kSurfaces)/sizeof(kingdom::kSurfaces[0])<=16);

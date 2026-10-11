@@ -124,6 +124,11 @@ void OnEmoteWheelInput() {
     const royale::HudState hud = gSession.Hud();
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
+    // A consumable in hand (taken with C-Down or by tapping its slot): B drinks it, so the press is kept from the game or Link would swing the weapon.
+    if (gHandStack >= 0 && LiveAndAlive(hud) && InField()) {
+        if (in.press.button & BTN_B) gStackBPressed = true;
+        in.press.button &= ~BTN_B; in.cur.button &= ~BTN_B; in.rel.button &= ~BTN_B;
+    }
     // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
@@ -169,7 +174,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceJones, kVoiceJonesAttack, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -1114,3 +1119,18 @@ void ForgetCarts() {
     gRide.player = nullptr;
 }
 
+
+
+void PlayJonesSound(int clip, float x, float z, int weapon = 0) {
+    namespace S=royale::jones_snd;
+    const bool attack=clip==2;
+    if(attack && weapon>0) clip=weapon==1?4:weapon==2?5:6;
+    if (clip<0 || clip>=S::kClipCount || !gPlayState) return;
+    Player* player=GET_PLAYER(gPlayState);if(!player) return;
+    const float d=std::hypot(player->actor.world.pos.x-x,player->actor.world.pos.z-z);
+    const float volume=GameVolume(false)*.4f*std::clamp(1.0f-d/1000.0f,0.0f,1.0f);
+    if(volume<.01f) return;
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    if(!cache[clip]) cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(attack?kVoiceJonesAttack:kVoiceJones,cache[clip],false,S::kRate,false,volume);
+}

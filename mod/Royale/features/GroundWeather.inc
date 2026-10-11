@@ -200,6 +200,29 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     return &gFloraSpots.emplace(key, spot).first->second;
 }
 
+// How the ground lies under a ground patch (shared/ground_patches.h, FitPlane): measured once per patch and size, then remembered. nullptr = not
+// measured yet (the budget ran out); a Fit with ok false = this patch does not lie flat anywhere on it, so it is left out.
+std::unordered_map<uint64_t, royale::ground::Fit> gPatchFits;
+int gPatchFitBudget = 0;
+const royale::ground::Fit* PatchFitAt(int kind, const royale::ground::Patch& patch, const royale::ground::Shape& sh) {
+    namespace gp = royale::ground;
+    const uint64_t key = (static_cast<uint64_t>(kind) << 60) ^ (static_cast<uint64_t>(patch.cx + 65536) << 36) ^ (static_cast<uint64_t>(patch.cz + 65536) << 16) ^
+                         (static_cast<uint64_t>(sh.a / 12.0f) << 8) ^ (static_cast<uint64_t>(sh.b / 12.0f) << 3) ^ static_cast<uint64_t>(std::lround(sh.yaw * 1.2f) & 7);
+    auto it = gPatchFits.find(key);
+    if (it != gPatchFits.end()) return &it->second;
+    if (gPatchFitBudget <= 0) return nullptr;
+    gPatchFitBudget--;
+    const float x = patch.x + sh.dx, z = patch.z + sh.dz;
+    float h[gp::kFitPoints], ox[gp::kFitPoints], oz[gp::kFitPoints];
+    bool have[gp::kFitPoints];
+    for (int i = 0; i < gp::kFitPoints; i++) {
+        gp::FitOffset(i, sh.a, sh.b, sh.yaw, &ox[i], &oz[i]);
+        have[i] = RawFloorAt(x + ox[i], z + oz[i], &h[i]);
+    }
+    if (gPatchFits.size() > 4000) gPatchFits.clear();
+    return &gPatchFits.emplace(key, gp::FitPlane(h, have, ox, oz, sh.a, sh.b)).first->second;
+}
+
 constexpr float kGrassCell = 95.0f, kTreeCell = 380.0f, kDecorCell = 170.0f;
 // The Fortnite Map's trees stand where its texture has them painted (fortnite::CoverAt): thick in the woods, a lone one here and there on the
 // meadows, none on the roads or in the towns. Its cells are smaller, so the woods can be dense.
@@ -450,17 +473,17 @@ void DrawFlora(PlayState* play) {
 // snow lies in long drifts. Where each is comes from the map and a hash of its cell, so nothing is sent; only the ones near the player are drawn.
 royale::ground::Field gGround;   // the patches worked out so far, forgotten when the world changes (ForgetFloraGround)
 
-void ForgetFloraGround() { gGround.Clear(); }
+void ForgetFloraGround() { gGround.Clear(); gPatchFits.clear(); }
 
 void RefreshFloraWorld(PlayState* play) {
-    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gGround.Clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
+    if (play->sceneNum != gFloraScene) { gFloraScene = play->sceneNum; gFloraSpots.clear(); gPatchFits.clear(); gGround.Clear(); gSnowCover = 0.0f; gPuddleCover = 0.0f; }
     static float lastSig = 0.0f;
     float sig = 0.0f;
     if (gSession.Client()) {
         const auto& pois = gSession.Client()->Pois();
         sig = static_cast<float>(pois.size()) + static_cast<float>(gSession.Client()->Props().size()) * 1000.0f + (pois.empty() ? 0.0f : pois[0].center.x * 0.37f + pois.back().center.z * 0.11f);
     }
-    if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); gGround.Clear(); }
+    if (sig != lastSig) { lastSig = sig; gFloraSpots.clear(); gPatchFits.clear(); gGround.Clear(); }
 }
 
 // Something lying on (possibly gently sloping) ground: stretched `a` along its long axis and `b` across it, `rise` as tall as it is wide, turned by `yaw`.
@@ -622,6 +645,7 @@ void DrawGroundPatches(PlayState* play) {
     const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
     const float t = static_cast<float>(ImGui::GetTime());
     gFloraBudget = 48;
+    gPatchFitBudget = 4;
     // Who is walking where (tracked frame to frame for speed), and the trail the snow keeps.
     gWalkFrame++;
     const bool paused = play->pauseCtx.state != 0;
@@ -701,8 +725,15 @@ void DrawGroundPatches(PlayState* play) {
                 if (m == nullptr || m->dl.empty()) continue;
                 const float f = std::clamp((layer.reach - d) / (layer.reach * 0.25f), 0.0f, 1.0f), fade = f * f * (3.0f - 2.0f * f);
                 if (fade < 0.02f) continue;
-                const float y = spot->y + spot->sx * sh.dx + spot->sz * sh.dz;
-                const float shrink = layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * fade : fade;   // heaps sink into the ground at a distance, flat things fade out
+                // Puddles only lie on level ground (the spot rule). The rest are laid on the plane of the ground under them, shrunk where a wall or
+                // ledge would poke through, and left out where the ground is too steep or broken to lie on.
+                float slx = spot->sx, slz = spot->sz, y = spot->y + spot->sx * sh.dx + spot->sz * sh.dz, fitScale = 1.0f;
+                if (layer.kind != gp::Kind::Puddle) {
+                    const gp::Fit* fit = PatchFitAt(static_cast<int>(layer.kind), patch, sh);
+                    if (fit == nullptr || !fit->ok) continue;
+                    slx = fit->sx; slz = fit->sz; y = fit->y + fit->lift; fitScale = fit->scale;
+                }
+                const float shrink = (layer.kind == gp::Kind::Snow ? 0.6f + 0.4f * fade : fade) * fitScale;   // heaps sink into the ground at a distance, flat things fade out
                 // Is anyone inside this patch? (an ellipse: along its long axis `a`, across it `b`)
                 const float ys = std::sin(sh.yaw), yc = std::cos(sh.yaw);
                 auto inside = [&](const Walker& w, float grow) {
@@ -759,7 +790,7 @@ void DrawGroundPatches(PlayState* play) {
                         if (dents.size() > 40) dents.erase(dents.begin(), dents.end() - 40);   // the newest 40
                         if (!dents.empty()) dented = DentedSnow(play, m, x, z, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, dents);
                     }
-                    DrawGroundPatch(play, m, x, y - 1.2f, z, spot->sx, spot->sz, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, -1, dented);
+                    DrawGroundPatch(play, m, x, y - 1.2f, z, slx, slz, sh.yaw, sh.a * shrink, sh.rise * shrink * lift, sh.b * shrink, -1, dented);
                     continue;
                 }
                 if (layer.kind == gp::Kind::Puddle && !frozen) {   // wading through: a splash on the way in, rings while moving
@@ -787,11 +818,11 @@ void DrawGroundPatches(PlayState* play) {
                     const GpuMesh* bank = GpuMeshFor(royale::MeshKind::Ground, gp::BankVariant(patch));
                     if (bank != nullptr && !bank->dl.empty()) {
                         const float growth = std::clamp(std::sqrt(sh.a * sh.b) / 70.0f, 0.35f, 1.0f);   // a puddle that is only just forming has hardly any bank
-                        DrawGroundPatch(play, bank, x, y + 0.5f, z, spot->sx, spot->sz, sh.yaw, sh.a, std::min(deform, 1.6f) * growth * fade, sh.b, -1);
+                        DrawGroundPatch(play, bank, x, y + 0.5f, z, slx, slz, sh.yaw, sh.a, std::min(deform, 1.6f) * growth * fade, sh.b, -1);
                     }
                 }
-                DrawGroundPatch(play, m, x, y + 1.0f, z, spot->sx, spot->sz, sh.yaw, sh.a, 1.0f, sh.b, alpha);
-                if (layer.kind == gp::Kind::Puddle && !frozen && d < 900.0f && gPuddleSheens.size() < 48) gPuddleSheens.push_back({ x, y + 1.3f, z, spot->sx, spot->sz, sh.yaw, sh.a, sh.b, fade });
+                DrawGroundPatch(play, m, x, y + 1.0f, z, slx, slz, sh.yaw, sh.a * fitScale, 1.0f, sh.b * fitScale, alpha);
+                if (layer.kind == gp::Kind::Puddle && !frozen && d < 900.0f && gPuddleSheens.size() < 48) gPuddleSheens.push_back({ x, y + 1.3f, z, slx, slz, sh.yaw, sh.a, sh.b, fade });
                 if (layer.kind != gp::Kind::Puddle || !raining || frozen || ripple == nullptr || ripple->dl.empty() || d > 650.0f) continue;
                 // Every drop that lands on a puddle rings out across it: each ring grows and fades over 0.8 s, then starts again somewhere else on the puddle.
                 const int rings = std::clamp(static_cast<int>((1.0f + rainNow * 3.0f) * std::sqrt(sh.a * sh.b) / 90.0f), 1, 6);
@@ -802,7 +833,7 @@ void DrawGroundPatches(PlayState* play) {
                     const float ang = Flora01(patch.cx * 31 + j, patch.cz + drop, 61) * 6.2831853f, rr = std::sqrt(Flora01(patch.cx + drop, patch.cz * 17 + j, 62)) * 0.6f;
                     const float lx = std::cos(ang) * rr * sh.a, lz = std::sin(ang) * rr * sh.b;   // along and across the puddle's long axis
                     const float ox = lx * yc + lz * ys, oz = -lx * ys + lz * yc;
-                    DrawGroundPatch(play, ripple, x + ox, y + 1.6f + spot->sx * ox + spot->sz * oz, z + oz, spot->sx, spot->sz, 0.0f,
+                    DrawGroundPatch(play, ripple, x + ox, y + 1.6f + slx * ox + slz * oz, z + oz, slx, slz, 0.0f,
                                     40.0f + 130.0f * age, 1.0f, 40.0f + 130.0f * age, static_cast<int>(190.0f * (1.0f - age) * fade));
                 }
             }

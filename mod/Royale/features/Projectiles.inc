@@ -7,6 +7,7 @@ struct Projectile {
     uint32_t variant;
     bool explodes;
     royale::Rarity rarity = royale::Rarity::Common;
+    float ox = 0, oz = 0, reach = 0, age = 0;   // the Shockwave Grenade: where it left the hand and how far along its heading it comes to rest
 };
 std::vector<Projectile> gProjectiles;
 Actor* gProjectileActor = nullptr;
@@ -17,9 +18,12 @@ struct Reveal { float x, y, z; int gid; float age; royale::Rarity rarity; };
 std::vector<Reveal> gReveals;
 constexpr float kRevealSeconds = 3.2f;
 
-void LaunchSelfFromShockwave(Player* player, float x, float z, royale::Rarity rarity);
+constexpr float kGrenadeThrowVy = -120.0f;   // thrown down at the ground: it touches down about 0.18 s after leaving the hand (frame 599 after 592)
+constexpr float kGrenadeGravity = 1400.0f;
+constexpr float kGrenadeBounce = 0.45f;      // each bounce keeps this much of the fall: about three hops with dust, then it rolls (frames 599-617)
+constexpr float kGrenadeRadius = 17.5f;      // the ball as drawn (its 14-unit model at 1.25)
 
-void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity) {
+void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity, float reach) {
     using royale::ItemId;
     if (!InField() || gPlayState == nullptr) return;
     const royale::WeaponStats w = royale::WeaponOf(weapon);
@@ -36,17 +40,26 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
         case ItemId::Bombs: variant = 5; speed = 650.0f; gravity = 760.0f; explodes = true; spin = 6.0f; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::Bombchus: variant = 6; speed = 600.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::HomingBombchus: variant = 7; speed = 700.0f; explodes = true; sfx = NA_SE_IT_BOMB_IGNIT; break;
-        case ItemId::ShockwaveGrenade: variant = 10; speed = 650.0f; gravity = 760.0f; explodes = true; spin = 6.0f; sfx = NA_SE_IT_BOMB_IGNIT; break;
         case ItemId::DekuNuts: variant = 8; speed = 1000.0f; spin = 9.0f; sfx = NA_SE_IT_SLING_SHOT; break;
         case ItemId::Boomerang: variant = 9; speed = 900.0f; spin = 20.0f; sfx = NA_SE_IT_BOOMERANG_THROW; break;
         default: break;
     }
     const float base = yaw * (3.14159265f / 32768.0f);
+    if (weapon == ItemId::ShockwaveGrenade) {
+        // The bounceball (docs/BOUNCEBALL-MECHANICS.md 2): an overhand throw down at the ground ahead. Along the ground it slows to a stop at `reach`
+        // (where the server marks the blast) just as the fuse runs out; up and down it falls for real and bounces off the floor with a puff of dust.
+        Projectile p = { x, y, z, std::sin(base), kGrenadeThrowVy, std::cos(base), royale::kShockwaveFuse, kGrenadeGravity, 0.0f, 10, true, rarity };
+        p.ox = x; p.oz = z;
+        p.reach = std::clamp(reach > 0.0f ? reach : royale::kShockwaveSelfThrow, 0.0f, royale::WeaponOf(weapon).range * 1.1f);
+        if (gProjectiles.size() < 160) gProjectiles.push_back(p);
+        Vec3f at = { x, y, z };
+        Audio_PlaySoundGeneral(NA_SE_IT_BOMB_IGNIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        return;
+    }
     const int count = weapon == ItemId::TripleSlingshot ? 3 : 1;
     for (int i = 0; i < count; i++) {
         const float a = base + (count == 1 ? 0.0f : (i - 1) * 0.11f);
         Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes, rarity };
-        if (variant == 10) p.vy = 250.0f; // land near the end of its 520-unit throw
         if (gProjectiles.size() < 160) gProjectiles.push_back(p);
     }
     Vec3f at = { x, y, z };
@@ -162,6 +175,7 @@ bool DrawRealProjectile(PlayState* play, const Projectile& p) {
 
 int GidFor(royale::ItemId id);
 float GidScale(int gid);
+constexpr float kLootSizeScale = 0.5f;   // items on the ground are drawn at half the game's own item-drop size
 constexpr int kGidGilded = 1001;    // the Gilded Sword's own model (shared/gilded_sword_model.h), see DrawItemModel
 constexpr int kGidGrenade = 1000;   // not one of the game's models: the Shockwave Grenade's own (shared/meshes.h), see DrawItemModel
 
@@ -201,6 +215,63 @@ void DrawItemModel(PlayState* play, int gid) {
 }
 void Sparkle(PlayState* play, const Vec3f& at, royale::Rarity rarity);
 
+// The bounceball in flight (docs/BOUNCEBALL-MECHANICS.md 2-3). It travels along its heading (vx, vz hold the heading, not a speed) and slows to a
+// stop `reach` away exactly as the fuse runs out, so it rests where the server marks the blast; up and down it really falls and bounces. Returns false
+// when the fuse is out. The blast is not drawn here: it is the server's Strike (StrikeBlast in RoyaleBosses.h), which everyone sees at the same spot
+// and time, and which launches whoever is inside it (UpdateShockwaveLaunches in Terrain.inc).
+bool UpdateGrenade(PlayState* play, Projectile& p, float dt) {
+    p.age += dt;
+    p.life -= dt;
+    if (p.life <= 0.0f) return false;
+    const float u = std::clamp(p.age / royale::kShockwaveFuse, 0.0f, 1.0f);
+    const float along = p.reach * (1.0f - (1.0f - u) * (1.0f - u));   // quick out of the hand, easing to a stop
+    const float nx = p.ox + p.vx * along, nz = p.oz + p.vz * along;
+    const float moved = std::hypot(nx - p.x, nz - p.z);
+    p.x = nx; p.z = nz;
+    p.spin += moved / kGrenadeRadius;   // it rolls over the ground, it does not slide
+    p.vy -= p.gravity * dt;
+    p.y += p.vy * dt;
+    float floorY = p.y - 1000.0f;
+    const bool floor = RawFloorAt(p.x, p.z, &floorY);
+    if (floor && p.y <= floorY) {
+        p.y = floorY;
+        if (p.vy < -90.0f) {   // a bounce: a puff of dust where it touched (frames 599-617)
+            Vec3f pos = { p.x, floorY + 2.0f, p.z }, vel = { 0.0f, 0.6f, 0.0f }, accel = { 0.0f, 0.12f, 0.0f };
+            Color_RGBA8 prim = { 235, 225, 205, 255 }, env = { 170, 150, 130, 255 };
+            EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, 60, 6, 12, 0);
+            p.vy = -p.vy * kGrenadeBounce;
+        } else {
+            p.vy = 0.0f;   // rolling
+        }
+    }
+    const bool rolling = floor && p.y <= floorY + 1.0f;
+    if (moved > 0.4f && (play->gameplayFrames & 1)) {   // a purple streak behind it: on the ground while it rolls (frames 884-936), a glint in the air
+        Glitter(play, p.x - p.vx * 10.0f, (rolling ? floorY + 3.0f : p.y + kGrenadeRadius), p.z - p.vz * 10.0f, { 240, 200, 255, 255 }, { 150, 60, 255, 255 }, 0.0f,
+                rolling ? 70 : 50, 10);
+    }
+    return true;
+}
+
+// The ball itself: rolled about its own axis as it goes, its crystal and studs blinking faster as the fuse runs out, like the game's own bombs.
+void DrawGrenade(PlayState* play, const Projectile& p) {
+    const float left = std::clamp(p.life / royale::kShockwaveFuse, 0.0f, 1.0f);
+    const bool lit = std::sin(p.age * (10.0f + 34.0f * (1.0f - left))) > 0.0f;
+    const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Grenade, lit ? 1 : 0);
+    if (mesh == nullptr || mesh->dl.empty()) return;
+    OPEN_DISPS(play->state.gfxCtx);
+    Matrix_Translate(p.x, p.y + kGrenadeRadius, p.z, MTXMODE_NEW);   // p.y is the bottom of the ball
+    Matrix_RotateY(std::atan2(p.vx, p.vz), MTXMODE_APPLY);
+    Matrix_RotateX(p.spin, MTXMODE_APPLY);                              // forward is +Z here: rolling forward turns it about X
+    Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
+    Matrix_Translate(0.0f, -15.5f, 0.0f, MTXMODE_APPLY);                // the model's centre (it is built standing on y 0)
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
+    gSPDisplayList(POLY_OPA_DISP++, const_cast<Gfx*>(mesh->dl.data()));
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 // What each other player last picked up, so it can be held up over their head while they show it off, as Link does.
 struct HeldFind { int gid; double at; };
 std::unordered_map<uint16_t, HeldFind> gLastFind;
@@ -214,7 +285,7 @@ void DrawHeldFinds(PlayState* play) {
         if (f == gLastFind.end() || st == gState.end() || actor == nullptr || f->second.gid < 0) continue;
         if (st->second.anim != static_cast<uint8_t>(royale::Anim::ItemGet) || now - f->second.at > kHeldFindSeconds) continue;
         const float size = actor->scale.y / 0.01f;   // grown players hold it higher
-        const float k = GidScale(f->second.gid) * 0.032f * size;   // the size the chest reveal settles at
+        const float k = GidScale(f->second.gid) * 0.032f * kLootSizeScale * size;   // the size the chest reveal settles at
         OPEN_DISPS(play->state.gfxCtx);
         Matrix_Translate(actor->world.pos.x, actor->world.pos.y + 62.0f * size, actor->world.pos.z, MTXMODE_NEW);
         Matrix_RotateY(BINANG_TO_RAD(actor->shape.rot.y), MTXMODE_APPLY);
@@ -225,6 +296,7 @@ void DrawHeldFinds(PlayState* play) {
 }
 
 void DrawWater(PlayState* play);   // the water section, further down
+void DrawChestLights(PlayState* play);   // the chests' glow and the light that comes out of an opened one (Effects)
 
 // The sky pass. patches/0022 calls this from the game's Play_Draw right after its own skybox and before the scene, so the sky is drawn behind
 // everything, like the game's skybox: without a depth test, and the world drawn over it afterwards. (Drawn with the world it had to be depth tested
@@ -258,7 +330,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
     }
     if (DebugOn(kDbgFoliage)) { Feat("draw: foliage"); GfxLayer layer(play, GfxLayerId::Foliage); DrawFlora(play); }
     if (DebugOn(kDbgScenery)) { Feat("draw: island scenery"); GfxLayer layer(play, GfxLayerId::Scenery); DrawIslandScenery(play); }
-    if (DebugOn(kDbgGroundPatches)) { Feat("draw: ground patches"); GfxLayer layer(play, GfxLayerId::Ground); DrawGroundPatches(play); }
+    { GfxLayer layer(play, GfxLayerId::Ground); if (DebugOn(kDbgGroundPatches)) { Feat("draw: ground patches"); DrawGroundPatches(play); } Feat("draw: chest lights"); DrawChestLights(play); }
     { GfxLayer layer(play, GfxLayerId::Shadows); DrawShadowsAndLights(play); }   // (switched off, it still gives back the game's round shadows)
     if (DebugOn(kDbgWater)) { GfxLayer layer(play, GfxLayerId::Water); DrawWater(play); }
     else DrawWater(play);   // (switched off: it only forgets its state)
@@ -286,7 +358,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         const float grow = std::min(1.0f, r.age / 0.6f);
         const Vec3f at = { r.x, r.y + 10.0f + ease * 70.0f, r.z };
         Sparkle(play, at, r.rarity);
-        const float k = GidScale(r.gid) * 0.0016f * (0.4f + 0.6f * grow) * 1.5f;
+        const float k = GidScale(r.gid) * 0.0016f * (0.4f + 0.6f * grow) * 1.5f * kLootSizeScale;
         OPEN_DISPS(play->state.gfxCtx);
         Matrix_Translate(at.x, at.y, at.z, MTXMODE_NEW);
         Matrix_RotateY(r.age * 2.4f, MTXMODE_APPLY);
@@ -297,6 +369,12 @@ void Projectile_Draw(Actor*, PlayState* play) {
     }
     for (size_t i = 0; i < gProjectiles.size();) {
         Projectile& p = gProjectiles[i];
+        if (p.variant == 10) {
+            if (!UpdateGrenade(play, p, dt)) { gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i)); continue; }
+            DrawGrenade(play, p);
+            i++;
+            continue;
+        }
         p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
         p.vy -= p.gravity * dt;
         p.life -= dt;
@@ -306,31 +384,14 @@ void Projectile_Draw(Actor*, PlayState* play) {
         if (p.life <= 0.0f || landed) {
             if (p.explodes && gPlayState != nullptr) {
                 Vec3f pos = { p.x, std::max(p.y, floorY) + 10.0f, p.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
-                if (p.variant == 10) {
-                    PowerFx(play, royale::ItemId::ShockwaveGrenade, pos, false, nullptr, royale::net::kNoPlayer16);
-                    LaunchSelfFromShockwave(GET_PLAYER(play), pos.x, pos.z, p.rarity);
-                    AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 190, 100, 255, 380.0f, 0.7f, 1);
-                } else {
-                    EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
-                }
-                if (p.variant != 10) AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 255, 170, 80, 380.0f, 0.7f, 1);
+                EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
+                AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 255, 170, 80, 380.0f, 0.7f, 1);
                 Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             }
             gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i));
             continue;
         }
         if (DrawRealProjectile(play, p)) { i++; continue; }
-        if (p.variant == 10) {
-            Matrix_Push();
-            Matrix_Translate(p.x, p.y, p.z, MTXMODE_NEW);
-            Matrix_RotateY(std::atan2(p.vx, p.vz), MTXMODE_APPLY);
-            Matrix_RotateZ(p.spin, MTXMODE_APPLY);
-            Matrix_Scale(1.25f, 1.25f, 1.25f, MTXMODE_APPLY);
-            DrawItemModel(play, kGidGrenade);
-            Matrix_Pop();
-            i++;
-            continue;
-        }
         const GpuMesh* mesh = GpuMeshFor(royale::MeshKind::Projectile, p.variant);
         if (mesh != nullptr && !mesh->dl.empty()) {
             const float horiz = std::hypot(p.vx, p.vz);
@@ -561,7 +622,7 @@ void Loot_Draw(Actor* actor, PlayState* play) {
     if (la.gid < 0) return;
     func_8002EBCC(actor, play, 0);   // the same highlights the game's own 3D drops get
     func_8002ED80(actor, play, 0);
-    const float k = GidScale(la.gid);
+    const float k = GidScale(la.gid) * kLootSizeScale;
     Matrix_Scale(k, k, k, MTXMODE_APPLY);
     DrawItemModel(play, la.gid);
 }
@@ -582,6 +643,8 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
     if (gLoot[index].gid >= 0) {   // the item's real model instead of the stand-in
         actor->draw = Loot_Draw;
         Actor_SetScale(actor, 0.03f);
+    } else {   // rupee and ammo piles keep the game's own drawing, at half its size like the rest
+        Actor_SetScale(actor, actor->scale.x * kLootSizeScale);
     }
     gLootOf[actor] = index;
     std::string label = LootLabel(l);
@@ -589,6 +652,7 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
 }
 
 void ClearLoot() {
+    gMyChestOpens.clear();
     for (auto& [idx, la] : gLoot) Actor_Kill(la.actor);
 }
 
@@ -613,7 +677,9 @@ void ReconcileLoot(const royale::HudState& hud) {
         if (la.chest) {
             // Chests clean up their own entry when the game destroys them (they have collision to remove first).
             if (known && loot[idx].taken && !la.opened) {
-                OpenChest(la);
+                const bool mine = gMyChestOpens.erase(idx) > 0 || dx * dx + dz * dz < 130.0f * 130.0f;   // (or it is right beside us)
+                OpenChest(la, mine);
+                if (!mine && dx * dx + dz * dz < 1800.0f * 1800.0f) SparkBurst(gPlayState, la.actor->world.pos.x, la.actor->world.pos.y + 40.0f, la.actor->world.pos.z, RarityColor(la.rarity), 6 + 4 * static_cast<int>(la.rarity), 3.0f + 0.7f * static_cast<int>(la.rarity));
                 const int gid = GidFor(static_cast<royale::ItemId>(loot[idx].item));
                 if (gid >= 0 && dx * dx + dz * dz < 1800.0f * 1800.0f && gReveals.size() < 8) gReveals.push_back({ la.actor->world.pos.x, la.actor->world.pos.y + 25.0f, la.actor->world.pos.z, gid, 0.0f, la.rarity });
             }

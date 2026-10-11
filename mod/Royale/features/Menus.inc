@@ -113,6 +113,11 @@ UiState& Ui() {
         gWaterRipples = CVarGetInteger(ROYALE_CVAR("WaterRipples"), 1) != 0;
         LoadShadowSettings();
         gWaterUnderAmt = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterUnderAmt"), 100), 0, 200) / 100.0f;
+        gWaterSparkle = CVarGetInteger(ROYALE_CVAR("WaterSparkle"), 1) != 0;
+        gWaterStreaks = CVarGetInteger(ROYALE_CVAR("WaterStreaks"), 1) != 0;
+        gWaterBands = CVarGetInteger(ROYALE_CVAR("WaterBands"), 1) != 0;
+        gWaterHaze = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterHaze"), 100), 0, 200) / 100.0f;
+        gWaterTone = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterTone"), 100), 0, 200) / 100.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);
         gMusicMode = ui.musicMode;
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
