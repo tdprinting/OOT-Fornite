@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 using namespace royale::water;
@@ -374,6 +375,25 @@ int main() {
         const double before = TimeUs(400, [&](int) { run(ref::ShadeWaterRef); });
         const double after = TimeUs(400, [&](int) { run(ShadeWater); });
         std::printf("shading per frame (2803 points): old %.1f us, new %.1f us (%.1fx)\n", before, after, before / after);
+    }
+    // ---- 4. the "what is under each point" lookups DrawWaterSheet now skips while the meshes have not moved (exact: the same values are kept).
+    //         A model of the old per-frame cost: 2803 hash lookups and copies out of the cell memory.
+    {
+        struct Cell { float surface, depth; bool have; };
+        std::unordered_map<uint64_t, Cell> cells[3];
+        std::vector<Cell> under[3];
+        auto key = [](int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); };
+        for (int l = 0; l < 3; l++)
+            for (int j = -40; j < 40; j++) for (int i = -40; i < 40; i++) cells[l][key(i, j)] = { float(i), float(j), ((i ^ j) & 3) != 0 };
+        const double lookups = TimeUs(2000, [&](int) {
+            for (int l = 0; l < 3; l++) {
+                const int V = kLevels[l].V;
+                under[l].assign(static_cast<size_t>(V) * V, Cell{ 0, 0, false });
+                for (int j = 0; j < V; j++) for (int i = 0; i < V; i++) under[l][static_cast<size_t>(j) * V + i] = cells[l].find(key(i - V / 2, j - V / 2))->second;
+            }
+            gSink = gSink + under[2][7].surface;
+        });
+        std::printf("cell lookups per frame (model of the old step 1): %.1f us, now skipped while the meshes stay put\n", lookups);
     }
     if (failures) { std::fprintf(stderr, "%d check(s) failed\n", failures); return 1; }
     return 0;

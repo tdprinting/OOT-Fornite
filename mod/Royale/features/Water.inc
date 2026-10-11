@@ -666,7 +666,8 @@ struct WaterCell { float surface, depth; bool have; };
 std::unordered_map<uint64_t, WaterCell> gWaterCells[3];   // one lookup memory per mesh (see DrawWaterSheet)
 int gWaterCellsAge = 0;
 int gWaterCellsMap = -1;
-void ClearWaterCells() { for (auto& m : gWaterCells) m.clear(); }
+int gWaterCellsGen = 0;   // counts the clears, so what was copied out of gWaterCells knows when it is stale
+void ClearWaterCells() { for (auto& m : gWaterCells) m.clear(); gWaterCellsGen++; }
 uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); }
 
 // ---- caustics: the light the waves focus onto the floor under shallow water, as a sheet that lies on the floor (its own fine grid round the
@@ -780,6 +781,8 @@ struct WaterLevel {
     bool want[PS_N] = {};
     std::vector<WaterPoint> pt;
     std::vector<WaterCell> under;
+    int underGi = 0, underGj = 0, underV = -1, underGen = -1;   // what `under` was filled for (DrawWaterSheet step 1)
+    bool underAny = false; float underBase = 0.0f;           // and its first point with water, if any
     Vtx* vtx[PS_N] = {};
     std::vector<uint8_t> live[PS_N];   // a point where the pass has something to show
     bool Hole(int i, int j) const { return i >= hi0 && i < hi1 && j >= hj0 && j < hj1; }
@@ -825,6 +828,13 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     float baseY = 0; bool any = false;
     for (int l = 0; l < kWaterLevels; l++) {
         WaterLevel& L = gWaterLevel[l];
+        // The mesh only moves when the camera crosses a snap line, so most frames it covers the very same cells as last frame: then `under`
+        // already holds what the lookups would give (the memory is only ever added to, between clears).
+        if (L.underGen == gWaterCellsGen && L.underGi == L.gi0 && L.underGj == L.gj0 && L.underV == L.V) {
+            if (L.underAny && !any) { any = true; baseY = L.underBase; }
+            continue;
+        }
+        L.underGen = gWaterCellsGen; L.underGi = L.gi0; L.underGj = L.gj0; L.underV = L.V; L.underAny = false; L.underBase = 0.0f;
         L.under.assign(static_cast<size_t>(L.V) * L.V, WaterCell{ 0, 0, false });
         for (int j = 0; j < L.V; j++)
             for (int i = 0; i < L.V; i++) {
@@ -841,8 +851,9 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     it = gWaterCells[l].emplace(WaterCellKey(gi, gj), c).first;
                 }
                 L.under[static_cast<size_t>(j) * L.V + i] = it->second;
-                if (it->second.have && !any) { any = true; baseY = it->second.surface; }
+                if (it->second.have && !L.underAny) { L.underAny = true; L.underBase = it->second.surface; }
             }
+        if (L.underAny && !any) { any = true; baseY = L.underBase; }
     }
     if (!any) return;
 
