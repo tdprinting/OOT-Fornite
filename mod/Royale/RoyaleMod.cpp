@@ -20,6 +20,7 @@
 #include "avriella_anim.h"
 #include "maya_anim.h"
 #include "bokoblin_anim.h"
+#include "ally_anim.h"
 #include "bokoblin_sounds.h"
 #include "maya_sounds.h"
 #include "maya_phone.h"
