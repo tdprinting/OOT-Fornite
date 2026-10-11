@@ -400,17 +400,19 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "LobbyFish", "Lobby reef aquarium (clownfish and cleaner wrasse)" },
     { "HitFx", "Hit feedback: flash and particles on whatever is hit" },
     { "Shadows", "Dynamic shadows and lights" },
+    { "ItemMaps", "Sword and shield sunlight detail (normal and bump maps)" },
+    { "GearReport", "Gear report: show on screen what Link's hands, back and feet draw (off by default)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows };
-static_assert(kDbgShadows + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport };
+static_assert(kDbgGearReport + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
     for (int i = 0; i < kDebugCount; i++) {
         const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
-        gDebugOn[i] = CVarGetInteger(key.c_str(), 1) != 0;
+        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport ? 0 : 1) != 0;   // (the gear report is a bug-report aid: off unless asked for)
     }
     gDebugLoaded = true;
 }
