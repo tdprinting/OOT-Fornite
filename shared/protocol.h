@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 37; // 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 38; // 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -444,10 +444,15 @@ struct AllyNet {
     uint16_t owner = kNoPlayer16;   // who hired it (kNoPlayer16 while it is free)
     uint8_t flags = 0;          // 1 walking, 2 attacking
     uint8_t weapon = 0;         // Jones-only equipment, never a player ItemId
-    void Write(ByteWriter& w) const { w.U8(index); w.U8(kind); w.F32(x); w.F32(z); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(flags); w.U8(weapon); }
+    // Position to the nearest unit as 16 bits (maps fit +-32000); Jones's rifle rides in bits 2..3 of the flags byte. 13 bytes an ally.
+    void Write(ByteWriter& w) const {
+        auto unit = [](float f) { return static_cast<int16_t>(std::lround(std::clamp(f, -32000.0f, 32000.0f))); };
+        w.U8(index); w.U8(kind); w.I16(unit(x)); w.I16(unit(z)); w.I16(rot); w.U8(hp); w.U16(owner); w.U8(static_cast<uint8_t>(flags | (weapon << 2)));
+    }
     bool Read(ByteReader& r) {
-        index = r.U8(); kind = r.U8(); x = r.F32(); z = r.F32(); rot = r.I16(); hp = r.U8(); owner = r.U16(); flags = r.U8(); weapon=r.U8();
-        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && flags <= 3 &&
+        index = r.U8(); kind = r.U8(); x = r.I16(); z = r.I16(); rot = r.I16(); hp = r.U8(); owner = r.U16();
+        const uint8_t packed = r.U8(); flags = packed & 3; weapon = packed >> 2;
+        return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && packed < 16 &&
             (kind==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0);
     }
 };
