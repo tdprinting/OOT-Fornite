@@ -26,7 +26,7 @@
 | Lilo model and toxic cloud | `LiloModel.inc` |
 | Avriella model and behavior | `Avriella.inc` |
 | Avriella toys; includes `RoyaleLobbyPets.h` | `AvriellaToys.inc` |
-| Lilo behavior and hireable allies (own models: `shared/ally_anim.h`, `tools/allies`) | `Companions.inc` |
+| Lilo behavior and hireable allies | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h` |
 | Link clothes, cloth, Gilded Sword | `Equipment.inc` |
 | Map sign, aquarium include, pause inventory, update hooks | `SceneHooks.inc` |
 | Legacy sidebar/play menu | `Menus.inc` |

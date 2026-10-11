@@ -1,0 +1,59 @@
+{
+  "triangles": 3652,
+  "parts": [
+    "torso",
+    "left_leg",
+    "right_leg",
+    "left_arm",
+    "right_arm",
+    "head",
+    "left_tail",
+    "right_tail",
+    "scarf",
+    "jaw",
+    "left_brow",
+    "right_brow",
+    "left_forearm",
+    "right_forearm"
+  ],
+  "height_cm": 188.8,
+  "clips": [
+    {
+      "name": "idle",
+      "seconds": 2.4,
+      "loop": true
+    },
+    {
+      "name": "invite",
+      "seconds": 1.8,
+      "loop": true
+    },
+    {
+      "name": "walk",
+      "seconds": 0.9,
+      "loop": true
+    },
+    {
+      "name": "run",
+      "seconds": 0.65,
+      "loop": true
+    },
+    {
+      "name": "attack",
+      "seconds": 0.7,
+      "loop": false
+    },
+    {
+      "name": "greet",
+      "seconds": 0.8,
+      "loop": false
+    },
+    {
+      "name": "hurt",
+      "seconds": 0.35,
+      "loop": false
+    }
+  ],
+  "runtime": "shared/jones_model.h",
+  "rig": "rigid control empties, same baked rotations in Blender and runtime"
+}

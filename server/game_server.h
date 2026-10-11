@@ -793,6 +793,7 @@ class GameServer {
                 case MatchEvent::Type::AllyAction: {
                     net::EvAllyAction a;
                     a.index = static_cast<uint8_t>(e.a); a.target = e.b == kNoPlayer ? net::kNoPlayer16 : static_cast<uint16_t>(e.b); a.x = e.x; a.z = e.z;
+                    a.weapon = e.item;
                     Broadcast(a);
                     break;
                 }
@@ -978,6 +979,7 @@ class GameServer {
                 if (!a.alive || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
                 net::AllyNet n;
                 n.index = a.index; n.kind = static_cast<uint8_t>(a.kind);
+                n.weapon = a.weapon;
                 n.x = a.pos.x; n.z = a.pos.z; n.rot = a.rot;
                 n.hp = static_cast<uint8_t>((std::max)(0.0f, (std::min)(255.0f, a.health / AllyOf(a.kind).maxHealth * 255.0f + 0.5f)));
                 n.owner = a.Hired() ? static_cast<uint16_t>(a.owner) : net::kNoPlayer16;

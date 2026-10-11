@@ -446,6 +446,7 @@ class GameClient {
                 if (!net::Decode(data, m)) break;
                 ClientEvent e{ClientEvent::Type::AllyAction};
                 e.index = m.index; e.id = m.target; e.x = m.x; e.z = m.z;
+                e.item = m.weapon;
                 events.push_back(e);
                 break;
             }

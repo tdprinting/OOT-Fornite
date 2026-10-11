@@ -1,0 +1,1 @@
+Seven original synthesized cues: scout greeting, hire confirmation, four distinct rifle reports (assault, burst, carbine, scoped), and impact reaction. Similar adventure/shooter sound direction; not Fortnite recordings. No sampled external audio or voice imitation. Reproduce: python tools/jones/build_jones_audio.py.

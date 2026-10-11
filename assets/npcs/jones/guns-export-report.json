@@ -1,0 +1,17 @@
+{
+  "names": [
+    "Tan Assault",
+    "Olive Burst",
+    "Compact Carbine",
+    "Scoped Rifle"
+  ],
+  "triangles": [
+    304,
+    244,
+    324,
+    420
+  ],
+  "attach_part": 13,
+  "position_scale": 0.0625,
+  "private_npc_assets": true
+}
