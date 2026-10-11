@@ -74,7 +74,7 @@ bool WaterSurfaceAt(float x, float z, float* y) {
     namespace fn = royale::fortnite;
     if (OnIsland()) {
         if (std::fabs(x) >= fn::kHalfX || std::fabs(z) >= fn::kHalfZ) return false;
-        *y = OnRiftlandsTerrain() ? royale::RiftlandsWaterY({x,z}) : OnMoonfallTerrain() ? royale::MoonfallWaterY({x,z}) : static_cast<float>(fn::kWaterY);
+        *y = OnRiftlandsTerrain() ? royale::RiftlandsWaterY({x,z}) : OnMoonfallTerrain() ? royale::MoonfallWaterY({x,z}) : OnSkyloftTerrain() ? royale::SkyloftWaterY({x,z}) : static_cast<float>(fn::kWaterY);
         return true;
     }
     return GameWaterSurfaceAt(x, z, y);
@@ -981,7 +981,7 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
                 float fy = 0;
                 if (WaterSurfaceAt(gi * cc, gj * cc, &c.surface) && WaterFloorAt(gi * cc, gj * cc, &fy)) {
                     c.depth = c.surface - fy;
-                    if (island && !OnKingdomTerrain() && !OnRiftlandsTerrain() && !OnMoonfallTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
+                    if (island && !OnKingdomTerrain() && !OnRiftlandsTerrain() && !OnMoonfallTerrain() && !OnSkyloftTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
                     c.have = c.depth > 1.0f;
                 }
                 it = gCausticCells.emplace(WaterCellKey(gi, gj), c).first;

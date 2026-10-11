@@ -84,7 +84,9 @@ inline const char* const kPoiNames[] = {
     // Hyrule Riftlands: dedicated names after the compact boss-arena names.
     "Crownfall Castle", "Death Mountain Quarry", "Kakariko Windmill", "Deku Hollow", "Lake Lantern", "Lon Lon Crossroads", "Spirit Bazaar", "Frostwatch Lodge", "Temple of Time", "Fairy Spring", "Zora's Falls", "Goron Lookout", "Lakeside Lab", "Graveyard Annex", "Castle Gardens", "River Overlook", "West Stone Crossing", "East Stone Crossing", "Orchard Rest", "Oasis Caravan", "Lantern Shore", "North Meadow", "South Meadow", "Frozen Trail",
     // Moonfall Isle: the main map; its 24 landmark names follow Riftlands' (PoiNameBase).
-    "Hyrule Castle", "Clock Town", "Temple of Time", "Snowhead Lodge", "Spirit Colossus", "Goron Forge", "Kakariko Windmill", "Ikana Graveyard", "Romani Ranch", "Great Bay Stilts", "Deku Tree Village", "Lost Woods", "Astral Observatory", "Zora Cape", "Castle Falls", "Moonfall Span", "Milk Road", "Fairy Fountain", "Termina Bridge", "Lantern Bridge", "Moon Crater", "Frozen Pond", "Spirit Oasis", "Fisherman's Hut"
+    "Hyrule Castle", "Clock Town", "Temple of Time", "Snowhead Lodge", "Spirit Colossus", "Goron Forge", "Kakariko Windmill", "Ikana Graveyard", "Romani Ranch", "Great Bay Stilts", "Deku Tree Village", "Lost Woods", "Astral Observatory", "Zora Cape", "Castle Falls", "Moonfall Span", "Milk Road", "Fairy Fountain", "Termina Bridge", "Lantern Bridge", "Moon Crater", "Frozen Pond", "Spirit Oasis", "Fisherman's Hut",
+    // Skyloft Isles: its 24 landmark names follow Moonfall's (PoiNameBase).
+    "Knight Academy", "Bazaar", "Goddess Statue", "Sparring Hall", "Waterfall Cave", "Lumpy Pumpkin", "Light Tower", "Pumpkin Fields", "Westwind Homes", "Hollow Graveyard", "Loftwing Roost", "Ember Rock", "Statue Plaza", "Academy Bridge", "Goddess Stair", "Beedle's Perch", "Pumpkin Bridge", "West Diving Deck", "South Diving Deck", "Waterfall Pool", "Windmill Hill", "East Span", "Fledge's Cove", "Ember Bridge"
 };
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
@@ -132,6 +134,9 @@ constexpr MapDef kMaps[] = {
      {BossKind::Stone,BossKind::Moss},BossKind::DragonForest},
     {"Moonfall Isle", "The main map: Hyrule Castle over its falls, Clock Town, the Temple of Time, Snowhead, the Spirit Colossus, the Goron Forge, Kakariko's windmill, Romani Ranch, the Great Bay stilts and the Deku Tree, every house open to walk into", 0x51, {{0,0},6500}, 6600, Theme::Meadow,
      {BossKind::Stone,BossKind::Moss},BossKind::DragonForest},
+    // Skyloft Isles is authored in Blender (tools/maps/skyloft): one terraced island in the open sea, layout inspired by Skyward Sword's Skyloft.
+    {"Skyloft Isles", "The island in the sea: the Knight Academy on its high lobe, the Bazaar tent, the Goddess Statue, the Light Tower, pumpkin fields, cliff homes, the Waterfall Cave and islets joined by bridges", 0x51, {{0,0},6500}, 6600, Theme::Water,
+     {BossKind::Tide, BossKind::Stone}, BossKind::DragonWater},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
@@ -204,21 +209,22 @@ constexpr int kConvergenceMapIndex = 7;
 constexpr int kKingdomMapIndex = 8;      // Hyrule Kingdom: its own number, so no other map changes
 constexpr int kRiftlandsMapIndex = 11;
 constexpr int kMoonfallMapIndex = 12;
+constexpr int kSkyloftMapIndex = 13;
 constexpr int kMiniBossArenaIndex = 9;
 constexpr int kMainBossArenaIndex = 10;
 constexpr bool IsBossArena(int id) { return id==kMiniBossArenaIndex || id==kMainBossArenaIndex; }
 constexpr bool IsTestMap(int id) { return id==kSandboxMapIndex || IsBossArena(id); }
-constexpr int PoiNameBase(int id) { return id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
+constexpr int PoiNameBase(int id) { return id==kSkyloftMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+2*kNamesPerMap:id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
 constexpr int PoiNameCount(int id) { return IsBossArena(id)?3:kNamesPerMap; }
 constexpr int kPlayableMapCount = kMapCount - 3;
 constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && !IsTestMap(id); }
-constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex; }
+constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex; }
 // The maps built by hand in Blender: their ground, collision, buildings and loot sites come from shared/<name>_data.h, and nothing is scattered over them.
-constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex; }
+constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
 static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7 && kKingdomMapIndex == 8, "preserve network map IDs");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount*kNamesPerMap-2*(kNamesPerMap-3), "regular maps have 24 names; boss arenas have 3");
-static_assert(PoiNameBase(kMoonfallMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
+static_assert(PoiNameBase(kSkyloftMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
 constexpr int kPoiNameTotal = sizeof(kPoiNames)/sizeof(kPoiNames[0]);
 
 constexpr int ClampMap(int id) { return id >= 0 && id < kMapCount ? id : 0; }

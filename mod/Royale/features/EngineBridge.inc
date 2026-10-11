@@ -8,7 +8,8 @@ SurfaceType gFortniteSurface[16];
 CamData gFortniteCam[1];
 constexpr size_t kRiftlandsPoolCount = sizeof(royale::riftlands::kPools)/sizeof(royale::riftlands::kPools[0]);
 constexpr size_t kMoonfallPoolCount = sizeof(royale::moonfall::kPools)/sizeof(royale::moonfall::kPools[0]);
-constexpr size_t kMaxPoolCount = kRiftlandsPoolCount > kMoonfallPoolCount ? kRiftlandsPoolCount : kMoonfallPoolCount;
+constexpr size_t kSkyloftPoolCount = sizeof(royale::skyloft::kPools)/sizeof(royale::skyloft::kPools[0]);
+constexpr size_t kMaxPoolCount = kRiftlandsPoolCount > kMoonfallPoolCount ? (kRiftlandsPoolCount > kSkyloftPoolCount ? kRiftlandsPoolCount : kSkyloftPoolCount) : (kMoonfallPoolCount > kSkyloftPoolCount ? kMoonfallPoolCount : kSkyloftPoolCount);
 WaterBox gFortniteWater[1+kMaxPoolCount];
 CollisionHeader gFortniteHeader;
 bool gFortniteBuilt = false;
@@ -64,6 +65,16 @@ CollisionHeader* FortniteHeader() {
             gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
         }
     }
+    if (fn::gTerrainMapId == royale::kSkyloftMapIndex) {
+        constexpr int n = sizeof(royale::skyloft::kSurfaces) / sizeof(royale::skyloft::kSurfaces[0]);
+        static_assert(n <= 16, "surface table");
+        for (int i = 0; i < n; i++) {
+            const auto& sf = royale::skyloft::kSurfaces[i];
+            gFortniteSurface[i] = {};
+            gFortniteSurface[i].data[0] = sf.climb ? (4u << 21) : 0u;
+            gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
+        }
+    }
     gFortniteCam[0] = {};
     gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
     gFortniteCam[0].numCameras = 0;
@@ -101,6 +112,17 @@ CollisionHeader* FortniteHeader() {
         const WaterBox ocean=gFortniteWater[0];
         int count=0;
         for(const auto& pool:royale::moonfall::kPools) {
+            auto& b=gFortniteWater[count++]; b={};
+            b.xMin=static_cast<s16>(pool.x0); b.zMin=static_cast<s16>(pool.z0);
+            b.xLength=static_cast<s16>(pool.x1-pool.x0); b.zLength=static_cast<s16>(pool.z1-pool.z0);
+            b.ySurface=static_cast<s16>(pool.y); b.properties=0x3Fu<<13;
+        }
+        gFortniteWater[count++]=ocean;gFortniteHeader.numWaterBoxes=count;
+    }
+    if(fn::gTerrainMapId == royale::kSkyloftMapIndex) {
+        const WaterBox ocean=gFortniteWater[0];
+        int count=0;
+        for(const auto& pool:royale::skyloft::kPools) {
             auto& b=gFortniteWater[count++]; b={};
             b.xMin=static_cast<s16>(pool.x0); b.zMin=static_cast<s16>(pool.z0);
             b.xLength=static_cast<s16>(pool.x1-pool.x0); b.zLength=static_cast<s16>(pool.z1-pool.z0);

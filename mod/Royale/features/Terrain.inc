@@ -163,6 +163,18 @@ struct RiftlandsTables {
     static constexpr auto kSurfaceSize = royale::riftlands::kSurfaceSize;
     static constexpr auto kSurfaceClasses = royale::riftlands::kSurfaceClasses;
 };
+struct SkyloftTables {
+    using Batch = royale::skyloft::Batch;
+    static constexpr auto& kBatches = royale::skyloft::kBatches;
+    static constexpr auto& kDrawVertices = royale::skyloft::kDrawVertices;
+    static constexpr auto& kTextures = royale::skyloft::kTextures;
+    static constexpr auto& kSurfaceNormal = royale::skyloft::kSurfaceNormal;
+    static constexpr auto& kSurfaceBump = royale::skyloft::kSurfaceBump;
+    static constexpr auto& kSurfaceUnits = royale::skyloft::kSurfaceUnits;
+    static constexpr auto kTextureSize = royale::skyloft::kTextureSize;
+    static constexpr auto kSurfaceSize = royale::skyloft::kSurfaceSize;
+    static constexpr auto kSurfaceClasses = royale::skyloft::kSurfaceClasses;
+};
 struct MoonfallTables {
     using Batch = royale::moonfall::Batch;
     static constexpr auto& kBatches = royale::moonfall::kBatches;
@@ -354,6 +366,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     if (OnKingdomTerrain()) DrawAuthoredStructures<KingdomTables>(play);
     if (OnRiftlandsTerrain()) DrawAuthoredStructures<RiftlandsTables>(play);
     if (OnMoonfallTerrain()) DrawAuthoredStructures<MoonfallTables>(play);
+    if (OnSkyloftTerrain()) DrawAuthoredStructures<SkyloftTables>(play);
 }
 
 int FortniteActorId() {

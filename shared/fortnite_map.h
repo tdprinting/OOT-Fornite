@@ -7,6 +7,7 @@
 #include "kingdom_data.h"
 #include "riftlands_data.h"
 #include "moonfall_data.h"
+#include "skyloft_data.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -77,6 +78,10 @@ inline void UseTerrainForMap(int mapId) {
         gHeightData = moonfall::kHeights; gColourData = moonfall::kColours; gCoverData = moonfall::kCover;
         gSpawnX = moonfall::kSpawnX; gSpawnZ = moonfall::kSpawnZ;
     }
+    if (mapId == 13) {   // Skyloft Isles (map.h kSkyloftMapIndex)
+        gHeightData = skyloft::kHeights; gColourData = skyloft::kColours; gCoverData = skyloft::kCover;
+        gSpawnX = skyloft::kSpawnX; gSpawnZ = skyloft::kSpawnZ;
+    }
 }
 inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
 
@@ -94,6 +99,7 @@ inline bool GroundHeight(float x, float z, float* y) {
 inline float WaterHeightAt(float x,float z) {
     if(gTerrainMapId==11) for(const auto& b:riftlands::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
     if(gTerrainMapId==12) for(const auto& b:moonfall::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
+    if(gTerrainMapId==13) for(const auto& b:skyloft::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
     return static_cast<float>(kWaterY);
 }
 inline bool IsWaterAt(float x, float z) {
@@ -188,6 +194,16 @@ inline Mesh BuildCollision() {
         }
         return m;
     }
+    if (gTerrainMapId == 13) {   // Skyloft Isles: the same baked mesh layout as Moonfall
+        for (const auto& v : skyloft::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : skyloft::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
+        m.lo = m.hi = m.verts.front();
+        for (const auto& v : m.verts) {
+            m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
+            m.hi = {std::max(m.hi.x,v.x),std::max(m.hi.y,v.y),std::max(m.hi.z,v.z)};
+        }
+        return m;
+    }
     m.verts.reserve(kVerts * kVerts);
     for (int j = 0; j < kVerts; j++)
         for (int i = 0; i < kVerts; i++) m.verts.push_back({ Round16(VertexX(i)), Round16(static_cast<float>(VertexHeight(i, j))), Round16(VertexZ(j)) });
@@ -270,7 +286,7 @@ inline DrawVert FineVertex(int fi, int fj) {   // fine vertex (fi, fj), 0..kFine
     const float h00 = static_cast<float>(VertexHeight(ci, cj)), h10 = static_cast<float>(VertexHeight(ci + 1, cj));
     const float h01 = static_cast<float>(VertexHeight(ci, cj + 1)), h11 = static_cast<float>(VertexHeight(ci + 1, cj + 1));
     float y = u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + u * (h11 - h01) + v * (h01 - h00);
-    if(gTerrainMapId!=11 && gTerrainMapId!=12) y = std::max(y, static_cast<float>(kSeabedY)); // Riftlands and Moonfall use the same rendered and physical bed
+    if(gTerrainMapId!=11 && gTerrainMapId!=12 && gTerrainMapId!=13) y = std::max(y, static_cast<float>(kSeabedY)); // Riftlands, Moonfall and Skyloft use the same rendered and physical bed
     const uint8_t* c = &gColourData[(static_cast<size_t>(fj) * (kFine + 1) + fi) * 3];
     return { Round16(-kHalfX + kCellX * fi / kSub), Round16(y), Round16(-kHalfZ + kCellZ * fj / kSub), c[0], c[1], c[2] };
 }
