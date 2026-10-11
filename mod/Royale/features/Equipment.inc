@@ -138,18 +138,18 @@ void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dL
         (player->leftHandType == PLAYER_MODELTYPE_LH_SWORD || player->leftHandType == PLAYER_MODELTYPE_LH_SWORD_2 ||
          player->leftHandType == PLAYER_MODELTYPE_LH_BGS)) {
         switch (player->heldItemAction) {
-            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_normal; height = kokiri_sword_bump; break;
-            case PLAYER_IA_SWORD_MASTER: normal = master_sword_normal; height = master_sword_bump; break;
-            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_normal; height = biggoron_sword_bump; break;
+            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_maps().normal.data(); height = kokiri_sword_maps().bump.data(); break;
+            case PLAYER_IA_SWORD_MASTER: normal = master_sword_maps().normal.data(); height = master_sword_maps().bump.data(); break;
+            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_maps().normal.data(); height = biggoron_sword_maps().bump.data(); break;
             default: return;
         }
         scale = 1.0f / 4000.0f;
     } else if ((limb == PLAYER_LIMB_R_HAND && player->rightHandType == PLAYER_MODELTYPE_RH_SHIELD) ||
                limb == PLAYER_LIMB_SHEATH) {
         switch (player->currentShield) {
-            case PLAYER_SHIELD_DEKU: normal = deku_shield_normal; height = deku_shield_bump; break;
-            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_normal; height = hylian_shield_bump; break;
-            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_normal; height = mirror_shield_bump; break;
+            case PLAYER_SHIELD_DEKU: normal = deku_shield_maps().normal.data(); height = deku_shield_maps().bump.data(); break;
+            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_maps().normal.data(); height = hylian_shield_maps().bump.data(); break;
+            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_maps().normal.data(); height = mirror_shield_maps().bump.data(); break;
             default: return;
         }
     } else return;
