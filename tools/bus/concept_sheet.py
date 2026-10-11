@@ -37,7 +37,7 @@ DEFS = f'''
 <defs>
   <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5E8FD6"/><stop offset="0.55" stop-color="#A9CDEB"/><stop offset="1" stop-color="#F3D7B0"/></linearGradient>
   <radialGradient id="moonG" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#B8B8AE"/><stop offset="0.6" stop-color="{C['moon']}"/><stop offset="1" stop-color="{C['moon2']}"/></radialGradient>
-  <radialGradient id="eyeG" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="{C['eye2']}"/><stop offset="0.55" stop-color="{C['eye']}"/><stop offset="1" stop-color="#E89A1A"/></radialGradient>
+  <radialGradient id="eyeG" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#FFF0A0"/><stop offset="0.45" stop-color="#FFC21A"/><stop offset="0.8" stop-color="#F07A14"/><stop offset="1" stop-color="#B8301A"/></radialGradient>
   <linearGradient id="lacG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{C['lac3']}"/><stop offset="0.5" stop-color="{C['lac']}"/><stop offset="1" stop-color="{C['lac2']}"/></linearGradient>
   <linearGradient id="glassG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{C['glass2']}"/><stop offset="1" stop-color="{C['glass']}"/></linearGradient>
   <linearGradient id="flameG" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="{C['flame']}"/><stop offset="1" stop-color="{C['flame2']}"/></linearGradient>
@@ -69,49 +69,64 @@ def net(cx, cy, R, collar_y):
     return out
 def moon_front(cx, cy, R):
     s = circ(cx, cy, R, "url(#moonG)", True, 4)
-    s += craters(cx, cy, R, 5, 16, lambda x, y: abs(x - cx) < R * 0.62 and y > cy - R * 0.55 and y < cy + R * 0.62)
-    # brow ridge
+    s += craters(cx, cy, R, 5, 16, lambda x, y: abs(x - cx) < R * 0.7 and y > cy - R * 0.6 and y < cy + R * 0.7)
+    # cracks radiating from the mouth corners and the brow
+    for d in ("M-0.62 0.30 L-0.84 0.52", "M0.62 0.30 L0.86 0.50", "M-0.5 -0.5 L-0.72 -0.74", "M0.48 -0.52 L0.66 -0.78", "M0.0 0.78 L0.08 0.95"):
+        pts = d.replace("M", "").replace("L", " ").split(); x0, y0, x1, y1 = [float(v) for v in pts]
+        s += line(cx + x0*R, cy + y0*R, cx + x1*R, cy + y1*R, C["moon3"], 3)
+    # eyes: deep dark sockets, sagging bags, bloodshot orange eyes with tiny pupils that look in at the bridge
     for sx in (-1, 1):
-        s += path(f"M{cx + sx*R*0.12} {cy - R*0.30} Q{cx + sx*R*0.36} {cy - R*0.48} {cx + sx*R*0.6} {cy - R*0.26}", "none", C["moon3"], 9)
-    # eyes
+        ex, ey = cx + sx * R * 0.33, cy - R * 0.2
+        s += ell(ex, ey + R*0.04, R * 0.25, R * 0.23, C["moon3"], False)                                 # the socket's shadow
+        s += ell(ex, ey + R*0.19, R * 0.2, R * 0.06, C["moon2"], True, 2.5)                             # the bag under the eye
+        s += ell(ex, ey, R * 0.215, R * 0.2, C["sock"], True, 3)
+        s += ell(ex, ey, R * 0.18, R * 0.17, "url(#eyeG)", False, extra='filter="url(#glow2)"')
+        for k in range(5):   # veins
+            a_ = -0.6 + k * 0.5 + sx * 0.2
+            s += line(ex + math.cos(a_ + sx*1.57) * R*0.17, ey + math.sin(a_ + sx*1.57) * R*0.16, ex + math.cos(a_ + sx*1.57) * R*0.09, ey + math.sin(a_ + sx*1.57) * R*0.085, "#C8401E", 1.6)
+        s += circ(ex + sx * R * 0.06, ey + R * 0.02, R * 0.045, C["pupil"], False)
+        s += circ(ex + sx * R * 0.08, ey - R * 0.02, R * 0.012, "#FFF6DC", False)
+    # brows: thick, heavy, slanted hard inward
     for sx in (-1, 1):
-        ex, ey = cx + sx * R * 0.34, cy - R * 0.16
-        s += ell(ex, ey, R * 0.21, R * 0.19, C["moon3"], True, 3)
-        s += ell(ex, ey, R * 0.18, R * 0.16, C["sock"], False)
-        s += ell(ex, ey, R * 0.145, R * 0.13, "url(#eyeG)", False, extra='filter="url(#glow2)"')
-        s += ell(ex + sx * R * 0.01, ey, R * 0.035, R * 0.1, C["pupil"], False)
-    # nose
-    s += path(f"M{cx - R*0.1} {cy + R*0.1} Q{cx} {cy - R*0.02} {cx + R*0.1} {cy + R*0.1}", "none", C["moon3"], 6)
-    for sx in (-1, 1): s += ell(cx + sx * R * 0.09, cy + R * 0.11, R * 0.05, R * 0.035, C["moon3"], False)
-    # mouth: wide grin with two rows of teeth
-    my = cy + R * 0.38
-    s += path(f"M{cx - R*0.5} {my - R*0.08} Q{cx} {my + R*0.3} {cx + R*0.5} {my - R*0.08} Q{cx} {my - R*0.02} {cx - R*0.5} {my - R*0.08} Z", C["mouth"], C["moon3"], 4)
-    n = 9
+        s += path(f"M{cx + sx*R*0.08} {cy - R*0.3} Q{cx + sx*R*0.3} {cy - R*0.56} {cx + sx*R*0.62} {cy - R*0.4} Q{cx + sx*R*0.34} {cy - R*0.42} {cx + sx*R*0.12} {cy - R*0.24} Z", C["moon3"], C["line"], 2.5)
+    # the nose is only two flared nostrils and a crease between the eyes
+    s += path(f"M{cx - R*0.04} {cy - R*0.1} L{cx} {cy + R*0.08} L{cx + R*0.04} {cy - R*0.1}", "none", C["moon3"], 3)
+    for sx in (-1, 1): s += ell(cx + sx * R * 0.1, cy + R * 0.13, R * 0.065, R * 0.04, C["moon3"], False)
+    # the grin: stretched wider than the eyes, lips pulled back, two rows of big uneven teeth with a black gap
+    my = cy + R * 0.4
+    s += path(f"M{cx - R*0.64} {my - R*0.1} Q{cx} {my - R*0.02} {cx + R*0.64} {my - R*0.1} Q{cx + R*0.5} {my + R*0.3} {cx} {my + R*0.34} Q{cx - R*0.5} {my + R*0.3} {cx - R*0.64} {my - R*0.1} Z", C["mouth"], C["moon3"], 4)
+    n = 11
     for i in range(n):
-        t = (i + 0.5) / n; x = cx - R * 0.46 + t * R * 0.92
-        top = my - R * 0.08 + (1 - (2*t-1)**2) * R * 0.0 + 2
-        h = (1 - (2*t-1)**2) * R * 0.09 + R * 0.04
-        s += rect(x - R*0.04, top, R * 0.08, h, C["teeth"], 2, True, 2)
-        s += rect(x - R*0.036, my + R*0.02 + (1 - (2*t-1)**2) * R * 0.12 - h, R * 0.072, h * 0.9, C["teeth"], 2, True, 2)
-    s += path(f"M{cx - R*0.52} {my - R*0.06} Q{cx} {my + R*0.36} {cx + R*0.52} {my - R*0.06}", "none", C["moon3"], 6)
+        t = (i + 0.5) / n; x = cx - R * 0.6 + t * R * 1.2; bow = (1 - (2*t-1)**2)
+        h = R * (0.06 + 0.1 * bow) * (0.85 + 0.3 * ((i * 7) % 3) / 2)
+        s += rect(x - R*0.05, my - R*0.1 + bow * R*0.07, R * 0.1 - 2, h, C["teeth"], 2, True, 2)
+        hb = R * (0.04 + 0.08 * bow) * (0.8 + 0.3 * ((i * 5) % 3) / 2)
+        s += rect(x - R*0.045 + R*0.04, my + R*0.34 * bow - hb - R*0.02 + (1 - bow) * R * 0.1, R * 0.09 - 2, hb, C["teeth"], 2, True, 2)
+    s += path(f"M{cx - R*0.66} {my - R*0.12} Q{cx} {my - R*0.03} {cx + R*0.66} {my - R*0.12}", "none", C["moon3"], 5)      # upper lip line
+    for sx in (-1, 1): s += path(f"M{cx + sx*R*0.14} {cy + R*0.16} Q{cx + sx*R*0.48} {cy + R*0.2} {cx + sx*R*0.68} {cy + R*0.3}", "none", C["moon3"], 3)   # the creases down from the nostrils
     return s
 def moon_side(cx, cy, R, facing=-1):
     """profile: the face is on the `facing` side (-1 = left)"""
     s = circ(cx, cy, R, "url(#moonG)", True, 4)
-    s += craters(cx, cy, R, 7, 15, lambda x, y: (x - cx) * facing > R * 0.35)
+    s += craters(cx, cy, R, 7, 15, lambda x, y: (x - cx) * facing > R * 0.3)
     f = facing
-    # brow, eye, nose bump, grin along the facing edge
-    s += path(f"M{cx + f*R*0.55} {cy - R*0.55} Q{cx + f*R*0.8} {cy - R*0.5} {cx + f*R*0.86} {cy - R*0.3}", "none", C["moon3"], 9)
-    ex, ey = cx + f * R * 0.74, cy - R * 0.2
-    s += ell(ex, ey, R * 0.12, R * 0.17, C["moon3"], True, 3) + ell(ex, ey, R * 0.1, R * 0.14, C["sock"], False)
-    s += ell(ex, ey, R * 0.08, R * 0.11, "url(#eyeG)", False, extra='filter="url(#glow2)"') + ell(ex + f * R*0.02, ey, R * 0.02, R * 0.08, C["pupil"], False)
-    s += path(f"M{cx + f*R*0.9} {cy} Q{cx + f*R*1.07} {cy + R*0.08} {cx + f*R*0.93} {cy + R*0.17}", C["moon"], C["line"], 3)     # nose
-    s += path(f"M{cx + f*R*0.95} {cy + R*0.28} Q{cx + f*R*0.75} {cy + R*0.72} {cx + f*R*0.25} {cy + R*0.72}", C["mouth"], C["moon3"], 4)
-    p0 = (cx + f*R*0.95, cy + R*0.28); p1 = (cx + f*R*0.75, cy + R*0.72); p2 = (cx + f*R*0.25, cy + R*0.72)
-    for i in range(6):
-        t = 0.1 + i * 0.16
+    s += path(f"M{cx + f*R*0.5} {cy - R*0.6} L{cx + f*R*0.62} {cy - R*0.82}", "none", C["moon3"], 3)
+    # brow ridge over a sunken socket, the eye bulging out past the rock
+    s += path(f"M{cx + f*R*0.5} {cy - R*0.5} Q{cx + f*R*0.8} {cy - R*0.56} {cx + f*R*0.98} {cy - R*0.34} Q{cx + f*R*0.8} {cy - R*0.42} {cx + f*R*0.54} {cy - R*0.4} Z", C["moon3"], C["line"], 2.5)
+    ex, ey = cx + f * R * 0.8, cy - R * 0.18
+    s += ell(ex, ey + R*0.03, R * 0.16, R * 0.2, C["moon3"], False) + ell(ex, ey + R*0.19, R*0.13, R*0.05, C["moon2"], True, 2.5)
+    s += ell(ex, ey, R * 0.14, R * 0.18, C["sock"], True, 3) + ell(ex, ey, R * 0.11, R * 0.15, "url(#eyeG)", False, extra='filter="url(#glow2)"')
+    s += circ(ex + f * R * 0.05, ey + R * 0.02, R * 0.04, C["pupil"], False)
+    s += ell(cx + f*R*0.96, cy + R*0.13, R*0.06, R*0.035, C["moon3"], False)   # nostril
+    # the grin wraps round the lower front: a dark wedge with big teeth along the lip line
+    s += path(f"M{cx + f*R*0.99} {cy + R*0.26} Q{cx + f*R*0.86} {cy + R*0.6} {cx + f*R*0.3} {cy + R*0.9} Q{cx + f*R*0.62} {cy + R*0.72} {cx + f*R*0.9} {cy + R*0.42} Z", C["mouth"], C["moon3"], 4)
+    p0 = (cx + f*R*0.99, cy + R*0.26); p1 = (cx + f*R*0.86, cy + R*0.6); p2 = (cx + f*R*0.3, cy + R*0.9)
+    for i in range(7):
+        t = 0.08 + i * 0.14
         x = (1-t)**2*p0[0] + 2*(1-t)*t*p1[0] + t*t*p2[0]; y = (1-t)**2*p0[1] + 2*(1-t)*t*p1[1] + t*t*p2[1]
-        s += rect(x - R*0.03 - f*R*0.03, y - R*0.09, R*0.06, R*0.08, C["teeth"], 2, True, 2)
+        h = R * (0.07 + 0.05 * ((i * 7) % 3) / 2)
+        s += rect(x - R*0.035 - f*R*0.05, y - R*0.02, R*0.07, h, C["teeth"], 2, True, 2)
+    s += path(f"M{cx + f*R*0.9} {cy + R*0.2} Q{cx + f*R*0.7} {cy + R*0.34} {cx + f*R*0.62} {cy + R*0.56}", "none", C["moon3"], 3)   # the cheek crease
     return s
 def moon_back(cx, cy, R):
     return circ(cx, cy, R, "url(#moonG)", True, 4) + craters(cx, cy, R, 9, 22)
@@ -132,11 +147,16 @@ def cage(cx, top, bottom, w=90):
     s += path(f"M{cx - 7} {ring_y + 20} Q{cx - 8} {ring_y - 20} {cx} {ring_y - 44} Q{cx + 8} {ring_y - 20} {cx + 7} {ring_y + 20} Z", C["flame2"], "none", 0)
     return s
 def ropes(ring_x, ring_y, w, moon_cx, moon_cy, R, collar_y):
-    s = rect(moon_cx - 36, collar_y - 14, 72, 22, C["wood2"], 4, True, 3)   # the mouth collar
+    s = ""
+    yj = moon_cy + R * 0.85; wj = math.sqrt(1 - 0.85 * 0.85) * R          # the net's bottom ring: the ropes tie here
     for sx in (-1, 1):
-        for k in (0.5, 0.78):
-            s += line(ring_x + sx * w * k, ring_y, moon_cx + sx * R * (0.3 + 0.35 * (k - 0.5)), moon_cy + R * 0.72, C["gold2"], 3)
-            s += circ(ring_x + sx * w * k, ring_y + 16, 8, C["wood"], True, 2)   # sandbag
+        for k, nx in ((0.5, 0.42), (0.78, 0.92)):
+            x0, y0 = ring_x + sx * w * k, ring_y; x1, y1 = moon_cx + sx * wj * nx, yj + (1 - nx) * R * 0.06
+            s += line(x0, y0, x1, y1, C["gold2"], 3.5)
+            s += circ(x1, y1, 4, C["wood2"], True, 1.5)                     # the knot
+            s += line(x0, y0, x0, y0 + 14, C["gold2"], 2) + circ(x0, y0 + 22, 8, C["wood"], True, 2)   # sandbag hanging off the ring
+    s += rect(moon_cx - 36, collar_y - 14, 72, 22, C["wood2"], 4, True, 3)   # the mouth collar
+    for sx in (-1, 1): s += line(moon_cx + sx * 30, collar_y - 14, moon_cx + sx * wj * 0.42, yj, C["gold2"], 2.5)
     return s
 
 # ------------------------------------------------------------------------------------------------------------------- the coach: side view
@@ -150,7 +170,7 @@ def wheel(cx, cy, r):
 def leaf(cx, cy, L, W, angle, color=None):
     return f'<g transform="rotate({angle} {cx} {cy})">' + path(f"M{cx} {cy} Q{cx - W} {cy - L*0.45} {cx} {cy - L} Q{cx + W} {cy - L*0.45} {cx} {cy} Z", color or C["leaf"], C["line"], 2.5) + line(cx, cy, cx, cy - L * 0.92, C["leaf2"], 2) + "</g>"
 def lantern(cx, cy):
-    return line(cx, cy - 14, cx, cy - 4, C["brass2"], 2) + ell(cx, cy + 8, 9, 12, C["lantern"], True, 2, 'filter="url(#glow)"') + rect(cx - 5, cy - 5, 10, 4, C["brass2"], 1, False)
+    return rect(cx - 6, cy - 16, 12, 5, C["brass2"], 1, True, 1.5) + line(cx, cy - 12, cx, cy - 4, C["brass2"], 2) + ell(cx, cy + 8, 9, 12, C["lantern"], True, 2, 'filter="url(#glow)"') + rect(cx - 5, cy - 5, 10, 4, C["brass2"], 1, False)
 def horse_head(x, y, f=-1, scale=1.0):
     """bronze horse head, nose pointing in direction f, neck base at (x, y)"""
     s = f'<g transform="translate({x} {y}) scale({f*scale} {scale})">'
@@ -210,6 +230,8 @@ def side_view(ox, oy, mirror=False):
     for k in range(3): s += rect(bx + bw + 40 + k * 14, by + 104 + k * 12, 24, 6, C["wood"], 2, True, 2)
     # propeller at the rear
     hx, hy = bx + bw + 78, by + 50
+    s += rect(bx + bw - 2, hy - 6, hx - bx - bw + 2, 12, "url(#brassG)", 4, True, 2.5)      # the brass arm from the body to the hub
+    s += line(bx + bw + 52, by + 52, hx - 10, hy + 2, C["brass2"], 3)
     s += leaf(hx, hy, 70, 18, 0) + leaf(hx, hy, 70, 18, 180) + ell(hx, hy, 10, 26, C["leaf"], True, 2.5)
     s += circ(hx, hy, 9, "url(#brassG)", True, 2.5)
     return s
@@ -277,6 +299,7 @@ def top_view(ox, oy):
     s += rect(bx + bw - 4, by + 24, 60, 92, C["wood"], 4, True, 2.5)
     for k in range(3): s += line(bx + bw + 12 + k * 16, by + 30, bx + bw + 12 + k * 16, by + 110, C["wood2"], 2)
     hx, hy = bx + bw + 78, by + bh * 0.5
+    s += rect(bx + bw + 50, hy - 6, hx - bx - bw - 50, 12, "url(#brassG)", 4, True, 2.5)
     s += rect(hx - 6, hy - 48, 12, 96, C["leaf"], 4, True, 2.5) + ell(hx, hy, 8, 14, "url(#brassG)", True, 2.5)
     # wheels, tucked under the skirt: just their outer edges show
     for wx in (bx + 70, bx + bw - 70):
