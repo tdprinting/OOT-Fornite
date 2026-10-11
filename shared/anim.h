@@ -25,7 +25,16 @@ enum class Anim : uint8_t { Idle = 0, Walk = 1, Run = 2, Attack = 3, Hurt = 4, D
                         Tread = 35,       // treading water
                         Climb = 36,       // going up a cliff or an ivy wall, hand over hand
                         Knocked = 37,     // down but not out: lying on the ground, crawling (team modes; older clients draw it as Idle)
+                        BusRide = 38,     // sat on the Moonfall Bus (shared/bus.h)
+                        Freefall = 39,    // jumped off the bus, arms out, the glider not open yet
+                        Glide = 40,       // hanging from the glider (the server takes the first other anim after a jump as landing)
+                        BusHorn = 41,     // sat on the bus and honking its horn (one tick; everyone near the bus hears it)
                         Count };
+
+// In the air after leaving the bus.
+constexpr bool IsAirborne(uint8_t a) { return a == static_cast<uint8_t>(Anim::Freefall) || a == static_cast<uint8_t>(Anim::Glide); }
+// Still sat on the bus.
+constexpr bool IsBusSeat(uint8_t a) { return a == static_cast<uint8_t>(Anim::BusRide) || a == static_cast<uint8_t>(Anim::BusHorn); }
 
 // The moves that dodge like a roll does: the server gives them the same moment of safety.
 constexpr bool IsDodge(uint8_t a) {

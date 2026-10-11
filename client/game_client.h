@@ -1,4 +1,5 @@
 #pragma once
+#include "../shared/bus.h"
 #include "../shared/protocol.h"
 #include "../shared/transport.h"
 #include <algorithm>
@@ -15,7 +16,7 @@ namespace royale {
 
 // Something that happened that the game layer should react to (HUD, sound, effects).
 struct ClientEvent {
-    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction, FartCloud, Knocked, TeamRevived, Pinged, PadsChanged, TeamsChanged } type;
+    enum class Type : uint8_t { StateChanged, Damaged, Eliminated, LootTaken, LootAdded, PlayerJoined, PlayerLeft, ReadyChanged, MapChanged, InventoryChanged, AbilityUsed, BossDown, Strike, BossSpawned, PropBroken, SupplyDrop, WeatherChanged, AllyChanged, AllyAction, FartCloud, Knocked, TeamRevived, Pinged, PadsChanged, TeamsChanged, BusPath, BusHorn } type;
     uint16_t id = 0;     // Damaged: target | Eliminated: victim | LootTaken: taker | PlayerJoined/Left: player | Knocked/TeamRevived: the player who went down / got up | Pinged: the pinger
     uint16_t other = 0;  // Damaged: attacker | Eliminated: killer (kNoPlayer16 for storm or disconnect) | Knocked: who knocked them | TeamRevived: who revived them
     float amount = 0;    // Damaged: hearts
@@ -26,6 +27,7 @@ struct ClientEvent {
     bool ready = false;  // ReadyChanged
     uint8_t item = 0;    // PropBroken: what was inside | AbilityUsed: the ability (net::kRevivedItem means a Fairy brought someone back)
     float x = 0, z = 0;  // AbilityUsed: where the user was | Strike / BossSpawned / BossDown / Pinged: where
+    // BusPath: the line arrived (read it with GameClient::Bus) | BusHorn: id = who honked
 };
 
 // A ping (L) your team can see: where, what kind (PingKind) and what it points at (the enemy's id or the loot index, else kNoPlayer16).
@@ -269,6 +271,17 @@ class GameClient {
     // Seconds since the match state last changed, by the local clock (drives the lobby countdown).
     float StateElapsed() const { return localClock - stateSince; }
     uint64_t Seed() const { return seed; }
+    // ---- the Moonfall Bus (shared/bus.h) ----
+    // This match's line (valid once EvBusPath arrived with the countdown).
+    const BusPath& Bus() const { return bus; }
+    // Seconds since the drop began (0 before it): where the bus is on its line.
+    float BusTime() const { return state == MatchState::Drop ? StateElapsed() : 0.0f; }
+    // Who sits on each bench (kNoPlayer16 for empty ones), and which benches are still taken (from the newest snapshot).
+    const std::vector<uint16_t>& BusSeats() const { return busSeats; }
+    uint32_t AboardMask() const { return state == MatchState::Countdown || state == MatchState::Drop ? aboardMask : 0u; }
+    // The local player's bench, or -1.
+    int MySeat() const { for (size_t i = 0; i < busSeats.size(); i++) if (busSeats[i] == playerId) return static_cast<int>(i); return -1; }
+    bool Aboard() const { const int s = MySeat(); return s >= 0 && s < 32 && (AboardMask() >> s & 1u); }
     uint32_t LastSnapshotTick() const { return lastTick; }
     uint64_t DesyncCount() const { return desyncs; }
 
@@ -347,6 +360,7 @@ class GameClient {
 
     void SetState(MatchState next) {
         if (next != state) stateSince = localClock;
+        if (next != state && (next == MatchState::Lobby || next == MatchState::Countdown)) { bus = BusPath{}; busSeats.clear(); aboardMask = 0; }   // a new line comes with each countdown
         state = next;
     }
 
@@ -557,6 +571,22 @@ class GameClient {
                 events.push_back(e);
                 break;
             }
+            case net::MsgType::EvBusPath: {
+                net::EvBusPath m;
+                if (!net::Decode(data, m)) break;
+                bus = BusFromEnds({m.sx, m.sz}, {m.ex, m.ez}, m.altitude, m.speed, map);
+                busSeats = m.seats;
+                events.push_back(ClientEvent{ClientEvent::Type::BusPath});
+                break;
+            }
+            case net::MsgType::EvBusHorn: {
+                net::EvBusHorn m;
+                if (!net::Decode(data, m)) break;
+                ClientEvent e{ClientEvent::Type::BusHorn};
+                e.id = m.by;
+                events.push_back(e);
+                break;
+            }
             case net::MsgType::EvFartCloud: {
                 net::EvFartCloud m;
                 if (!net::Decode(data, m)) break;
@@ -660,6 +690,7 @@ class GameClient {
         stormTimeAtSnapshot = s.stormTime;
         lobbyLeftAtSnapshot = s.lobbyLeft;
         SetState(static_cast<MatchState>(s.state));
+        aboardMask = s.aboardMask;
         alive = s.alive;
         epoch = s.epoch;
 
@@ -726,6 +757,9 @@ class GameClient {
     std::vector<ClientPing> pings;
     std::vector<std::pair<float, float>> pads;
     uint8_t lobbyLeftAtSnapshot = 255;
+    BusPath bus;
+    std::vector<uint16_t> busSeats;
+    uint32_t aboardMask = 0;
     std::vector<Prop> props;
     std::vector<Poi> pois;
     std::vector<net::ResultRow> results;

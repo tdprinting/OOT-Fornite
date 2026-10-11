@@ -10,7 +10,8 @@ std::unordered_map<const Actor*, std::string> gPlate;      // the nameplate text
 // Floor height under (x, z), or `fallback` if the ray finds nothing.
 float GroundY(PlayState* play, float x, float z, float fallback) {
     CollisionPoly poly;
-    Vec3f pos = { x, 4000.0f, z };
+    // (in the regular game's houses and dungeons from just above where it stands, so a floor upstairs is not taken for its own)
+    Vec3f pos = { x, InRegularGame() && !SceneOutdoors() ? fallback + 120.0f : 4000.0f, z };
     float y = BgCheck_AnyRaycastFloor1(&play->colCtx, &poly, &pos);
     return y > BGCHECK_Y_MIN + 1.0f ? y : fallback;
 }
@@ -756,6 +757,10 @@ std::unordered_map<const Actor*, PuppetMotion> gMotion;
 // Carts (the section "carts: the Lon Lon Buggy" below).
 bool PuppetRide(PlayState* play, Player* player, PuppetMotion& m, uint16_t id);
 bool CartInput(Input& in, const royale::HudState& hud);
+// The Moonfall Bus (BattleBus.inc).
+bool PuppetBusSeat(PlayState* play, Player* player, PuppetMotion& m, const royale::PuppetState& s);
+bool BusInput(Input& in, const royale::HudState& hud);
+void DrawBusHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 std::string CartPromptText();
 void DrawCartHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
 void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
@@ -949,6 +954,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
             SpawnProjectileFrom(s.weapon, s.x, actor->world.pos.y + 45.0f, s.z, s.rot, s.weaponRarity);
         before = s.anim;
     }
+    if (s.alive && PuppetBusSeat(play, player, m, s)) return;    // sat on the Moonfall Bus, or falling from it
     if (s.alive && PuppetRide(play, player, m, s.id)) return;   // sat in a cart (or climbing down from one)
     if (HangingFromGlider(&s, actor, play)) {   // both hands up on the glider's bar (the game's ledge-hang pose)
         if (m.anim != 254) { StartSeq(play, player, m, AnimSeq(RA(normal_jump_climb_wait), true), -6.0f); m.anim = 254; }

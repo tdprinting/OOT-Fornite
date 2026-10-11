@@ -32,6 +32,42 @@ static void NavigationStorageAndBudget() {
     CHECK(path.size() == 1);
 }
 
+static void SearchBudgetFailsOverlongSearch() {
+    // A search that had the whole tick budget and still ran out is a failure (remembered by the bot), not deferred to be retried every tick.
+    NavGrid grid({{0,0}, 6600}, [](Vec2 p) { return std::fabs(p.x) > 90; });
+    NavGrid::SearchWorkspace work;
+    NavGrid::SearchBudget budget;
+    std::vector<Vec2> path;
+    CHECK(!grid.FindPath({-3000,0},{3000,0},path,true,&work,&budget));
+    CHECK(work.expanded == NavGrid::SearchBudget::kExpansions && !work.deferred);
+    budget.Reset(); budget.expansions = 500;   // a later search in the same tick with only part of the budget left is deferred
+    CHECK(!grid.FindPath({-3000,0},{3000,0},path,true,&work,&budget));
+    CHECK(work.deferred);
+}
+
+static void ConnectedJudgesWalledPointsByTheirGround() {
+    // A goal inside a wall is judged by the ground it snaps to (where the search would end), so a flee or boss-avoid point pushed into a wall
+    // on the far side does not cost a whole failed search.
+    NavGrid grid({{0,0}, 3000}, [](Vec2 p) { return std::fabs(p.x) > 300; });
+    grid.BuildRegions();
+    Vec2 snapped;
+    CHECK(grid.Snap({280,0}, &snapped, true) && snapped.x > 300);
+    CHECK(!grid.Connected({-1000,0}, {280,0}));
+    CHECK(grid.Connected({1000,0}, {280,0}));
+    CHECK(!grid.Connected({280,0}, {-1000,0}));
+}
+
+static void RouteOffAFloorStartsAtItsFoot() {
+    // From up on a floor the route's first ground stop is where the floor meets the ground, not a far point the ground line test allows
+    // (the bot can only walk where the floor is until it is down).
+    NavGrid grid({{0,0}, 3000}, nullptr);
+    grid.AddUpper({{0,0,40}, {60,0,40}, {0,60,40}, {60,60,40}});
+    NavGrid::SearchWorkspace work;
+    std::vector<NavGrid::Stop> route;
+    CHECK(grid.FindRoute({0,0}, 40, true, {1200,0}, 0, false, route, &work));
+    CHECK(route.size() >= 2 && !route[0].upper && Distance(route[0].p, {0,0}) < 150.0f);
+}
+
 static void TerrainTransitions() {
     NavGrid::SearchWorkspace work;
     std::vector<NavGrid::Stop> route;
@@ -53,7 +89,7 @@ static void TerrainTransitions() {
 static Simulation Duel() {
     Simulation sim(5, {{0,0},3000},0);
     sim.match.AddHuman(1); sim.match.Start();
-    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(0.05f);
+    while (sim.match.State() != MatchState::InMatch) sim.match.Tick(0.05f); sim.match.LandEveryone();
     for (auto& p : sim.match.Players()) if (p.id != 1 && p.id != 1000) p.alive = false;
     sim.match.Find(1)->pos = {2000,0}; sim.match.Find(1000)->pos = {-400,0};
     sim.match.SetSupplyDrops(false);
@@ -132,7 +168,7 @@ static void CacheAndRippleSleep() {
     field.Clear(); CHECK(field.Sleeping());
 }
 int main() {
-    NavigationStorageAndBudget(); TerrainTransitions(); BotsAbandonUnreachableLoot();
+    NavigationStorageAndBudget(); SearchBudgetFailsOverlongSearch(); ConnectedJudgesWalledPointsByTheirGround(); RouteOffAFloorStartsAtItsFoot(); TerrainTransitions(); BotsAbandonUnreachableLoot();
     AllyCannotStrikeThroughCover(); RevealedBotsStillRespectCover(); CacheAndRippleSleep();
     std::printf("performance regressions: %d failures\n", failures);
     return failures ? 1 : 0;

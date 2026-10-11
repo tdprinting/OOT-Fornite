@@ -535,7 +535,7 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
 void DrawSky(PlayState* play) {
     static const char drawKey = 0;
     DrawIdentity identity(&drawKey, 0, 0);
-    if (!InField()) return;
+    if (!WorldFxOn(kRegSky, true)) return;
     constexpr float kR = 7000.0f;
     const SkyLight L = SkyLightNow();
     float tint[3];
@@ -672,7 +672,7 @@ void DrawSky(PlayState* play) {
 void DrawFogBanks(PlayState* play) {
     static const char drawKey = 0;
     const WorldAnchor anchor(&drawKey, play->view.eye);
-    if (!InField()) return;
+    if (!WorldFxOn(kRegAir, true)) return;
     const SkyLight L = SkyLightNow();
     const float w = WeatherAmount();
     float dens = 0.0f, col[3] = { 214, 220, 228 };
@@ -742,7 +742,7 @@ void DrawFogBanks(PlayState* play) {
 void DrawSkyLight(PlayState* play, bool shafts, bool flies) {
     static const char drawKey = 0;
     DrawIdentity identity(&drawKey, 0, 0);
-    if (!InField() || !gSkyOot) return;
+    if (!WorldFxOn(kRegSky, true) || !gSkyOot) return;
     const SkyLight L = SkyLightNow();
     float tint[3];
     const float ov = SkyOvercast(tint);
@@ -813,7 +813,7 @@ void DrawSkyLight(PlayState* play, bool shafts, bool flies) {
 void DrawWindParticles(PlayState* play) {
     static const char drawKey = 0;
     const WorldAnchor anchor(&drawKey, play->view.eye);
-    if (!gWindStreaks || !gWindOn || !InField()) return;
+    if (!gWindStreaks || !gWindOn || !WorldFxOn(kRegAir, true)) return;
     if (gWeatherShown.sky == royale::Sky::Ash || gWeatherShown.sky == royale::Sky::Sandstorm) return;
     float wx, wz, wind;
     WindNow(&wx, &wz, &wind);
@@ -989,10 +989,52 @@ void DrawTornado(PlayState* play) {
 // the server's spell of weather and the storm. So are the rest: thunderstorms and the storm zone bring the game's lightning (bolts on the horizon,
 // the sky flashing), fog, sand, ash and the storm thicken the game's own distance fog and tint it, and a sandstorm brings the Haunted Wasteland's
 // sandstorm. Everything is handed back to the game when the weather clears or the match ends.
+// The regular game's weather. There are no match spells, so it is worked out here from the save (its day count and the time of day), the place
+// and the "Weather" setting on the Regular game page: three spells a day by itself (the place's own kinds, as on the match maps: ash on Death
+// Mountain, sandstorms in the desert, mist on the lake, snow in winter; the season turns every five days), or always one kind. Outdoors only; the
+// Haunted Wasteland keeps its own sandstorm. It fades out before it changes, and when you go inside.
+int RegularWeatherPlace(int scene) {
+    switch (scene) {
+        case SCENE_DEATH_MOUNTAIN_CRATER: case SCENE_DEATH_MOUNTAIN_TRAIL: return 3;
+        case SCENE_DESERT_COLOSSUS: case SCENE_GERUDOS_FORTRESS: return 4;
+        case SCENE_LAKE_HYLIA: case SCENE_ZORAS_RIVER: case SCENE_ZORAS_FOUNTAIN: return 1;
+        case SCENE_KAKARIKO_VILLAGE: case SCENE_GRAVEYARD: case SCENE_LON_LON_RANCH: case SCENE_MARKET_DAY: return 2;
+        case SCENE_HAUNTED_WASTELAND: return -1;
+        default: return 0;
+    }
+}
+royale::Weather RegularWeatherNow() {
+    royale::Weather w;
+    const int totalDays = std::max(0, static_cast<int>(gSaveContext.totalDays));
+    w.season = static_cast<royale::Season>((totalDays / 5 + 1) % royale::kSeasonCount);   // a new save starts in summer
+    const int mode = gRegular[kRegWeather], place = gPlayState != nullptr ? RegularWeatherPlace(gPlayState->sceneNum) : -1;
+    if (mode <= 0 || place < 0 || !SceneOutdoors() || InCutscene()) return w;
+    if (mode >= 2) { w.sky = static_cast<royale::Sky>(std::clamp(mode - 1, 1, royale::kSkyCount - 1)); w.intensity = 60; return w; }
+    const int spell = 1 + totalDays * 3 + gSaveContext.dayTime / 21846;
+    const uint64_t seed = 0x5245474Cull ^ (static_cast<uint64_t>(gSaveContext.fileNum + 1) * 0x9E3779B97F4A7C15ull);   // "REGL", one weather per save file
+    royale::WeatherOptions o;
+    o.season = static_cast<uint8_t>(w.season); o.intensity = 55; o.change = 50;
+    const royale::Weather spellW = royale::WeatherForSpell(o, seed, place, spell);
+    w.sky = spellW.sky; w.intensity = spellW.intensity;
+    return w;
+}
+void DriveRegularWeather() {
+    if (!InRegularGame()) return;
+    const royale::Weather want = RegularWeatherNow();
+    gWeatherShown.season = want.season;
+    const bool active = want.sky != royale::Sky::Clear && want.intensity > 0;
+    if (active && (gWeatherShown.sky == want.sky || gWeatherBlend <= 0.0f)) {   // the old weather has faded out: the new one comes in
+        gWeatherShown.sky = want.sky; gWeatherShown.intensity = want.intensity;
+        gWeatherBlend = std::min(1.0f, gWeatherBlend + 0.012f);
+    } else {
+        gWeatherBlend = std::max(0.0f, gWeatherBlend - 0.02f);
+    }
+}
+
 void DriveRealWeather() {
     static bool rainManaged = false, snowManaged = false, lightningManaged = false, sandManaged = false, fogManaged = false;
     static float fogNearAdj = 0.0f, fogFarAdj = 0.0f, fogColAdj[3] = { 0.0f, 0.0f, 0.0f };
-    if (!InField() || gPlayState == nullptr) {   // the scene is going (or gone): the next one starts from its own settings
+    if ((!InField() && !InRegularGame()) || gPlayState == nullptr) {   // the scene is going (or gone): the next one starts from its own settings
         rainManaged = snowManaged = lightningManaged = sandManaged = fogManaged = false;
         fogNearAdj = fogFarAdj = fogColAdj[0] = fogColAdj[1] = fogColAdj[2] = 0.0f;
         return;

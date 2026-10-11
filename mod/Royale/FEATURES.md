@@ -4,7 +4,7 @@
 
 | Feature | Implementation under `features/` |
 |---|---|
-| Session state, graphics/debug settings, travel, floor/platform helpers | `Core.inc` |
+| Session state, graphics/debug settings, travel, floor/platform helpers; the regular game's switches (`InRegularGame`, `WorldFxOn`, `SpawnStandIn`; `docs/REGULAR_GAME.md`) | `Core.inc` |
 | Remote players, animations, sounds, spells, skins | `Players.inc` |
 | Death ragdolls and lobby ragdoll test | `Ragdolls.inc` |
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |
@@ -18,16 +18,17 @@
 | Teams, knocked-down and revive, pings, Deku launch pads (input, crawl, squad HUD, ping and pad drawing, minimap helpers) | `Squads.inc` |
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
+| Moonfall Bus: seats, jump, free fall, horn, HUD, minimap, model draw | `BattleBus.inc` |
 | Music folder, crash reports, instrument playback | `MusicDiagnostics.inc` |
 | Angry villagers and solid scenery | `Scenery.inc` |
-| Water simulation, textures, caustics and rendering | `Water.inc` |
+| Water simulation, textures, caustics and rendering; hiding the game's own water (`UpdateGameWater`) | `Water.inc` |
 | Custom terrain, structures, map rendering | `Terrain.inc` |
 | Save files, lobby time, sandbox, alerts, dialogue | `Lobby.inc` |
 | Maya integration | `Maya.inc` |
 | Lilo model and toxic cloud | `LiloModel.inc` |
 | Avriella model and behavior | `Avriella.inc` |
 | Avriella toys; includes `RoyaleLobbyPets.h` | `AvriellaToys.inc` |
-| Lilo behavior and hireable allies | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md`; Master Chief (Jones's rifles, own body/clips): `RoyaleChief.h`, `shared/chief_animation.h`, `tools/chief/` |
+| Lilo behavior and hireable allies (regular-game allies: `ReconcileRegularAllies`) | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md`; Master Chief (Jones's rifles, own body/clips): `RoyaleChief.h`, `shared/chief_animation.h`, `tools/chief/` |
 | Link clothes, cloth, Gilded Sword | `Equipment.inc` |
 | Map sign, aquarium include, pause inventory, update hooks | `SceneHooks.inc` |
 | Legacy sidebar/play menu | `Menus.inc` |
