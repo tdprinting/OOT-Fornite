@@ -880,8 +880,9 @@ class BotController {
     }
 
     // Walk toward `goal`, following an A* path when the way isn't a clear line. `face` keeps the bot looking at a point (for
-    // strafing) instead of where it is going.
-    void Steer(Match& m, PlayerState& p, Memory& mem, Vec2 goal, float dt, float speedScale = 1.0f, const Vec2* face = nullptr) {
+    // strafing) instead of where it is going. A goal that moves is searched for again once it has moved a good way and a second has passed;
+    // an `urgent` one (a foe or a boss being closed on) after a quarter second.
+    void Steer(Match& m, PlayerState& p, Memory& mem, Vec2 goal, float dt, float speedScale = 1.0f, const Vec2* face = nullptr, bool urgent = false) {
         const float sprint = speedScale >= 0.9f ? SprintScale(mem) : 1.0f;
         const float stroke = nav && nav->Swimming(p.pos) ? 0.55f : 1.0f;   // swimming is slower than running
         const float step = kRunSpeed * m.SpeedMultiplier(p) * speedScale * sprint * stroke * dt;
@@ -894,8 +895,8 @@ class BotController {
             // Up a ramp to a floor or a roof, along it, across water, up a cliff or an ivy wall: a route whose stops carry their heights.
             float goalY = 0;
             const bool toUp = nav->UpperGoal(goal, &goalY);
-            const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
-            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
+            const bool goalMoved = Distance(goal, mem.pathGoal) > (urgent ? 120.0f : 200.0f);
+            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + (urgent ? 0.25f : 1.0f))) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
                 ROYALE_BOT_PROF(const bool timerHit = m.Clock() >= mem.repathAt;)
                 mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
@@ -923,8 +924,8 @@ class BotController {
                 if (stop.upper && !mem.upper && Distance(p.pos, stop.p) < NavGrid::kCell * 1.6f) { mem.upper = true; mem.levelY = nav->FloorAt(p.pos); }   // onto the ramp
             }
         } else if (nav && Distance(p.pos, goal) > NavGrid::kCell * 1.2f) {
-            const bool goalMoved = Distance(goal, mem.pathGoal) > 120.0f;
-            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + 0.25f)) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
+            const bool goalMoved = Distance(goal, mem.pathGoal) > (urgent ? 120.0f : 200.0f);
+            if ((m.Clock() >= mem.repathAt || (goalMoved && m.Clock() >= mem.lastSearchAt + (urgent ? 0.25f : 1.0f))) && repathBudget > 0 && !FailedGoal(mem, goal, m.Clock())) {
                 repathBudget--;
                 ROYALE_BOT_PROF(const bool timerHit = m.Clock() >= mem.repathAt;)
                 mem.pathGoal = goal; mem.lastSearchAt = m.Clock();
@@ -991,7 +992,7 @@ class BotController {
         // With no navigation grid the foe is the only target, so walk at it directly; with one, chase through the pathfinder.
         const bool far = dist > want * 1.8f && radial > 0;
         if (far) {
-            Steer(m, p, mem, foe.pos, dt, speedScale, &foe.pos);
+            Steer(m, p, mem, foe.pos, dt, speedScale, &foe.pos, true);
             return;
         }
         const float vx = toX * radial - toZ * strafe, vz = toZ * radial + toX * strafe;
@@ -1568,7 +1569,7 @@ class BotController {
             ROYALE_BOT_BRANCH(kBrHelper);
             const WeaponStats w=Match::StatsOf(p);
             p.rot=FaceAngle(p.pos,helper->pos);
-            if (helperDistance>w.range*.75f+kBokoBodyRadius) Steer(m,p,mem,helper->pos,dt,1.0f);
+            if (helperDistance>w.range*.75f+kBokoBodyRadius) Steer(m,p,mem,helper->pos,dt,1.0f,nullptr,true);
             if (helperDistance<=w.range*1.1f+kBokoBodyRadius) BotAttack(m,p,mem,helper->id,rng.Unit()<mem.skill);
             if (BokoAttacking(helper->mode) && helperDistance<130.0f)
                 Advance(m,p,p.pos.x-helper->pos.x,p.pos.z-helper->pos.z,kRunSpeed*dt);
@@ -1598,7 +1599,7 @@ class BotController {
                 ROYALE_BOT_BRANCH(kBrBossFight);
                 const WeaponStats w = Match::StatsOf(p);
                 const float want = w.ranged ? w.range * 0.7f : w.range * 0.6f + kBossBodyRadius * 0.5f;
-                if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos);
+                if (bd > want) Steer(m, p, mem, boss->pos, dt, 1.0f, &boss->pos, true);
                 else { p.rot = FaceAngle(p.pos, boss->pos); }
                 if (bd <= w.range * 1.1f + (dragon ? kDragonBodyRadius : kBossBodyRadius) && m.Clock() >= p.attackReadyAt) BotAttack(m, p, mem, boss->id, rng.Unit() < mem.skill);
                 // Back away just before it smashes, then return.
@@ -1659,7 +1660,7 @@ class BotController {
             if (foe && mem.aggression > 0.45f && s.advantage > 1.0f) {
                 ROYALE_BOT_BRANCH(kBrHuntVis);
                 if (dist > 500.0f || GettingAway(mem, p, *foe)) WantSprint(mem, tune, dist < 320.0f);   // closing the last gap on a runner: all it has
-                Steer(m, p, mem, foe->pos, dt);
+                Steer(m, p, mem, foe->pos, dt, 1.0f, nullptr, true);
                 return;
             }
             if (!foe && now - mem.lastSeenAt < 6.0f && mem.aggression > 0.5f && Distance(p.pos, mem.lastSeen) > 80.0f && Circle{soon.center, soon.radius * 0.9f}.Contains(mem.lastSeen)) {
@@ -1683,7 +1684,7 @@ class BotController {
             if (nearest && nearestDist > 250.0f) {
                 ROYALE_BOT_BRANCH(kBrLateClose);
                 if (nearestDist > 900.0f) WantSprint(mem, tune, false);
-                Steer(m, p, mem, nearest->pos, dt, 0.9f);
+                Steer(m, p, mem, nearest->pos, dt, 0.9f, nullptr, true);
                 return;
             }
         }
