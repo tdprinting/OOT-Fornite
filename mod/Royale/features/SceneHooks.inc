@@ -475,6 +475,7 @@ void OnSceneInit(int16_t) {
 void RegisterRoyaleMod() {
     InstallCrashReporter();
     gRoyaleBackdropDraw = DrawBackdrop;   // the sky pass, behind the world (see DrawBackdrop)
+    Ship::Archive::sRoyaleResourceFailed = OnResourceFailed;   // libultraship patch 0009: failed resources go into the crash trail
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>(OnSceneInit);

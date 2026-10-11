@@ -141,6 +141,7 @@ using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 #include <SDL2/SDL.h>
 #include <imgui.h>
 #include <libultraship/libultraship.h>
+#include "resource/archive/Archive.h"   // Ship::Archive::sRoyaleResourceFailed (libultraship patch 0009)
 #include <spdlog/spdlog.h>
 #ifdef near
 #undef near
