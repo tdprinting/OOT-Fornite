@@ -485,6 +485,7 @@ void RegisterRoyaleMod() {
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerClothLimb>(OnPlayerClothLimb);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerCustomSword>(OnPlayerCustomSword);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerItemMaterial>(OnPlayerItemMaterial);
+    GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerSkinLimb>(OnPlayerSkinLimb);
     // The server owns health during a match, so whatever the game itself does to it (a long fall, lava, a void out) is undone on the spot.
     // Otherwise a hit that takes it to 0 starts the game's own death and game-over screen before OnPlayerUpdate can put it back.
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerHealthChange>([](int16_t) {

@@ -6,7 +6,8 @@
 |---|---|
 | Session state, graphics/debug settings, travel, floor/platform helpers; the regular game's switches (`InRegularGame`, `WorldFxOn`, `SpawnStandIn`; `docs/REGULAR_GAME.md`) | `Core.inc` |
 | Our own Link clips (jump, landing, sprint) over local Link and puppets | `LinkAnims.inc` |
-| Remote players, animations, sounds, spells, skins | `Players.inc` |
+| Remote players, animations, sounds, spells, tunic skins | `Players.inc` |
+| Player skin models: other bodies on Link's skeleton (binding, CPU skinning, patch 0031 hook; `docs/SKINS.md`) | `Skins.inc`; models `shared/skin_<id>_model.h`, tools `tools/skins/` |
 | Death ragdolls and lobby ragdoll test | `Ragdolls.inc` |
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |
 | Glider, foliage, ground weather and patches | `GroundWeather.inc` |

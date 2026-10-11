@@ -25,6 +25,7 @@ struct UiState {
     int clothPhysics = 100;                // how much cloth and wind physics the cap and glider get, per cent (local)
     int musicMode = 0;                     // match music: 0 the game's, 1 random from the music folder, 2 none (local)
     int skin = 0;          // index into royale::kSkins, or royale::kCustomSkin
+    int model = 0;         // index into royale::kSkinModelNames (0: the game's own Link)
     float customTunic[3] = { 0.12f, 0.41f, 0.11f };
     bool loaded = false;
     bool showPosition = false;
@@ -130,6 +131,9 @@ UiState& Ui() {
         gSession.SetTeamMode(static_cast<royale::TeamMode>(ui.teamMode));
         gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);
         ui.skin = std::clamp(CVarGetInteger(ROYALE_CVAR("Skin"), 0), 0, royale::kCustomSkin);
+        ui.model = std::clamp(CVarGetInteger(ROYALE_CVAR("SkinModel"), 0), 0, royale::kSkinModelCount - 1);
+        gLocalSkinModel = ui.model;
+        gSession.SetSkinModel(ui.model);
         const uint32_t saved = static_cast<uint32_t>(CVarGetInteger(ROYALE_CVAR("SkinColor"), static_cast<int>(royale::SkinRgb(0))));
         ui.customTunic[0] = royale::RgbR(saved) / 255.0f; ui.customTunic[1] = royale::RgbG(saved) / 255.0f; ui.customTunic[2] = royale::RgbB(saved) / 255.0f;
         gLocalTunic = SelectedTunic(ui);
@@ -145,6 +149,7 @@ void SaveUi(const UiState& ui) {
     CVarSetInteger(ROYALE_CVAR("WaitingRoom"), ui.waitingRoom ? 1 : 0);
     CVarSetInteger(ROYALE_CVAR("BotDifficulty"), ui.botDifficulty);
     CVarSetInteger(ROYALE_CVAR("Skin"), ui.skin);
+    CVarSetInteger(ROYALE_CVAR("SkinModel"), ui.model);
     CVarSetInteger(ROYALE_CVAR("PlayerLimit"), ui.playerLimit);
     CVarSetInteger(ROYALE_CVAR("TeamMode"), ui.teamMode);
     CVarSetInteger(ROYALE_CVAR("AutoStart"), ui.autoStart ? 1 : 0);

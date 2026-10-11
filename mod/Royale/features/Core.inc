@@ -495,11 +495,12 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "Shadows", "Dynamic shadows and lights" },
     { "ItemMaps", "Sword and shield sunlight detail (normal and bump maps)" },
     { "GearReport", "Gear report: show on screen what Link's hands, back and feet draw (off by default)" },
+    { "Skins", "Player models: newer bodies for Link on the game's own animations (off: everyone is the game's Link)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport };
-static_assert(kDbgGearReport + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport, kDbgSkins };
+static_assert(kDbgSkins + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {

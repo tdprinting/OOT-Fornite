@@ -10,6 +10,7 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 
 ## Build and run
 - [BUILDING.md](BUILDING.md): Building and running OOT Royale
+- [SKINS.md](SKINS.md): Player skins: new bodies for Link on the game's own animations, and how to add one
 - [PLAY.md](PLAY.md): How to get and install OOT Royale (no building needed)
 - [CODE_MAP.md](CODE_MAP.md): Code map
 - [CLEANUP_PLAN.md](CLEANUP_PLAN.md): Cleanup plan: fewer tokens, easier navigation, zero gameplay change

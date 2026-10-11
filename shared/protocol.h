@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 43; // 43: Skyloft Isles, map 13 (14 maps, 24 more POI names). 42: Master Chief, a seventh ally carrying Jones's rifles. 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 44; // 44: player skin models (Hello, roster and EvPlayerJoined carry a skin byte). 43: Skyloft Isles, map 13 (14 maps, 24 more POI names). 42: Master Chief, a seventh ally carrying Jones's rifles. 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -70,8 +70,9 @@ struct Hello {
     // Secret the hosting process generated; a Hello carrying it is the host's own player. 0 for everyone else.
     uint64_t hostToken = 0;
     uint32_t tunic = SkinRgb(0); // the player's chosen tunic colour, 0xRRGGBB
-    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); w.U64(hostToken); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); }
-    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); hostToken = r.U64(); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); return r.ok; }
+    uint8_t skin = 0;            // the player's model (index into kSkinModelNames; 0 is the game's own Link)
+    void Write(ByteWriter& w) const { w.U16(version); w.Str(name); w.U64(hostToken); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); w.U8(skin); }
+    bool Read(ByteReader& r) { version = r.U16(); name = r.Str(kMaxNameLen); hostToken = r.U64(); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); skin = r.U8(); return r.ok && ValidSkinModel(skin); }
 };
 
 struct Input {
@@ -290,6 +291,7 @@ struct RosterEntry {
     uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
     uint32_t tunic = SkinRgb(0);
+    uint8_t skin = 0;   // the player's model (index into kSkinModelNames)
 };
 
 inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
@@ -348,7 +350,7 @@ struct Welcome {
         WriteProps(w, props);
         WritePois(w, pois);
         w.U8(static_cast<uint8_t>(roster.size()));
-        for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); }
+        for (const auto& e : roster) { w.U16(e.id); w.U8(e.flags); w.Str(e.name); w.U8(RgbR(e.tunic)); w.U8(RgbG(e.tunic)); w.U8(RgbB(e.tunic)); w.U8(e.skin); }
     }
     bool Read(ByteReader& r) {
         playerId = r.U16(); version = r.U16(); seed = r.U64(); limit = r.U8(); mapId = r.U8(); teamMode = r.U8();
@@ -363,7 +365,7 @@ struct Welcome {
         if (!ReadPois(r, pois)) return false;
         size_t m = r.U8();
         roster.assign(m, {});
-        for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); e.tunic = PackRgb(cr, cg, cb); if (e.flags > 3) r.ok = false; }
+        for (auto& e : roster) { e.id = r.U16(); e.flags = r.U8(); e.name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); e.tunic = PackRgb(cr, cg, cb); e.skin = r.U8(); if (e.flags > 3 || !ValidSkinModel(e.skin)) r.ok = false; }
         return r.ok;
     }
 };
@@ -774,8 +776,9 @@ struct EvPlayerJoined {
     uint8_t flags = 0; // kRosterHost, kRosterReady
     std::string name;
     uint32_t tunic = SkinRgb(0);
-    void Write(ByteWriter& w) const { w.U16(id); w.U8(flags); w.Str(name); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); }
-    bool Read(ByteReader& r) { id = r.U16(); flags = r.U8(); name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); return r.ok && flags <= 3; }
+    uint8_t skin = 0;   // the player's model (index into kSkinModelNames)
+    void Write(ByteWriter& w) const { w.U16(id); w.U8(flags); w.Str(name); w.U8(RgbR(tunic)); w.U8(RgbG(tunic)); w.U8(RgbB(tunic)); w.U8(skin); }
+    bool Read(ByteReader& r) { id = r.U16(); flags = r.U8(); name = r.Str(kMaxNameLen); const uint8_t cr = r.U8(), cg = r.U8(), cb = r.U8(); tunic = PackRgb(cr, cg, cb); skin = r.U8(); return r.ok && flags <= 3 && ValidSkinModel(skin); }
 };
 
 struct EvReady {
