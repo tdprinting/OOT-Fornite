@@ -134,7 +134,8 @@ void OnEmoteWheelInput() {
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
     if (gSkydiving) in.cur.button &= ~BTN_Z, in.press.button &= ~BTN_Z, in.rel.button &= ~BTN_Z;
     // Battle Royale layout: A with nothing to open, take, hire or say is the jump. Taken off the pad here so the game does not also roll with it.
-    if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && LiveAndAlive(hud) && InField() &&
+    // While Z-targeting (Z held) A stays the game's own: its normal jumps and the jump slash.
+    if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && !(in.cur.button & BTN_Z) && LiveAndAlive(hud) && InField() &&
         !gSkydiving && !AHasTarget()) {
         gTouchJump = true;
         in.cur.button &= ~BTN_A; in.press.button &= ~BTN_A; in.rel.button &= ~BTN_A;
