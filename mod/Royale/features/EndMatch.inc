@@ -719,22 +719,7 @@ void DrawOverlay() {
             prompt(IM_COL32(255, 232, 160, 255), "Read the sign");
         }
     }
-    if (ImGui::GetTime() < gBannerUntil) {
-        const float fade = static_cast<float>(std::min(1.0, gBannerUntil - ImGui::GetTime()));
-        ImU32 col = RarityU32(gBannerRarity);
-        col = (col & 0x00FFFFFF) | (static_cast<ImU32>(255 * fade) << 24);
-        centered(ds.y * 0.56f, col, 27 * scale, gBannerText);
-        if (!gBannerDescription.empty()) {
-            const float size = 16.0f * scale;
-            const float wrap = ds.x * 0.82f;
-            ImVec2 desc = font->CalcTextSizeA(size, wrap, wrap, gBannerDescription.c_str());
-            const ImVec2 pos((ds.x - desc.x) * 0.5f, ds.y * 0.56f + 31.0f * scale);
-            const ImU32 ink = IM_COL32(245, 245, 255, static_cast<int>(230 * fade));
-            dl->AddText(font, size, ImVec2(pos.x + 1.5f, pos.y + 1.5f), IM_COL32(0, 0, 0, static_cast<int>(210 * fade)),
-                        gBannerDescription.c_str(), nullptr, wrap);
-            dl->AddText(font, size, pos, ink, gBannerDescription.c_str(), nullptr, wrap);
-        }
-    }
+    if (ImGui::GetTime() < gBannerUntil) DrawPickupCard(dl, font, ds, scale);
     DrawWeather(dl, ds, scale, h);
     DrawStorm(dl, ds, scale, h);
     DrawBossBars(dl, font, scale);

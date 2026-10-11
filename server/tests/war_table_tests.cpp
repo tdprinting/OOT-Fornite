@@ -49,6 +49,17 @@ int main() {
     Check(Neighbor(buttons,0,1,0)==3,"Navigation skips disabled actions");
     Check(Neighbor(buttons,2,1,0)==3,"Right reaches adjacent control");
     Check(Neighbor(buttons,3,1,0)==3,"Focus remains valid at edge");
+    buttons[3].touchOnly=true;
+    Check(Neighbor(buttons,2,1,0)==2,"Touch-only footer buttons are skipped by the controller");
+    Check(HitTest(buttons,50,10)==0&&HitTest(buttons,150,50)==3,"Taps inside a button hit it, touch-only ones too");
+    Check(HitTest(buttons,50,30)==0||HitTest(buttons,50,30)==2,"Taps in a narrow gap reach a neighbouring button");
+    Check(HitTest(buttons,50,-6)==0&&HitTest(buttons,50,-20)==-1,"Near misses count, far misses do not");
+    const Rect full=GameViewport(1920,1080,false,0,0);
+    Check(full.x==0&&full.w==1920,"Without boxing the game fills the window");
+    const Rect n64=GameViewport(1920,1080,true,0,0);
+    Check(std::fabs(n64.w-1440)<.01f&&std::fabs(n64.x-240)<.01f,"N64 mode pillarboxes to 4:3");
+    const Rect wide=GameViewport(1920,1080,false,21,9);
+    Check(std::fabs(wide.w-1920)<.01f&&wide.y>0,"Ultra-wide letterboxes a 16:9 window");
     Repeat repeat;
     Check(repeat.Tick(1,.05f),"First stick direction responds immediately");
     Check(!repeat.Tick(1,.05f),"Holding does not repeat every frame");
