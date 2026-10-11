@@ -30,6 +30,13 @@ def line(x1, y1, x2, y2, stroke=None, sw=3, extra=""):
 def text(x, y, s, size=18, fill="#2A1408", anchor="start", weight="normal", italic=False):
     st = ' font-style="italic"' if italic else ""
     return f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" text-anchor="{anchor}" font-weight="{weight}"{st}>{s}</text>'
+def triforce(cx, cy, w, fill=None, sw=1.5):
+    """three gold triangles, point up, width w, centred at (cx, cy)"""
+    h = w * 0.866; f = fill or C["gold"]; out = ""
+    for (ox, oy) in ((0, -h/4), (-w/4, h/4), (w/4, h/4)):
+        x, y = cx + ox, cy + oy
+        out += path(f"M{x} {y - h/4} L{x + w/4} {y + h/4} L{x - w/4} {y + h/4} Z", f, C["line"], sw)
+    return out
 def callout(x, y, tx, ty, s, anchor="start"):
     return line(x, y, tx, ty, "#3A2A1A", 1.6) + circ(x, y, 3.5, "#3A2A1A", False) + text(tx + (6 if anchor == "start" else -6), ty + 5, s, 16, "#3A2A1A", anchor)
 
@@ -95,13 +102,13 @@ def moon_front(cx, cy, R):
     # the grin: stretched wider than the eyes, lips pulled back, two rows of big uneven teeth with a black gap
     my = cy + R * 0.4
     s += path(f"M{cx - R*0.64} {my - R*0.1} Q{cx} {my - R*0.02} {cx + R*0.64} {my - R*0.1} Q{cx + R*0.5} {my + R*0.3} {cx} {my + R*0.34} Q{cx - R*0.5} {my + R*0.3} {cx - R*0.64} {my - R*0.1} Z", C["mouth"], C["moon3"], 4)
-    n = 11
+    n = 10
     for i in range(n):
-        t = (i + 0.5) / n; x = cx - R * 0.6 + t * R * 1.2; bow = (1 - (2*t-1)**2)
-        h = R * (0.06 + 0.1 * bow) * (0.85 + 0.3 * ((i * 7) % 3) / 2)
-        s += rect(x - R*0.05, my - R*0.1 + bow * R*0.07, R * 0.1 - 2, h, C["teeth"], 2, True, 2)
-        hb = R * (0.04 + 0.08 * bow) * (0.8 + 0.3 * ((i * 5) % 3) / 2)
-        s += rect(x - R*0.045 + R*0.04, my + R*0.34 * bow - hb - R*0.02 + (1 - bow) * R * 0.1, R * 0.09 - 2, hb, C["teeth"], 2, True, 2)
+        t = (i + 0.5) / n; x = cx - R * 0.58 + t * R * 1.16; bow = (1 - (2*t-1)**2)
+        lip_top = my - R*0.1 + bow * R * 0.08; lip_bot = my - R*0.1 + bow * R * 0.44
+        h_top = R * 0.12 * (0.8 + 0.2 * bow); h_bot = R * 0.09 * (0.8 + 0.2 * bow)
+        s += rect(x - R*0.052, lip_top, R * 0.104, h_top, C["teeth"], 3, True, 2)
+        s += rect(x - R*0.047, lip_bot - h_bot, R * 0.094, h_bot, C["teeth"], 3, True, 2)
     s += path(f"M{cx - R*0.66} {my - R*0.12} Q{cx} {my - R*0.03} {cx + R*0.66} {my - R*0.12}", "none", C["moon3"], 5)      # upper lip line
     for sx in (-1, 1): s += path(f"M{cx + sx*R*0.14} {cy + R*0.16} Q{cx + sx*R*0.48} {cy + R*0.2} {cx + sx*R*0.68} {cy + R*0.3}", "none", C["moon3"], 3)   # the creases down from the nostrils
     return s
@@ -121,11 +128,10 @@ def moon_side(cx, cy, R, facing=-1):
     # the grin wraps round the lower front: a dark wedge with big teeth along the lip line
     s += path(f"M{cx + f*R*0.99} {cy + R*0.26} Q{cx + f*R*0.86} {cy + R*0.6} {cx + f*R*0.3} {cy + R*0.9} Q{cx + f*R*0.62} {cy + R*0.72} {cx + f*R*0.9} {cy + R*0.42} Z", C["mouth"], C["moon3"], 4)
     p0 = (cx + f*R*0.99, cy + R*0.26); p1 = (cx + f*R*0.86, cy + R*0.6); p2 = (cx + f*R*0.3, cy + R*0.9)
-    for i in range(7):
-        t = 0.08 + i * 0.14
+    for i in range(6):
+        t = 0.12 + i * 0.15
         x = (1-t)**2*p0[0] + 2*(1-t)*t*p1[0] + t*t*p2[0]; y = (1-t)**2*p0[1] + 2*(1-t)*t*p1[1] + t*t*p2[1]
-        h = R * (0.07 + 0.05 * ((i * 7) % 3) / 2)
-        s += rect(x - R*0.035 - f*R*0.05, y - R*0.02, R*0.07, h, C["teeth"], 2, True, 2)
+        s += rect(x - R*0.035 - f*R*0.06, y - R*0.01, R*0.07, R*0.09, C["teeth"], 3, True, 2)
     s += path(f"M{cx + f*R*0.9} {cy + R*0.2} Q{cx + f*R*0.7} {cy + R*0.34} {cx + f*R*0.62} {cy + R*0.56}", "none", C["moon3"], 3)   # the cheek crease
     return s
 def moon_back(cx, cy, R):
@@ -192,7 +198,7 @@ def side_view(ox, oy, mirror=False):
     # banner pole at the rear
     s += line(bx + bw - 12, by - 70, bx + bw - 12, by + 10, C["wood2"], 4)
     s += path(f"M{bx + bw - 12} {by - 70} L{bx + bw + 70} {by - 58} L{bx + bw + 40} {by - 44} L{bx + bw + 70} {by - 30} L{bx + bw - 12} {by - 36} Z", C["red"], C["line"], 2.5)
-    s += path(f"M{bx + bw + 6} {by - 60} L{bx + bw + 34} {by - 51} L{bx + bw + 6} {by - 44} Z", C["gold"], "none", 0)
+    s += triforce(bx + bw + 20, by - 52, 22, sw=1)
     # roof then body
     s += rect(bx + 12, by - 14, bw - 24, 22, C["lac2"], 8, True, 3)
     s += rect(bx, by, bw, bh, "url(#lacG)", 22, True, 4)
@@ -208,8 +214,8 @@ def side_view(ox, oy, mirror=False):
         s += path(f"M{wx} {wy + 52} L{wx} {wy + 20} A20 20 0 0 1 {wx + 40} {wy + 20} L{wx + 40} {wy + 52} Z", "url(#glassG)", C["brass2"], 4)
         s += path(f"M{wx + 6} {wy + 48} L{wx + 6} {wy + 22} A14 14 0 0 1 {wx + 20} {wy + 8}", "none", "#BFE6F2", 2.5)
     # crest plaque
-    px = bx + bw * 0.5 - 24; py = by + 96
-    s += rect(px, py, 48, 24, C["red"], 3, True, 2) + path(f"M{px + 24} {py + 3} L{px + 42} {py + 21} L{px + 6} {py + 21} Z", C["gold"], C["line"], 1.5)
+    px = bx + bw * 0.5 - 34; py = by + 94
+    s += rect(px, py, 68, 30, C["red"], 4, True, 2) + triforce(bx + bw * 0.5, py + 16, 30)
     # hood, grille, lamp; horse head
     s += rect(bx - 62, by + 62, 70, 58, "url(#lacG)", 12, True, 3.5)
     for k in range(4): s += line(bx - 52, by + 76 + k * 10, bx - 20, by + 76 + k * 10, C["brass2"], 2.5)
@@ -258,6 +264,7 @@ def end_view(ox, oy, front=True):
         for k in range(5): line(0, 0, 0, 0)
         for k in range(4): s += line(bx + 36, by + 98 + k * 8, bx + bw - 36, by + 98 + k * 8, C["brass2"], 2.5)
         for sx in (-1, 1): s += circ(mcx + sx * 50, by + 96, 8, C["rune"], True, 2, 'filter="url(#glow)"')
+        s += rect(mcx - 22, by + 100, 44, 24, C["red"], 3, True, 2) + triforce(mcx, by + 113, 22, sw=1.2)
         # horse head on the hood, seen from the front: a narrow face with ears
         s += path(f"M{mcx - 14} {by + 90} L{mcx - 12} {by + 56} Q{mcx} {by + 44} {mcx + 12} {by + 56} L{mcx + 14} {by + 90} Z", "url(#brassG)", C["line"], 3)
         s += path(f"M{mcx - 12} {by + 56} L{mcx - 20} {by + 40} L{mcx - 6} {by + 48} Z", "url(#brassG)", C["line"], 2) + path(f"M{mcx + 12} {by + 56} L{mcx + 20} {by + 40} L{mcx + 6} {by + 48} Z", "url(#brassG)", C["line"], 2)
@@ -269,6 +276,7 @@ def end_view(ox, oy, front=True):
         s += rect(bx + 8, by + 92, bw - 16, 12, C["wood"], 3, True, 2.5)
         for k in range(3): s += rect(bx + 40, by + 104 + k * 10, bw - 80, 6, C["wood"], 2, True, 2)
         s += rect(bx + 18, by + 14, bw - 36, 30, "url(#glassG)", 6, True, 3)   # rear window
+        s += rect(mcx - 22, by + 60, 44, 24, C["red"], 3, True, 2) + triforce(mcx, by + 73, 22, sw=1.2)
         s += line(bx + bw - 24, by - 70, bx + bw - 24, by - 14, C["wood2"], 4) + path(f"M{bx + bw - 24} {by - 70} L{bx + bw + 40} {by - 58} L{bx + bw + 14} {by - 48} L{bx + bw + 40} {by - 36} L{bx + bw - 24} {by - 40} Z", C["red"], C["line"], 2.5)
     for sx in (-1, 1): s += lantern(mcx + sx * 80, by - 4)
     for sx in (-1, 1):
@@ -289,6 +297,7 @@ def top_view(ox, oy):
         s += rect(bx + 20, by + bh/2 + sx * (bh/2 - 14) - 3, bw - 40, 6, C["gold"], 3, True, 1.5)
         for i in range(4): s += circ(bx + 70 + i * 120, by + bh/2 + sx * (bh/2 + 8), 9, C["lantern"], True, 2, 'filter="url(#glow)"')
     mcx, mcy = bx + bw * 0.5, by + bh * 0.5
+    s += triforce(bx + 70, mcy, 60, C["gold2"], 2) + triforce(bx + bw - 70, mcy, 60, C["gold2"], 2)   # painted on the roof fore and aft
     s += ell(mcx, mcy, 92, 70, "none", True, 3) + ell(mcx, mcy, 68, 52, "url(#brassG)", True, 3) + ell(mcx, mcy, 58, 44, C["lac2"], False)
     for a in (45, 135, 225, 315): s += circ(mcx + math.cos(math.radians(a)) * 68, mcy + math.sin(math.radians(a)) * 52, 9, C["wood"], True, 2)
     s += circ(mcx, mcy, 26, C["iron"], True, 3) + circ(mcx, mcy, 16, C["flame"], True, 2, 'filter="url(#glow2)"') + circ(mcx, mcy, 8, C["flame2"], False)
