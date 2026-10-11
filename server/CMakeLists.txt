@@ -93,6 +93,11 @@ add_test(NAME royale_performance_tests COMMAND royale_performance_tests)
 add_executable(royale_performance_bench tools/performance_bench.cpp)
 target_link_libraries(royale_performance_bench PRIVATE royale_core)
 
+# Server tick benchmark (not a test): 31 bots play a real match; prints ms per Simulation::Tick, allocations per tick and a match fingerprint.
+# Run: royale_sim_bench [map] [seconds] [seed]
+add_executable(royale_sim_bench tools/sim_bench.cpp)
+target_link_libraries(royale_sim_bench royale_net)
+
 add_executable(royale_bokoblin_model_tests tests/bokoblin_model_tests.cpp)
 target_link_libraries(royale_bokoblin_model_tests PRIVATE royale_core)
 add_test(NAME royale_bokoblin_model_tests COMMAND royale_bokoblin_model_tests)
