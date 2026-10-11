@@ -636,14 +636,31 @@ static void PickupRulesForEveryKind() {
     CHECK(grab(ItemId::NayrusLove, Rarity::Epic) && p->hasAbility && p->ability.item == ItemId::NayrusLove && p->abilityReadyAt <= m.Clock());
     CHECK(grab(ItemId::SunsSong, Rarity::Rare) && p->ability.item == ItemId::SunsSong);
 
-    // Consumables: bag holds kMaxPotions, then refuses.
-    for (int i = 0; i < kMaxPotions; i++) CHECK(grab(ItemId::Milk, Rarity::Common));
+    // Consumables stack like Fortnite's: one slot per kind, a full stack refuses more, and the bag has kPotionSlots slots.
+    for (int i = 0; i < PotionStackMax(ItemId::Milk); i++) CHECK(grab(ItemId::Milk, Rarity::Common));
     size_t taken = 0;
     for (auto& e : m.Loot()) taken += e.taken;
-    CHECK(!grab(ItemId::Fish, Rarity::Common));
+    CHECK(!grab(ItemId::Milk, Rarity::Common));                                    // the Milk stack is full
     size_t takenAfter = 0;
     for (auto& e : m.Loot()) takenAfter += e.taken;
-    CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(kMaxPotions));
+    CHECK(takenAfter == taken && p->potions.size() == static_cast<size_t>(PotionStackMax(ItemId::Milk)));
+    CHECK(grab(ItemId::Fish, Rarity::Common) && grab(ItemId::Bug, Rarity::Common) && grab(ItemId::GreenPotion, Rarity::Common) && grab(ItemId::SmallShieldPotion, Rarity::Common));
+    CHECK(!grab(ItemId::BlueFire, Rarity::Uncommon));                              // a sixth kind has no slot
+
+    // Drinking the stack in hand, dropping the weapon in hand, and the wallet cap.
+    {
+        PlayerState* q = m.Find(1000);
+        q->armor = 0;
+        const size_t before = q->potions.size();
+        CHECK(m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common) && q->armor > 0.9f && q->potions.size() == before - 1);
+        CHECK(!m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common));                  // none left
+        q->weapon = {ItemId::MasterSword, Rarity::Epic};
+        q->reserve.clear();
+        CHECK(m.DropWeapon(1000) && q->weapon.item == ItemId::BasicSword);
+        CHECK(!m.DropWeapon(1000));                                                           // the starter sword stays
+        q->rupees = kWalletMax;
+        CHECK(!grab(ItemId::Rupees, Rarity::Common) || q->rupees == kWalletMax);
+    }
 
     // Everyone starts with 7 hearts; opening a chest spills a few rupees, and some Rare chests hold a Piece of Heart.
     {

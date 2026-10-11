@@ -121,6 +121,11 @@ void OnEmoteWheelInput() {
     const royale::HudState hud = gSession.Hud();
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
+    // A consumable in hand (taken with C-Down or by tapping its slot): B drinks it, so the press is kept from the game or Link would swing the weapon.
+    if (gHandStack >= 0 && LiveAndAlive(hud) && InField()) {
+        if (in.press.button & BTN_B) gStackBPressed = true;
+        in.press.button &= ~BTN_B; in.cur.button &= ~BTN_B; in.rel.button &= ~BTN_B;
+    }
     // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);

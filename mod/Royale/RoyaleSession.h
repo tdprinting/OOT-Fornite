@@ -224,6 +224,8 @@ class RoyaleSession {
     void RequestPickup(uint32_t lootIndex, bool force = false) { if (Joined()) client->RequestPickup(lootIndex, force); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
+    void UseStack(uint8_t item, uint8_t rarity) { if (Joined()) client->UseStack(item, rarity); }
+    void DropWeapon() { if (Joined()) client->DropWeapon(); }
     void UseShield() { if (Joined()) client->UseShield(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
     // Carts: get in, get out, change seats, and (driving) report where the cart is each tick.

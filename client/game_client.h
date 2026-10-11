@@ -110,6 +110,8 @@ class GameClient {
     void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { net::AttackReport m; m.target = target; m.hit = hit; m.style = style; SendIfJoined(m); }
     // `force` false = auto-pickup while walking (upgrades only); true = the player pressed the swap button.
     void RequestPickup(uint32_t index, bool force = false) { net::PickupRequest m; m.index = index; m.force = force; SendIfJoined(m); }
+    void UseStack(uint8_t item, uint8_t rarity) { net::UseItemRequest m; m.item = item; m.rarity = rarity; SendIfJoined(m); }
+    void DropWeapon() { SendIfJoined(net::DropItemRequest{}); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }

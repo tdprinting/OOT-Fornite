@@ -288,6 +288,16 @@ constexpr PotionDef PotionOf(ItemId id) {
     }
 }
 
+// How many of one kind fit in a single bag slot.
+constexpr int PotionStackMax(ItemId id) {
+    switch (id) {
+        case ItemId::Fairy: return 1;
+        case ItemId::SmallShieldPotion: case ItemId::Fish: return 6;
+        case ItemId::LargeShieldPotion: case ItemId::Poe: case ItemId::BluePotion: return 3;
+        default: return 4;
+    }
+}
+
 enum class InstantEffect : uint8_t { None, Heart, HeartPiece, HeartContainer, MagicJar, AdultPower, Rupees, Ammo };
 constexpr InstantEffect InstantOf(ItemId id) {
     switch (id) {

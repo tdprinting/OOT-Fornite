@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 34; // 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
+constexpr uint16_t kProtocolVersion = 35; // 35: UseItemRequest and DropItemRequest, stacking potions (kMaxPotions 30). 34: Bokoblin helper snapshots. 33: Riftlands scale/collision. 32: Riftlands map. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -35,7 +35,7 @@ constexpr uint8_t kRevivedItem = 0xFF;      // EvAbility.item value meaning "use
 
 enum class MsgType : uint8_t {
     Hello = 1, Input = 2, AttackReport = 3, PickupRequest = 4, UsePotionRequest = 5, SetReady = 6, UseAbilityRequest = 7, SelectWeaponRequest = 8, RematchRequest = 9, UseShieldRequest = 10, SelectMapRequest = 11, PropSmashRequest = 12, HireAllyRequest = 13, NpcHitRequest = 14,
-    VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17,
+    VehicleRequest = 15, VehicleDrive = 16, FartCloudRequest = 17, UseItemRequest = 18, DropItemRequest = 19,
     Welcome = 64, Reject = 65, MatchStateMsg = 66, Snapshot = 67,
     EvDamaged = 70, EvEliminated = 71, EvLootTaken = 72, EvLootAdded = 73, EvPlayerJoined = 74, EvPlayerLeft = 75,
     EvReady = 76, EvMapConfig = 77, EvInventory = 78, EvAbility = 79, EvResults = 80, EvBossDown = 81, EvStrike = 82, EvBossSpawn = 83, EvPropBroken = 84, EvWeather = 85, EvSupplyDrop = 86, EvAlly = 87, EvAllyAction = 88, EvReplayHeader = 89, EvReplayChunk = 90, EvFartCloud = 91,
@@ -117,6 +117,21 @@ struct SelectWeaponRequest {
 };
 
 // Drink a shield potion from the bag (the server picks the one that fits best).
+// Drink one particular stack from the bag (the one the player has in hand). The server checks it would do something.
+struct UseItemRequest {
+    static constexpr MsgType kType = MsgType::UseItemRequest;
+    uint8_t item = 0, rarity = 0;
+    void Write(ByteWriter& w) const { w.U8(item); w.U8(rarity); }
+    bool Read(ByteReader& r) { item = r.U8(); rarity = r.U8(); return r.ok && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount; }
+};
+
+// Put the weapon in hand on the ground in front of you (a backup weapon, if you have one, comes into your hand).
+struct DropItemRequest {
+    static constexpr MsgType kType = MsgType::DropItemRequest;
+    void Write(ByteWriter&) const {}
+    bool Read(ByteReader& r) { return r.ok; }
+};
+
 struct UseShieldRequest {
     static constexpr MsgType kType = MsgType::UseShieldRequest;
     void Write(ByteWriter&) const {}

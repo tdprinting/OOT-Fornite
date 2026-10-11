@@ -131,6 +131,8 @@ static void MessagesRoundTrip() {
     { EvStrike a, b; a.by = kDragonId; a.radius = 100; a.delay = 1; a.style = static_cast<uint8_t>(StrikeStyle::Ice); CHECK(RoundTrips(a, b) && b.style == a.style); }
     { EvStrike bad, out; bad.style = static_cast<uint8_t>(StrikeStyle::Count); CHECK(!RoundTrips(bad, out)); }
     { UseShieldRequest a, b; CHECK(RoundTrips(a, b)); }
+    { UseItemRequest a, b; a.item = static_cast<uint8_t>(ItemId::SmallShieldPotion); a.rarity = 2; CHECK(RoundTrips(a, b)); }
+    { DropItemRequest a, b; CHECK(RoundTrips(a, b)); }
     { EvInventory a, b; a.shield = 2.5f; CHECK(RoundTrips(a, b) && b.shield == 2.5f); }
     { EvInventory bad, out; bad.shield = 9.0f; CHECK(!RoundTrips(bad, out)); }
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
