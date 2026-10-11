@@ -132,9 +132,13 @@ class NavGrid {
     struct Stop { Vec2 p; float y; bool upper; bool climb; };
     // Owned by the simulation, never by a shared/const grid. Retained storage
     // and generation stamps avoid clearing or allocating a grid on every query.
+    // Every bot path on the shipped maps takes under 7000 expansions, so a tick's budget fits one long search with room to spare. A search that
+    // had the whole budget and still ran out is a failure (remembered), not deferred (retried next tick forever).
     struct SearchBudget {
-        int expansions = 32768, searches = 12;
-        void Reset() { expansions = 32768; searches = 12; }
+        static constexpr int kExpansions = 12000;
+        int expansions = kExpansions, searches = 12;
+        void Reset() { expansions = kExpansions; searches = 12; }
+        bool Cut(int startedWith) const { return expansions <= 0 && startedWith < kExpansions; }
     };
     struct SearchWorkspace {
         struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
@@ -354,6 +358,7 @@ class NavGrid {
         const size_t total = cells.size() + up.size();
         if (budget && (budget->searches <= 0 || budget->expansions <= 0)) { work.deferred = true; return false; }
         if (budget) --budget->searches;
+        const int startedWith = budget ? budget->expansions : 0;
         work.Begin(total);
         auto& open = work;
         auto& g = work.cost; auto& parent = work.parent; auto& via = work.via;
@@ -415,7 +420,7 @@ class NavGrid {
             }
             GroundToUpper(n.idx, [&](int to2) { relax(to2, Distance(NodeXZ(n.idx), NodeXZ(to2)) / kCell + 0.05f, false); });
         }
-        if (!reached) { work.deferred = budget && budget->expansions <= 0; return false; }
+        if (!reached) { work.deferred = budget && budget->Cut(startedWith); return false; }
 
         auto& raw = work.rawRoute;
         for (int i = goal; i != start && i >= 0; i = parent[static_cast<size_t>(i)]) raw.push_back({NodeXZ(i), NodeY(i), i >= base, via[static_cast<size_t>(i)] != 0});
@@ -520,6 +525,7 @@ class NavGrid {
 
         if (budget && (budget->searches <= 0 || budget->expansions <= 0)) { work.deferred = true; return false; }
         if (budget) --budget->searches;
+        const int startedWith = budget ? budget->expansions : 0;
         work.Begin(cells.size());
         auto& open = work;
         auto& g = work.cost; auto& parent = work.parent;
@@ -559,7 +565,7 @@ class NavGrid {
                 }
             }
         }
-        if (!reached) { work.deferred = budget && budget->expansions <= 0; return false; }
+        if (!reached) { work.deferred = budget && budget->Cut(startedWith); return false; }
 
         auto& raw = work.rawPath;
         for (int i = goal; i != start && i >= 0; i = parent[i]) raw.push_back(CellCentre(i % w, i / w));
