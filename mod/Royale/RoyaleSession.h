@@ -34,6 +34,8 @@ struct PuppetState {
     ItemId shield = ItemId::Count;
     ItemId boots = ItemId::Count;
     ItemId mask = ItemId::Count;
+    ItemId tunicGear = ItemId::Count;   // Goron or Zora tunic worn (colours the tunic)
+    ItemId gauntlets = ItemId::Count;   // Goron's Bracelet, Silver or Golden Gauntlets worn
 };
 
 // One line of the lobby list.
@@ -256,6 +258,8 @@ class RoyaleSession {
             if (p.flags & net::PlayerNet::kShield) s.shield = static_cast<ItemId>(p.shield);
             if (p.boots != net::PlayerNet::kNoGear) s.boots = static_cast<ItemId>(p.boots);
             if (p.mask != net::PlayerNet::kNoGear) s.mask = static_cast<ItemId>(p.mask);
+            if (p.tunicGear != net::PlayerNet::kNoGear) s.tunicGear = static_cast<ItemId>(p.tunicGear);
+            if (p.gauntlets != net::PlayerNet::kNoGear) s.gauntlets = static_cast<ItemId>(p.gauntlets);
             out.push_back(std::move(s));
         }
         return out;

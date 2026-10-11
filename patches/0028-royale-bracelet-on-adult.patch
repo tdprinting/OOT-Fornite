@@ -1,0 +1,28 @@
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+index c5c6004..68eb7e8 100644
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -1025,6 +1025,10 @@ Color_RGB8 sGauntletColors[] = {
+     { 254, 207, 15 },
+ };
+ 
++// OOT Royale: 1 = adult Link also wears the Goron's Bracelet (bronze plates on his forearms), set by the mod during a match
++s32 gRoyaleBraceletOnAdult = 0;
++Color_RGB8 sRoyaleBraceletColor = { 190, 120, 50 };
++
+ Gfx* sBootDListGroups[][2] = {
+     { gLinkAdultLeftIronBootDL, gLinkAdultRightIronBootDL },   // PLAYER_BOOTS_IRON
+     { gLinkAdultLeftHoverBootDL, gLinkAdultRightHoverBootDL }, // PLAYER_BOOTS_HOVER
+@@ -1094,10 +1098,10 @@ void Player_DrawImpl(PlayState* play, void** skeleton, Vec3s* jointTable, s32 dL
+         if (LINK_IS_ADULT) {
+             s32 strengthUpgrade = CUR_UPG_VALUE(UPG_STRENGTH);
+ 
+-            if (strengthUpgrade >= 2) { // silver or gold gauntlets
++            if (strengthUpgrade >= 2 || (strengthUpgrade == 1 && gRoyaleBraceletOnAdult)) { // silver or gold gauntlets
+                 gDPPipeSync(POLY_OPA_DISP++);
+ 
+-                color = &sGauntletColors[strengthUpgrade - 2];
++                color = strengthUpgrade >= 2 ? &sGauntletColors[strengthUpgrade - 2] : &sRoyaleBraceletColor;
+                 if (strengthUpgrade == PLAYER_STR_SILVER_G &&
+                     CVarGetInteger(CVAR_COSMETIC("Gloves.SilverGauntlets.Changed"), 0)) {
+                     sTemp = CVarGetColor24(CVAR_COSMETIC("Gloves.SilverGauntlets.Value"),
