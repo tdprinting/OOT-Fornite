@@ -26,24 +26,44 @@ bool SocialPet_Update(Actor* actor, PlayState* play, int pet) {
     if(trio==P::Trio::Conga) speed=pet==0 ? 80.0f : pet==1 ? 62.0f : 72.0f;
     if(trio==P::Trio::Tag) speed=pet==0 ? 135.0f : pet==1 ? 45.0f : 112.0f;
     bool moving=d>9;
+    static float stuck[3]={0,0,0};
     if(moving) {
         const float step=std::min(d,speed*dt);
-        const float x=pos.x+dx/d*step,z=pos.z+dz/d*step;
-        float y;
-        if(PetPathClear(play,pos,x,z) && RawFloorAt(x,z,&y) && std::fabs(y-pos.y)<22 && !WaterAt(x,z,y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z)) {
-            pos.x=x; pos.z=z; pos.y=y;
-        } else {
-            moving=false;
-            // Never step off ledges or into a loading zone. Rejoin only if left far behind.
-            if(playerDistance>650 || std::fabs(player.y-pos.y)>170) {
-                for(int i=0;i<8;++i) {
-                    const float a=pet*2.094395f+i*.3f;
-                    const float nx=player.x+std::sin(a)*80,nz=player.z+std::cos(a)*80;
+        // Straight at the goal first; if something is in the way, slide round it a little to either side.
+        static const float kTurns[5]={0.0f,0.7f,-0.7f,1.4f,-1.4f};
+        const float base=std::atan2(dx,dz);
+        bool stepped=false;
+        for(float turn:kTurns) {
+            const float x=pos.x+std::sin(base+turn)*step,z=pos.z+std::cos(base+turn)*step;
+            float y;
+            if(PetPathClear(play,pos,x,z) && RawFloorAt(x,z,&y) && std::fabs(y-pos.y)<22 && !WaterAt(x,z,y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z)) {
+                pos.x=x; pos.z=z; pos.y=y; stepped=true; break;
+            }
+        }
+        if(stepped) stuck[pet]=std::max(0.0f,stuck[pet]-dt);
+        else {
+            moving=false; stuck[pet]+=dt;
+            // Wedged for a moment (or left far behind): hop to open floor beside the player, never off a ledge or into a loading zone.
+            if(stuck[pet]>1.5f || playerDistance>650 || std::fabs(player.y-pos.y)>170) {
+                for(int i=0;i<12;++i) {
+                    const float a=pet*2.094395f+i*.52f,r=70.0f+(i/6)*30.0f;
+                    const float nx=player.x+std::sin(a)*r,nz=player.z+std::cos(a)*r;
+                    float y;
                     if(RawFloorAt(nx,nz,&y) && std::fabs(y-player.y)<35 && !WaterAt(nx,nz,y) && !OnExitFloor(nx,nz) && !HazardFloorAt(nx,nz)) {
-                        CatPoof(play,pos.x,pos.y,pos.z); pos={nx,y,nz}; CatPoof(play,nx,y,nz); break;
+                        CatPoof(play,pos.x,pos.y,pos.z); pos={nx,y,nz}; CatPoof(play,nx,y,nz); stuck[pet]=0; break;
                     }
                 }
             }
+        }
+    }
+    // Never stand inside a friend: ease apart from any pet closer than a body width.
+    for(int i=0;i<3;++i) if(i!=pet && peers[i]) {
+        const auto& q=peers[i]->world.pos;
+        float ox=pos.x-q.x,oz=pos.z-q.z;float od=std::hypot(ox,oz);
+        if(od<30.0f) {
+            if(od<.01f) { ox=std::sin(pet*2.1f);oz=std::cos(pet*2.1f);od=1; }
+            const float push=(30.0f-od)*.5f,x=pos.x+ox/od*push,z=pos.z+oz/od*push;float y;
+            if(RawFloorAt(x,z,&y) && std::fabs(y-pos.y)<22 && !WaterAt(x,z,y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z)) { pos.x=x;pos.z=z;pos.y=y; }
         }
     }
     // Turn toward the pet that is leading the activity, or acknowledge nearby Link.

@@ -68,21 +68,24 @@ struct AllyActor {
     int kind = 0;
     float x = 0, z = 0, tx = 0, tz = 0;
     int16_t rot = 0, trot = 0;
-    float hp = 1.0f;
+    float hp = 1.0f, shownHp = 1.0f;
     uint16_t owner = royale::net::kNoPlayer16;
-    float moved = 0;
+    uint16_t lastOwner = royale::net::kNoPlayer16;
     float actAge = 10.0f;      // seconds since it attacked or healed
     bool init = false;
-    // The game's own NPC model: its skeleton and animation state (see AllyNpc below)
-    SkelAnime sk = {};   // zeroed like an actor's memory: the game reads the old animation when it changes one
-    Vec3s joint[32] = {};
-    Vec3s morph[32] = {};
-    bool skReady = false;
-    const void* playing = nullptr;
-    float phase = 0.0f;        // walking cycle
-    float walkW = 0.0f;        // 0 standing to 1 walking
-    float bob = 0.0f;
-    bool wasActing = false;
+    // Our own model (shared/ally_anim.h): its animation, and what it is doing
+    royale::allymodel::Animator anim;
+    float speed = 0.0f;        // ground speed, units a second, smoothed
+    bool walking = false;
+    int pending = 0;           // 1 an attack, 2 a heal, started on the next update
+    bool leftFist = false;     // the Goron punches with each fist in turn
+    float busy = 0.0f;         // a one-shot clip (attack, hurt, cheer, getting up) plays until this runs out
+    bool resting = false;      // a free ally sits (a Goron curls into a ball) when nobody is near
+    float lonely = 0.0f;       // seconds with no player close
+    bool rolling = false;      // a Goron hurrying after its owner rolls
+    float rollAngle = 0.0f;
+    float slowFor = 0.0f;
+    float age = 0.0f;
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;
@@ -453,6 +456,100 @@ constexpr Rgb kRarityRgb[royale::kRarityCount] = { { 96, 210, 84 }, { 72, 132, 2
 
 // HUD and native menus share one War Table palette.
 ImU32 HudColor(uint32_t rgba, int alpha=255) { return IM_COL32(rgba>>24,(rgba>>16)&255,(rgba>>8)&255,alpha); }
+// ---- the pad layout and the button pictures ------------------------------------------------------------------------------------
+// ControlScheme 0 is the Battle Royale layout (the default), 1 the Classic one (jump on C-Up); see shared/controls.h. The prompts in the HUD
+// follow whichever is chosen. Buttons are drawn like the N64 pad: A blue, B green, C yellow, Z grey, R grey, Start red.
+royale::controls::Scheme ControlScheme() { return royale::controls::Clamp(CVarGetInteger(CVAR_SETTING("Royale.ControlScheme"), 0)); }
+bool gTouchJump = false;   // the on-screen JUMP button was tapped this frame
+
+void DrawPadGlyph(ImDrawList* dl, ImFont* font, ImVec2 c, float r, royale::controls::Glyph g, int alpha = 255) {
+    using G = royale::controls::Glyph;
+    auto a = [&](int v) { return v * alpha / 255; };
+    auto tri = [&](ImVec2 at, float s, int dir, ImU32 col) {   // dir: 0 up, 1 down, 2 left, 3 right
+        const ImVec2 pts[4][3] = { { {at.x, at.y - s}, {at.x - s, at.y + s * 0.8f}, {at.x + s, at.y + s * 0.8f} },
+                                   { {at.x, at.y + s}, {at.x - s, at.y - s * 0.8f}, {at.x + s, at.y - s * 0.8f} },
+                                   { {at.x - s, at.y}, {at.x + s * 0.8f, at.y - s}, {at.x + s * 0.8f, at.y + s} },
+                                   { {at.x + s, at.y}, {at.x - s * 0.8f, at.y - s}, {at.x - s * 0.8f, at.y + s} } };
+        dl->AddTriangleFilled(pts[dir][0], pts[dir][1], pts[dir][2], col);
+    };
+    if (g == G::None) return;
+    if (g == G::DLeftRight) {   // a pair of D-pad arrows
+        DrawPadGlyph(dl, font, ImVec2(c.x - r * 0.95f, c.y), r * 0.9f, G::DLeft, alpha);
+        DrawPadGlyph(dl, font, ImVec2(c.x + r * 0.95f, c.y), r * 0.9f, G::DRight, alpha);
+        return;
+    }
+    const char* letter = nullptr;
+    ImU32 fill = IM_COL32(120, 120, 130, a(255));
+    bool round = true;
+    switch (g) {
+        case G::A: letter = "A"; fill = IM_COL32(70, 120, 215, a(255)); break;
+        case G::B: letter = "B"; fill = IM_COL32(60, 175, 85, a(255)); break;
+        case G::Z: letter = "Z"; round = false; fill = IM_COL32(150, 150, 160, a(255)); break;
+        case G::R: letter = "R"; round = false; fill = IM_COL32(150, 150, 160, a(255)); break;
+        case G::Start: letter = "S"; fill = IM_COL32(205, 55, 45, a(255)); break;
+        case G::CUp: case G::CDown: case G::CLeft: case G::CRight: fill = IM_COL32(245, 205, 40, a(255)); break;
+        default: fill = IM_COL32(60, 62, 72, a(255)); round = false; break;   // the D-pad's dark plastic
+    }
+    const ImU32 edge = IM_COL32(10, 12, 20, a(235)), shade = IM_COL32(0, 0, 0, a(90));
+    if (round) {
+        dl->AddCircleFilled(ImVec2(c.x + r * 0.12f, c.y + r * 0.16f), r, shade, 20);
+        dl->AddCircleFilled(c, r, fill, 20);
+        dl->AddCircle(c, r, edge, 20, std::max(1.5f, r * 0.14f));
+        dl->AddCircleFilled(ImVec2(c.x - r * 0.3f, c.y - r * 0.35f), r * 0.28f, IM_COL32(255, 255, 255, a(70)), 12);
+    } else if (letter != nullptr) {   // Z and R: the trigger, a wide rounded tab
+        const ImVec2 p0(c.x - r * 1.05f, c.y - r * 0.8f), p1(c.x + r * 1.05f, c.y + r * 0.8f);
+        dl->AddRectFilled(ImVec2(p0.x + 1, p0.y + 2), ImVec2(p1.x + 1, p1.y + 2), shade, r * 0.5f);
+        dl->AddRectFilled(p0, p1, fill, r * 0.5f);
+        dl->AddRect(p0, p1, edge, r * 0.5f, 0, std::max(1.5f, r * 0.14f));
+    } else {   // the D-pad: a dark cross with the pressed arm lit
+        const float t = r * 0.38f;
+        dl->AddRectFilled(ImVec2(c.x - r, c.y - t), ImVec2(c.x + r, c.y + t), fill, 2.0f);
+        dl->AddRectFilled(ImVec2(c.x - t, c.y - r), ImVec2(c.x + t, c.y + r), fill, 2.0f);
+        dl->AddRect(ImVec2(c.x - r, c.y - t), ImVec2(c.x + r, c.y + t), edge, 2.0f, 0, 1.2f);
+        const ImU32 lit = IM_COL32(245, 245, 235, a(255));
+        const float o = r * 0.62f, s = r * 0.26f;
+        if (g == G::DUp) tri(ImVec2(c.x, c.y - o), s, 0, lit);
+        if (g == G::DDown) tri(ImVec2(c.x, c.y + o), s, 1, lit);
+        if (g == G::DLeft) tri(ImVec2(c.x - o, c.y), s, 2, lit);
+        if (g == G::DRight) tri(ImVec2(c.x + o, c.y), s, 3, lit);
+        return;
+    }
+    const ImU32 ink = IM_COL32(g == G::A || g == G::B || g == G::Start ? 255 : 30, g == G::A || g == G::B || g == G::Start ? 255 : 30, g == G::A || g == G::B || g == G::Start ? 255 : 36, a(255));
+    if (letter != nullptr) {
+        const float fs = r * 1.25f;
+        const ImVec2 sz = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, letter);
+        dl->AddText(font, fs, ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f), ink, letter);
+    } else {   // a C button: a small dark arrow on the yellow
+        const float s = r * 0.42f;
+        tri(c, s, g == G::CUp ? 0 : g == G::CDown ? 1 : g == G::CLeft ? 2 : 3, IM_COL32(60, 40, 5, a(255)));
+    }
+}
+
+// A row of "button + what it does" chips, centred on `cx` (or left-aligned from `cx` when `centred` is false). Returns the width drawn.
+struct PromptChip { royale::controls::Glyph glyph; std::string label; };
+float DrawPromptRow(ImDrawList* dl, ImFont* font, float cx, float y, float scale, const std::vector<PromptChip>& chips, bool centred = true, int alpha = 255) {
+    const float r = 9.0f * scale, ts = 14.0f * scale, gap = 14.0f * scale;
+    float total = 0;
+    std::vector<float> widths;
+    for (const auto& c : chips) {
+        const float gw = c.glyph == royale::controls::Glyph::DLeftRight ? r * 3.7f : r * 2.2f;
+        widths.push_back(gw + 5.0f * scale + font->CalcTextSizeA(ts, FLT_MAX, 0.0f, c.label.c_str()).x);
+        total += widths.back() + (&c == &chips.back() ? 0.0f : gap);
+    }
+    float x = centred ? cx - total * 0.5f : cx;
+    const float start = x;
+    for (size_t i = 0; i < chips.size(); i++) {
+        const bool pair = chips[i].glyph == royale::controls::Glyph::DLeftRight;
+        const float gw = pair ? r * 3.7f : r * 2.2f;
+        DrawPadGlyph(dl, font, ImVec2(x + gw * 0.5f, y), r, chips[i].glyph, alpha);
+        const ImVec2 tp(x + gw + 5.0f * scale, y - ts * 0.5f);
+        dl->AddText(font, ts, ImVec2(tp.x + 1, tp.y + 1), IM_COL32(0, 0, 0, alpha * 220 / 255), chips[i].label.c_str());
+        dl->AddText(font, ts, tp, IM_COL32(240, 236, 220, alpha), chips[i].label.c_str());
+        x += widths[i] + gap;
+    }
+    return x - start - gap;
+}
+
 ImU32 OotPanel(int alpha) { return HudColor(royale::wartable::theme::Panel,alpha); }
 void HudFrame(ImDrawList* dl,ImVec2 a,ImVec2 b,float scale,bool selected=false) {
     using namespace royale::wartable::theme;

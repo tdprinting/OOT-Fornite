@@ -51,6 +51,13 @@ class BotController {
     // that they can put bots in a fight at once.
     static float& CalmSeconds() { static float v = 15.0f; return v; }
     static bool& GearFirst() { static bool v = true; return v; }
+    // A bot holding only the starting sword keeps looking for a real weapon, but not forever: after this long into the match, or once the
+    // field has thinned, everyone fights with what they have (otherwise most bots flee each other all game and the match crawls).
+    static constexpr float kGearGraceSeconds = 60.0f;
+    static constexpr int kGearGraceAlive = 16;
+    static bool NeedsGear(const Match& m, const PlayerState& p) {
+        return GearFirst() && EffectiveDpsNow(p) < kMinFightDps && m.StateTime() < kGearGraceSeconds && m.Alive() > kGearGraceAlive;
+    }
 
     explicit BotController(uint64_t seed) : rng(seed ^ 0x626F74ull) {} // "bot"
 
@@ -223,6 +230,30 @@ class BotController {
             }
             if (ownerDist > kAllyFollowDistance * 1.5f) walkTo(owner->pos, ownerDist > kAllyLeash ? 1.5f : 1.0f);
             else a.rot = FaceAngle(a.pos, owner->pos);
+        }
+        SeparateAllies(m, dt);
+    }
+
+    // Allies that follow the same owner all stop at the same distance and pile up inside each other; ease any that overlap apart (and
+    // show them walking while they do, so they do not slide).
+    void SeparateAllies(Match& m, float dt) {
+        auto& list = m.MutableAllies();
+        constexpr float kBody = 64.0f;
+        for (size_t i = 0; i < list.size(); ++i) {
+            if (!list[i].alive) continue;
+            for (size_t j = i + 1; j < list.size(); ++j) {
+                if (!list[j].alive) continue;
+                float dx = list[j].pos.x - list[i].pos.x, dz = list[j].pos.z - list[i].pos.z;
+                float d = std::hypot(dx, dz);
+                if (d >= kBody) continue;
+                if (d < 0.5f) { const float a = static_cast<float>(i * 2.399963 + j); dx = std::sin(a); dz = std::cos(a); d = 1.0f; }
+                const float push = (std::min)((kBody - d) * 0.5f, 140.0f * dt);   // a walking pace, not a jolt
+                for (int k = 0; k < 2; ++k) {
+                    AllyState& a = list[k == 0 ? i : j];
+                    const float sign = k == 0 ? -1.0f : 1.0f;
+                    if (Advance(m, a.pos, sign * dx, sign * dz, push)) a.moving = true;
+                }
+            }
         }
     }
 
@@ -1433,11 +1464,11 @@ class BotController {
         const float fleeBelow = 0.15f + 0.45f * mem.caution;
         if (foe && s.advantage < fleeBelow && dist < 700.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 3.0f + 2.0f * mem.caution;
         // With only the starting sword a bot runs from anybody who comes close rather than trade blows (they only fight when cornered).
-        if (foe && GearFirst() && EffectiveDpsNow(p) < kMinFightDps && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
+        if (foe && NeedsGear(m, p) && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
         // Run out of puff with the foe on its heels: nowhere left to run, so it turns and fights (it can flee again once it has its breath).
         if (now < mem.fleeUntil && foe && mem.stamina < 0.1f && dist < 160.0f && !mem.sprinting) mem.fleeUntil = 0;
         s.fleeing = now < mem.fleeUntil && foe != nullptr;
-        if (s.fleeing && s.advantage > 1.6f && !(GearFirst() && EffectiveDpsNow(p) < kMinFightDps)) mem.fleeUntil = 0; // the tables turned
+        if (s.fleeing && s.advantage > 1.6f && !NeedsGear(m, p)) mem.fleeUntil = 0; // the tables turned
         s.hunting = !foe && now - mem.lastSeenAt < 6.0f;
 
         if (AvoidHazards(m, p, mem, dt, tune)) return;
@@ -1554,7 +1585,7 @@ class BotController {
         if ((!foe || dist > 800.0f) && SmashProps(m, p, mem, soon, dt)) return;
 
         // 5. Hunt: go where the last target was seen (aggressive, healthy bots), or close in on a visible but distant enemy.
-        const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !GearFirst();   // with just the starting sword, nobody goes hunting
+        const bool armed = EffectiveDpsNow(p) >= kMinFightDps || !NeedsGear(m, p);   // with just the starting sword, nobody goes hunting
         if (tune.hunt && armed && s.deficit < p.maxHealth * 0.4f) {
             if (foe && mem.aggression > 0.45f && s.advantage > 1.0f) {
                 if (dist > 500.0f || GettingAway(mem, p, *foe)) WantSprint(mem, tune, dist < 320.0f);   // closing the last gap on a runner: all it has
@@ -1597,17 +1628,17 @@ class BotController {
             }
             mem.hasWander = true;
         }
-        Steer(m, p, mem, {soon.center.x + mem.wander.x, soon.center.z + mem.wander.z}, dt, 0.75f);
+        Steer(m, p, mem, {soon.center.x + mem.wander.x, soon.center.z + mem.wander.z}, dt, 0.88f);
     }
 
     bool FightWorthIt(const Match& m, const PlayerState& p, const Memory& mem, const PlayerState& foe, float dist, float advantage) const {
-        (void)m; (void)foe;
+        (void)foe;
         const float range = (std::max)(kAlwaysFightRange * (0.5f + mem.aggression), Match::StatsOf(p).range * 1.5f);
         if (dist > range) return false;
         if (dist <= 180.0f) return true; // cornered: fight
         // Don't swim or climb after a foe with a blade: let it come, and spend the time looting or taking the high ground instead.
         if (nav && !Match::StatsOf(p).ranged && dist > 220.0f && (nav->Swimming(foe.pos) || !nav->Connected(p.pos, foe.pos))) return false;
-        if (EffectiveDpsNow(p) < kMinFightDps && (advantage < 1.0f || (GearFirst() && dist > 220.0f))) return false;   // with only the starting sword, go and find a real weapon first
+        if (EffectiveDpsNow(p) < kMinFightDps && (advantage < 1.0f || (NeedsGear(m, p) && dist > 220.0f))) return false;   // with only the starting sword, go and find a real weapon first
         return advantage >= 0.4f + 0.5f * (1.0f - mem.aggression);
     }
 

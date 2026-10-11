@@ -671,6 +671,7 @@ std::deque<PickupNote> gPickupLog;                    // newest first, shown (co
 std::string gBannerText;                              // the big "you got" line above the hotbar
 std::string gBannerDescription;
 royale::Rarity gBannerRarity = royale::Rarity::Common;
+royale::ItemId gBannerItem = royale::ItemId::BasicSword;
 double gBannerUntil = 0;
 
 void NotePickup(royale::ItemId item, const std::string& label, royale::Rarity rarity, bool fromChest) {
@@ -679,6 +680,7 @@ void NotePickup(royale::ItemId item, const std::string& label, royale::Rarity ra
     gBannerText = label;
     gBannerDescription = royale::DefOf(item).effect;
     gBannerRarity = rarity;
+    gBannerItem = item;
     gBannerUntil = ImGui::GetTime() + 4.0;
 }
 

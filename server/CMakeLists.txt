@@ -96,3 +96,7 @@ target_link_libraries(royale_performance_bench PRIVATE royale_core)
 add_executable(royale_bokoblin_model_tests tests/bokoblin_model_tests.cpp)
 target_link_libraries(royale_bokoblin_model_tests PRIVATE royale_core)
 add_test(NAME royale_bokoblin_model_tests COMMAND royale_bokoblin_model_tests)
+
+add_executable(royale_ally_model_tests tests/ally_model_tests.cpp)
+target_link_libraries(royale_ally_model_tests PRIVATE royale_core)
+add_test(NAME royale_ally_model_tests COMMAND royale_ally_model_tests)

@@ -360,8 +360,13 @@ void ReconcileMayaCompanion(const royale::HudState& hud) {
     if (gMayaCompanion.actor) return;
     Player* player=GET_PLAYER(gPlayState);
     const auto& p=player->actor.world.pos;
-    float y; const float x=p.x+70, z=p.z+45;
-    if (!PetFloorAt(x,z,&y)) return;
+    // Beside the player on any open floor (a waiting room's entrance can be an exit tile or a wall), else right on them like the other pets.
+    float y = p.y, x = p.x, z = p.z;
+    for (int i = 0; i < 12; ++i) {
+        const float a = 0.8f + i * 0.52f, r = 60.0f + (i / 6) * 30.0f;
+        float fy;
+        if (PetFloorAt(p.x + std::sin(a) * r, p.z + std::cos(a) * r, &fy) && std::fabs(fy - p.y) < 35.0f) { x = p.x + std::sin(a) * r; z = p.z + std::cos(a) * r; y = fy; break; }
+    }
     Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
     if (!a) return;
     a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;

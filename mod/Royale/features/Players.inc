@@ -759,6 +759,7 @@ bool PuppetRide(PlayState* play, Player* player, PuppetMotion& m, uint16_t id);
 bool CartInput(Input& in, const royale::HudState& hud);
 std::string CartPromptText();
 void DrawCartHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 void DrawCartsOnMap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap, const std::function<bool(ImVec2)>& inside);
 bool CartTargetAt(uint16_t id, float* x, float* z);
 
@@ -914,15 +915,15 @@ void Puppet_Update(Actor* actor, PlayState* play) {
 
     if (s.alive) HeldGlow(play, player, s.weaponRarity, false);
 
-    // The nameplate shows the player's name, hearts left and weapon (colour coded by rarity), so you can size up everyone you see.
+    // Only real players get a nameplate (their name, nothing else). Bots wear none.
     {
-        const int hearts = static_cast<int>(std::ceil(std::max(0.0f, s.health)));
-        const std::string plate = s.name + "  " + std::to_string(hearts) + " hearts  " + ItemLabel(s.weapon, s.weaponRarity);
         std::string& shown = gPlate[actor];
-        if (shown != plate) {
+        if (s.isBot) {
+            if (!shown.empty()) { NameTag_RemoveAllForActor(actor); shown.clear(); }
+        } else if (shown != s.name) {
             NameTag_RemoveAllForActor(actor);
-            NameTag_RegisterForActorWithOptions(actor, plate.c_str(), NameTagOptions{ "royale-puppet", 0, RarityColor(s.weaponRarity) });
-            shown = plate;
+            NameTag_RegisterForActorWithOptions(actor, s.name.c_str(), NameTagOptions{ "royale-puppet", 0, { 255, 255, 255, 255 } });
+            shown = s.name;
         }
     }
 

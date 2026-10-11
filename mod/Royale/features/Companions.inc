@@ -138,206 +138,233 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
 // Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
-// The four allies are the game's own NPCs: the Kokiri kid, the Zora, the Goron and the Gerudo, each with its real skeleton, textures and animations
-// (the same assets the game's NPC actors use). The game never walks or fights with these, so the movement is built here: the real standing, waving
-// and posing animations, plus a procedural walk cycle and attack poses added to the limbs while they are drawn. What each carries is drawn with the
-// real item model in its hand.
-struct NpcSpec {
-    const char* skeleton;
-    int limbs;
-    const char* idle;      // standing and ready (hired)
-    const char* invite;    // free to hire: waves you over
-    const char* act;       // attacking or healing: played through once
-    float scale;           // actor scale
-    int hairstyle;         // Gerudo: which hair
-    royale::ItemId item;   // carried
-    int lHand, rHand;      // which hand holds it (limb index)
-    bool itemLeft;
-};
-NpcSpec NpcOf(int kind) {
-    switch (kind) {
-        case 0: return { gKm1Skel, 16, gKokiriStandingHandsOnHipsAnim, gKokiriStandingRightArmUpAnim, gKokiriStandingRightArmUpAnim, 0.0105f, 0, royale::ItemId::Slingshot, 11, 14, true };
-        case 1: return { gZoraSkel, 20, gZoraHandsOnHipsTappingFootAnim, gZoraOpenArmsAnim, gZoraThrowRupeesAnim, 0.0105f, 0, royale::ItemId::DekuStick, 11, 14, false };
-        case 2: return { gGoronSkel, 18, gGoronAnim_004930, gGoronAnim_004930, gGoronAnim_004930, 0.0115f, 0, royale::ItemId::MegatonHammer, 16, 13, false };
-        default: return { gGerudoWhiteSkel, 16, gGerudoWhiteIdleAnim, gGerudoWhiteClapAnim, gGerudoWhiteDismissiveAnim, 0.0105f, 1, royale::ItemId::FairyBow, 11, 14, true };
+// The models are original low-poly ones in the Ocarina of Time style with their own rig and clips (tools/allies, shared/ally_anim.h): they
+// walk, wave you over, sit down when nobody is about (a Goron curls into his rock ball), get up when you come near, cheer when hired, flinch
+// when hit and fight their own way: the Kokiri's slingshot, the Zora's thrown magic, the Goron's left and right punches, the Gerudo's bow. A
+// Goron who falls behind curls up and rolls after his owner.
+
+// Draws an ally's model in a pose: skinned on the CPU, lit by the sun in the vertex colours, the face picked by swapping the atlas.
+void DrawAllyModel(PlayState* play, float x, float y, float z, float yaw, const royale::allymodel::Model& m, const royale::allymodel::Pose& pose,
+                   int face, float roll, float rollPivot) {
+    GfxLayer layer(play, GfxLayerId::Characters);
+    namespace A = royale::allymodel;
+    constexpr float kSub = 8.0f;   // vertices go to the graphics chip in 1/8 units, so the small model keeps its shape
+    Vtx* vtx = static_cast<Vtx*>(FrameAlloc(play, sizeof(Vtx) * m.vertCount));
+    if (vtx == nullptr) return;
+    const float wx = 0.35f, wy = 0.82f, wz = 0.45f;   // the sun, as for the Bokoblin and Lilo
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float lx = wx * cy - wz * sy, ly = wy, lz = wx * sy + wz * cy;
+    for (int i = 0; i < m.vertCount; i++) {
+        const A::Vert& v = m.verts[i];
+        float p[3], n[3];
+        A::SkinVertex(pose, v, p, n);
+        const float lit = std::clamp(0.55f + 0.55f * std::max(0.0f, n[0] * lx + n[1] * ly + n[2] * lz), 0.0f, 1.0f);
+        Vtx& o = vtx[i];
+        for (int k = 0; k < 3; k++) o.v.ob[k] = static_cast<s16>(std::lround(std::clamp(p[k] * kSub, -32000.0f, 32000.0f)));
+        o.v.flag = 0;
+        o.v.tc[0] = v.s;
+        o.v.tc[1] = v.t;
+        o.v.cn[0] = static_cast<u8>(255.0f * lit);
+        o.v.cn[1] = static_cast<u8>(250.0f * lit);
+        o.v.cn[2] = static_cast<u8>(245.0f * lit);
+        o.v.cn[3] = 255;
     }
-}
-struct NpcRig { int torso, lArm, rArm, lFore, rFore, lThigh, rThigh, lShin, rShin, head; };
-NpcRig RigOf(int kind) {
-    if (kind == 2) return { 10, 11, 14, 12, 15, 2, 5, 3, 6, 17 };   // the Goron's skeleton is laid out differently
-    return { 8, 9, 12, 10, 13, 2, 5, 3, 6, 15 };                    // Kokiri, Zora and Gerudo share the humanoid layout
-}
-
-constexpr float kRad = 32768.0f / 3.14159265f;
-
-// Called for every limb as the skeleton is drawn: the walk cycle, the idle sway and the attack poses are added to the limb's rotation here.
-AllyActor* gDrawingAlly = nullptr;
-s32 Ally_OverrideLimb(PlayState*, s32 limb, Gfx** dList, Vec3f*, Vec3s* rot, void*) {
-    const AllyActor* a = gDrawingAlly;
-    if (a == nullptr) return 0;
-    if (a->kind == 0 && limb == 15) *dList = (Gfx*)gKm1DL;   // the Kokiri's head is its own display list, put on at the head limb
-    const NpcRig r = RigOf(a->kind);
-    const float t = static_cast<float>(ImGui::GetTime());
-    auto add = [&](float x, float y, float z) { rot->x = static_cast<s16>(rot->x + x * kRad); rot->y = static_cast<s16>(rot->y + y * kRad); rot->z = static_cast<s16>(rot->z + z * kRad); };
-    const float w = a->walkW, s = std::sin(a->phase);
-    // the walk: legs swing, knees bend as each foot lifts, the arms swing against the legs, the body twists a little
-    if (limb == r.lThigh || limb == r.rThigh) add(0, 0, 0.62f * w * s);
-    if (limb == r.lShin || limb == r.rShin) add(0, 0, 0.55f * w * std::max(0.0f, limb == r.lShin ? -s : s) + 0.1f * w);
-    if (limb == r.lArm || limb == r.rArm) add(0, 0, -0.45f * w * s);
-    if (limb == r.torso) add(0, 0.14f * w * s, -0.08f * w);
-    // standing: a slow breath and a little weight shift
-    if (limb == r.torso) add(0, 0.03f * std::sin(t * 1.3f + a->kind), 0.025f * std::sin(t * 1.7f));
-    if (limb == r.head) add(0, 0.05f * std::sin(t * 0.8f + a->kind * 2.0f), 0.04f * std::sin(t * 1.1f));
-    // the attack or heal: how far through it, 0 to 1
-    const float T = a->actAge;
-    if (T < 0.7f) {
-        const float u = T / 0.7f, env = std::sin(u * 3.14159f);
-        switch (a->kind) {
-            case 0:   // the Kokiri aims the slingshot out in front, then it snaps back
-                if (limb == r.lArm) add(0, 0, 1.45f * env);
-                if (limb == r.rArm) add(0, 0, -(0.9f + 0.4f * (1.0f - u)) * env);
-                if (limb == r.rFore) add(0, 0, -0.9f * env);
-                if (limb == r.torso) add(0, -0.25f * env, 0);
-                break;
-            case 1:   // the Zora throws its arms wide, glowing, and bobs up
-                if (limb == r.lArm) add(0, 0, 1.2f * env);
-                if (limb == r.rArm) add(0, 0, -1.2f * env);
-                if (limb == r.head) add(0, 0, -0.25f * env);
-                break;
-            case 2: { // the Goron heaves the hammer overhead and brings it down
-                const float lift = u < 0.45f ? u / 0.45f : std::max(0.0f, 1.0f - (u - 0.45f) / 0.2f);
-                if (limb == r.lArm || limb == r.rArm) add(0, 0, (limb == r.lArm ? 1.0f : -1.0f) * 2.5f * lift);
-                if (limb == r.torso) add(0, 0, (u < 0.45f ? -0.3f * lift : 0.55f * (1.0f - std::fabs(u - 0.6f) * 4.0f)));
-                break;
-            }
-            default:  // the Gerudo draws the bow: left arm out, right hand pulled back to the cheek
-                if (limb == r.lArm) add(0, 0, 1.5f * env);
-                if (limb == r.rArm) add(0, 0, -1.1f * env);
-                if (limb == r.rFore) add(0, 0, -1.6f * env * (1.0f - u * 0.6f));
-                if (limb == r.torso) add(0, -0.2f * env, 0);
-                break;
-        }
-    }
-    return 0;
-}
-
-void Ally_PostLimb(PlayState* play, s32 limb, Gfx** dList, Vec3s*, void*) {
-    (void)dList;
-    const AllyActor* a = gDrawingAlly;
-    if (a == nullptr) return;
-    const NpcSpec spec = NpcOf(a->kind);
     OPEN_DISPS(play->state.gfxCtx);
-    if (a->kind == 3 && limb == 15) {   // the Gerudo's hair goes on at the head
-        static const char* hair[2] = { gGerudoWhiteHairstyleBobDL, gGerudoWhiteHairstyleStraightFringeDL };
-        gSPDisplayList(POLY_OPA_DISP++, (Gfx*)hair[spec.hairstyle % 2]);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);         // the light is already in the vertex colours; fins are seen from both sides
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);     // the texture times the vertex colour
+    Matrix_Translate(x, y, z, MTXMODE_NEW);
+    Matrix_RotateY(yaw, MTXMODE_APPLY);
+    if (roll != 0.0f) {   // a rolling Goron turns about the middle of his ball
+        Matrix_Translate(0.0f, rollPivot, 0.0f, MTXMODE_APPLY);
+        Matrix_RotateX(roll, MTXMODE_APPLY);
+        Matrix_Translate(0.0f, -rollPivot, 0.0f, MTXMODE_APPLY);
     }
-    if (limb == (spec.itemLeft ? spec.lHand : spec.rHand)) {   // what it carries, in the real item model
-        const int gid = GidFor(spec.item);
-        if (gid >= 0) {
-            Matrix_Push();
-            Matrix_Translate(600.0f, 0.0f, 0.0f, MTXMODE_APPLY);
-            Matrix_RotateZ(spec.itemLeft ? 1.57f : -1.0f, MTXMODE_APPLY);
-            Matrix_RotateY(1.57f, MTXMODE_APPLY);
-            const float k = GidScale(gid) * 3.0f;
-            Matrix_Scale(k, k, k, MTXMODE_APPLY);
-            DrawItemModel(play, gid);
-            Matrix_Pop();
-        }
+    Matrix_Scale(1.0f / kSub, 1.0f / kSub, 1.0f / kSub, MTXMODE_APPLY);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    const uint8_t* atlas = m.atlas[std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1)];
+    // LOADBLOCK clamps at 2048 texels; LOADTILE keeps the whole 64x64 atlas in Shipwright.
+    gDPLoadTextureTile(POLY_OPA_DISP++, atlas, G_IM_FMT_RGBA, G_IM_SIZ_16b, A::kAtlasW, A::kAtlasH, 0, 0, A::kAtlasW - 1, A::kAtlasH - 1, 0,
+                       G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+    for (int b = 0; b < m.batchCount; b++) {
+        const A::Batch& bt = m.batches[b];
+        gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
+        const int end = bt.firstTri + bt.triCount;
+        int t = bt.firstTri;
+        for (; t + 1 < end; t += 2)
+            gSP2Triangles(POLY_OPA_DISP++, m.tris[t][0], m.tris[t][1], m.tris[t][2], 0, m.tris[t + 1][0], m.tris[t + 1][1], m.tris[t + 1][2], 0);
+        if (t < end) gSP1Triangle(POLY_OPA_DISP++, m.tris[t][0], m.tris[t][1], m.tris[t][2], 0);
     }
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// The middle of the curled-up Goron's ball, the point he rolls about (worked out once from his resting pose).
+float GoronBallPivot() {
+    static float pivot = -1.0f;
+    if (pivot < 0.0f) {
+        namespace A = royale::allymodel;
+        A::Pose p;
+        A::SampleClip(A::goron::kModel, A::kRest, 0.0f, p);
+        float mn[3], mx[3];
+        A::PoseBounds(A::goron::kModel, p, mn, mx);
+        pivot = std::max(10.0f, (mn[1] + mx[1]) * 0.5f);
+    }
+    return pivot;
+}
+
+constexpr float kAllyShadow[royale::kAllyCount] = { 13.0f, 17.0f, 30.0f, 17.0f };
+
+void AllyDust(PlayState* play, float x, float y, float z, int count, float spread, s16 scale) {
+    for (int i = 0; i < count; i++) {
+        Vec3f pos = { x + Rand_CenteredFloat(spread), y + 4.0f, z + Rand_CenteredFloat(spread) };
+        Vec3f vel = { Rand_CenteredFloat(2.0f), 0.6f + Rand_ZeroOne(), Rand_CenteredFloat(2.0f) }, accel = { 0.0f, 0.1f, 0.0f };
+        Color_RGBA8 prim = { 200, 180, 150, 255 }, env = { 130, 110, 90, 255 };
+        EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, scale, 8, 14, 0);
+    }
+}
+
 void Ally_Update(Actor* actor, PlayState* play) {
+    namespace A = royale::allymodel;
     auto of = gAllyOf.find(actor);
     if (of == gAllyOf.end()) { Actor_Kill(actor); return; }
     AllyActor& a = gAllies[of->second];
+    const float dt = 1.0f / royale::kTickHz;
     if (!a.init) { a.x = a.tx; a.z = a.tz; a.rot = a.trot; a.init = true; }
     const float nx = a.x + (a.tx - a.x) * 0.4f, nz = a.z + (a.tz - a.z) * 0.4f;
-    a.moved = a.moved * 0.8f + std::hypot(nx - a.x, nz - a.z);
+    a.speed += (std::hypot(nx - a.x, nz - a.z) / dt - a.speed) * 0.3f;
     a.x = nx; a.z = nz;
     a.rot = static_cast<s16>(a.rot + static_cast<s16>(a.trot - a.rot) * 0.35f);
-    a.actAge += 1.0f / royale::kTickHz;
+    a.actAge += dt;
+    a.age += dt;
+    a.busy = std::max(0.0f, a.busy - dt);
     actor->world.pos.x = a.x;
     actor->world.pos.z = a.z;
     actor->world.pos.y = GroundY(play, a.x, a.z, actor->world.pos.y);
     actor->shape.rot.y = a.rot;
     actor->world.rot.y = a.rot;
+    const A::Model& m = A::ModelOf(a.kind);
+    a.anim.model = &m;
     actor->focus.pos = actor->world.pos;
-    actor->focus.pos.y += 55.0f;
+    actor->focus.pos.y += (a.resting || a.rolling) ? 30.0f : m.height * 0.75f;
+    actor->shape.shadowScale = kAllyShadow[a.kind % royale::kAllyCount];
     // Z-targeting, as with the game's own NPCs (the white reticle, not the red one an enemy gets): works on the free ones and on the helpers
     // alike, so you can face them to talk or see who is fighting for whom.
     actor->targetMode = 3;
     actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED;
     actor->flags &= ~ACTOR_FLAG_HOSTILE;
 
-    const NpcSpec spec = NpcOf(a.kind);
-    if (!a.skReady) {
-        SkelAnime_InitFlex(play, &a.sk, (FlexSkeletonHeader*)spec.skeleton, nullptr, a.joint, a.morph, spec.limbs);
-        a.skReady = true;
-    }
-    // Which of the game's animations: waving you over while free to hire, the attack pose while it fights, the ready stance otherwise.
     const bool free = a.owner == royale::net::kNoPlayer16;
-    const bool acting = a.actAge < 0.7f;
-    const char* want = free ? spec.invite : (acting ? spec.act : spec.idle);
-    if (a.playing != (const void*)want || (acting && !a.wasActing && !free)) {
-        Animation_Change(&a.sk, (AnimationHeader*)want, (a.kind == 2 && want == spec.idle) ? 0.0f : 1.0f, 0.0f, Animation_GetLastFrame((void*)want), ANIMMODE_LOOP, -4.0f);
-        a.playing = want;
+    const bool goron = a.kind == static_cast<int>(royale::AllyKind::Goron);
+    Player* pl = GET_PLAYER(play);
+    const float playerDist = std::hypot(pl->actor.world.pos.x - a.x, pl->actor.world.pos.z - a.z);
+    auto oneShot = [&](int clip, float fade, float hold) {
+        a.anim.Play(clip, fade, true);
+        a.busy = A::ClipSeconds(m, clip) * hold;
+    };
+    auto getUp = [&]() {
+        if (goron) Audio_PlayActorSound2(actor, NA_SE_EN_GOLON_WAKE_UP);
+        oneShot(A::kRise, 0.1f, 1.0f);
+    };
+
+    // Moving or standing, with a little hysteresis so it does not flicker between the two.
+    if (!a.walking && a.speed > 14.0f) a.walking = true;
+    else if (a.walking && a.speed < 6.0f) a.walking = false;
+
+    // Just hired: a cheer (getting up first if it was sitting or curled).
+    if (a.lastOwner == royale::net::kNoPlayer16 && !free) {
+        const bool wasDown = a.resting;
+        a.resting = false;
+        a.rolling = false;
+        if (wasDown) getUp();
+        else oneShot(A::kCheer, 0.15f, 1.0f);
+        if (goron) Audio_PlayActorSound2(actor, NA_SE_EN_GOLON_GOOD_BIG);
     }
-    a.wasActing = acting;
-    SkelAnime_Update(&a.sk);
-    const float moving = std::clamp(a.moved / 1.6f, 0.0f, 1.0f);
-    a.walkW += (moving - a.walkW) * 0.25f;
-    a.phase += (0.35f + 0.3f * a.walkW) * a.walkW;
-    a.bob = a.walkW * std::fabs(std::sin(a.phase)) * 3.0f;
+    a.lastOwner = a.owner;
+
+    // An attack or a heal the server just reported.
+    if (a.pending != 0) {
+        int clip = A::kAttack;
+        if (a.pending == 2 && a.kind == static_cast<int>(royale::AllyKind::Zora)) clip = A::kHeal;
+        else if (goron) { clip = a.leftFist ? A::kAttack2 : A::kAttack; a.leftFist = !a.leftFist; }
+        if (a.rolling || a.resting) { a.rolling = false; a.resting = false; a.rollAngle = 0.0f; }
+        oneShot(clip, 0.06f, clip == A::kHeal ? 0.85f : 0.5f);
+        a.pending = 0;
+    }
+
+    // Hurt: health dropped since the last look.
+    if (a.hp < a.shownHp - 0.015f && !a.rolling) {
+        if (a.anim.clip != A::kAttack && a.anim.clip != A::kAttack2 && a.anim.clip != A::kHeal) oneShot(A::kHurt, 0.05f, 1.0f);
+        if (a.resting) a.resting = false;
+    }
+    a.shownHp = a.hp;
+
+    // A Goron who has to hurry curls up and rolls; he unrolls once he has caught up.
+    if (goron && !free) {
+        if (!a.rolling && a.speed > m.walkSpeed * 1.3f) {
+            a.rolling = true;
+            a.slowFor = 0.0f;
+            a.anim.Play(A::kRest, 0.15f, true);
+            a.busy = 0.0f;
+            Audio_PlayActorSound2(actor, NA_SE_EN_GOLON_SIT_DOWN);
+        } else if (a.rolling) {
+            a.slowFor = a.speed < m.walkSpeed * 1.05f ? a.slowFor + dt : 0.0f;
+            if (a.slowFor > 0.35f) {
+                a.rolling = false;
+                a.rollAngle = 0.0f;
+                getUp();
+                AllyDust(play, a.x, actor->world.pos.y, a.z, 5, 40.0f, 60);
+            }
+        }
+    } else if (a.rolling) {
+        a.rolling = false;
+        a.rollAngle = 0.0f;
+    }
+    if (a.rolling) {
+        a.rollAngle += a.speed * dt / GoronBallPivot();
+        func_8002F974(actor, NA_SE_EV_BIGBALL_ROLL - SFX_FLAG);
+        if ((play->gameplayFrames & 3) == 0) AllyDust(play, a.x, actor->world.pos.y, a.z, 1, 30.0f, 45);
+    }
+
+    // A free ally with nobody near sits down (a Goron curls up and dozes); when someone comes close it gets up and waves.
+    if (free) {
+        a.lonely = playerDist > 900.0f ? a.lonely + dt : 0.0f;
+        if (!a.resting && a.lonely > 2.5f && !a.walking && a.busy <= 0.0f) {
+            a.resting = true;
+            a.anim.Play(A::kRest, 0.6f);
+            if (goron) Audio_PlayActorSound2(actor, NA_SE_EN_GOLON_SIT_DOWN);
+        } else if (a.resting && (playerDist < 900.0f || a.walking)) {
+            a.resting = false;
+            getUp();
+        }
+    } else {
+        a.lonely = 0.0f;
+    }
+
+    // Otherwise: walking, waving you over (free, and you are close enough to see), or the ready stance.
+    if (a.busy <= 0.0f && !a.rolling && !a.resting) {
+        const int base = a.walking ? A::kWalk : (free && playerDist < 1600.0f) ? A::kInvite : A::kIdle;
+        a.anim.Play(base, 0.22f);
+    }
+    const float rate = a.anim.clip == A::kWalk ? std::clamp(a.speed / std::max(1.0f, m.walkSpeed), 0.6f, 1.8f) : 1.0f;
+    a.anim.Update(dt, rate);
 }
 
 void Ally_Draw(Actor* actor, PlayState* play) {
+    namespace A = royale::allymodel;
     auto of = gAllyOf.find(actor);
     if (of == gAllyOf.end()) return;
     AllyActor& a = gAllies[of->second];
-    if (!a.skReady) return;
-    const NpcSpec spec = NpcOf(a.kind);
-    const float t = static_cast<float>(play->gameplayFrames);
-    const int eye = std::fmod(t + of->second * 37.0f, 90.0f) < 4.0f ? 2 : 0;   // a blink every few seconds
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    switch (a.kind) {
-        case 0: {   // Kokiri: tunic and boots colours come through two small display lists, as the game's Kokiri do
-            Gfx* tunic = static_cast<Gfx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Gfx) * 2));
-            gDPSetEnvColor(tunic, 30, 105, 27, 255);
-            gSPEndDisplayList(tunic + 1);
-            Gfx* boots = static_cast<Gfx*>(Graph_Alloc(play->state.gfxCtx, sizeof(Gfx) * 2));
-            gDPSetEnvColor(boots, 110, 170, 39, 255);
-            gSPEndDisplayList(boots + 1);
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)tunic);
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)boots);
-            break;
-        }
-        case 1: {
-            static const char* eyes[3] = { gZoraEyeOpenTex, gZoraEyeHalfTex, gZoraEyeClosedTex };
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)eyes[eye]);
-            break;
-        }
-        case 2: {
-            static const char* eyes[4] = { gGoronCsEyeClosed2Tex, gGoronCsEyeOpenTex, gGoronCsEyeHalfTex, gGoronCsEyeClosedTex };
-            static const char* mouths[2] = { gGoronCsMouthNeutralTex, gGoronCsMouthSmileTex };
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)eyes[eye == 2 ? 3 : 1]);
-            gSPSegment(POLY_OPA_DISP++, 0x09, (uintptr_t)mouths[a.owner == royale::net::kNoPlayer16 ? 1 : 0]);
-            break;
-        }
-        default: {
-            static const char* eyes[3] = { gGerudoWhiteEyeOpenTex, gGerudoWhiteEyeHalfTex, gGerudoWhiteEyeClosedTex };
-            gSPSegment(POLY_OPA_DISP++, 0x08, (uintptr_t)eyes[eye]);
-            break;
-        }
-    }
-    Matrix_Translate(actor->world.pos.x, actor->world.pos.y + a.bob, actor->world.pos.z, MTXMODE_NEW);
-    Matrix_RotateY(actor->shape.rot.y * (3.14159265f / 32768.0f), MTXMODE_APPLY);
-    Matrix_Scale(spec.scale, spec.scale, spec.scale, MTXMODE_APPLY);
-    gDrawingAlly = &a;
-    SkelAnime_DrawFlexOpa(play, a.sk.skeleton, a.sk.jointTable, a.sk.dListCount, Ally_OverrideLimb, Ally_PostLimb, actor);
-    gDrawingAlly = nullptr;
-    CLOSE_DISPS(play->state.gfxCtx);
+    const A::Model& m = A::ModelOf(a.kind);
+    A::Pose pose;
+    a.anim.model = &m;
+    a.anim.Evaluate(pose);
+    int face = A::kFaceNormal;
+    const int clip = a.anim.clip;
+    if (a.resting || (a.rolling && a.kind == static_cast<int>(royale::AllyKind::Goron))) face = A::kFaceBlink;   // dozing, or eyes shut as he rolls
+    else if (clip == A::kAttack || clip == A::kAttack2 || clip == A::kHurt) face = A::kFaceFierce;
+    else if (std::fmod(a.age + of->second * 1.37f, 3.4f) < 0.12f) face = A::kFaceBlink;                  // a blink every few seconds
+    DrawAllyModel(play, actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, actor->shape.rot.y * (3.14159265f / 32768.0f), m, pose, face,
+                  a.rolling ? a.rollAngle : 0.0f, GoronBallPivot());
 }
 
 void Ally_Destroy(Actor* actor, PlayState* play) {
@@ -367,6 +394,10 @@ void ReconcileAllies(const royale::HudState& hud) {
                 AllyActor a;
                 a.actor = actor; a.origDestroy = actor->destroy; a.kind = n.kind; a.owner = n.owner;
                 a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.rot = n.rot; a.x = n.x; a.z = n.z; a.init = true;
+                a.lastOwner = n.owner;   // one already working for someone when it comes into view does not cheer
+                a.hp = a.shownHp = n.hp / 255.0f;
+                a.anim.model = &royale::allymodel::ModelOf(n.kind);
+                a.anim.Play(royale::allymodel::kIdle, 0.0f, true);
                 gAllies[n.index] = a;
                 gAllyOf[actor] = n.index;
                 actor->update = Ally_Update;
@@ -374,11 +405,11 @@ void ReconcileAllies(const royale::HudState& hud) {
                 actor->destroy = Ally_Destroy;
                 actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED;
                 actor->uncullZoneForward = 4000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
-                actor->shape.shadowScale = 40.0f;
+                actor->shape.shadowScale = kAllyShadow[n.kind % royale::kAllyCount];
             } else {
                 AllyActor& a = it->second;
                 a.tx = n.x; a.tz = n.z; a.trot = n.rot; a.hp = n.hp / 255.0f; a.owner = n.owner;
-                if ((n.flags & 2) && a.actAge > 0.5f) a.actAge = 0.0f;
+                if ((n.flags & 2) && a.actAge > 0.5f) { a.actAge = 0.0f; a.pending = 1; }
             }
         }
     }
@@ -408,7 +439,8 @@ void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const 
         const bool mine = a.owner == h.selfId, free = a.owner == royale::net::kNoPlayer16;
         if (d > (free ? 2600.0f : 1800.0f)) continue;
         ImVec2 at;
-        if (!WorldToScreen(a.x, a.actor->world.pos.y + 245.0f, a.z, &at)) continue;
+        const float top = (a.resting || a.rolling) ? 70.0f : royale::allymodel::ModelOf(a.kind).height + 28.0f;
+        if (!WorldToScreen(a.x, a.actor->world.pos.y + top, a.z, &at)) continue;
         const royale::AllyDef& def = royale::kAllyDefs[a.kind];
         const float k = std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f), ts = 18.0f * scale * k;
         std::string line1 = free ? std::string(def.name) + " " + def.title : mine ? std::string(def.name) + " (yours)" : std::string(def.name) + " (an ally)";
@@ -437,6 +469,7 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
     if (it == gAllies.end() || it->second.actor == nullptr || gPlayState == nullptr) return;
     AllyActor& a = it->second;
     a.actAge = 0.0f;
+    a.pending = e.id == a.owner ? 2 : 1;   // the model plays its attack (or the Zora's healing) on its next update
     const float ay = a.actor->world.pos.y;
     if (e.id == a.owner) {   // mending its owner
         float gy = ay;
@@ -447,13 +480,14 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
     }
     const s16 yaw = static_cast<s16>(std::atan2(e.x - a.x, e.z - a.z) * (32768.0f / 3.14159265f));
     switch (a.kind) {
-        case 0: SpawnProjectileFrom(royale::ItemId::Slingshot, a.x, ay + 70.0f, a.z, yaw); break;
-        case 1: SpawnProjectileFrom(royale::ItemId::IceArrows, a.x, ay + 90.0f, a.z, yaw); break;
-        case 3: SpawnProjectileFrom(royale::ItemId::FairyBow, a.x, ay + 90.0f, a.z, yaw); break;
-        default: {
+        case 0: SpawnProjectileFrom(royale::ItemId::Slingshot, a.x, ay + 42.0f, a.z, yaw); break;    // from the slingshot, at the Kokiri's eye height
+        case 1: SpawnProjectileFrom(royale::ItemId::IceArrows, a.x, ay + 80.0f, a.z, yaw); break;    // from the Zora's palms
+        case 3: SpawnProjectileFrom(royale::ItemId::FairyBow, a.x, ay + 88.0f, a.z, yaw); break;     // off the Gerudo's bow
+        default: {   // the Goron's fist lands: a thump, sparks and a puff of dust where it hit
             float gy = ay;
             FloorAt(e.x, e.z, &gy);
             SparkBurst(gPlayState, e.x, gy + 40.0f, e.z, { 255, 200, 120, 255 }, 20, 6.0f);
+            AllyDust(gPlayState, e.x, gy, e.z, 4, 30.0f, 70);
             Vec3f at = { e.x, gy + 40.0f, e.z };
             Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             break;

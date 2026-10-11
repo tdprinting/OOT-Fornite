@@ -894,6 +894,10 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
             const bool isB = hint[0] == 'B' && hint[1] == 0, isC = hint[0] == 'C';
             const ImU32 hintCol = isB ? IM_COL32(100, 230, 110, 255) : isC ? IM_COL32(255, 220, 40, 255) : IM_COL32(210, 205, 190, 235); // B green, C yellow, as on the N64 pad
             dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
+            const int nres = royale::kMaxReserveWeapons;
+            const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
+            const auto g = i == 0 ? pr.weapon : static_cast<int>(i) <= nres ? pr.swap : static_cast<int>(i) == nres + 1 ? pr.shield : static_cast<int>(i) == nres + 2 ? pr.potion : pr.ability;
+            DrawPadGlyph(dl, font, ImVec2((a.x + b.x) * 0.5f, b.y + 11.0f * scale), 8.5f * scale, g);
         }
         const float ts = 11.5f * scale;
         dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), HudColor(royale::wartable::theme::Ink,sl.filled?255:120), sl.title.c_str());
