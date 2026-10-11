@@ -43,6 +43,8 @@ def cyl(m, loc, r, h, rot=(0,0,0), v=16, name=None, smooth=False):
 def sph(m, loc, r, seg=24, ring=12, name=None, smooth=True):
     bpy.ops.mesh.primitive_uv_sphere_add(segments=seg, ring_count=ring, radius=r); return finish(bpy.context.object, m, loc, (1,1,1), (0,0,0), name, smooth)
 def bevel(o, w=0.08, segs=3):
+    bpy.ops.object.select_all(action='DESELECT'); o.select_set(True); bpy.context.view_layer.objects.active = o
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)   # bevel width is in object space: apply the box's size first
     mod = o.modifiers.new("bevel", 'BEVEL'); mod.width = w; mod.segments = segs; mod.limit_method = 'ANGLE'
 def rope(m, p0, p1, r=0.045):
     p0, p1 = Vector(p0), Vector(p1); d = p1 - p0
@@ -50,8 +52,8 @@ def rope(m, p0, p1, r=0.045):
 
 # ---------------------------------------------------------------- the coach-bus (metres; faces -Y; 1 m = 100 game units)
 L, W, H = 11.0, 3.2, 3.0
-body = box(M["blue"], (0, 0, 1.0 + H/2), (L, W, H), name="BusBody"); bevel(body, 0.25, 4)
-roof = box(M["blue2"], (0, 0, 1.0 + H + 0.1), (L - 0.9, W - 0.5, 0.36), name="Roof"); bevel(roof, 0.16, 4)
+body = box(M["blue"], (0, 0, 1.0 + H/2), (W, L, H), name="BusBody"); bevel(body, 0.25, 4)
+roof = box(M["blue2"], (0, 0, 1.0 + H + 0.1), (W - 0.5, L - 0.9, 0.36), name="Roof"); bevel(roof, 0.16, 4)
 # arched windows along both sides, brass frames
 for s in (-1, 1):
     for i in range(7):
