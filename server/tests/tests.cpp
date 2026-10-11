@@ -374,6 +374,35 @@ static void BotOutrunsStorm() {
     CHECK(b->alive);
     CHECK(sim.match.GetStorm().SafeZoneAt(sim.match.StormTime()).Contains(b->pos));
 }
+static void BotLeavesEarlyForTheNextCircle() {
+    // While the zone holds, a bot far from the circle it will close to sets out once the run there would take as long as the hold has left,
+    // not only when the storm is upon it.
+    Simulation sim = Duel(9, {0, 0}, {0, 0});
+    const Storm& storm = sim.match.GetStorm();
+    const Circle end = storm.PhaseEnd(0);
+    Vec2 spot = end.center;
+    float beyond = 0;
+    for (int a = 0; a < 64; a++) {   // the far side of the end circle, well inside the zone that holds now
+        const Vec2 u = {std::sin(a * 0.0982f), std::cos(a * 0.0982f)};
+        for (float b = 900.0f; b >= 300.0f; b -= 50.0f) {
+            const Vec2 at = {end.center.x + u.x * (end.radius * 0.9f + b), end.center.z + u.z * (end.radius * 0.9f + b)};
+            if (Distance(at, MapCircle().center) <= MapCircle().radius * 0.75f) { if (b > beyond) { beyond = b; spot = at; } break; }
+        }
+    }
+    CHECK(beyond >= 500.0f);
+    const float leaveAt = beyond / kRunSpeed + 8.0f - 1.0f;   // a second after it should have set out
+    while (storm.InfoAt(sim.match.StormTime()).secondsLeft > leaveAt) sim.match.Tick(kDt);
+    CHECK(!storm.InfoAt(sim.match.StormTime()).shrinking);
+    PlayerState* b = sim.match.Find(1000);
+    PlayerState* h = sim.match.Find(1);
+    b->pos = spot;
+    h->pos = {spot.x - (end.center.x - spot.x), spot.z - (end.center.z - spot.z)};   // behind it, out of the way
+    if (Distance(h->pos, MapCircle().center) > MapCircle().radius * 0.95f) h->pos = spot;
+    const float before = Distance(b->pos, end.center);
+    Run(sim, 5.0f);
+    std::printf("  leaves early: %.0f u beyond the end circle, %.0f u closer after 5 s\n", beyond, before - Distance(b->pos, end.center));
+    CHECK(before - Distance(b->pos, end.center) > 400.0f);
+}
 static void BotsFightToTheDeath() {
     Simulation sim(3, MapCircle(), 0);
     sim.match.AddHuman(1);
@@ -4454,6 +4483,16 @@ static void MoveCart(Simulation& sim, int ci, Vec2 to) {
     SettleCart(v.body, sim.match.VehicleWorld());
 }
 
+static void BotInStormSkipsFarCart() {
+    // Out in the storm a bot runs for the zone; it does not walk off to a cart that is not right at hand.
+    for (uint64_t seed : {9u, 10u, 11u}) {
+        Simulation sim = CartDuel(seed, {-1500, 0}, {1900, 0}, {{1846, 446}});
+        bool rode = false;
+        for (int i = 0; i < kTickHz * 8 && !rode; i++) { sim.Tick(kDt); rode = sim.match.RidingIn(1000); }
+        CHECK(!rode);
+    }
+}
+
 static void BotsDriveAndRideCarts() {
     // A bot that likes driving (1001 does), with nobody about and a cart close by, gets in and drives off somewhere.
     {
@@ -4794,14 +4833,14 @@ int main() {
     BotController::GearFirst() = false;
     LiloTheCatModel(); AvriellaTheBabyModel(); MatchReplayIsRecorded(); HeartChestsAndAdultPower(); HireableAllies(); ClothAndWind(); TheSignInTheMiddle(); MagicMeter(); SeasonsAndWeather(); SupplyDrops(); BotsShowTheirItemUse(); BotsLootBeforeTheyFight(); ClimbsAndSpreadOutChests(); PlacementIsPurposeful(); BlocksAreBakedIntoTheCollision(); StartingSwordAndAmmo(); StormJingleAndWarning(); RollingDodgesHits(); BotsRollAndLockOn(); BotsPlayLikePlayers(); BotsLeaveBlastRings(); LilosToxicCloud(); MapsHaveTheirOwnNamesAndBosses(); FortniteMapIsSound(); FortniteIslandPlaces(); SoloTestHasNoBotsAndKeepsGoing(); TheMajorBoss(); StormNests(); StormDeterministic(); StormTimeline(); LootDeterministicAndValid(); ChestsRollHigher(); SandboxTerrainAndLayout(); SandboxMatchHasNoCountdownOrEnd(); SandboxCommands();
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
-    BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
+    BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotLeavesEarlyForTheNextCircle(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
-    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
+    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

@@ -20,7 +20,7 @@ enum BotBranch { kBrOther, kBrBusy, kBrHazard, kBrCartGo, kBrCover, kBrStorm, kB
                  kBrSmash, kBrHuntVis, kBrHuntLast, kBrLateClose, kBrWander, kBrBossFight, kBrSkydive, kBrRiding, kBrCount };
 struct BotProfile {
     long timerRepaths = 0, goalMovedRepaths = 0, searchOk = 0, searchFail = 0, deferred = 0, expanded = 0, maxExp = 0, bigSearches = 0, bigExp = 0;
-    long advanceBlocked = 0, unsticks = 0, failWhy[8] = {}, failExp = 0, okOver12k = 0, okMaxExp = 0;
+    long advanceBlocked = 0, unsticks = 0, failExp = 0, okMaxExp = 0;
     long brSearches[kBrCount] = {}, brExp[kBrCount] = {}, brFail[kBrCount] = {};
     int branch = kBrOther;
     std::unordered_map<uint32_t, int> lastBranch;
@@ -37,7 +37,6 @@ inline void BotProfSearch(bool timer, bool ok, const NavGrid::SearchWorkspace& w
     if (!ok) f.failExp += w.expanded;
     f.expanded += w.expanded; f.maxExp = (std::max)(f.maxExp, static_cast<long>(w.expanded));
     if (w.expanded >= 20000) { f.bigSearches++; f.bigExp += w.expanded; }
-    if (ok && w.expanded >= 12000) f.okOver12k++;
     if (ok) f.okMaxExp = (std::max)(f.okMaxExp, static_cast<long>(w.expanded));
     f.brSearches[f.branch]++; f.brExp[f.branch] += w.expanded; if (!ok) f.brFail[f.branch]++;
 }
@@ -915,8 +914,6 @@ class BotController {
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindRoute(p.pos, startY, mem.upper, goal, goalY, toUp, mem.route, &context.workspace, &context.budget);
                 ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
-                ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
-                    int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
                     mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
@@ -946,8 +943,6 @@ class BotController {
                 auto& context = m.Navigation();
                 mem.pathFailed = !nav->FindPath(p.pos, goal, mem.path, true, &context.workspace, &context.budget);
                 ROYALE_BOT_PROF(BotProfSearch(timerHit, !mem.pathFailed, context.workspace);)
-                ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
-                    int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
                     mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
