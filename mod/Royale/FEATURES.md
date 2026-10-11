@@ -4,7 +4,7 @@
 
 | Feature | Implementation under `features/` |
 |---|---|
-| Session state, graphics/debug settings, travel, floor/platform helpers | `Core.inc` |
+| Session state, graphics/debug settings, travel, floor/platform helpers; the regular game's switches (`InRegularGame`, `WorldFxOn`, `SpawnStandIn`; `docs/REGULAR_GAME.md`) | `Core.inc` |
 | Remote players, animations, sounds, spells, skins | `Players.inc` |
 | Death ragdolls and lobby ragdoll test | `Ragdolls.inc` |
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |
@@ -20,14 +20,15 @@
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
 | Music folder, crash reports, instrument playback | `MusicDiagnostics.inc` |
 | Angry villagers and solid scenery | `Scenery.inc` |
-| Water simulation, textures, caustics and rendering | `Water.inc` |
+| Water simulation, textures, caustics and rendering; hiding the game's own water (`UpdateGameWater`) | `Water.inc` |
 | Custom terrain, structures, map rendering | `Terrain.inc` |
 | Save files, lobby time, sandbox, alerts, dialogue | `Lobby.inc` |
 | Maya integration | `Maya.inc` |
 | Lilo model and toxic cloud | `LiloModel.inc` |
 | Avriella model and behavior | `Avriella.inc` |
 | Avriella toys; includes `RoyaleLobbyPets.h` | `AvriellaToys.inc` |
-| Lilo behavior and hireable allies | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md` |
+| Lilo behavior and hireable allies (regular-game allies: `ReconcileRegularAllies`) | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md` |
+>>>>>>> 2406688 (Regular game: our water everywhere, sky/weather/shadows, companions and allies)
 | Link clothes, cloth, Gilded Sword | `Equipment.inc` |
 | Map sign, aquarium include, pause inventory, update hooks | `SceneHooks.inc` |
 | Legacy sidebar/play menu | `Menus.inc` |

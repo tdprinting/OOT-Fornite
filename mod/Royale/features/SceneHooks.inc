@@ -328,6 +328,7 @@ void OnGameFrameUpdate() {
     EnsureHudWindow();
     // Game logic runs at 20 Hz, the same rate as the server tick, so one call is one step.
     Feat("session update"); gSession.Update(1.0f / royale::kTickHz);
+    RefreshRegularSettings();
     if (gTravelCooldown > 0) gTravelCooldown--;
     Feat("song melody"); if (DebugOn(kDbgMusic)) UpdateSongMelody();
 
@@ -341,6 +342,8 @@ void OnGameFrameUpdate() {
     Feat("island scenery collision"); if (DebugOn(kDbgScenery) && joined && InField() && gPlayState != nullptr) ApplyScenery(GET_PLAYER(gPlayState));
     Feat("storm"); DriveStorm(hud);
     Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
+    Feat("game water"); UpdateGameWater();   // the game's own water hidden under ours (or put back)
+    Feat("regular game weather"); DriveRegularWeather();
     Feat("dynamic lights"); UpdateDynamicLights(gPlayState);   // before the actors are drawn, so they are lit by this frame's lights
     Feat("tunic colour"); ApplyLocalTunic(joined && hud.state != royale::MatchState::Lobby && InField(), LocalWearTunic(hud));
     Feat("pause inventory"); SyncPauseInventory(hud);
@@ -463,6 +466,7 @@ void OnSceneInit(int16_t) {
     gAngry.clear();
     gSolidActor = nullptr; gSolidBgId = -1; gSolidFailed = false; gSolidSet.clear();   // the scene's collision (and our actor with it) is gone
     gFortniteActor = nullptr; gFortniteArrived = false;
+    ForgetGameWaterActors();
     ForgetLobbyReef();
     ForgetCarts();   // the cart actors went with the scene
 }

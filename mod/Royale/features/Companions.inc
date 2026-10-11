@@ -237,7 +237,11 @@ bool AllyOwnerCelebrates(uint16_t owner) {
     if (owner == royale::net::kNoPlayer16) return false;
     const auto& h = gSession.Hud();
     if (h.winnerId == owner) return true;
-    if (owner == h.selfId) return gEmote.id >= 0;
+    if (owner == h.selfId) {
+        if (gEmote.id >= 0) return true;
+        Player* pl = gPlayState != nullptr ? GET_PLAYER(gPlayState) : nullptr;   // in the regular game they dance along to your ocarina too
+        return InRegularGame() && pl != nullptr && (pl->stateFlags2 & PLAYER_STATE2_OCARINA_PLAYING) != 0;
+    }
     auto it = gState.find(owner);
     return it != gState.end() && it->second.alive && royale::IsEmote(it->second.anim);
 }
@@ -424,7 +428,9 @@ void Ally_Destroy(Actor* actor, PlayState* play) {
     if (orig) orig(actor, play);
 }
 
+void ReconcileRegularAllies();
 void ReconcileAllies(const royale::HudState& hud) {
+    if (!gSession.Joined()) { ReconcileRegularAllies(); return; }   // no match: the regular game's own allies, if any (below)
     const bool show = gSession.Joined() && InField() && gSession.Client() &&
                       (hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch || hud.state == royale::MatchState::Ending);
     std::unordered_map<uint8_t, bool> wanted;
@@ -520,6 +526,7 @@ void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const 
     }
 }
 
+void AllyStrikeFx(AllyActor& a, float x, float z);
 // What an ally's hit looks like: a shot flies from it (or a thump lands, for the Goron); a Zora's gift is a shower of green sparks on you.
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
     auto it = gAllies.find(static_cast<uint8_t>(e.index));
@@ -540,20 +547,228 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
         if (a.owner == h.selfId) Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
         return;
     }
-    const s16 yaw = static_cast<s16>(std::atan2(e.x - a.x, e.z - a.z) * (32768.0f / 3.14159265f));
+    AllyStrikeFx(a, e.x, e.z);
+}
+// The look and sound of an ally's attack landing at (x, z): a shot from it, or the Goron's thump where his fist lands.
+void AllyStrikeFx(AllyActor& a, float x, float z) {
+    if (a.actor == nullptr || gPlayState == nullptr) return;
+    const float ay = a.actor->world.pos.y;
+    const s16 yaw = static_cast<s16>(std::atan2(x - a.x, z - a.z) * (32768.0f / 3.14159265f));
     switch (a.kind) {
         case 0: SpawnProjectileFrom(royale::ItemId::Slingshot, a.x, ay + 42.0f, a.z, yaw); break;    // from the slingshot, at the Kokiri's eye height
         case 1: SpawnProjectileFrom(royale::ItemId::IceArrows, a.x, ay + 80.0f, a.z, yaw); break;    // from the Zora's palms
         case 3: SpawnProjectileFrom(royale::ItemId::FairyBow, a.x, ay + 88.0f, a.z, yaw); break;     // off the Gerudo's bow
         default: {   // the Goron's fist lands: a thump, sparks and a puff of dust where it hit
             float gy = ay;
-            FloorAt(e.x, e.z, &gy);
-            SparkBurst(gPlayState, e.x, gy + 40.0f, e.z, { 255, 200, 120, 255 }, 20, 6.0f);
-            AllyDust(gPlayState, e.x, gy, e.z, 4, 30.0f, 70);
-            Vec3f at = { e.x, gy + 40.0f, e.z };
+            FloorAt(x, z, &gy);
+            SparkBurst(gPlayState, x, gy + 40.0f, z, { 255, 200, 120, 255 }, 20, 6.0f);
+            AllyDust(gPlayState, x, gy, z, 4, 30.0f, 70);
+            Vec3f at = { x, gy + 40.0f, z };
             Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
             break;
         }
     }
 }
 
+
+// ---- allies in the regular game -----------------------------------------------------------------------------------------------------------
+// Up to two of the hireable allies (Regular game page: "Ally 1" and "Ally 2") join you for the whole adventure: no hiring and no server, the
+// client runs them. Each follows a little behind you, one on each side, hurries when it falls back, and is brought along when you get far ahead,
+// climb out of its reach or go through a door (allies are made again beside you in every scene). It dances along to your ocarina and fights the
+// enemies near you with its own attack, the same shot or punch as in a match, which really lands: a short-lived attack collider on the enemy
+// that the game's enemies take damage from as they do from your slingshot (Kokiri), your arrows (Zora, Gerudo, Jones) or the hammer (Goron).
+// A Zora also mends you now and then. Allies are never hurt. Cutscenes send them away until they end.
+struct RegularAllyBrain {
+    int slot = 0;
+    float stuck = 0.0f, nextStrike = 0.0f, nextHeal = 0.0f, clock = 0.0f;
+    Actor* target = nullptr;      // the enemy it is after
+    Actor* hitTarget = nullptr;   // the enemy its last attack lands on, when
+    float hitAt = -1.0f;
+    int hitFrames = 0;
+};
+RegularAllyBrain gRegularBrain[royale::kAllyCount];
+ColliderCylinder gRegularAllyHit[royale::kAllyCount];
+bool gRegularAllyHitSet[royale::kAllyCount];
+ColliderCylinderInit kRegularAllyHitInit = {
+    { COLTYPE_NONE, AT_ON | AT_TYPE_PLAYER, AC_NONE, OC1_NONE, OC2_NONE, COLSHAPE_CYLINDER },
+    { ELEMTYPE_UNK2, { DMG_SLINGSHOT, 0x00, 0x01 }, { 0x00000000, 0x00, 0x00 }, TOUCH_ON | TOUCH_SFX_NORMAL, BUMP_NONE, OCELEM_NONE },
+    { 30, 60, -30, { 0, 0, 0 } },
+};
+uint32_t RegularAllyDamage(int kind, u8* damage) {
+    switch (static_cast<royale::AllyKind>(kind)) {
+        case royale::AllyKind::Kokiri: *damage = 1; return DMG_SLINGSHOT;
+        case royale::AllyKind::Goron: *damage = 2; return DMG_HAMMER_SWING;
+        default: *damage = 2; return DMG_ARROW_NORMAL;
+    }
+}
+
+bool RegularEnemyAlive(PlayState* play, const Actor* target) {
+    if (target == nullptr) return false;
+    for (Actor* e = play->actorCtx.actorLists[ACTORCAT_ENEMY].head; e != nullptr; e = e->next)
+        if (e == target) return e->update != nullptr && e->colChkInfo.health > 0 && (e->flags & ACTOR_FLAG_ATTENTION_ENABLED) != 0;
+    return false;
+}
+// The nearest enemy the ally can see that is close to you (it never wanders off after one).
+Actor* RegularAllyTarget(PlayState* play, const AllyActor& a, const royale::AllyDef& def, const Vec3f& you) {
+    Actor* best = nullptr;
+    float bestD = std::max(def.range, 300.0f) + 150.0f;
+    for (Actor* e = play->actorCtx.actorLists[ACTORCAT_ENEMY].head; e != nullptr; e = e->next) {
+        if (e->update == nullptr || e->colChkInfo.health == 0 || (e->flags & ACTOR_FLAG_ATTENTION_ENABLED) == 0) continue;   // dead, or not a foe you could target either
+        if (std::hypot(e->world.pos.x - you.x, e->world.pos.z - you.z) > 900.0f || std::fabs(e->world.pos.y - you.y) > 250.0f) continue;
+        const float d = std::hypot(e->world.pos.x - a.x, e->world.pos.z - a.z);
+        if (d >= bestD) continue;
+        Vec3f from = { a.x, a.actor->world.pos.y + 40.0f, a.z }, to = { e->focus.pos.x, e->focus.pos.y, e->focus.pos.z }, hit;
+        CollisionPoly* poly = nullptr; s32 bgId = 0;
+        if (BgCheck_EntityLineTest1(&play->colCtx, &from, &to, &hit, &poly, true, true, false, true, &bgId)) continue;   // behind a wall
+        best = e; bestD = d;
+    }
+    return best;
+}
+
+void RegularAlly_Update(Actor* actor, PlayState* play) {
+    auto of = gAllyOf.find(actor);
+    if (of == gAllyOf.end()) { Actor_Kill(actor); return; }
+    const uint8_t id = of->second;
+    AllyActor& a = gAllies[id];
+    RegularAllyBrain& b = gRegularBrain[id % royale::kAllyCount];
+    const royale::AllyDef& def = royale::kAllyDefs[a.kind % royale::kAllyCount];
+    Player* pl = GET_PLAYER(play);
+    constexpr float dt = 1.0f / royale::kTickHz;
+    b.clock += dt;
+    const Vec3f you = pl->actor.world.pos;
+    const float yaw = BINANG_TO_RAD(pl->actor.shape.rot.y);
+    // its place: behind you, to one side
+    const float side = b.slot == 0 ? -70.0f : 70.0f, back = -110.0f;
+    float gx = you.x + std::cos(yaw) * side + std::sin(yaw) * back, gz = you.z - std::sin(yaw) * side + std::cos(yaw) * back;
+    // an enemy near you: go for it (within reach), face it, and strike when ready
+    if (!RegularEnemyAlive(play, b.target)) b.target = nullptr;
+    if (b.target == nullptr || (play->gameplayFrames % 10) == static_cast<u32>(id)) b.target = RegularAllyTarget(play, a, def, you);
+    float faceX = gx - a.x, faceZ = gz - a.z;
+    if (b.target != nullptr) {
+        const Vec3f e = b.target->world.pos;
+        const float d = std::hypot(e.x - a.x, e.z - a.z), reach = def.melee ? 60.0f + b.target->colChkInfo.cylRadius : std::min(def.range, 450.0f);
+        if (d > reach * 0.85f) { gx = e.x + (a.x - e.x) / std::max(1.0f, d) * reach * 0.7f; gz = e.z + (a.z - e.z) / std::max(1.0f, d) * reach * 0.7f; }
+        else { gx = a.x; gz = a.z; }
+        faceX = e.x - a.x; faceZ = e.z - a.z;
+        if (d <= reach && b.clock >= b.nextStrike && b.hitAt < 0.0f) {
+            b.nextStrike = b.clock + def.cooldown;
+            a.actAge = 0.0f;
+            if (a.kind == static_cast<int>(royale::AllyKind::Jones)) { a.weapon = static_cast<uint8_t>(royale::JonesGunAt(d)); PlayJonesSound(2, a.x, a.z, a.weapon); JonesShotFx(a, e.x, e.z); }
+            else { a.pending = 1; AllyStrikeFx(a, e.x, e.z); }
+            b.hitTarget = b.target;
+            b.hitAt = b.clock + (def.melee ? 0.25f : std::clamp(d / 1100.0f, 0.1f, 0.6f));   // when the fist or the shot gets there
+        }
+    }
+    // a Zora mends you now and then when you are hurt
+    if (def.healEvery > 0.0f && b.clock >= b.nextHeal && gSaveContext.health < gSaveContext.healthCapacity && gSaveContext.health > 0) {
+        b.nextHeal = b.clock + def.healEvery;
+        Health_ChangeBy(play, static_cast<s16>(def.healAmount * 16.0f));
+        a.pending = 2; a.actAge = 0.0f;
+        SparkBurst(play, you.x, you.y + 60.0f, you.z, { 120, 255, 150, 255 }, 18, 3.0f);
+    }
+    // walking there
+    const float dx = gx - a.x, dz = gz - a.z, dist = std::hypot(dx, dz);
+    const float toYou = std::hypot(you.x - a.x, you.z - a.z);
+    const float hurry = toYou > 450.0f ? 2.4f : toYou > 220.0f ? 1.5f : 1.0f;
+    float nx = a.x, nz = a.z;
+    if (dist > 22.0f) {
+        const float step = std::min(dist, def.speed * 1.6f * hurry * dt);
+        nx = a.x + dx / dist * step; nz = a.z + dz / dist * step;
+        const float cur = actor->world.pos.y;
+        CollisionPoly probePoly;
+        Vec3f probe = { nx, cur + 60.0f, nz };   // the floor just ahead, from a step above its feet (a ledge it can climb, not the floor upstairs)
+        const float floor = BgCheck_AnyRaycastFloor1(&play->colCtx, &probePoly, &probe);
+        float surface = 0.0f;
+        const bool deep = WaterSurfaceAt(nx, nz, &surface) && surface - floor > 40.0f && a.kind != static_cast<int>(royale::AllyKind::Zora);
+        if (floor <= BGCHECK_Y_MIN + 1.0f || floor < cur - 160.0f || deep || !PetPathClear(play, actor->world.pos, nx, nz)) { nx = a.x; nz = a.z; b.stuck += dt; }
+        else b.stuck = std::max(0.0f, b.stuck - dt);
+    } else b.stuck = 0.0f;
+    // brought along: far behind, stuck, or on another level
+    if (toYou > 1300.0f || b.stuck > 1.6f || std::fabs(you.y - actor->world.pos.y) > 260.0f) {
+        float fy = you.y;
+        const float bx = you.x + std::sin(yaw) * -60.0f, bz = you.z + std::cos(yaw) * -60.0f;
+        const float floor = GroundY(play, bx, bz, you.y);
+        const bool ok = std::fabs(floor - you.y) < 40.0f;
+        nx = ok ? bx : you.x; nz = ok ? bz : you.z; fy = ok ? floor : you.y;
+        a.x = nx; a.z = nz; actor->world.pos.y = fy;
+        b.stuck = 0.0f; b.target = nullptr;
+        AllyDust(play, nx, fy, nz, 4, 30.0f, 60);
+    }
+    a.tx = nx; a.tz = nz;
+    if (std::fabs(faceX) + std::fabs(faceZ) > 1.0f && (dist > 22.0f || b.target != nullptr)) a.trot = static_cast<int16_t>(std::atan2(faceX, faceZ) * (32768.0f / 3.14159265f));
+    a.owner = gSession.Hud().selfId;
+    Ally_Update(actor, play);
+    // the attack lands: an attack collider on the enemy for a couple of frames (the game's collision check then hurts it as it would your weapon)
+    if (b.hitAt >= 0.0f && b.clock >= b.hitAt) {
+        if (b.hitFrames == 0 && RegularEnemyAlive(play, b.hitTarget) && gRegularAllyHitSet[id % royale::kAllyCount]) b.hitFrames = 2;
+        if (b.hitFrames == 0) b.hitAt = -1.0f;
+    }
+    if (b.hitFrames > 0) {
+        ColliderCylinder& c = gRegularAllyHit[id % royale::kAllyCount];
+        if (RegularEnemyAlive(play, b.hitTarget)) {
+            const Actor* e = b.hitTarget;
+            c.dim.pos.x = static_cast<s16>(e->world.pos.x); c.dim.pos.z = static_cast<s16>(e->world.pos.z);
+            c.dim.pos.y = static_cast<s16>(std::min(e->world.pos.y, e->focus.pos.y));
+            c.dim.radius = static_cast<s16>(std::clamp(static_cast<int>(e->colChkInfo.cylRadius) + 10, 25, 90));
+            c.dim.height = static_cast<s16>(std::clamp(static_cast<int>(std::fabs(e->focus.pos.y - e->world.pos.y)) + 50, 50, 200));
+            c.dim.yShift = -10;
+            c.base.atFlags &= ~AT_HIT;
+            CollisionCheck_SetAT(play, &play->colChkCtx, &c.base);
+            if (--b.hitFrames == 0 || (c.base.atFlags & AT_HIT)) { b.hitFrames = 0; b.hitAt = -1.0f; }
+        } else { b.hitFrames = 0; b.hitAt = -1.0f; }
+    }
+}
+
+void RegularAlly_Destroy(Actor* actor, PlayState* play) {
+    auto of = gAllyOf.find(actor);
+    if (of != gAllyOf.end()) gRegularAllyHitSet[of->second % royale::kAllyCount] = false;   // its attack collider belonged to this actor
+    Ally_Destroy(actor, play);
+}
+void ReconcileRegularAllies() {
+    int want[2] = { -1, -1 };
+    const bool on = InRegularGame() && !InCutscene() && gPlayState != nullptr;
+    if (on) {
+        for (int s = 0; s < 2; s++) {
+            const int k = gRegular[s == 0 ? kRegAlly1 : kRegAlly2] - 1;
+            if (k >= 0 && k < royale::kAllyCount && (s == 0 || k != want[0])) want[s] = k;
+        }
+    }
+    for (auto& [id, a] : gAllies)
+        if (a.actor != nullptr && id != want[0] && id != want[1]) Actor_Kill(a.actor);
+    if (!on) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    for (int s = 0; s < 2; s++) {
+        const int k = want[s];
+        if (k < 0) continue;
+        auto it = gAllies.find(static_cast<uint8_t>(k));
+        if (it != gAllies.end()) { gRegularBrain[k].slot = s; continue; }
+        const Vec3f you = pl->actor.world.pos;
+        const float yaw = BINANG_TO_RAD(pl->actor.shape.rot.y), side = s == 0 ? -70.0f : 70.0f;
+        float x = you.x + std::cos(yaw) * side - std::sin(yaw) * 90.0f, z = you.z - std::sin(yaw) * side - std::cos(yaw) * 90.0f;
+        float y = GroundY(gPlayState, x, z, you.y);
+        if (std::fabs(y - you.y) > 40.0f || !PetPathClear(gPlayState, you, x, z)) { x = you.x; z = you.z; y = you.y; }
+        const s16 rot = pl->actor.shape.rot.y;
+        Actor* actor = SpawnStandIn(gPlayState, x, y, z, 0, rot, 0, 0, false);
+        if (actor == nullptr) continue;
+        AllyActor a;
+        a.actor = actor; a.origDestroy = actor->destroy; a.kind = k; a.owner = gSession.Hud().selfId; a.lastOwner = a.owner;   // already yours: no cheer at every door
+        a.tx = x; a.tz = z; a.trot = rot; a.rot = rot; a.x = x; a.z = z; a.init = true;
+        if (k != static_cast<int>(royale::AllyKind::Jones)) { a.anim.model = &royale::allymodel::ModelOf(k); a.anim.Play(royale::allymodel::kIdle, 0.0f, true); }
+        gAllies[static_cast<uint8_t>(k)] = a;
+        gAllyOf[actor] = static_cast<uint8_t>(k);
+        gRegularBrain[k] = RegularAllyBrain{};
+        gRegularBrain[k].slot = s;
+        gRegularBrain[k].nextHeal = royale::kAllyDefs[k].healEvery;
+        ColliderCylinder& c = gRegularAllyHit[k];
+        Collider_InitCylinder(gPlayState, &c);
+        Collider_SetCylinder(gPlayState, &c, actor, &kRegularAllyHitInit);
+        c.info.toucher.dmgFlags = RegularAllyDamage(k, &c.info.toucher.damage);
+        gRegularAllyHitSet[k] = true;
+        actor->update = RegularAlly_Update;
+        actor->draw = Ally_Draw;
+        actor->destroy = RegularAlly_Destroy;
+        actor->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
+        actor->uncullZoneForward = 4000.0f; actor->uncullZoneScale = 1500.0f; actor->uncullZoneDownward = 1500.0f;
+        actor->shape.shadowScale = kAllyShadow[k % royale::kAllyCount];
+    }
+}

@@ -235,6 +235,7 @@ int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
 
 struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
+    if (InRegularGame()) return false;   // the regular game's scenes have their own trees: ours would stand in its roads and rooms, and are not solid there
     if (OnIsland()) {
         const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kIslandTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kIslandTreeCell;
         const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
@@ -297,14 +298,14 @@ void DrawFloraMesh(PlayState* play, const GpuMesh* m, float x, float y, float z,
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
-int FloraSeason() { return gSession.Joined() ? (static_cast<int>(gWeatherShown.season) & 3) : 1; }
+int FloraSeason() { return gSession.Joined() || InRegularGame() ? (static_cast<int>(gWeatherShown.season) & 3) : 1; }   // (the regular game's turns every five days)
 
 // A new scene, or a new world from the host (new towns and scenery): forget which ground was clear of them, and every ground patch worked out from it.
 void RefreshFloraWorld(PlayState* play);
 void ForgetFloraGround();
 
 void DrawFlora(PlayState* play) {
-    if (!InField() || gPlayState == nullptr) return;
+    if (gPlayState == nullptr || !WorldFxOn(kRegFlora, true)) return;
     RefreshFloraWorld(play);
     if (gFoliage <= 0.01f) return;
     const int season = FloraSeason();
@@ -607,7 +608,7 @@ Gfx* DentedSnow(PlayState* play, const GpuMesh* m, float x, float z, float yaw, 
 void DrawGroundPatches(PlayState* play) {
     gPuddleSheens.clear();
     namespace gp = royale::ground;
-    if (!InField() || gPlayState == nullptr) return;
+    if (gPlayState == nullptr || !WorldFxOn(kRegGround, true)) return;
     RefreshFloraWorld(play);
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime);
     const int season = FloraSeason();

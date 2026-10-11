@@ -10,7 +10,8 @@ std::unordered_map<const Actor*, std::string> gPlate;      // the nameplate text
 // Floor height under (x, z), or `fallback` if the ray finds nothing.
 float GroundY(PlayState* play, float x, float z, float fallback) {
     CollisionPoly poly;
-    Vec3f pos = { x, 4000.0f, z };
+    // (in the regular game's houses and dungeons from just above where it stands, so a floor upstairs is not taken for its own)
+    Vec3f pos = { x, InRegularGame() && !SceneOutdoors() ? fallback + 120.0f : 4000.0f, z };
     float y = BgCheck_AnyRaycastFloor1(&play->colCtx, &poly, &pos);
     return y > BGCHECK_Y_MIN + 1.0f ? y : fallback;
 }
