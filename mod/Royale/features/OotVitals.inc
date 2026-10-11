@@ -18,7 +18,8 @@ void DrawOotVitals(ImDrawList* dl, float scale, const royale::HudState& h) {
             dl->AddTriangleFilled({a.x+heart/20,c.y},{b.x-heart/20,c.y},{c.x,b.y},color);
         }
     }
-    const float meterY = y + ((count+9)/10) * step + 5 * scale;
+    const float meterY = HudMeterTop(scale, h);
+    ImFont* font = ImGui::GetFont();
     auto meter = [&](float top, float value, float maximum, ImU32 tint) {
         const float width = 150 * scale, height = 16 * scale, cap = 8 * scale;
         const ImVec2 a(x, top), b(x+width, top+height);
@@ -36,6 +37,13 @@ void DrawOotVitals(ImDrawList* dl, float scale, const royale::HudState& h) {
             dl->AddImage(mid,{a.x+cap,a.y},{b.x-cap,b.y});
             dl->AddImage(end,{b.x-cap,a.y},b,{1,0},{0,1});
         } else dl->AddRect(a,b,IM_COL32(230,230,220,255),3*scale,0,2*scale);
+        // The number, Fortnite style, 0 to 100, right of the meter.
+        char num[8];
+        std::snprintf(num,sizeof(num),"%d",static_cast<int>(std::lround(fill * 100.0f)));
+        const float ts = 15 * scale;
+        const ImVec2 tp(b.x + 9 * scale, a.y + (height - ts) * 0.5f);
+        dl->AddText(font,ts,ImVec2(tp.x+1.5f,tp.y+1.5f),IM_COL32(0,0,0,230),num);
+        dl->AddText(font,ts,tp,HudColor(royale::wartable::theme::Ink),num);
     };
     // OoT had no shield-energy meter; reuse its magic frame in Hylian blue.
     meter(meterY,h.inv.shield,royale::kMaxShield,IM_COL32(85,165,245,255));

@@ -71,7 +71,13 @@ void UpdateSprint(Player* player, const royale::HudState& hud) {
     if (gSprinting && (player->actor.bgCheckFlags & 1) && std::fabs(player->linearVelocity) > 4.0f) SprintDust(gPlayState, &player->actor, gPlayState->gameplayFrames);
 }
 
-// A thin bar under the magic meter, the width of the hearts, like the shield and magic bars above it. No text. It only shows while you are using
+// Where the shield meter starts (below the heart rows): DrawOotVitals draws the shield and magic meters from here, the stamina bar sits under them.
+float HudMeterTop(float scale, const royale::HudState& h) {
+    const int count = std::clamp(static_cast<int>(std::ceil(h.maxHealth)), 1, 32);
+    return 20.0f * scale + ((count + 9) / 10) * 22.0f * scale + 5.0f * scale;
+}
+
+// A thin bar under the magic meter, the width of the meters above it. No text. It only shows while you are using
 // stamina and fades out a moment after it fills, so it stays off the screen the rest of the time.
 void DrawStaminaBar(ImDrawList* dl, ImVec2 ds, const royale::HudState& h) {
     if (!LiveAndAlive(h) || !InField()) return;
@@ -79,8 +85,8 @@ void DrawStaminaBar(ImDrawList* dl, ImVec2 ds, const royale::HudState& h) {
     const float alpha = static_cast<float>(std::clamp(1.0 - (sinceFull - 0.8) / 0.4, 0.0, 1.0));
     if (alpha <= 0.0f) return;
     auto a = [&](int v) { return static_cast<int>(v * alpha); };
-    const float unit = ds.y / 240.0f;   // the game's own HUD is laid out on a 240 high screen
-    const float bx = 34.0f * unit / 3.0f, by = 146.0f * unit / 3.0f, bw = 260.0f * unit / 3.0f, bh = 4.0f * unit;
+    const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);   // as DrawOverlay
+    const float bx = 22.0f * scale, by = HudMeterTop(scale, h) + 21.0f * scale + 16.0f * scale + 5.0f * scale, bw = 150.0f * scale, bh = 4.0f * scale;
     const float fill = std::clamp(gStamina, 0.0f, 1.0f);
     const bool winded = !gSprinting && fill < kSprintMinStamina;
     dl->AddRectFilled(ImVec2(bx - 2, by - 2), ImVec2(bx + bw + 2, by + bh + 2), IM_COL32(0, 0, 0, a(170)), 3.0f);
@@ -270,14 +276,16 @@ const GameMinimap* GameMinimapFor(int sceneNum) {
     return m.ok ? &m : nullptr;
 }
 
-// Bottom left: a minimap that follows you. It shows the area around you on the game's own minimap for the scene, north up, with you in the
+// Top right: a minimap that follows you. It shows the area around you on the game's own minimap for the scene, north up, with you in the
 // middle as the game's yellow arrow: the storm in purple, the safe zone's edge, supply drops, mini bosses and other players. While you skydive
 // it zooms out to show the whole map, so you can pick where to land.
+constexpr float kMinimapHalf = 86.0f;   // 720p units
+ImVec2 MinimapCentre(ImVec2 ds, float scale) { return ImVec2(ds.x - (kMinimapHalf + 22.0f) * scale, (kMinimapHalf + 22.0f) * scale); }
 void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     if (h.map.radius <= 0 || !InField()) return;
     Player* pl = GET_PLAYER(gPlayState);
-    const float half = 86.0f * scale;
-    const ImVec2 c(half + 22.0f * scale, ds.y - half - 30.0f * scale);
+    const float half = kMinimapHalf * scale;
+    const ImVec2 c = MinimapCentre(ds, scale);
     const ImVec2 a(c.x - half, c.y - half), b(c.x + half, c.y + half);
     const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
 
@@ -378,6 +386,148 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     const ImVec2 np(c.x - nsz.x * 0.5f, a.y - nsz.y * 0.5f);
     dl->AddCircleFilled(ImVec2(c.x, a.y), nsz.y * 0.7f, IM_COL32(16, 12, 8, 230));
     dl->AddText(ImGui::GetFont(), 14.0f * scale, np, IM_COL32(255, 222, 110, 255), "N");
+}
+
+// Top centre: Fortnite's compass strip in the War Table frame. Link's heading in a gold box in the middle, the letters and ticks sliding past
+// (fading towards the edges, 120 degrees in view), a ring for the middle of the safe zone (red once you are outside it) and an orange star for
+// each supply drop. North is the game's -Z, as on the minimap.
+void DrawCompass(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!InField() || !h.selfAlive) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float px = pl->actor.world.pos.x, pz = pl->actor.world.pos.z;
+    const float th = pl->actor.shape.rot.y * (3.14159265f / 32768.0f);
+    const float heading = 180.0f - th * (180.0f / 3.14159265f);   // Link faces (sin th, cos th); bearing 0 is -Z, 90 is +X
+    auto wrap = [](float d) { d = std::fmod(d + 180.0f, 360.0f); if (d < 0) d += 360.0f; return d - 180.0f; };
+    auto bearing = [&](float x, float z) { return std::atan2(x - px, -(z - pz)) * (180.0f / 3.14159265f); };
+    constexpr float kSpan = 60.0f;   // degrees either side of the middle
+
+    const float cw = 440.0f * scale, ch = 30.0f * scale, x0 = (ds.x - cw) * 0.5f, y0 = 12.0f * scale, x1 = x0 + cw, y1 = y0 + ch;
+    const float reach = cw * 0.5f - 14.0f * scale;
+    auto at = [&](float rel) { return ds.x * 0.5f + rel / kSpan * reach; };
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(6, 15, 36, 150), 6.0f * scale);
+    const ImU32 gold = HudColor(royale::wartable::theme::Gold);
+    for (int i = 0; i < 4; ++i) {   // gold corner brackets, as HudFrame
+        const ImVec2 c(i & 1 ? x1 : x0, i & 2 ? y1 : y0);
+        dl->AddLine(c, ImVec2(c.x + (i & 1 ? -9.0f : 9.0f) * scale, c.y), gold, 2.0f * scale);
+        dl->AddLine(c, ImVec2(c.x, c.y + (i & 2 ? -9.0f : 9.0f) * scale), gold, 2.0f * scale);
+    }
+    static const char* const names[8] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    for (int deg = 0; deg < 360; deg += 15) {
+        const float rel = wrap(static_cast<float>(deg) - heading);
+        if (std::fabs(rel) > kSpan) continue;
+        const int a = static_cast<int>(255.0f * std::pow(1.0f - std::fabs(rel) / kSpan, 0.6f));
+        const float x = at(rel);
+        if (deg % 45 == 0) {
+            const char* n = names[deg / 45];
+            const float size = (n[1] ? 11.0f : 15.0f) * scale;
+            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, n);
+            const ImVec2 p(x - sz.x * 0.5f, (y0 + y1) * 0.5f - sz.y * 0.5f);
+            dl->AddText(font, size, ImVec2(p.x + 1.0f, p.y + 1.0f), IM_COL32(0, 0, 0, a * 220 / 255), n);
+            dl->AddText(font, size, p, HudColor(royale::wartable::theme::Ink, a), n);
+        } else {
+            dl->AddLine(ImVec2(x, y1 - 8.0f * scale), ImVec2(x, y1 - 3.0f * scale), HudColor(royale::wartable::theme::Muted, a), 1.5f * scale);
+        }
+    }
+    {   // the heading, in a gold-rimmed box in the middle
+        char num[8];
+        std::snprintf(num, sizeof(num), "%03d", (static_cast<int>(std::lround(heading)) % 360 + 360) % 360);
+        const ImVec2 a(ds.x * 0.5f - 26.0f * scale, y0 - 4.0f * scale), b(ds.x * 0.5f + 26.0f * scale, y1 + 4.0f * scale);
+        dl->AddRectFilled(a, b, HudColor(royale::wartable::theme::Panel, 245), 5.0f * scale);
+        dl->AddRect(a, b, gold, 5.0f * scale, 0, 1.5f * scale);
+        const float size = 15.0f * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, num);
+        const ImVec2 p(ds.x * 0.5f - sz.x * 0.5f, (a.y + b.y) * 0.5f - sz.y * 0.5f);
+        dl->AddText(font, size, ImVec2(p.x + 1.0f, p.y + 1.0f), IM_COL32(0, 0, 0, 220), num);
+        dl->AddText(font, size, p, HudColor(royale::wartable::theme::Ink), num);
+    }
+
+    // Markers under the strip.
+    const float my = y1 + 12.0f * scale;
+    {   // supply drops: the same orange star as on the minimap
+        const double now = ImGui::GetTime();
+        const float u = 6.0f * scale;
+        auto star = [&](float wx, float wz, ImU32 col) {
+            const float rel = wrap(bearing(wx, wz) - heading);
+            if (std::fabs(rel) > kSpan) return;
+            const float x = at(rel);
+            dl->AddQuadFilled(ImVec2(x, my - u), ImVec2(x + u * 0.4f, my), ImVec2(x, my + u), ImVec2(x - u * 0.4f, my), col);
+            dl->AddQuadFilled(ImVec2(x - u, my), ImVec2(x, my - u * 0.4f), ImVec2(x + u, my), ImVec2(x, my + u * 0.4f), col);
+        };
+        for (const SupplyMark& m : gSupplyMarks) if (now <= m.until) star(m.x, m.z, IM_COL32(255, 160, 60, 255));
+        if (gSession.Client()) for (const auto& l : gSession.Client()->Loot()) if (l.supply && l.chest && !l.taken) star(l.x, l.z, IM_COL32(255, 160, 60, 255));
+    }
+    {   // the safe zone's middle: a white ring, red when you stand outside the zone; pinned to the end of the strip when it is off to the side
+        const float dx = h.safeZone.center.x - px, dz = h.safeZone.center.z - pz;
+        const bool outside = std::sqrt(dx * dx + dz * dz) > h.safeZone.radius;
+        const float rel = std::clamp(wrap(bearing(h.safeZone.center.x, h.safeZone.center.z) - heading), -kSpan, kSpan);
+        const float x = at(rel);
+        const ImU32 col = outside ? IM_COL32(255, 90, 90, 245) : IM_COL32(255, 255, 255, 240);
+        dl->AddTriangleFilled(ImVec2(x, y1 + 1.0f * scale), ImVec2(x - 4.0f * scale, y1 + 6.0f * scale), ImVec2(x + 4.0f * scale, y1 + 6.0f * scale), col);
+        dl->AddCircle(ImVec2(x, y1 + 12.0f * scale), 5.0f * scale, IM_COL32(0, 0, 0, 200), 16, 3.5f * scale);
+        dl->AddCircle(ImVec2(x, y1 + 12.0f * scale), 5.0f * scale, col, 16, 2.0f * scale);
+    }
+}
+
+// Under the minimap: a framed row with the storm timer, players left and your eliminations, then what is affecting you, right-aligned.
+void DrawMatchStats(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h, int kills) {
+    const ImVec2 mc = MinimapCentre(ds, scale);
+    const float half = kMinimapHalf * scale;
+    const ImVec2 a(mc.x - half, mc.y + half + 10.0f * scale), b(mc.x + half, a.y + 28.0f * scale);
+    const ImU32 ink = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold),
+                red = IM_COL32(255, 90, 90, 255), green = IM_COL32(110, 230, 130, 255);
+    auto shadowed = [&](ImVec2 p, float size, ImU32 col, const char* t) {
+        dl->AddText(font, size, ImVec2(p.x + 1.5f, p.y + 1.5f), IM_COL32(0, 0, 0, 230), t);
+        dl->AddText(font, size, p, col, t);
+    };
+    HudFrame(dl, a, b, scale);
+    const bool isFinal = h.stormPhase >= royale::kStormPhaseCount;
+    const std::string storm = isFinal ? "FINAL" : ClockText(h.stormSecondsLeft);
+    const ImU32 stormCol = isFinal || h.stormShrinking || h.stormSecondsLeft <= 5.0f ? red : h.stormSecondsLeft <= 15.0f ? gold : ink;
+    const std::string alive = std::to_string(h.alive), ko = std::to_string(kills);
+    const float ts = 15.0f * scale, icon = 15.0f * scale, ig = 4.0f * scale, cy = (a.y + b.y) * 0.5f;
+    const float w0 = icon + ig + font->CalcTextSizeA(ts, FLT_MAX, 0.0f, storm.c_str()).x, w1 = icon + ig + font->CalcTextSizeA(ts, FLT_MAX, 0.0f, alive.c_str()).x,
+                w2 = icon + ig + font->CalcTextSizeA(ts, FLT_MAX, 0.0f, ko.c_str()).x;
+    const float pad = 9.0f * scale, space = std::max(3.0f * scale, ((b.x - a.x) - 2 * pad - w0 - w1 - w2) * 0.5f);
+    float x = a.x + pad;
+    auto label = [&](float xx, const std::string& t, ImU32 col) { shadowed(ImVec2(xx + icon + ig, cy - ts * 0.5f - 1.0f * scale), ts, col, t.c_str()); };
+    {   // storm: a purple swirl
+        const ImVec2 c(x + icon * 0.5f, cy);
+        dl->AddCircle(c, 7.0f * scale, IM_COL32(200, 120, 255, 255), 16, 2.5f * scale);
+        dl->AddCircleFilled(c, 2.8f * scale, IM_COL32(200, 120, 255, 255), 10);
+        label(x, storm, stormCol);
+        x += w0 + space;
+    }
+    {   // players left: a head and shoulders
+        const ImVec2 c(x + icon * 0.5f, cy);
+        dl->AddCircleFilled(ImVec2(c.x, c.y - 4.5f * scale), 3.6f * scale, ink, 12);
+        dl->AddRectFilled(ImVec2(c.x - 6.5f * scale, c.y + 0.5f * scale), ImVec2(c.x + 6.5f * scale, c.y + 7.5f * scale), ink, 3.0f * scale);
+        label(x, alive, ink);
+        x += w1 + space;
+    }
+    {   // eliminations: a sword
+        const ImVec2 c(x + icon * 0.5f, cy);
+        dl->AddLine(ImVec2(c.x - 6.0f * scale, c.y + 6.0f * scale), ImVec2(c.x + 6.0f * scale, c.y - 6.0f * scale), IM_COL32(220, 230, 240, 255), 3.0f * scale);
+        dl->AddLine(ImVec2(c.x - 5.5f * scale, c.y + 0.5f * scale), ImVec2(c.x - 0.5f * scale, c.y + 5.5f * scale), gold, 3.0f * scale);
+        label(x, ko, ink);
+    }
+
+    // Only what is happening to you right now, short. Gear is shown as icons at the bottom left, the weather is on the screen itself.
+    if (!h.selfAlive) return;
+    float y = b.y + 8.0f * scale;
+    auto line = [&](ImU32 col, const std::string& t) {
+        const float size = 16.0f * scale;
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
+        shadowed(ImVec2(b.x - sz.x, y), size, col, t.c_str());
+        y += size + 5.0f * scale;
+    };
+    if (h.adultLeft > 0.0f) line(gold, "Adult " + ClockText(h.adultLeft));
+    if (h.invulnLeft > 0) line(gold, "Invulnerable " + ClockText(h.invulnLeft));
+    if (h.speedLeft > 0) line(green, "Speed " + ClockText(h.speedLeft));
+    if (h.revealLeft > 0) line(green, "Reveal " + ClockText(h.revealLeft));
+    if (h.shieldLeft > 0) line(green, "Guard " + ClockText(h.shieldLeft));
+    if (h.burnLeft > 0) line(red, "Burning");
+    if (h.stunLeft > 0) line(red, "Stunned");
+    if (h.inv.hasMark) line(green, "Farore's Wind set");
 }
 
 // The game's own item art (the 32x32 icons from its resource archive) is used wherever the game has one for the item; the hand-drawn
@@ -839,121 +989,208 @@ int gHandStack = -1;               // the stack held in hand (B drinks one), or 
 bool gStackBPressed = false;       // B was pressed this frame with a stack in hand (taken off the controller so Link doesn't swing)
 double gStackBHold = -1.0;         // when C-Down went down: a tap picks the next stack, a long hold drops the weapon in hand
 
-// The item bar, like Fortnite's: weapons (the one in hand highlighted), shield, potions and your ability. D-pad Left cycles weapons;
-// on a touch screen you can tap a slot.
+// A round OoT item button (like the C buttons of the real game): drop shadow, panel fill, a coloured rim and a soft highlight.
+void HudRoundButton(ImDrawList* dl, ImVec2 c, float r, ImU32 rim, bool lit, float scale) {
+    using namespace royale::wartable::theme;
+    dl->AddCircleFilled(ImVec2(c.x + 2 * scale, c.y + 3 * scale), r, IM_COL32(6, 15, 36, 192), 32);
+    dl->AddCircleFilled(c, r, HudColor(lit ? Button : Panel, 237), 32);
+    dl->AddCircle(c, r, rim, 32, (lit ? 3.0f : 2.0f) * scale);
+    dl->PathArcTo(c, r - 5 * scale, 3.14159265f * 1.05f, 3.14159265f * 1.45f, 14);
+    dl->PathStroke(IM_COL32(255, 255, 255, 45), 0, 2 * scale);
+}
+
+// The right-hand column of the HUD, bottom up: the weapon button, its name and ammo count, the other ammo kinds one per row, and the touch
+// EMOTE and JUMP buttons stacked above that. All in 720p units times scale, measured from the bottom of the screen.
+int HudAmmoRows(const royale::HudState& h) {
+    int n = 0;
+    for (int k = 0; k < royale::kAmmoKinds; k++) if (h.ammo[static_cast<size_t>(k)] > 0) n++;
+    return n;
+}
+float HudAmmoRowY(ImVec2 ds, float scale, int row) { return ds.y - 172.0f * scale - row * 28.0f * scale; }   // centre of the row (0 is the lowest)
+// Centre of a touch button on the right edge (0 EMOTE, 1 JUMP), kept clear of the ammo column; `radius` gets the button's size.
+ImVec2 HudTouchButton(ImVec2 ds, float scale, const royale::HudState& h, int index, float* radius) {
+    const int n = HudAmmoRows(h);
+    const float r = 28.0f * scale, top = n > 0 ? HudAmmoRowY(ds, scale, n - 1) - 16.0f * scale : ds.y - 158.0f * scale;
+    if (radius) *radius = r;
+    return ImVec2(ds.x - 20.0f * scale - r, top - 8.0f * scale - r - index * (2 * r + 8.0f * scale));
+}
+
+// The item bar, in Zelda's round buttons and Fortnite's order: bottom right, right to left. The weapon in hand is the big B button with its
+// ammo count and name above it, then two reserve weapons (D-pad Left/Right), the shield (C-Left), the potion bag (C-Down; the stack in hand
+// is drunk with B) and the ability (D-pad Up), then the rupee counter. Gear icons you wear are at the bottom left. On a touch screen tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
-    struct Slot { std::string title, sub; ImU32 border; bool filled, selected; float cooldown; int action; royale::ItemId icon; int ammo = -1; const char* hint = ""; };
-    const ImU32 grey = HudColor(royale::wartable::theme::Muted,150);
-    const royale::ItemId none = royale::ItemId::DekuStick;
-    std::vector<Slot> slots;
+    using royale::wartable::theme::Muted;
+    using G = royale::controls::Glyph;
+    const float S = scale, bottom = ds.y - 20.0f * S, right = ds.x - 20.0f * S;
+    const ImU32 grey = HudColor(Muted, 150), ink = IM_COL32(244, 233, 202, 255);
+    const ImU32 nB = IM_COL32(60, 175, 85, 255), nC = IM_COL32(245, 205, 40, 255), nD = IM_COL32(150, 150, 160, 255);
+    const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
     auto ammoOf = [&](royale::ItemId id) { const royale::AmmoKind k = royale::AmmoUsedBy(id); return k == royale::AmmoKind::None ? -1 : h.ammo[static_cast<size_t>(k)]; };
     const std::vector<PotionStack> stacks = PotionStacks(h);
     if (gHandStack >= static_cast<int>(stacks.size())) gHandStack = -1;
     const bool stackInHand = gHandStack >= 0;
-    slots.push_back({ ShortName(h.weapon), "", RarityU32(h.weaponRarity), true, !stackInHand, 0.0f, 0, h.weapon, ammoOf(h.weapon), "B" });
-    for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
-        if (i < static_cast<int>(h.inv.reserve.size())) {
-            const auto& r = h.inv.reserve[i];
-            const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            slots.push_back({ "", "", RarityU32(static_cast<royale::Rarity>(r.rarity)), true, false, 0.0f, i + 1, id, ammoOf(id), "D-pad L/R" });
-        } else {
-            slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
-        }
-    }
-    if (h.hasShield) slots.push_back({ "", "", RarityU32(h.shieldRarity), true, false, 0.0f, 0, h.shield, -1, "" });
-    else slots.push_back({ "", "", grey, false, false, 0.0f, 0, none });
-    for (int i = 0; i < royale::kPotionSlots; i++) {   // the bag: one slot per kind, stacked, drunk with B once it is in hand (C-Down picks the next one)
-        if (i < static_cast<int>(stacks.size())) {
-            const PotionStack& st = stacks[static_cast<size_t>(i)];
-            slots.push_back({ "", "x" + std::to_string(st.count), RarityU32(st.rarity), true, gHandStack == i, 0.0f, 20 + i, st.item, -1, gHandStack == i ? "B" : "C-Down" });
-        } else {
-            slots.push_back({ "", "", grey, false, false, 0.0f, 20 + i, none });
-        }
-    }
-    if (h.inv.hasAbility) {
-        const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
-        const float cd = royale::AbilityOf(id).cooldown;
-        const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
-        slots.push_back({ "", h.abilityReadyIn > 0.05f ? ClockText(h.abilityReadyIn) : lowMagic ? "NO MAGIC" : "", RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)), true, false,
-                          cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f, 11, id, -1, "D-pad Up" });
-    } else {
-        slots.push_back({ "", "", grey, false, false, 0.0f, 11, none });
-    }
-    if (h.hasShield) slots[static_cast<size_t>(royale::kMaxReserveWeapons) + 1].hint = "C-Left";
-
-    const float w = (slots.size() > 8 ? 74.0f : 84.0f) * scale, hgt = 76.0f * scale, gap = 8.0f * scale;
-    const float total = slots.size() * w + (slots.size() - 1) * gap;
-    float x = (ds.x - total) * 0.5f;
-    const float y = ds.y - hgt - 20.0f * scale;
     ImGuiIO& io = ImGui::GetIO();
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
-    for (size_t i = 0; i < slots.size(); i++) {
-        const Slot& sl = slots[i];
-        const ImVec2 a(x, y), b(x + w, y + hgt);
-        HudFrame(dl,a,b,scale,sl.selected);
-        if (sl.filled) DrawItemIcon(dl, sl.icon, ImVec2((a.x + b.x) * 0.5f, a.y + hgt * 0.4f), hgt * 0.5f, sl.border);
-        if (sl.cooldown > 0) dl->AddRectFilled(a, ImVec2(b.x, a.y + hgt * sl.cooldown), IM_COL32(0, 0, 0, 150), 6.0f * scale);
-        dl->AddRectFilled(ImVec2(a.x+4*scale,b.y-4*scale),ImVec2(b.x-4*scale,b.y-2*scale),sl.border);
-        if (sl.filled) {   // which button uses the slot
-            const char* hint = sl.hint;
-            const float hs = 12.5f * scale;
-            const ImVec2 hsz = font->CalcTextSizeA(hs, FLT_MAX, 0.0f, hint);
-            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f + 1, b.y + 2 * scale + 1), IM_COL32(0, 0, 0, 220), hint);
-            const bool isB = hint[0] == 'B' && hint[1] == 0, isC = hint[0] == 'C';
-            const ImU32 hintCol = isB ? IM_COL32(100, 230, 110, 255) : isC ? IM_COL32(255, 220, 40, 255) : IM_COL32(210, 205, 190, 235); // B green, C yellow, as on the N64 pad
-            dl->AddText(font, hs, ImVec2((a.x + b.x - hsz.x) * 0.5f, b.y + 2 * scale), hintCol, hint);
-            const int nres = royale::kMaxReserveWeapons;
-            const royale::controls::Prompt pr = royale::controls::PromptsFor(ControlScheme());
-            const auto g = i == 0 ? pr.weapon : static_cast<int>(i) <= nres ? pr.swap : static_cast<int>(i) == nres + 1 ? pr.shield : static_cast<int>(i) == nres + 2 ? pr.potion : pr.ability;
-            DrawPadGlyph(dl, font, ImVec2((a.x + b.x) * 0.5f, b.y + 11.0f * scale), 8.5f * scale, g);
+    auto hitRound = [&](ImVec2 c, float r) { return tap && std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= r; };
+    auto hitRect = [&](ImVec2 a, ImVec2 b) { return tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y; };
+    auto shadowed = [&](ImVec2 p, float size, ImU32 col, const char* t) {
+        dl->AddText(font, size, ImVec2(p.x + 1.5f, p.y + 1.5f), IM_COL32(0, 0, 0, 230), t);
+        dl->AddText(font, size, p, col, t);
+    };
+    auto rightText = [&](float xr, float y, float size, ImU32 col, const char* t) {
+        shadowed(ImVec2(xr - font->CalcTextSizeA(size, FLT_MAX, 0.0f, t).x, y), size, col, t);
+    };
+    auto centreText = [&](ImVec2 c, float size, ImU32 col, const char* t) {
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t);
+        shadowed(ImVec2(c.x - sz.x * 0.5f, c.y - sz.y * 0.5f), size, col, t);
+    };
+    auto rarityArc = [&](ImVec2 c, float r, ImU32 col) {   // along the bottom of a round button
+        dl->PathArcTo(c, r - 3 * S, 3.14159265f * 0.17f, 3.14159265f * 0.83f, 16);
+        dl->PathStroke(col, 0, 4 * S);
+    };
+    auto rarityBar = [&](ImVec2 a, ImVec2 b, ImU32 col) { dl->AddRectFilled(ImVec2(a.x + 4 * S, b.y - 4 * S), ImVec2(b.x - 4 * S, b.y - 2 * S), col); };
+
+    // The weapon in hand: big, with the B button on its rim.
+    const float wr = 38.0f * S;
+    const ImVec2 wc(right - wr, bottom - wr);
+    HudRoundButton(dl, wc, wr, stackInHand ? IM_COL32(60, 175, 85, 110) : nB, !stackInHand, S);
+    DrawItemIcon(dl, h.weapon, wc, wr * 1.2f, RarityU32(h.weaponRarity));
+    rarityArc(wc, wr, RarityU32(h.weaponRarity));
+    DrawPadGlyph(dl, font, ImVec2(wc.x - wr * 0.72f, wc.y + wr * 0.72f), 8.0f * S, pr.weapon);
+    if (hitRound(wc, wr) && stackInHand) gHandStack = -1;   // tap the weapon to put the potion away
+    {   // ammo in the weapon and its name above it, both right-aligned; the other ammo above those, one row per kind
+        const float nameY = wc.y - wr - 30.0f * S;
+        std::string name = ShortName(h.weapon);
+        for (char& ch : name) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        rightText(right, nameY, 14.0f * S, RarityU32(h.weaponRarity), name.c_str());
+        if (const int n = ammoOf(h.weapon); n >= 0) rightText(right, nameY - 28.0f * S, 24.0f * S, n > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), std::to_string(n).c_str());
+        int row = 0;
+        for (int k = 0; k < royale::kAmmoKinds; k++) {
+            const int n = h.ammo[static_cast<size_t>(k)];
+            if (n <= 0) continue;
+            const float y = HudAmmoRowY(ds, S, row++);
+            const std::string t = "x " + std::to_string(n);
+            rightText(right, y - 8.5f * S, 16.0f * S, ink, t.c_str());
+            DrawItemIcon(dl, royale::AmmoItem(static_cast<royale::AmmoKind>(k)), ImVec2(right - 46.0f * S, y), 24.0f * S, IM_COL32(220, 230, 240, 255));
         }
-        const float ts = 11.5f * scale;
-        dl->AddText(font, ts, ImVec2(a.x + 5 * scale, b.y - 17 * scale), HudColor(royale::wartable::theme::Ink,sl.filled?255:120), sl.title.c_str());
-        dl->AddText(font, ts * 0.9f, ImVec2(a.x + 5 * scale, a.y + 3 * scale), sl.filled ? sl.border : grey, sl.sub.c_str());
-        if (sl.filled && sl.ammo >= 0) { // how many shots are left
-            const std::string n = "x" + std::to_string(sl.ammo);
-            const ImVec2 nsz = font->CalcTextSizeA(ts * 1.15f, FLT_MAX, 0.0f, n.c_str());
-            dl->AddText(font, ts * 1.15f, ImVec2(b.x - nsz.x - 5 * scale + 1, a.y + 4 * scale + 1), IM_COL32(0, 0, 0, 220), n.c_str());
-            dl->AddText(font, ts * 1.15f, ImVec2(b.x - nsz.x - 5 * scale, a.y + 4 * scale), sl.ammo > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), n.c_str());
+    }
+
+    // Two reserve weapons, squares, with one D-pad Left/Right glyph centred above the pair.
+    const float sq = 54.0f * S, gap = 6.0f * S;
+    float x = wc.x - wr - gap;
+    const float pairRight = x;
+    bool anyReserve = false;
+    for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
+        const ImVec2 a(x - sq, bottom - sq), b(x, bottom);
+        const bool filled = i < static_cast<int>(h.inv.reserve.size());
+        HudFrame(dl, a, b, S);
+        if (filled) {
+            const auto& r = h.inv.reserve[static_cast<size_t>(i)];
+            const royale::ItemId id = static_cast<royale::ItemId>(r.item);
+            const ImU32 col = RarityU32(static_cast<royale::Rarity>(r.rarity));
+            DrawItemIcon(dl, id, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - 2 * S), sq * 0.7f, col);
+            rarityBar(a, b, col);
+            if (const int n = ammoOf(id); n >= 0) rightText(b.x - 5 * S, a.y + 3 * S, 12.0f * S, n > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), std::to_string(n).c_str());
+            if (hitRect(a, b)) gSession.SelectWeapon(i + 1);
+            anyReserve = true;
+        } else rarityBar(a, b, grey);
+        x = a.x - gap;
+    }
+    if (anyReserve) DrawPadGlyph(dl, font, ImVec2((x + gap + pairRight) * 0.5f, bottom - sq - 10.0f * S), 7.0f * S, pr.swap);
+
+    // The shield: a round C-Left button.
+    const float r2 = 28.0f * S;
+    x -= 2 * S;
+    {
+        const ImVec2 c(x - r2, bottom - r2);
+        const ImU32 col = h.hasShield ? RarityU32(h.shieldRarity) : grey;
+        HudRoundButton(dl, c, r2, h.hasShield ? nC : IM_COL32(245, 205, 40, 110), false, S);
+        if (h.hasShield) {
+            DrawItemIcon(dl, h.shield, c, r2 * 1.3f, col);
+            rarityArc(c, r2, col);
+            DrawPadGlyph(dl, font, ImVec2(c.x - r2 * 0.72f, c.y + r2 * 0.72f), 7.0f * S, pr.shield);
         }
-        if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
-            if (sl.action >= 1 && sl.action <= royale::kMaxReserveWeapons) gSession.SelectWeapon(sl.action);
-            else if (sl.action >= 20 && sl.action < 20 + royale::kPotionSlots) {   // tap a stack to take it in hand, tap it again to drink
-                const int idx = sl.action - 20;
-                if (idx < static_cast<int>(stacks.size())) {
-                    if (gHandStack == idx) gSession.UseStack(static_cast<uint8_t>(stacks[static_cast<size_t>(idx)].item), static_cast<uint8_t>(stacks[static_cast<size_t>(idx)].rarity));
-                    else gHandStack = idx;
+        x = c.x - r2 - gap;
+    }
+
+    // The potion bag: stacks of one kind and tier; the stack in hand is lit and shows B. The C-Down glyph is centred above the row.
+    {
+        const float ps = 44.0f * S, pgap = 5.0f * S, rowRight = x;
+        for (int i = 0; i < royale::kPotionSlots; i++) {
+            const ImVec2 a(x - ps, bottom - ps), b(x, bottom);
+            const bool filled = i < static_cast<int>(stacks.size());
+            HudFrame(dl, a, b, S, gHandStack == i);
+            if (filled) {
+                const PotionStack& st = stacks[static_cast<size_t>(i)];
+                const ImU32 col = RarityU32(st.rarity);
+                DrawItemIcon(dl, st.item, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f + 1 * S), ps * 0.72f, col);
+                rarityBar(a, b, col);
+                const std::string cnt = "x" + std::to_string(st.count);
+                rightText(b.x - 4 * S, a.y + 3 * S, 12.0f * S, ink, cnt.c_str());
+                if (gHandStack == i) DrawPadGlyph(dl, font, ImVec2(a.x + 8 * S, a.y + 8 * S), 6.5f * S, pr.weapon);
+            } else rarityBar(a, b, grey);
+            if (hitRect(a, b) && filled) {   // tap a stack to take it in hand, tap it again to drink
+                const PotionStack& st = stacks[static_cast<size_t>(i)];
+                if (gHandStack == i) gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
+                else gHandStack = i;
+            }
+            x = a.x - pgap;
+        }
+        if (!stacks.empty()) DrawPadGlyph(dl, font, ImVec2((x + pgap + rowRight) * 0.5f, bottom - ps - 10.0f * S), 7.0f * S, G::CDown);
+    }
+
+    // The ability: a round D-pad Up button with a pie cooldown.
+    x -= 2 * S;
+    {
+        const ImVec2 c(x - r2, bottom - r2);
+        const bool has = h.inv.hasAbility;
+        const royale::ItemId id = static_cast<royale::ItemId>(h.inv.ability.item);
+        const ImU32 col = has ? RarityU32(static_cast<royale::Rarity>(h.inv.ability.rarity)) : grey;
+        HudRoundButton(dl, c, r2, has ? nD : IM_COL32(150, 150, 160, 110), false, S);
+        if (has) {
+            const float cd = royale::AbilityOf(id).cooldown;
+            const bool lowMagic = h.magic + 0.001f < royale::AbilityMagic(id);
+            DrawItemIcon(dl, id, c, r2 * 1.3f, col);
+            rarityArc(c, r2, col);
+            const float left = cd > 0 ? std::min(1.0f, h.abilityReadyIn / cd) : 0.0f;
+            if (left > 0.0f) {   // a dark pie, clockwise from the top, for the time still to wait
+                const int steps = std::max(2, static_cast<int>(40 * left));
+                for (int s = 0; s < steps; s++) {
+                    const float t0 = -1.5707963f + 6.2831853f * left * s / steps, t1 = -1.5707963f + 6.2831853f * left * (s + 1) / steps;
+                    dl->AddTriangleFilled(c, ImVec2(c.x + std::cos(t0) * r2, c.y + std::sin(t0) * r2), ImVec2(c.x + std::cos(t1) * r2, c.y + std::sin(t1) * r2), IM_COL32(0, 0, 0, 150));
                 }
             }
-            else if (sl.action == 0 && i == 0 && gHandStack >= 0) gHandStack = -1;
-            else if (sl.action == 11 && h.inv.hasAbility && h.abilityReadyIn <= 0.05f && h.magic + 0.001f >= royale::AbilityMagic(static_cast<royale::ItemId>(h.inv.ability.item))) gSession.UseAbility();
+            if (h.abilityReadyIn > 0.05f) centreText(ImVec2(c.x, c.y - r2 - 9 * S), 12.0f * S, ink, ClockText(h.abilityReadyIn).c_str());
+            else if (lowMagic) centreText(ImVec2(c.x, c.y - r2 - 9 * S), 12.0f * S, IM_COL32(255, 120, 110, 255), "NO MAGIC");
+            DrawPadGlyph(dl, font, ImVec2(c.x - r2 * 0.72f, c.y + r2 * 0.72f), 7.0f * S, pr.ability);
+            if (hitRound(c, r2) && h.abilityReadyIn <= 0.05f && !lowMagic) gSession.UseAbility();
         }
-        x += w + gap;
+        x = c.x - r2 - 12 * S;
     }
 
-    // Money, at the right end of the bar.
+    // Money, Wind Waker style: a rupee and four digits (the wallet holds 1000).
     {
-        const std::string n = std::to_string(h.rupees);
-        const float ts = 20.0f * scale;
-        const ImVec2 nsz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, n.c_str());
-        const float rx = (ds.x + total) * 0.5f, ry = y - 34.0f * scale;
-        DrawItemIcon(dl, royale::ItemId::Rupees, ImVec2(rx - nsz.x - 22.0f * scale, ry + 12.0f * scale), 26.0f * scale, IM_COL32(110, 240, 130, 255));
-        dl->AddText(font, ts, ImVec2(rx - nsz.x + 1, ry + 1), IM_COL32(0, 0, 0, 220), n.c_str());
-        dl->AddText(font, ts, ImVec2(rx - nsz.x, ry), IM_COL32(150, 255, 160, 255), n.c_str());
+        char n[8];
+        std::snprintf(n, sizeof(n), "%04d", std::clamp(h.rupees, 0, 9999));
+        const float ts = 24.0f * S;
+        const ImVec2 nsz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, n);
+        const float cy = bottom - 22.0f * S;
+        shadowed(ImVec2(x - nsz.x, cy - nsz.y * 0.5f), ts, IM_COL32(250, 215, 90, 255), n);
+        DrawItemIcon(dl, royale::ItemId::Rupees, ImVec2(x - nsz.x - 16.0f * S, cy), 28.0f * S, IM_COL32(110, 240, 130, 255));
     }
 
-    // What you wear: one small icon per gear slot, just above the bar (tunic, boots, gauntlets, mask, scale, pack, charm).
-    float gx = (ds.x - total) * 0.5f;
-    const float gs = 30.0f * scale, gy = y - gs - 10.0f * scale;
+    // What you wear: one small icon per gear slot at the bottom left (tunic, boots, gauntlets, mask, scale, pack, charm).
+    float gx = 18.0f * S;
+    const float gs = 28.0f * S, gy = ds.y - gs - 20.0f * S;
     for (int i = 0; i < royale::kGearSlots; i++) {
         if (!(h.inv.gearMask & (1 << i))) continue;
         const royale::ItemId id = static_cast<royale::ItemId>(h.inv.gear[i].item);
         const ImU32 col = RarityU32(static_cast<royale::Rarity>(h.inv.gear[i].rarity));
         const ImVec2 a(gx, gy), b(gx + gs, gy + gs);
-        HudFrame(dl,a,b,scale);
+        HudFrame(dl, a, b, S);
         DrawItemIcon(dl, id, ImVec2(gx + gs * 0.5f, gy + gs * 0.5f), gs * 0.72f, col);
-        dl->AddRectFilled(ImVec2(a.x+3*scale,b.y-3*scale),ImVec2(b.x-3*scale,b.y-scale),col);
-        gx += gs + 5.0f * scale;
+        rarityBar(a, b, col);
+        gx += gs + 4.0f * S;
     }
 }
 
@@ -1005,14 +1242,16 @@ void DrawEmotes(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const ImU32 lit = IM_COL32(255, 236, 120, 255);
     bool used = false;   // a tap the wheel has dealt with
 
-    // The EMOTE button, bottom right.
+    // The EMOTE button: a round C-Right button on the right edge, above the ammo column (JUMP is stacked above it).
     {
-        const float w = 128.0f * scale, hgt = 40.0f * scale;
-        const ImVec2 a(ds.x - w - 18.0f * scale, ds.y - hgt - 24.0f * scale), b(a.x + w, a.y + hgt);
-        dl->AddRectFilled(a, b, OotPanel(200), 6.0f * scale);
-        dl->AddRect(a, b, gWheel.open ? lit : goldDark, 6.0f * scale, 0, 2.5f * scale);
-        WheelText(dl, font, 16.0f * scale, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), IM_COL32(255, 255, 255, 255), "EMOTE");
-        if (tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) {
+        float rad;
+        const ImVec2 c = HudTouchButton(ds, scale, h, 0, &rad);
+        const bool over = std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= rad;
+        const bool down = over && ImGui::IsMouseDown(0) && !io.WantCaptureMouse;
+        HudRoundButton(dl, c, rad, gWheel.open ? lit : goldDark, gWheel.open || down, scale);
+        DrawPadGlyph(dl, font, ImVec2(c.x, c.y - 7.0f * scale), 12.0f * scale, royale::controls::PromptsFor(ControlScheme()).emote);
+        WheelText(dl, font, 11.0f * scale, ImVec2(c.x, c.y + 14.0f * scale), IM_COL32(255, 255, 255, 255), "EMOTE");
+        if (tap && over) {
             used = true;
             if (gWheel.open) CloseEmoteWheel();
             else if (CanEmote(h)) OpenEmoteWheel(true);

@@ -242,7 +242,7 @@ void ShowBanner(const std::string& text, ImU32 colour, float seconds = 2.6f) {
 }
 
 // Small "+5 Rupees" lines that float up on the right when something drops out of a rock or bush.
-// The kill feed, top right: who got whom.
+// The kill feed, bottom left: who got whom, newest at the bottom.
 struct FeedLine { std::string text; ImU32 colour; double at; };
 std::vector<FeedLine> gFeed;
 void AddFeed(const std::string& text, ImU32 colour) {
@@ -251,17 +251,18 @@ void AddFeed(const std::string& text, ImU32 colour) {
 }
 void DrawFeed(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
-    float y = 14.0f * scale;
-    for (const FeedLine& f : gFeed) {
+    float y = ds.y - 112.0f * scale;   // bottom of the newest line: above the item bar's height and the gear icons
+    for (auto it = gFeed.rbegin(); it != gFeed.rend(); ++it) {
+        const FeedLine& f = *it;
         const double age = now - f.at;
         if (age > 5.0) continue;
         const float a = static_cast<float>(std::min(1.0, (5.0 - age) / 1.0));
         const float size = 17.0f * scale;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, f.text.c_str());
-        const ImVec2 pos(ds.x - sz.x - 18.0f * scale, y);
+        const ImVec2 pos(18.0f * scale + 8.0f * scale, y - sz.y);
         dl->AddRectFilled(ImVec2(pos.x - 8 * scale, pos.y - 2 * scale), ImVec2(pos.x + sz.x + 8 * scale, pos.y + sz.y + 2 * scale), IM_COL32(6, 12, 18, static_cast<int>(150 * a)), 5.0f * scale);
         dl->AddText(font, size, pos, (f.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), f.text.c_str());
-        y += sz.y + 7.0f * scale;
+        y -= sz.y + 7.0f * scale;
     }
     gFeed.erase(std::remove_if(gFeed.begin(), gFeed.end(), [&](const FeedLine& f) { return now - f.at > 5.0; }), gFeed.end());
 }
@@ -274,14 +275,14 @@ void ShowGain(const std::string& text, ImU32 colour) {
 }
 void DrawGains(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     const double now = ImGui::GetTime();
-    float y = ds.y * 0.42f;
+    float y = ds.y * 0.5f;   // right side, left of the touch buttons and clear of the ammo column
     for (const Gain& g : gGains) {
         const double age = now - g.at;
         if (age > 1.8) continue;
         const float a = static_cast<float>(std::min(1.0, (1.8 - age) / 0.5));
         const float size = 22.0f * scale;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, g.text.c_str());
-        const ImVec2 pos(ds.x - sz.x - 24.0f * scale, y - static_cast<float>(age) * 26.0f * scale);
+        const ImVec2 pos(ds.x - sz.x - 96.0f * scale, y - static_cast<float>(age) * 26.0f * scale);
         dl->AddText(font, size, ImVec2(pos.x + 1.5f, pos.y + 1.5f), IM_COL32(0, 0, 0, static_cast<int>(220 * a)), g.text.c_str());
         dl->AddText(font, size, pos, (g.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), g.text.c_str());
         y += 28.0f * scale;

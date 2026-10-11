@@ -146,10 +146,10 @@ void WarDraw(GameState* state) {
                 p.Heart(36+(i%5)*14.0f,130+(i/5)*14.0f,13,amount<=0?0:std::clamp(static_cast<int>(std::ceil(amount*4)),1,4));
             }
             const float shieldFill=std::clamp(h.inv.shield/royale::kMaxShield,0.0f,1.0f), magicFill=std::clamp(h.magic/royale::kMaxMagic,0.0f,1.0f);
-            p.Text(36,157,"SHIELD",8,wt::theme::Muted);p.Meter({36,166,150,12},shieldFill,0x55A5F5FF);
-            p.Text(36,185,"MAGIC",8,wt::theme::Muted);p.Meter({36,194,150,12},magicFill,0x3CD255FF);
+            p.Text(36,160,"SHIELD",8,wt::theme::Muted);p.Meter({36,169,150,11},shieldFill,0x55A5F5FF);
+            p.Text(36,185,"MAGIC",8,wt::theme::Muted);p.Meter({36,194,150,11},magicFill,0x3CD255FF);
             const std::string sv=std::to_string(static_cast<int>(shieldFill*100)), mv=std::to_string(static_cast<int>(h.magic));
-            p.Text(208-p.TextWidth(sv,9),167,sv,9,wt::theme::Ink);p.Text(208-p.TextWidth(mv,9),195,mv,9,wt::theme::Ink);
+            p.Text(208-p.TextWidth(sv,9),170,sv,9,wt::theme::Ink);p.Text(208-p.TextWidth(mv,9),195,mv,9,wt::theme::Ink);
             const char* rows[]={attack,defense,speed};
             for(int i=0;i<3;++i)p.Text(36,216+i*15.0f,rows[i],11,wt::theme::Ink,false,171);
             p.Rect({39,269,4,4},0x6EF082FF);p.Rect({36,273,10,8},0x6EF082FF);p.Rect({39,281,4,4},0x6EF082FF);
@@ -186,20 +186,20 @@ void WarDraw(GameState* state) {
             p.Disc(394,189,5,kD);p.Text(401,184,"D-pad L/R",8,wt::theme::Muted);
             p.Disc(494,162,18,slot);p.Ring(494,162,18,kC,2);
             if(h.hasShield)p.ItemIcon(h.shield,{481,149,26,26});else p.Disc(494,162,12,0x1B3A6A66);
-            p.Text(485,184,"C<",8,kC);
+            p.Disc(482,188,4,kC);p.Text(488,184,"Left",7,kC);
             p.Disc(538,162,18,slot);p.Ring(538,162,18,kD,2);
             if(h.inv.hasAbility)p.ItemIcon(static_cast<royale::ItemId>(h.inv.ability.item),{525,149,26,26});
-            if(h.abilityReadyIn>0.05f)p.Text(530,184,ClockText(h.abilityReadyIn),8,wt::theme::Ink);else p.Text(531,184,"D^",8,kD);
+            if(h.abilityReadyIn>0.05f)p.Text(530,184,ClockText(h.abilityReadyIn),8,wt::theme::Ink);else {p.Disc(529,188,4,kD);p.Text(535,184,"Up",7,kD);}
             const auto stacks=PotionStacks(h);
             for(int i=0;i<royale::kPotionSlots;++i) {
-                const wt::Rect sq{566.0f+(i%3)*17,146.0f+(i/3)*17,15,15};
+                const wt::Rect sq{563.0f+(i%3)*16,146.0f+(i/3)*16,14,14};
                 if(i<static_cast<int>(stacks.size())) {
                     p.Rect(sq,slot);p.Border(sq,p.RarityRgba(stacks[i].rarity));
                     p.ItemIcon(stacks[i].item,{sq.x+2,sq.y+2,11,11});
                     if(stacks[i].count>1){const std::string n="x"+std::to_string(stacks[i].count);p.Text(sq.x+sq.w-p.TextWidth(n,7)-1,sq.y+sq.h-8,n,7,wt::theme::Ink);}
                 } else p.Border(sq,0x3A5A8AFF);
             }
-            p.Text(578,184,"Cv",8,kC);
+            p.Disc(571,188,4,kC);p.Text(577,184,"Down",7,kC);
         }
         if(gWar.page==WarPage::Lobby) {
             p.Text(38,139,std::to_string(h.humanCount)+" players / "+std::to_string(h.playerLimit)+" slots",10);
