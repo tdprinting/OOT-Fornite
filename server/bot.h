@@ -908,7 +908,7 @@ class BotController {
                 ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
                     int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
-                    mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
+                    mem.route.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.25f + 0.1f * static_cast<float>(rng.Unit()) : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
                 }
             }
@@ -936,7 +936,7 @@ class BotController {
                 ROYALE_BOT_PROF(if (mem.pathFailed && !context.workspace.deferred) { Vec2 sg, sa; int ra = nav->RegionAt(p.pos), rg = nav->RegionAt(goal); bool sn = nav->Snap(goal, &sg, true); nav->Snap(p.pos,&sa,true,true); int rs = sn ? nav->RegionAt(sg) : -2; int rsa=nav->RegionAt(sa);
                     int k = !sn ? 0 : rg < 0 ? (rs==rsa?1:2) : ra < 0 ? 3 : ra != rg ? 4 : context.workspace.expanded == 0 ? 5 : 6; if (mem.upper) k = 7; BotProf().failWhy[k] += context.workspace.expanded; })
                 if (mem.pathFailed) {
-                    mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.05f : 2.0f);
+                    mem.path.clear(); mem.repathAt = m.Clock() + (context.workspace.deferred ? 0.25f + 0.1f * static_cast<float>(rng.Unit()) : 2.0f);
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
                 }
             }
