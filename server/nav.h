@@ -428,11 +428,14 @@ class NavGrid {
         if (raw.empty()) { out.push_back({to, NodeY(goal), goal >= base, false}); return true; }
         raw.back().p = to;
         // String-pull the stretches of plain ground and water (a straight line that is clear is one stop); ramps, floors and climbs keep every stop.
+        // A stretch of ground straight after a floor or a roof starts where the floor meets it: the line test only knows the ground, and a bot up on
+        // the floor can only walk where the floor is.
         Vec2 at = NodeXZ(start);
+        bool atUpper = start >= base;
         size_t i = 0;
         while (i < raw.size()) {
             size_t far = i;
-            if (!raw[i].upper && !raw[i].climb) {
+            if (!raw[i].upper && !raw[i].climb && !atUpper) {
                 size_t last = i;
                 while (last + 1 < raw.size() && !raw[last+1].upper && !raw[last+1].climb) ++last;
                 for (size_t j = last; j > i; --j) {
@@ -441,6 +444,7 @@ class NavGrid {
             }
             out.push_back(raw[far]);
             at = raw[far].p;
+            atUpper = raw[far].upper;
             i = far + 1;
         }
         return true;

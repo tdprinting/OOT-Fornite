@@ -24,6 +24,9 @@ struct BotProfile {
     long brSearches[kBrCount] = {}, brExp[kBrCount] = {}, brFail[kBrCount] = {};
     int branch = kBrOther;
     std::unordered_map<uint32_t, int> lastBranch;
+    struct SteerNote { Vec2 goal; bool failed, routing, unstick, moved; size_t idx, size; Vec2 aim; float aimY; bool aimUp, upper; float levelY; };
+    std::unordered_map<uint32_t, SteerNote> steer;
+    const NavGrid* nav = nullptr;
 };
 inline BotProfile& BotProf() { static BotProfile p; return p; }
 inline void BotProfSearch(bool timer, bool ok, const NavGrid::SearchWorkspace& w) {
@@ -137,6 +140,7 @@ class BotController {
         const Circle soon = m.GetStorm().SafeZoneAt(m.StormTime() + kStormLookahead);
         m.BeginNavigationTick();
         repathBudget = 8;
+        ROYALE_BOT_PROF(BotProf().nav = nav.get();)
         for (auto it = memory.begin(); it != memory.end();) {
             auto* live = m.Find(it->first);
             if (!live || !live->alive || !live->isBot) it = memory.erase(it); else ++it;
@@ -368,6 +372,8 @@ class BotController {
         bool wasSwimming = false;
         Vec2 pathGoal = {};
         float repathAt = 0, lastSearchAt = -100;
+        bool leaving = false;               // set out early for the circle the zone will close to (leaveTo), on foot or in a cart
+        Circle leaveTo = {};
         bool pathFailed = false;
         float perceiveAt = 0;
         struct FailedGoal { Vec2 at = {}; float until = -1; };
@@ -915,7 +921,10 @@ class BotController {
                     if (!context.workspace.deferred) RememberFailure(mem, goal, m.Clock());
                 }
             }
-            while (mem.routeIdx < mem.route.size() && Distance(p.pos, mem.route[mem.routeIdx].p) < NavGrid::kCell * 0.45f) mem.routeIdx++;
+            while (mem.routeIdx < mem.route.size() && Distance(p.pos, mem.route[mem.routeIdx].p) < NavGrid::kCell * 0.45f) {
+                const NavGrid::Stop& done = mem.route[mem.routeIdx++];
+                if (mem.upper && !done.upper && !done.climb) mem.upper = false;   // at the foot of the ramp or the doorstep: off the floor, onto the ground
+            }
             if (mem.routeIdx < mem.route.size()) {
                 const NavGrid::Stop& stop = mem.route[mem.routeIdx];
                 if (stop.climb) { BeginClimb(m, p, mem, stop); return; }
@@ -951,6 +960,7 @@ class BotController {
         const Vec2 before = p.pos;
         const bool moved = Advance(m, p, dx, dz, (std::min)(step, std::hypot(dx, dz)));
         ROYALE_BOT_PROF(if (!moved && std::hypot(dx, dz) > 1.0f) BotProf().advanceBlocked++;)
+        ROYALE_BOT_PROF(BotProf().steer[p.id] = {goal, mem.pathFailed, routing, m.Clock() < mem.unstickUntil, moved, routing ? mem.routeIdx : mem.pathIdx, routing ? mem.route.size() : mem.path.size(), aim, aimY, aimUp, mem.upper, mem.levelY};)
         if (mem.upper) {   // keep the feet on the route: up the ramp as fast as the bot walks along it
             const float rate = Distance(before, p.pos) * 1.4f + 1.0f;
             if (routing) mem.levelY += (std::max)(-rate, (std::min)(rate, aimY - mem.levelY));
@@ -1524,10 +1534,11 @@ class BotController {
         // While the zone holds, leave for the circle it will close to in good time: as soon as the run there (and a little for the way round)
         // would take as long as the hold has left, not only 15 s before it starts to close.
         Vec2 zoneGoal = soon.center;
+        mem.leaving = false;
         if (const auto info = m.GetStorm().InfoAt(m.StormTime()); !info.shrinking && info.phase < kStormPhaseCount) {
             const Circle& next = m.GetStorm().PhaseEnd(info.phase);
             const float beyond = Distance(p.pos, next.center) - next.radius * 0.9f;
-            if (beyond > 0 && beyond / kRunSpeed + 8.0f >= info.secondsLeft) { s.outsideZone = true; zoneGoal = TripGoal(p, next); }
+            if (beyond > 0 && beyond / kRunSpeed + 8.0f >= info.secondsLeft) { s.outsideZone = mem.leaving = true; mem.leaveTo = next; zoneGoal = TripGoal(p, next); }
         }
 
         // Flee a fight that is going badly. Once started, keep fleeing for a few seconds so bots don't flip-flop.
@@ -1858,7 +1869,7 @@ class BotController {
         if (now >= mem.cartEvalAt) {
             mem.cartEvalAt = now + 1.2f + static_cast<float>(rng.Unit());
             mem.cartIdx = -1;
-            const float trip = Distance(p.pos, TripGoal(p, soon));
+            const float trip = Distance(p.pos, TripGoal(p, mem.leaving ? mem.leaveTo : soon));
             const bool fleeing = s.fleeing && foe && dist > 150.0f;
             const bool longWay = (s.outsideZone && trip > 800.0f) || trip > 2200.0f - 1400.0f * mem.cartLove;
             const bool idle = !foe && s.noFoeKnown && mem.cartLove > 0.4f;
@@ -1953,7 +1964,7 @@ class BotController {
         }
         // Where to: out of the storm first, else wherever it set out for, else the middle of the zone.
         if (!mem.cartGoalSet || !Circle{soon.center, soon.radius * 0.95f}.Contains(mem.cartGoal)) {
-            mem.cartGoal = TripGoal(p, soon);
+            mem.cartGoal = TripGoal(p, mem.leaving ? mem.leaveTo : soon);
             if (nav) { Vec2 snapped; if (nav->Snap(mem.cartGoal, &snapped)) mem.cartGoal = snapped; }
             mem.cartGoalSet = true;
             mem.cartPath.clear();
