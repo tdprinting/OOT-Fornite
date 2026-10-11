@@ -105,78 +105,111 @@ void DrawTitleLogo() {
     dl->AddText(ImGui::GetFont(), vs, ImVec2(ds.x - vsz.x - 14.0f, ds.y - vsz.y - 10.0f), vcol, version.c_str());
 }
 
+// The loading screen shown while everyone is moved to the battlefield. It wears the War Table menu's look: the same deep blue, framed panels with
+// gold corners, teal light shafts and drifting fairy lights, with a bar that fills as the countdown runs and a tip from Hyrule's old hands.
+// "Made by Tevin Dahl" sits quietly at the bottom.
 void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float secondsIn) {
-    const float fadeIn = std::clamp(secondsIn / 0.6f, 0.0f, 1.0f);
+    using namespace royale::wartable::theme;
+    const float fadeIn = std::clamp(secondsIn / 0.5f, 0.0f, 1.0f);
     const float fadeOut = std::clamp((kSplashSeconds - secondsIn) / 0.6f, 0.0f, 1.0f);
     const float a = std::min(fadeIn, fadeOut);
     if (a <= 0.0f) return;
     auto A = [&](int v) { return static_cast<int>(v * a); };
-    const ImU32 gold = IM_COL32(255, 214, 90, A(255)), goldDark = IM_COL32(176, 118, 24, A(255)), shadow = IM_COL32(8, 14, 10, A(235)),
-                cream = IM_COL32(236, 228, 190, A(255));
+    const float t = secondsIn;
 
-    // Night sky: top and bottom of a vertical gradient, with a vignette.
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(6, 22, 38, A(255)), IM_COL32(6, 22, 38, A(255)), IM_COL32(14, 54, 46, A(255)), IM_COL32(14, 54, 46, A(255)));
-    for (int i = 0; i < 40; i++) { // a few stars, fixed positions
-        const float sx = std::fmod(i * 197.0f + 41.0f, 1000.0f) / 1000.0f * ds.x, sy = std::fmod(i * 331.0f + 17.0f, 1000.0f) / 1000.0f * ds.y * 0.6f;
-        dl->AddCircleFilled(ImVec2(sx, sy), (1.0f + (i % 3)) * scale * 0.8f, IM_COL32(255, 255, 230, A(60 + (i * 37) % 140)));
+    // night sky: deep blue fading to a teal horizon
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), ds, IM_COL32(6, 13, 32, A(255)), IM_COL32(6, 13, 32, A(255)), IM_COL32(12, 40, 62, A(255)), IM_COL32(12, 40, 62, A(255)));
+    for (int i = 0; i < 46; i++) {   // stars, twinkling
+        const float sx = std::fmod(i * 197.0f + 41.0f, 1000.0f) / 1000.0f * ds.x, sy = std::fmod(i * 331.0f + 17.0f, 1000.0f) / 1000.0f * ds.y * 0.62f;
+        const float tw = 0.5f + 0.5f * std::sin(t * (1.5f + i % 4) + i);
+        dl->AddCircleFilled(ImVec2(sx, sy), (0.8f + (i % 3) * 0.6f) * scale, IM_COL32(244, 233, 202, A(static_cast<int>(40 + 150 * tw))));
+    }
+    for (int i = 0; i < 5; i++) {   // light shafts
+        const float x = ds.x * (0.12f + i * 0.19f) + std::sin(t * 0.5f + i * 1.9f) * 30 * scale, w = (28 + i % 3 * 12) * scale;
+        const float pulse = 0.6f + 0.4f * std::sin(t * 0.8f + i * 2.3f);
+        dl->AddRectFilledMultiColor(ImVec2(x, 0), ImVec2(x + w, ds.y * 0.85f), IM_COL32(111, 216, 208, A(static_cast<int>(26 * pulse))), IM_COL32(111, 216, 208, A(static_cast<int>(26 * pulse))),
+                                    IM_COL32(111, 216, 208, 0), IM_COL32(111, 216, 208, 0));
+    }
+    for (int i = 0; i < 26; i++) {   // fairy lights rising
+        const float life = ds.y * 1.05f, speed = (14 + (i * 7 % 11) * 4) * scale;
+        const float y = ds.y + 10 - std::fmod(t * speed + i * 83.0f * scale, life);
+        const float x = std::fmod(i * 131.0f + 57.0f, 1000.0f) / 1000.0f * ds.x + std::sin(t * 0.7f + i) * 14 * scale;
+        const float tw = 0.55f + 0.45f * std::sin(t * 2.4f + i * 1.7f);
+        const bool gold = i % 3 == 0;
+        const ImU32 col = gold ? IM_COL32(247, 215, 116, A(static_cast<int>(210 * tw))) : IM_COL32(127, 230, 216, A(static_cast<int>(170 * tw)));
+        dl->AddCircleFilled(ImVec2(x, y), (gold ? 7.0f : 5.0f) * scale, (col & 0x00FFFFFF) | (static_cast<ImU32>(A(26)) << 24), 14);
+        dl->AddCircleFilled(ImVec2(x, y), (gold ? 2.2f : 1.6f) * scale, col, 10);
     }
 
-    // Double gold border with diamond corners.
-    const float m = 26 * scale;
-    dl->AddRect(ImVec2(m, m), ImVec2(ds.x - m, ds.y - m), gold, 0, 0, 3.0f * scale);
-    dl->AddRect(ImVec2(m + 9 * scale, m + 9 * scale), ImVec2(ds.x - m - 9 * scale, ds.y - m - 9 * scale), goldDark, 0, 0, 1.5f * scale);
-    const ImVec2 corners[4] = { ImVec2(m, m), ImVec2(ds.x - m, m), ImVec2(m, ds.y - m), ImVec2(ds.x - m, ds.y - m) };
-    for (const ImVec2& c : corners) {
-        const float r = 9 * scale;
-        dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), gold);
-    }
+    // the framed panel
+    const float pw = std::min(ds.x * 0.62f, 760.0f * scale), ph = ds.y * 0.60f;
+    const ImVec2 lo((ds.x - pw) * 0.5f, ds.y * 0.17f + (1.0f - fadeIn) * 14 * scale), hi(lo.x + pw, lo.y + ph);
+    dl->PushClipRectFullScreen();
+    HudFrame(dl, lo, hi, scale);
 
-    auto lettered = [&](float y, float size, ImU32 col, const char* text) {
-        ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
-        const float x = (ds.x - sz.x) * 0.5f;
-        const float o = std::max(2.0f, size * 0.05f);
-        for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
-            if (dx || dy) dl->AddText(font, size, ImVec2(x + dx * o, y + dy * o), shadow, text);
-        }
-        dl->AddText(font, size, ImVec2(x + o * 1.6f, y + o * 1.6f), shadow, text);
-        dl->AddText(font, size, ImVec2(x, y), col, text);
-        return sz.y;
-    };
-
-    float y;
+    float y = lo.y + 22 * scale;
     ImVec2 logoSize;
     if (LogoTexture(&logoSize) != nullptr) {   // the logo, floating gently
-        const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
-        const float width = std::min(ds.x * 0.5f, ds.y * 0.5f * logoSize.x / logoSize.y);
-        const float top = ds.y * 0.06f + bob;
-        y = top + DrawLogo(dl, ds.x * 0.5f, top, width, A(255), true) + 24 * scale;
-    } else {
-        // The Triforce, three gold triangles with a dark gap in the middle, floating gently.
-        const float bob = std::sin(secondsIn * 2.0f) * 4.0f * scale;
-        const ImVec2 c(ds.x * 0.5f, ds.y * 0.27f + bob);
-        const float t = 62 * scale; // half the width of the whole mark
-        auto tri = [&](ImVec2 top, ImVec2 left, ImVec2 right) {
-            dl->AddTriangleFilled(ImVec2(top.x + 3 * scale, top.y + 3 * scale), ImVec2(left.x + 3 * scale, left.y + 3 * scale), ImVec2(right.x + 3 * scale, right.y + 3 * scale), shadow);
-            dl->AddTriangleFilled(top, left, right, gold);
-            dl->AddTriangle(top, left, right, goldDark, 2.0f * scale);
-        };
-        const float h = t * 1.732f;                    // height of the whole mark
-        const float half = t * 0.5f, hh = h * 0.5f;
-        const ImVec2 apex(c.x, c.y - hh), bl(c.x - t, c.y + hh), br(c.x + t, c.y + hh), midL(c.x - half, c.y), midR(c.x + half, c.y), midB(c.x, c.y + hh);
-        tri(apex, midL, midR);
-        tri(midL, bl, midB);
-        tri(midR, midB, br);
-
-        y = ds.y * 0.27f + hh + 28 * scale;
-        y += lettered(y, 58 * scale, gold, "OOT ROYALE") + 10 * scale;
-
+        const float bob = std::sin(t * 2.0f) * 3.0f * scale;
+        const float width = std::min(pw * 0.55f, ph * 0.42f * logoSize.x / logoSize.y);
+        y += DrawLogo(dl, ds.x * 0.5f, y + bob, width, A(255), true) + 22 * scale;
     }
-    // A thin gold rule with a diamond in the middle under the title.
-    dl->AddLine(ImVec2(ds.x * 0.34f, y), ImVec2(ds.x * 0.66f, y), goldDark, 2.0f * scale);
-    dl->AddQuadFilled(ImVec2(ds.x * 0.5f, y - 6 * scale), ImVec2(ds.x * 0.5f + 6 * scale, y), ImVec2(ds.x * 0.5f, y + 6 * scale), ImVec2(ds.x * 0.5f - 6 * scale, y), gold);
-    y += 22 * scale;
-    y += lettered(y, 34 * scale, cream, "Made by Tevin Dahl") + 26 * scale;
-    y += lettered(y, 21 * scale, cream, "Thank you to my wife Cynthia for supporting my wildest dreams and hobbies :)");
+    auto centred = [&](float size, ImU32 col, const std::string& text, bool shadow = true) {
+        const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
+        const float x = (ds.x - sz.x) * 0.5f;
+        if (shadow) dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, A(210)), text.c_str());
+        dl->AddText(font, size, ImVec2(x, y), col, text.c_str());
+        y += sz.y;
+    };
+    auto tint = [&](uint32_t rgba, int alpha) { return HudColor(rgba, A(alpha)); };
+    const std::string where = InField() ? std::string("Arriving at ") + CurrentMap().name : std::string("Travelling to ") + CurrentMap().name;
+    centred(26 * scale, tint(Ink, 255), where);
+    y += 14 * scale;
+
+    // the loading bar: a gold fill that grows with the countdown, and a fairy riding its tip
+    const float bw = pw * 0.62f, bh = 12 * scale, bx = (ds.x - bw) * 0.5f;
+    const float progress = std::clamp(secondsIn / (kSplashSeconds - 0.4f), 0.0f, 1.0f), eased = 1.0f - (1.0f - progress) * (1.0f - progress);
+    dl->AddRectFilled(ImVec2(bx, y), ImVec2(bx + bw, y + bh), IM_COL32(6, 15, 36, A(220)));
+    dl->AddRectFilled(ImVec2(bx + 2 * scale, y + 2 * scale), ImVec2(bx + 2 * scale + (bw - 4 * scale) * eased, y + bh - 2 * scale), tint(Gold, 255));
+    dl->AddRectFilled(ImVec2(bx + 2 * scale, y + 2 * scale), ImVec2(bx + 2 * scale + (bw - 4 * scale) * eased, y + bh * 0.5f), IM_COL32(255, 244, 190, A(110)));
+    dl->AddRect(ImVec2(bx, y), ImVec2(bx + bw, y + bh), tint(Border, 255), 0, 0, 1.5f * scale);
+    const ImVec2 fairy(bx + 2 * scale + (bw - 4 * scale) * eased, y + bh * 0.5f + std::sin(t * 9.0f) * 2.0f * scale);
+    dl->AddCircleFilled(fairy, 10 * scale, IM_COL32(190, 240, 255, A(50)), 16);
+    dl->AddCircleFilled(fairy, 4.5f * scale, IM_COL32(230, 250, 255, A(235)), 12);
+    for (int i = 0; i < 5; i++) {   // the sparkle trail
+        const float k = i / 5.0f;
+        dl->AddCircleFilled(ImVec2(fairy.x - (8 + i * 9) * scale, fairy.y + std::sin(t * 7.0f + i) * 5.0f * scale), (3.0f - k * 2.0f) * scale, IM_COL32(247, 215, 116, A(static_cast<int>(200 * (1 - k)))), 8);
+    }
+    y += bh + 20 * scale;
+
+    static const char* const kTips[] = {
+        "Hold Z to dive, then steer with the stick. Open your glider low.",
+        "Chests glow the colour of what is inside.",
+        "Stay inside the safe zone. The storm does not forgive.",
+        "Rupees buy loyal friends. Look for a Goron, a Zora or a Gerudo.",
+        "A shield turns the blow. Raise it before the arrow lands.",
+        "Water slows you and hides you. Splash through puddles for a sneak.",
+    };
+    static int tip = 0;
+    static float lastSeconds = 99.0f;
+    if (secondsIn < lastSeconds) tip = (tip + 1) % static_cast<int>(sizeof(kTips) / sizeof(kTips[0]));   // a new loading screen: the next tip
+    lastSeconds = secondsIn;
+    centred(11 * scale, tint(Gold, 255), "TIP", false);
+    y += 3 * scale;
+    centred(15 * scale, tint(Muted, 255), kTips[tip], false);
+    dl->PopClipRect();
+
+    // the credit, small and quiet in the lower corner of the screen
+    const float cs = 13 * scale;
+    const std::string credit = "Made by Tevin Dahl";
+    const ImVec2 cz = font->CalcTextSizeA(cs, FLT_MAX, 0.0f, credit.c_str());
+    const float cy = ds.y - cz.y - 22 * scale, cx = (ds.x - cz.x) * 0.5f;
+    dl->AddLine(ImVec2(ds.x * 0.5f - 70 * scale, cy - 7 * scale), ImVec2(ds.x * 0.5f + 70 * scale, cy - 7 * scale), tint(Gold, 120), 1.0f * scale);
+    dl->AddText(font, cs, ImVec2(cx, cy), tint(Gold, 190), credit.c_str());
+    const float ts = 10 * scale;
+    const char* thanks = "with thanks to Cynthia";
+    const ImVec2 tz = font->CalcTextSizeA(ts, FLT_MAX, 0.0f, thanks);
+    dl->AddText(font, ts, ImVec2((ds.x - tz.x) * 0.5f, cy + cz.y + 2 * scale), tint(Muted, 130), thanks);
 }
 
 
@@ -267,16 +300,71 @@ void DrawBanners(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
         const double age = now - b.start, left = b.until - now;
         if (left <= 0) continue;
         const float a = static_cast<float>(std::min(1.0, std::min(age / 0.2, left / 0.5)));
-        const float size = (30.0f + 6.0f * static_cast<float>(std::max(0.0, 1.0 - age * 4.0))) * scale;
+        const float slide = (1.0f - std::min(1.0f, static_cast<float>(age) / 0.25f));
+        const float size = 26.0f * scale;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, b.text.c_str());
-        const ImVec2 pos((ds.x - sz.x) * 0.5f, y);
-        const ImU32 col = (b.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24);
-        dl->AddRectFilled(ImVec2(pos.x - 20 * scale, pos.y - 6 * scale), ImVec2(pos.x + sz.x + 20 * scale, pos.y + sz.y + 6 * scale), IM_COL32(6, 12, 18, static_cast<int>(170 * a)), 8.0f * scale);
-        dl->AddText(font, size, ImVec2(pos.x + 2, pos.y + 2), IM_COL32(0, 0, 0, static_cast<int>(230 * a)), b.text.c_str());
-        dl->AddText(font, size, pos, col, b.text.c_str());
-        y += sz.y + 16.0f * scale;
+        const ImVec2 pos((ds.x - sz.x) * 0.5f, y - slide * slide * 16.0f * scale);
+        const ImVec2 lo(pos.x - 24 * scale, pos.y - 8 * scale), hi(pos.x + sz.x + 24 * scale, pos.y + sz.y + 8 * scale);
+        dl->PushClipRectFullScreen();
+        HudFrame(dl, lo, hi, scale);
+        dl->AddRectFilled(ImVec2(lo.x + 3 * scale, lo.y + 3 * scale), ImVec2(hi.x - 3 * scale, lo.y + 6 * scale), (b.colour & 0x00FFFFFF) | (static_cast<ImU32>(220 * a) << 24));
+        dl->AddText(font, size, ImVec2(pos.x + 1.5f, pos.y + 1.5f), IM_COL32(0, 0, 0, static_cast<int>(230 * a)), b.text.c_str());
+        dl->AddText(font, size, pos, (b.colour & 0x00FFFFFF) | (static_cast<ImU32>(255 * a) << 24), b.text.c_str());
+        dl->PopClipRect();
+        y += sz.y + 26.0f * scale;
     }
     gBanners.erase(std::remove_if(gBanners.begin(), gBanners.end(), [&](const Banner& b) { return b.until <= now; }), gBanners.end());
+}
+
+// What you just picked up, in the same framed panel as the War Table menus: the item in a rarity ring on the left, its tier and name on the
+// right, then what it does. It slides up, shines once and fades.
+void DrawPickupCard(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
+    const double now = ImGui::GetTime(), age = now - (gBannerUntil - 4.0), left = gBannerUntil - now;
+    const float fade = static_cast<float>(std::clamp(std::min(age / 0.18, left / 0.6), 0.0, 1.0));
+    const float slide = 1.0f - std::min(1.0f, static_cast<float>(age) / 0.28f);
+    const Rgb& c = kRarityRgb[static_cast<int>(gBannerRarity)];
+    const int A = static_cast<int>(255 * fade);
+    const ImU32 tier = IM_COL32(c.r, c.g, c.b, A);
+    const float nameSize = 24.0f * scale, tierSize = 13.0f * scale, descSize = 15.0f * scale, ring = 30.0f * scale, pad = 14.0f * scale;
+    const std::string tierText = std::string(RarityName(gBannerRarity)) + " item";
+    const float wrap = std::min(ds.x * 0.42f, 520.0f * scale);
+    const ImVec2 nameSz = font->CalcTextSizeA(nameSize, FLT_MAX, 0.0f, gBannerText.c_str());
+    const ImVec2 descSz = gBannerDescription.empty() ? ImVec2(0, 0) : font->CalcTextSizeA(descSize, wrap, wrap, gBannerDescription.c_str());
+    const float textW = std::max(nameSz.x, descSz.x), textH = tierSize + nameSz.y + (descSz.y > 0 ? descSz.y + 4 * scale : 0) + 6 * scale;
+    const float w = pad * 3 + ring * 2 + textW, h = std::max(textH, ring * 2) + pad * 2;
+    const float x0 = (ds.x - w) * 0.5f, y0 = ds.y * 0.56f + slide * slide * 20.0f * scale;
+    const ImVec2 lo(x0, y0), hi(x0 + w, y0 + h);
+    HudFrame(dl, lo, hi, scale);
+    dl->AddRectFilled(ImVec2(lo.x + 3 * scale, lo.y + 3 * scale), ImVec2(hi.x - 3 * scale, lo.y + 6 * scale), tier);   // the rarity bar along the top
+    const ImVec2 mid(lo.x + pad + ring, lo.y + h * 0.5f + 1.5f * scale);
+    dl->AddCircleFilled(mid, ring * 1.18f, IM_COL32(c.r, c.g, c.b, static_cast<int>(50 * fade)), 28);
+    dl->AddCircleFilled(mid, ring, HudColor(royale::wartable::theme::Button, static_cast<int>(240 * fade)), 28);
+    dl->AddCircle(mid, ring, tier, 28, 2.5f * scale);
+    DrawItemIcon(dl, gBannerItem, mid, ring * 1.15f, IM_COL32(c.r, c.g, c.b, 255));
+    const float tx = lo.x + pad * 2 + ring * 2;
+    float ty = lo.y + (h - textH) * 0.5f + 3 * scale;
+    auto line = [&](float size, ImU32 col, const std::string& t, float wrapWidth = 0.0f) {
+        dl->AddText(font, size, ImVec2(tx + 1.2f, ty + 1.2f), IM_COL32(0, 0, 0, static_cast<int>(200 * fade)), t.c_str(), nullptr, wrapWidth);
+        dl->AddText(font, size, ImVec2(tx, ty), col, t.c_str(), nullptr, wrapWidth);
+    };
+    line(tierSize, tier, tierText);
+    ty += tierSize + 1 * scale;
+    line(nameSize, HudColor(royale::wartable::theme::Ink, A), gBannerText);
+    ty += nameSz.y + 4 * scale;
+    if (!gBannerDescription.empty()) line(descSize, HudColor(royale::wartable::theme::Muted, A), gBannerDescription, wrap);
+    // one glint across the card as it arrives
+    const float sweep = static_cast<float>(age) / 0.7f;
+    if (sweep > 0.0f && sweep < 1.0f) {
+        const float gx = lo.x + (w + 40 * scale) * sweep - 30 * scale;
+        dl->AddRectFilled(ImVec2(std::max(gx, lo.x + 3), lo.y + 7 * scale), ImVec2(std::min(gx + 14 * scale, hi.x - 3), hi.y - 3 * scale), IM_COL32(255, 255, 255, static_cast<int>(60 * fade)));
+    }
+    // a few sparkles rise off the ring
+    for (int i = 0; i < 6; i++) {
+        const float t = static_cast<float>(std::fmod(age * 0.9 + i * 0.17, 1.0));
+        const float sx = mid.x + std::sin(i * 2.1f + static_cast<float>(age) * 2.0f) * ring * 0.9f, sy = mid.y - ring * 0.6f - t * ring * 1.3f;
+        const float r = (1.0f - t) * 3.2f * scale;
+        dl->AddRectFilled(ImVec2(sx - r, sy - r), ImVec2(sx + r, sy + r), IM_COL32(c.r, c.g, c.b, static_cast<int>(200 * fade * (1.0f - t))));
+    }
 }
 
 // The item floats up out of the chest on a halo of its rarity colour, spinning its glow, then fades.

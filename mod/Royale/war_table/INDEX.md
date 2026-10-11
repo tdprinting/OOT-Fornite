@@ -5,6 +5,9 @@ once by RoyaleWarTable.h in this order; do not compile them separately.
 
 | Task | File |
 | --- | --- |
+| Display page (resolution, widescreen, draw distance, presets), front-page update button | Controls.inc (`WarDisplayPage`, `WarUpdate*`) |
+| Menu motion: motes, shafts, ripples, staggered buttons | Draw.inc (`WarMotes`, `WarRipples`) |
+| Touch taps (SDL event watch, hit slop, boxed viewport) | Input.inc (`WarTapWatch`), `shared/war_table.h` (`HitTest`) |
 | State, page controls, settings and actions | Controls.inc |
 | Matrices, graphics state, tiles/fonts and map/portrait caching | Painter.inc |
 | Visible pages and panels | Draw.inc |

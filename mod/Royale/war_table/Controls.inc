@@ -18,12 +18,22 @@ struct WarState {
     std::array<uint8_t, SDL_NUM_SCANCODES> keys{};
     std::vector<WarControl> controls;
     std::string edit, notice, bootError;
+    struct Ripple { float x, y, born; };
+    std::vector<Ripple> ripples;
+    int lastFocusId = -1;
+    float focusChangedAt = -10, pageChangedAt = -10;
+    float tabX = 24;
 };
 WarState gWar;
 bool WarMenuOpen() { return gWar.open; }
 void WarBuild();
 void WarDraw(GameState* state);
 
+void WarTouchRipple(float x, float y) {
+    if(gWar.reduced)return;
+    gWar.ripples.push_back({x,y,gWar.clock});
+    if(gWar.ripples.size()>6)gWar.ripples.erase(gWar.ripples.begin());
+}
 void WarSound(int kind) {
     static float volume = 0.75f;
     static const u16 sounds[] = {NA_SE_SY_FSEL_CURSOR, NA_SE_SY_FSEL_DECIDE_L, NA_SE_SY_FSEL_CLOSE,
@@ -41,6 +51,7 @@ void WarShow(WarPage page) {
     gWar.section = 0;
     gWar.optionPage = 0;
     gWar.transition = gWar.reduced ? 1.0f : 0.0f;
+    gWar.pageChangedAt = gWar.clock;
     gWar.enteredAt = SDL_GetTicks();
     gWar.repeat = {};
     CloseEmoteWheel();
@@ -110,6 +121,11 @@ void WarBack() {
     if (gWar.page == WarPage::Lobby && !gSession.Joined()) { WarQuit(); return; }
     if (gWar.page == WarPage::Pause || gWar.page == WarPage::Lobby) { WarHide(); return; }
     WarOpen();
+}
+void WarPageStep(int tab) {
+    if(gWar.page==WarPage::Keyboard||!tab)return;
+    int n=static_cast<int>(gWar.page);if(n>3)n=0;n=(n+tab+4)%4;
+    if(n==0)WarOpen();else WarShow(static_cast<WarPage>(n));
 }
 void WarEdit(int target) {
     gWar.returnPage = gWar.page;
@@ -193,8 +209,8 @@ void WarOptionPager(int pages) {
     gWar.optionPages=std::max(1,pages);
     if(pages<=1)return;
     gWar.optionPage=std::clamp(gWar.optionPage,0,pages-1);
-    WarAdd(800,{235,282,100,22},"< OPTIONS","Previous option page",[](int){gWar.optionPage=std::max(0,gWar.optionPage-1);WarFocusFirstOption();},gWar.optionPage>0);
-    WarAdd(801,{507,282,100,22},"OPTIONS >","More options in this category",[pages](int){gWar.optionPage=std::min(pages-1,gWar.optionPage+1);WarFocusFirstOption();},gWar.optionPage+1<pages);
+    WarAdd(800,{235,280,104,26},"< OPTIONS","Previous option page",[](int){gWar.optionPage=std::max(0,gWar.optionPage-1);WarFocusFirstOption();},gWar.optionPage>0);
+    WarAdd(801,{503,280,104,26},"OPTIONS >","More options in this category",[pages](int){gWar.optionPage=std::min(pages-1,gWar.optionPage+1);WarFocusFirstOption();},gWar.optionPage+1<pages);
 }
 void WarOptions(std::initializer_list<WarOption> options,bool enabled=true) {
     const int pages=(static_cast<int>(options.size())+5)/6;
@@ -211,6 +227,175 @@ void WarDebugToggle(int row,int id) {
         gDebugOn[id]=!on;const auto key=std::string(ROYALE_CVAR("Debug."))+kDebugSwitches[id].key;
         CVarSetInteger(key.c_str(),!on);WarSave();
     },true,true);
+}
+// ---- Display page: resolution, widescreen, view distance and performance presets ----
+struct WarAspect { const char* name; float x, y; };
+constexpr WarAspect kWarAspects[] = {{"Fit window",0,0},{"16:9 widescreen",16,9},{"21:9 ultrawide",21,9},{"16:10",16,10},{"4:3 classic",4,3},{"5:3",5,3}};
+constexpr int kWarAspectCount = 6;
+struct WarVertical { const char* name; int lines; };
+constexpr WarVertical kWarVertical[] = {{"Window size",0},{"240p (N64)",240},{"360p",360},{"480p",480},{"720p",720},{"1080p",1080}};
+constexpr int kWarVerticalCount = 6;
+// libultraship reads these every frame, so changes show at once.
+void WarApplyResolution() {
+    const int a = std::clamp(CVarGetInteger(ROYALE_CVAR("AspectPreset"),0),0,kWarAspectCount-1);
+    const int v = std::clamp(CVarGetInteger(ROYALE_CVAR("VerticalPreset"),0),0,kWarVerticalCount-1);
+    const bool on = a != 0 || v != 0;
+    CVarSetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".Enabled", on);
+    CVarSetFloat(CVAR_PREFIX_ADVANCED_RESOLUTION ".AspectRatioX", kWarAspects[a].x);
+    CVarSetFloat(CVAR_PREFIX_ADVANCED_RESOLUTION ".AspectRatioY", kWarAspects[a].y);
+    CVarSetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".VerticalResolutionToggle", v != 0);
+    CVarSetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".VerticalPixelCount", v ? kWarVertical[v].lines : 480);
+    CVarSetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".UIComboItem.AspectRatio", a);
+    CVarSetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".UIComboItem.PixelCount", v);
+    CVarSetInteger(CVAR_LOW_RES_MODE, 0);
+}
+void WarCycleChoice(const char* key, int count, int direction) {
+    CVarSetInteger(key,(std::clamp(CVarGetInteger(key,0),0,count-1)+(direction<0?-1:1)+count)%count);
+    WarApplyResolution();
+    Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+}
+void WarRenderScale(int direction) {
+    float scale = CVarGetFloat(CVAR_INTERNAL_RESOLUTION, 1.0f);
+    scale = std::clamp(std::round((scale + (direction < 0 ? -0.05f : 0.05f)) * 20.0f) / 20.0f, 0.5f, 2.0f);
+    CVarSetFloat(CVAR_INTERNAL_RESOLUTION, scale);
+    Ship::Context::GetInstance()->GetWindow()->SetResolutionMultiplier(scale);
+    Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+}
+void WarMsaa(int direction) {
+    const int now = std::clamp(CVarGetInteger(CVAR_MSAA_VALUE,1),1,8);
+    const int next = direction < 0 ? std::max(1, now > 4 ? 4 : now > 2 ? 2 : 1) : (now < 2 ? 2 : now < 4 ? 4 : 8);
+    CVarSetInteger(CVAR_MSAA_VALUE, next);
+    Ship::Context::GetInstance()->GetWindow()->SetMsaaLevel(next);
+    Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+}
+// One tap sets every performance-related option together. Values are the cheap end for
+// handhelds, the game's defaults, and a generous setting for a strong PC.
+struct WarPreset { const char* name; float scale; int msaa, fps, weather, foliage, shadow, lights, water, ground, drawDistance; bool lod; };
+constexpr WarPreset kWarPresets[] = {
+    {"Battery saver",0.75f,1,30,50,50,1,0,0,50,1,false},
+    {"Balanced",1.0f,1,60,100,100,1,1,1,100,1,false},
+    {"Quality",1.5f,4,60,150,150,3,1,2,150,3,true},
+};
+void WarApplyPreset(int index) {
+    const WarPreset& p = kWarPresets[index];
+    CVarSetFloat(CVAR_INTERNAL_RESOLUTION,p.scale);
+    Ship::Context::GetInstance()->GetWindow()->SetResolutionMultiplier(p.scale);
+    CVarSetInteger(CVAR_MSAA_VALUE,p.msaa);
+    Ship::Context::GetInstance()->GetWindow()->SetMsaaLevel(p.msaa);
+    CVarSetInteger(CVAR_SETTING("InterpolationFPS"),p.fps);
+    CVarSetInteger(ROYALE_CVAR("WeatherDensity"),p.weather);
+    CVarSetInteger(ROYALE_CVAR("Foliage"),p.foliage);
+    CVarSetInteger(ROYALE_CVAR("ShadowQuality"),p.shadow);
+    CVarSetInteger(ROYALE_CVAR("ShadowCustom"),0);
+    CVarSetInteger(ROYALE_CVAR("DynLights"),p.lights);
+    CVarSetInteger(ROYALE_CVAR("WaterDetail"),p.water);
+    CVarSetInteger(ROYALE_CVAR("GroundAmount"),p.ground);
+    CVarSetInteger(CVAR_ENHANCEMENT("DisableDrawDistance"),p.drawDistance);
+    CVarSetInteger(CVAR_ENHANCEMENT("DisableLOD"),p.lod);
+    Ui().loaded=false; Ui(); gShadowCfgLoaded=false;
+    WarSave();
+}
+int WarCurrentPreset() {
+    for(int i=0;i<3;++i) {
+        const WarPreset& p=kWarPresets[i];
+        if(std::fabs(CVarGetFloat(CVAR_INTERNAL_RESOLUTION,1.0f)-p.scale)<0.01f&&CVarGetInteger(CVAR_MSAA_VALUE,1)==p.msaa&&
+           CVarGetInteger(ROYALE_CVAR("WeatherDensity"),100)==p.weather&&CVarGetInteger(ROYALE_CVAR("ShadowQuality"),1)==p.shadow&&
+           CVarGetInteger(ROYALE_CVAR("WaterDetail"),1)==p.water)return i;
+    }
+    return -1;
+}
+void WarDisplayPage() {
+    const int pages=3;
+    gWar.optionPages=pages;
+    gWar.optionPage=std::clamp(gWar.optionPage,0,pages-1);
+    if(gWar.optionPage==0) {
+        const int current=WarCurrentPreset();
+        for(int i=0;i<3;++i) {
+            std::string label=std::string(kWarPresets[i].name)+(current==i?"   *":"");
+            const char* hints[]={"Lower resolution, 30 fps, fewer particles and no dynamic lights. Best battery life.",
+                                 "The recommended setting for handhelds.","Sharper picture, MSAA, longer view and more detail. Needs a strong device."};
+            WarRow(430+i,i,label,hints[i],[i](int){WarApplyPreset(i);gWar.notice=std::string(kWarPresets[i].name)+" applied.";});
+        }
+        WarSetting(3,"Frame interpolation",CVAR_SETTING("InterpolationFPS"),60,20,120,10,"Target frames per second. Lower saves battery.");
+        WarSetting(4,"Vertical sync",CVAR_VSYNC_ENABLED,1,0,1,1,"Removes tearing but limits fps to the screen's refresh rate");
+        WarSetting(5,"Match refresh rate",CVAR_SETTING("MatchRefreshRate"),0,0,1,1,"Interpolate to your display's refresh rate");
+    } else if(gWar.optionPage==1) {
+        const float scale=CVarGetFloat(CVAR_INTERNAL_RESOLUTION,1.0f);
+        WarRow(440,0,"Render scale   "+std::to_string(static_cast<int>(std::lround(scale*100)))+"%","Below 100% is faster, above 100% is sharper",[](int d){WarRenderScale(d);},true,true);
+        const int a=std::clamp(CVarGetInteger(ROYALE_CVAR("AspectPreset"),0),0,kWarAspectCount-1);
+        WarRow(441,1,std::string("Screen shape   ")+kWarAspects[a].name,"Widescreen and other aspect ratios, boxed inside the window",[](int d){WarCycleChoice(ROYALE_CVAR("AspectPreset"),kWarAspectCount,d);},true,true);
+        const int v=std::clamp(CVarGetInteger(ROYALE_CVAR("VerticalPreset"),0),0,kWarVerticalCount-1);
+        WarRow(442,2,std::string("Resolution   ")+kWarVertical[v].name,"Fixed picture height. Lower is faster.",[](int d){WarCycleChoice(ROYALE_CVAR("VerticalPreset"),kWarVerticalCount,d);},true,true);
+        const int msaa=CVarGetInteger(CVAR_MSAA_VALUE,1);
+        WarRow(443,3,std::string("Smooth edges (MSAA)   ")+(msaa<=1?"Off":std::to_string(msaa)+"x"),"Anti-aliasing. Higher is smoother and slower.",[](int d){WarMsaa(d);},true,true);
+        WarSetting(4,"N64 look (4:3, 240p)",CVAR_LOW_RES_MODE,0,0,1,1,"Original console resolution. Overrides the options above.");
+#ifndef __ANDROID__
+        WarRow(445,5,"TOGGLE FULLSCREEN","Switch between a window and the full screen",[](int){Ship::Context::GetInstance()->GetWindow()->ToggleFullscreen();});
+#endif
+    } else {
+        WarSetting(0,"View distance",CVAR_ENHANCEMENT("DisableDrawDistance"),1,1,5,1,"How far away actors and objects are drawn (1 = original). Higher costs speed.");
+        WarSetting(1,"Widescreen culling",CVAR_ENHANCEMENT("WidescreenActorCulling"),0,0,1,1,"Draw actors at the sides of a widescreen picture");
+        WarSetting(2,"Always detailed models",CVAR_ENHANCEMENT("DisableLOD"),0,0,1,1,"Skip low-detail models at a distance. Looks better, costs speed.");
+        WarSetting(3,"Weather detail",ROYALE_CVAR("WeatherDensity"),100,0,200,25,"Rain, snow and leaf particle count");
+        WarSetting(4,"Foliage",ROYALE_CVAR("Foliage"),100,0,200,25,"Grass and bush count");
+        WarSetting(5,"Ground detail",ROYALE_CVAR("GroundAmount"),100,0,200,10,"Puddles, snow piles, frost and leaves");
+    }
+    WarOptionPager(pages);
+}
+// Front page update button: on Android it checks, downloads and installs in turn; elsewhere it opens the releases page.
+int WarUpdateState() {
+#ifdef __ANDROID__
+    return UpdaterInt("getState");
+#else
+    return 0;
+#endif
+}
+bool WarUpdateReady() {
+#ifdef __ANDROID__
+    return WarUpdateState()==kUpdChecked&&UpdaterInt("getLatestBuild")>OwnBuildNumber();
+#else
+    return false;
+#endif
+}
+std::string WarUpdateLabel() {
+#ifdef __ANDROID__
+    const int state=WarUpdateState();
+    if(state==kUpdChecking)return "CHECKING...";
+    if(state==kUpdDownloading)return "DOWNLOADING...";
+    if(state==kUpdNeedPermission||state==kUpdInstalling)return "INSTALL UPDATE";
+    if(WarUpdateReady())return "DOWNLOAD UPDATE";
+    if(state==kUpdChecked)return "UP TO DATE - CHECK";
+    if(state==kUpdError)return "RETRY UPDATE CHECK";
+    return "CHECK FOR UPDATE";
+#else
+    return "GET LATEST BUILD";
+#endif
+}
+std::string WarUpdateHint() {
+#ifdef __ANDROID__
+    const std::string message=UpdaterString("getMessage");
+    return message.empty()?std::string("Version ")+ROYALE_BUILD_VERSION+". Look for a newer build.":message;
+#else
+    return std::string("Version ")+ROYALE_BUILD_VERSION+". Opens the releases page.";
+#endif
+}
+bool WarUpdateEnabled() {
+#ifdef __ANDROID__
+    const int state=WarUpdateState();
+    return state!=kUpdChecking&&state!=kUpdDownloading;
+#else
+    return true;
+#endif
+}
+void WarUpdateAction() {
+#ifdef __ANDROID__
+    const int state=WarUpdateState();
+    if(state==kUpdNeedPermission||state==kUpdInstalling)UpdaterCall("install");
+    else if(WarUpdateReady())UpdaterCall("download");
+    else UpdaterCall("check");
+#else
+    SDL_OpenURL("https://github.com/tdprinting/OOT-Fornite/releases");
+#endif
 }
 void WarBuild() {
     auto& ui = Ui();
@@ -233,12 +418,20 @@ void WarBuild() {
         WarAdd(1102,{386,271,142,27},"Cancel","Keep the previous value",[](int){WarBack();});
         return;
     }
+    // Thumb-sized shortcuts for what the controller does with B and L / R.
+    auto footer=[](int id,wt::Rect rect,const char* label,const char* hint,std::function<void(int)> act,bool enabled){
+        WarAdd(id,rect,label,hint,std::move(act),enabled);gWar.controls.back().view.touchOnly=true;
+    };
+    footer(900,{402,330,66,24},"< PAGE","Previous page",[](int){WarPageStep(-1);WarSound(4);},true);
+    footer(901,{474,330,66,24},"PAGE >","Next page",[](int){WarPageStep(1);WarSound(4);},true);
+    footer(902,{546,330,70,24},"BACK","Go back",[](int){WarBack();},gWar.page!=WarPage::Play);
     const char* tabs[] = {joined?"MATCH":"PLAY","CHARACTER","SETTINGS","GUIDE"};
-    for(int i=0;i<4;++i) WarAdd(1+i,{24.0f+i*150,64,144,27},tabs[i],"L / R: change page",[i](int){
+    for(int i=0;i<4;++i) WarAdd(1+i,{24.0f+i*150,62,144,31},tabs[i],"L / R: change page",[i](int){
         if(i==0) WarOpen(); else WarShow(static_cast<WarPage>(i));
     });
     switch(gWar.page) {
     case WarPage::Play:
+        WarAdd(455,{455,287,152,18},WarUpdateLabel(),WarUpdateHint(),[](int){WarUpdateAction();},WarUpdateEnabled());
         WarAdd(10,{450,119,162,47},"HOST GAME","Create a lobby on the selected battlefield",[](int){WarHost(false,false);},InGame()&&idle);
         WarAdd(11,{450,177,162,47},"JOIN GAME","Connect to a friend's lobby",[](int){WarShow(WarPage::Join);},InGame()&&idle);
         WarAdd(12,{450,235,162,47},"PRACTICE","Test courses, equipment and solo exploration",[](int){WarShow(WarPage::Practice);},InGame()&&idle);
@@ -272,7 +465,7 @@ void WarBuild() {
         WarRow(43,4,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
-        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced"};
+        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced","Display"};
         gWar.optionPages=1;
         const int menuPage=wt::SettingsPage(gWar.section);
         for(int row=0;row<wt::kSettingsPageSize;++row) {
@@ -280,8 +473,8 @@ void WarBuild() {
             const int section=wt::kSettingsOrder[index];
             WarAdd(50+section,{28,108.0f+row*29,184,25},sections[section],"Choose a settings category",[section](int){gWar.section=section;gWar.optionPage=0;});
         }
-        WarAdd(850,{28,282,86,22},"< BACK","Previous categories",[](int){gWar.section=wt::kSettingsOrder[0];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
-        WarAdd(851,{122,282,90,22},"MORE >","World, water, effects, advanced and updates",[](int){gWar.section=wt::kSettingsOrder[6];gWar.optionPage=0;gWar.focus=4;},menuPage==0);
+        WarAdd(850,{28,280,88,26},"< BACK","Previous categories",[](int){gWar.section=wt::kSettingsOrder[0];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
+        WarAdd(851,{122,280,90,26},"MORE >","World, water, effects, advanced and updates",[](int){gWar.section=wt::kSettingsOrder[6];gWar.optionPage=0;gWar.focus=4;},menuPage==0);
         if(gWar.section==0) {
             WarOptionPager(2);
             if(gWar.optionPage==1) {
@@ -357,6 +550,8 @@ void WarBuild() {
             WarSetting(3,"Soft edges",ROYALE_CVAR("ShadowSoftness"),100,25,300,25,"Softness of shadow edges");
             WarSetting(4,"Dynamic lights",ROYALE_CVAR("DynLights"),1,0,1,1,"Light from explosions, spells and chests");
             WarSetting(5,"Building sunlight",ROYALE_CVAR("SunOnBuildings"),1,0,1,1,"Hyrule Kingdom lighting follows sun and moon");
+        } else if(gWar.section==11) {
+            WarDisplayPage();
         } else if(gWar.section==6) {
             auto row=[](int id,int line,std::string label,const char* hint,std::function<void(int)> action) {
                 WarAdd(id,{393,115.0f+line*33,213,28},std::move(label),hint,std::move(action),true,true);

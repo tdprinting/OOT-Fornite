@@ -67,13 +67,43 @@ void WarGameUpdate() {
 #endif
 }
 
+struct WarTap { float x, y; uint32_t window; bool normalized; };
+std::mutex gWarTapLock;
+std::vector<WarTap> gWarTaps;
+// SDL calls this from whichever thread queues the event (Android's UI thread for touch).
+int WarTapWatch(void*, SDL_Event* e) {
+    WarTap tap{};
+    if(e->type==SDL_FINGERDOWN) tap={e->tfinger.x,e->tfinger.y,e->tfinger.windowID,true};
+    else if(e->type==SDL_MOUSEBUTTONDOWN&&e->button.button==SDL_BUTTON_LEFT&&e->button.which!=SDL_TOUCH_MOUSEID)
+        tap={static_cast<float>(e->button.x),static_cast<float>(e->button.y),e->button.windowID,false};
+    else return 1;
+    std::lock_guard<std::mutex> lock(gWarTapLock);
+    if(gWarTaps.size()<8)gWarTaps.push_back(tap);
+    return 1;
+}
+std::vector<WarTap> WarTakeTaps() {
+    static bool watching=false;
+    if(!watching){watching=true;SDL_AddEventWatch(WarTapWatch,nullptr);}
+    std::lock_guard<std::mutex> lock(gWarTapLock);
+    std::vector<WarTap> taps;taps.swap(gWarTaps);
+    return taps;
+}
+// The aspect ratio libultraship boxes the picture to, or 0 when it fills the window.
+float WarBoxedAspect(int axis) {
+    if(!CVarGetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".Enabled",0)||CVarGetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".PixelPerfectMode",0)||
+       CVarGetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".IgnoreAspectCorrection",0))return 0;
+    return CVarGetFloat(axis?CVAR_PREFIX_ADVANCED_RESOLUTION ".AspectRatioY":CVAR_PREFIX_ADVANCED_RESOLUTION ".AspectRatioX",axis?9.0f:16.0f);
+}
+
 void WarInput() {
     const bool wasOpen = gWar.open;
     const uint32_t now=SDL_GetTicks();
     const float dt=gWar.lastTicks?std::clamp((now-gWar.lastTicks)/1000.0f,0.001f,0.1f):0.05f;
     gWar.lastTicks=now;gWar.clock+=dt;
     gWar.reduced=CVarGetInteger(ROYALE_CVAR("ReducedMotion"),0)!=0;
-    gWar.transition=gWar.reduced?1.0f:std::min(1.0f,gWar.transition+dt/0.18f);
+    gWar.transition=gWar.reduced?1.0f:std::min(1.0f,gWar.transition+dt/0.26f);
+    if(!gWar.open)WarTakeTaps(); // taps made while the menu is closed belong to the game
+    gWar.tabX=wt::Approach(gWar.tabX,24.0f+150.0f*(static_cast<int>(gWar.page)>3?0:static_cast<int>(gWar.page)),dt,gWar.reduced);
     int keyCount=0;const uint8_t* keys=SDL_GetKeyboardState(&keyCount);
     auto pressed=[&](SDL_Scancode key){return key<keyCount&&keys[key]&&!gWar.keys[key];};
     auto held=[&](SDL_Scancode key){return key<keyCount&&keys[key];};
@@ -106,41 +136,40 @@ void WarInput() {
                 if(next!=gWar.focus){gWar.focus=next;gWar.notice.clear();WarSound(0);}
             }
         }
-        int mx=0,my=0;const bool mouse=SDL_GetMouseState(&mx,&my)&SDL_BUTTON(SDL_BUTTON_LEFT);
-        SDL_Window* window=SDL_GetMouseFocus();
-        if(!window)window=SDL_GetKeyboardFocus();
-        int ww=640,wh=360;if(window)SDL_GetWindowSize(window,&ww,&wh);
-        auto canvas=wt::Canvas::Fit(static_cast<float>(ww),static_cast<float>(wh));
-        float px=canvas.X(static_cast<float>(mx)),py=canvas.Y(static_cast<float>(my));
-        bool tap=mouse&&!gWar.mouseDown;gWar.mouseDown=mouse;
-        bool touch=false;
-        for(int d=0;d<SDL_GetNumTouchDevices();++d) {
-            SDL_TouchID id=SDL_GetTouchDevice(d);
-            if(SDL_GetNumTouchFingers(id)>0) {
-                if(SDL_Finger* finger=SDL_GetTouchFinger(id,0)) {touch=true;px=canvas.X(finger->x*ww);py=canvas.Y(finger->y*wh);}
-                break;
-            }
-        }
-        tap|=touch&&!gWar.wasTouch;gWar.wasTouch=touch;
+        // Taps come from SDL's event stream (WarTapWatch), so a quick tap between two
+        // game frames is never lost, and are mapped through the boxed game picture.
         int activateDirection=1;
-        if(tap)for(int i=0;i<static_cast<int>(gWar.controls.size());++i)if(gWar.controls[i].view.rect.Contains(px,py)) {gWar.focus=i;activate=true;if(gWar.controls[i].view.adjustable&&px<gWar.controls[i].view.rect.x+gWar.controls[i].view.rect.w/2)activateDirection=-1;break;}
+        for(const WarTap& t:WarTakeTaps()) {
+            SDL_Window* window=t.window?SDL_GetWindowFromID(t.window):SDL_GetMouseFocus();
+            if(!window)window=SDL_GetKeyboardFocus();
+            int ww=640,wh=360;if(window)SDL_GetWindowSize(window,&ww,&wh);
+            const float x=t.normalized?t.x*ww:t.x, y=t.normalized?t.y*wh:t.y;
+            const auto box=wt::GameViewport(static_cast<float>(ww),static_cast<float>(wh),CVarGetInteger(CVAR_LOW_RES_MODE,0)==1,WarBoxedAspect(0),WarBoxedAspect(1));
+            const auto canvas=wt::Canvas::Fit(box.w,box.h);
+            const float px=canvas.X(x-box.x),py=canvas.Y(y-box.y);
+            std::vector<wt::Widget> views;for(const auto& c:gWar.controls)views.push_back(c.view);
+            const int hit=wt::HitTest(views,px,py);
+            WarTouchRipple(px,py);
+            if(hit<0)continue;
+            gWar.focus=hit;activate=true;
+            if(views[hit].adjustable&&px<views[hit].rect.x+views[hit].rect.w/2)activateDirection=-1;
+            break;
+        }
         if(back&&!start) {WarSound(2);WarBack();}
         else if(activate&&!start&&!gWar.controls.empty()) {
             const auto c=gWar.controls[gWar.focus];
             if(c.view.enabled){gWar.notice.clear();WarSound(1);c.act(activateDirection);}else WarSound(3);
         }
         if(gWar.page!=WarPage::Keyboard&&!start) {
-            int tab=((press&BTN_R)||pressed(SDL_SCANCODE_E)?1:0)-((press&BTN_L)||pressed(SDL_SCANCODE_Q)?1:0);
-            if(tab) {
-                int n=static_cast<int>(gWar.page);if(n>3)n=0;n=(n+tab+4)%4;
-                if(n==0)WarOpen();else WarShow(static_cast<WarPage>(n));WarSound(4);
-            }
+            const int tab=((press&BTN_R)||pressed(SDL_SCANCODE_E)?1:0)-((press&BTN_L)||pressed(SDL_SCANCODE_Q)?1:0);
+            if(tab){WarPageStep(tab);WarSound(4);}
         }
         WarBuild();
         if(!gWar.controls.empty()) {
             gWar.focus=std::clamp(gWar.focus,0,static_cast<int>(gWar.controls.size())-1);
             const auto r=gWar.controls[gWar.focus].view.rect;
             if(gWar.focusRect.w==0)gWar.focusRect=r;
+            if(gWar.controls[gWar.focus].view.id!=gWar.lastFocusId){gWar.lastFocusId=gWar.controls[gWar.focus].view.id;gWar.focusChangedAt=gWar.clock;}
             gWar.focusRect.x=wt::Approach(gWar.focusRect.x,r.x,dt,gWar.reduced);
             gWar.focusRect.y=wt::Approach(gWar.focusRect.y,r.y,dt,gWar.reduced);
             gWar.focusRect.w=wt::Approach(gWar.focusRect.w,r.w,dt,gWar.reduced);

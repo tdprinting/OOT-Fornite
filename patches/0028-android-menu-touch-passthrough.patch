@@ -1,0 +1,20 @@
+diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+--- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
++++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+@@ -615,11 +615,16 @@
+ 
+     boolean TouchAreaEnabled = true;
+ 
++    // OOT Royale: the native menu is touch driven. While it is open the whole overlay
++    // (stick, shoulder buttons, A/B, Start, the hide toggle) steps aside so every tap
++    // reaches the menu; the overlay comes back exactly as the player left it.
+     void DisableTouchArea(){
+         TouchAreaEnabled = false;
++        if (overlayView != null) runOnUiThread(() -> overlayView.setVisibility(View.GONE));
+     }
+     void EnableTouchArea(){
+         TouchAreaEnabled = true;
++        if (overlayView != null) runOnUiThread(() -> overlayView.setVisibility(View.VISIBLE));
+     }
+ 
+     private void setupLookAround(FrameLayout rightScreenArea) {

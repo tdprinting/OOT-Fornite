@@ -1,3 +1,65 @@
+// ---- motion: drifting motes, light shafts, sparkles and tap ripples ----
+uint32_t WarFade(uint32_t rgba, float alpha) {
+    return (rgba&0xFFFFFF00u)|static_cast<uint32_t>((rgba&255u)*std::clamp(alpha,0.0f,1.0f));
+}
+float WarEase(float t) { t=std::clamp(t,0.0f,1.0f); return 1-(1-t)*(1-t)*(1-t); }
+// A four-point twinkle, the same shape as the sparkles on OoT's fairies and item gets.
+void WarSparkle(WarPainter& p,float x,float y,float size,uint32_t colour) {
+    p.Rect({x-size,y-0.75f,size*2,1.5f},colour);
+    p.Rect({x-0.75f,y-size,1.5f,size*2},colour);
+    p.Rect({x-size*0.45f,y-size*0.45f,size*0.9f,size*0.9f},WarFade(colour,0.55f));
+}
+// Soft teal light shafts falling through the dark, like the stylised Zelda forests and temples.
+void WarShafts(WarPainter& p,float t) {
+    for(int i=0;i<5;++i) {
+        const float x=60+i*128+std::sin(t*0.23f+i*1.9f)*26, width=16+i%3*7;
+        const float pulse=0.55f+0.45f*std::sin(t*0.4f+i*2.3f);
+        for(int band=0;band<6;++band) {
+            const float a=(0.075f-band*0.011f)*pulse;
+            p.Rect({x+band*3.0f,band*40.0f,width,40},WarFade(0x6FD8D0FF,a));
+        }
+    }
+}
+// Fairy-like motes rising from the bottom; gold ones are bigger and twinkle.
+void WarMotes(WarPainter& p,float t) {
+    for(int i=0;i<30;++i) {
+        const float speed=5+(i*7%11)*1.6f, life=380;
+        const float y=360-std::fmod(t*speed+i*61.0f,life)+10;
+        const float x=std::fmod(i*97.0f+31.0f,640.0f)+std::sin(t*0.6f+i*1.3f)*(8+i%4*4);
+        const float edge=std::min(1.0f,std::min((360-y)/50,y/60));
+        if(edge<=0)continue;
+        const bool gold=i%4==0;
+        const float twinkle=0.55f+0.45f*std::sin(t*(2.2f+i%3)+i);
+        const uint32_t colour=gold?0xF7D774FF:(i%3==0?0x9EDCFFFF:0x7FE6D8FF);
+        if(gold) {
+            p.Rect({x-3,y-3,6,6},WarFade(colour,0.10f*edge*twinkle));
+            WarSparkle(p,x,y,2.6f+twinkle*1.6f,WarFade(colour,0.85f*edge*twinkle));
+        } else {
+            const float size=1.2f+(i%3)*0.5f;
+            p.Rect({x-size,y-size,size*2,size*2},WarFade(colour,0.55f*edge*twinkle));
+        }
+    }
+}
+// A star now and then crosses the corner of the screen.
+void WarShootingStar(WarPainter& p,float t) {
+    const float cycle=std::fmod(t,9.0f);
+    if(cycle>0.9f)return;
+    const float u=cycle/0.9f, x=470+u*190-95, y=20+u*70;
+    for(int i=0;i<9;++i) {
+        const float k=i/9.0f;
+        p.Rect({x-i*7,y-i*3.5f,3.5f-k*2,2.2f-k*1.2f},WarFade(0xF4E9CAFF,(1-k)*0.9f*std::sin(u*3.14159f)));
+    }
+}
+void WarRipples(WarPainter& p) {
+    auto& list=gWar.ripples;
+    list.erase(std::remove_if(list.begin(),list.end(),[](const WarState::Ripple& r){return gWar.clock-r.born>0.5f;}),list.end());
+    for(const auto& r:list) {
+        const float age=(gWar.clock-r.born)/0.5f, radius=5+WarEase(age)*34, fade=1-age;
+        p.Border({r.x-radius,r.y-radius,radius*2,radius*2},WarFade(0xD8F3FFFF,0.7f*fade),1.5f);
+        p.Border({r.x-radius*0.6f,r.y-radius*0.6f,radius*1.2f,radius*1.2f},WarFade(0xF7D774FF,0.5f*fade),1);
+    }
+}
+
 void WarDraw(GameState* state) {
     if(!gWar.open||!state)return;
     DrawIdentity menuIdentity(&gWar, 0, 0);
@@ -9,14 +71,16 @@ void WarDraw(GameState* state) {
     WarPainter p;
     p.Rect({-400,-400,1440,1160},0x060D20FF);
     p.Image(wt::art::background,{0,0,640,360},10,6);
+    if(!gWar.reduced) {WarShafts(p,gWar.clock);WarMotes(p,gWar.clock);WarShootingStar(p,gWar.clock);}
     p.Text(26,20,"BATTLE ROYALE",26,wt::theme::Ink,true);
     p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
-    p.Text(498,28,gSession.Joined()?(h.isHost?"HOSTING":"CONNECTED"):"OFFLINE",10,0x9EDCFFFF);
+    p.Text(498,24,gSession.Joined()?(h.isHost?"HOSTING":"CONNECTED"):"OFFLINE",10,0x9EDCFFFF);
+    p.Text(498,38,"VERSION " ROYALE_BUILD_VERSION,9,wt::theme::Gold);
     if(!gWar.bootError.empty()) {
         p.Panel({40,100,560,205});p.Text(60,120,"SAVE COULD NOT OPEN",18,wt::theme::Ink,true);
         p.Wrap(60,154,gWar.bootError,518,12,wt::theme::Ink,6);p.Text(60,266,"A / Enter: retry",12);p.End(state);return;
     }
-    p.offset=(1-gWar.transition)*12;
+    p.offset=(1-gWar.transition)*(1-gWar.transition)*18;
     if(gWar.page==WarPage::Play) {
         p.Panel({24,102,136,207});p.Panel({169,102,273,207});p.Panel({449,102,168,207});
         p.Text(36,113,"ADVENTURER",12,wt::theme::Ink,true);
@@ -136,21 +200,51 @@ void WarDraw(GameState* state) {
         gDPSetTextureImageFB(p.out++,G_IM_FMT_RGBA,G_IM_SIZ_16b,PAUSE_EQUIP_PLAYER_WIDTH,gPauseLinkFrameBuffer);
         p.Quad(r,PAUSE_EQUIP_PLAYER_WIDTH,PAUSE_EQUIP_PLAYER_HEIGHT);
     }
+    // Tab underline slides between pages.
+    if(gWar.page!=WarPage::Keyboard&&gWar.page!=WarPage::Death) {
+        p.Rect({gWar.tabX+6,95,132,2},wt::theme::Gold);
+        p.Rect({gWar.tabX+6,95,132,2},WarFade(0xFFFFFFFF,gWar.reduced?0:0.18f+0.18f*std::sin(gWar.clock*4)));
+    }
+    int staggered=0;
     for(size_t i=0;i<gWar.controls.size();++i) {
         const auto& w=gWar.controls[i].view;const bool selected=static_cast<int>(i)==gWar.focus;
-        const uint32_t bg=!w.enabled?0x162644FF:selected?0x83C6EFFF:wt::theme::Button;
-        p.Rect(w.rect,bg);p.Border(w.rect,selected?0xD5F1FFFF:0x527EBBFF);
-        const float size=w.id>=1000?13:w.rect.w>300?12:w.rect.w>150?13:11;
-        const uint32_t ink=!w.enabled?0x8497B2FF:selected?0x101D3DFF:wt::theme::Ink;
-        const float x=w.rect.w>300?w.rect.x+10:w.rect.x+std::max(5.0f,(w.rect.w-p.TextWidth(w.label,size,true))/2);
-        p.Text(x,w.rect.y+(w.rect.h-size)/2-1,w.label,size,ink,true,w.rect.w-15);
+        // Buttons slide in one after another when a page opens.
+        const bool chrome=w.id<5||w.touchOnly;
+        float arrive=1;
+        if(!chrome&&!gWar.reduced)arrive=WarEase((gWar.clock-gWar.pageChangedAt-0.04f*staggered++)/0.26f);
+        wt::Rect r=w.rect;r.x+=(1-arrive)*22;
+        const uint32_t bg=WarFade(!w.enabled?0x162644FF:selected?0x83C6EFFF:wt::theme::Button,arrive);
+        p.Rect(r,bg);p.Border(r,WarFade(selected?0xD5F1FFFF:0x527EBBFF,arrive));
+        if(selected&&!gWar.reduced) {
+            // A glint sweeps across the selected button every couple of seconds.
+            const float sweep=std::fmod(gWar.clock*0.55f,1.6f);
+            if(sweep<1) {const float gx=r.x+(r.w+16)*sweep-14;const float x0=std::max(gx,r.x),x1=std::min(gx+10,r.x+r.w);
+                if(x1>x0)p.Rect({x0,r.y+1,x1-x0,r.h-2},0xFFFFFF55);}
+        }
+        const float size=w.id>=1000?13:w.touchOnly?10:w.rect.w>300?12:w.rect.w>150?13:11;
+        const uint32_t ink=WarFade(!w.enabled?0x8497B2FF:selected?0x101D3DFF:wt::theme::Ink,arrive);
+        const float x=w.rect.w>300?r.x+10:r.x+std::max(5.0f,(r.w-p.TextWidth(w.label,size,true))/2);
+        p.Text(x,r.y+(r.h-size)/2-1,w.label,size,ink,true,r.w-15);
+    }
+    // Sparkles burst from a button the moment it is chosen.
+    if(!gWar.controls.empty()&&!gWar.reduced) {
+        const float age=gWar.clock-gWar.focusChangedAt;
+        if(age<0.45f) {
+            const auto& f=gWar.focusRect;
+            for(int i=0;i<7;++i) {
+                const float k=age/0.45f, ang=i*0.9f+1;
+                const float cx=f.x+f.w*((i%4)/3.0f), cy=i&1?f.y:f.y+f.h;
+                WarSparkle(p,cx+std::cos(ang)*k*14,cy+(i&1?-1:1)*k*10,3.2f*(1-k)+0.8f,WarFade(i%2?0xF7D774FF:0xD8F3FFFF,1-k));
+            }
+        }
     }
     if(!gWar.controls.empty())p.Focus(gWar.focusRect);
+    p.offset=0;WarRipples(p);
     p.offset=0;
     std::string hint=gWar.notice;
     if(hint.empty()&&!gWar.controls.empty())hint=gWar.controls[std::clamp(gWar.focus,0,static_cast<int>(gWar.controls.size())-1)].view.hint;
     p.Wrap(29,316,hint,582,10,0xC6E2F4FF,1);
-    p.Text(30,339,gWar.page==WarPage::Death?"A  Select     B  Spectate     L / R  Pages":"A  Select     B  Back     L / R  Pages     Start  Menu",10,wt::theme::Ink);
+    p.Text(30,339,gWar.page==WarPage::Death?"A  Select     B  Spectate":"A  Select     B  Back     L / R  Pages",10,wt::theme::Ink);
     p.End(state);
 }
 
