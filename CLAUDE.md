@@ -15,6 +15,7 @@
 - Check: `python scripts/check_mod_layout.py`; engine edits `scripts/check_mod_compile.sh`. Build pass ≠ gameplay verified.
 - Git: local first. GitHub: `python scripts/github_brief.py pr N` / `run ID --errors`, `--json` + bounded `--limit`. No log dumps, no polling, no secrets.
 - Art: every visual is OoT or stylised 3D Zelda look.
+- Keep it lean: new generated file → `.rgignore` + `.claude/settings.json` deny, same PR. New code file → line in `docs/CODE_MAP.md`; new doc → `docs/README.md`; new feature `.inc` → `FEATURES.md` row. Files >1,200 lines: split at `// ----` markers into included `.inc`, same order, prove byte-identical expansion. Patch number clash: letter suffix (`0023a`).
 - Preserve others' edits. End each feature with a short handoff: status, files, validation, next.
 
 ## Token tools

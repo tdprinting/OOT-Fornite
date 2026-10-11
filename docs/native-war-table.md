@@ -23,7 +23,7 @@ Selection corners ease to each target, pages slide, and map changes reveal over 
 
 ## Building and maintenance
 
-Apply patches in order and run `scripts/link_mod.sh` as normal. Patch 0025 integrates boot, dedicated save routing, native HUD coverage, transparent portrait framebuffer, and legacy menu removal. `RoyaleWarTable.h` is included once by `RoyaleMod.cpp` after its gameplay services.
+Apply patches in order and run `scripts/link_mod.sh` as normal. Patch 0025a integrates boot, dedicated save routing, native HUD coverage, transparent portrait framebuffer, and legacy menu removal. `RoyaleWarTable.h` is included once by `RoyaleMod.cpp` after its gameplay services.
 
 To regenerate artwork textures, run `python tools/build_war_table_assets.py` with Pillow. The committed generated header keeps release builds independent of Python/font tooling. RGBA16 background/map tiles are 32 x 32 (2 KiB); IA8 glyphs are 24 x 32. Source art and font license are under `assets/menu/war_table`.
 

@@ -67,6 +67,7 @@ Each step has a check. Nothing here touches an open-PR file.
 10. Final checks: `python scripts/check_mod_layout.py`; `git diff --stat origin/main -- shared server client patches cmake` shows only the step-8 files; line counts from above in the PR body.
 
 ## Later batches (one small PR each, in order)
+Done: 1, 3 (patch letter suffixes), 12 (`RoyaleBosses.h` → `bosses/*.inc`). Batch 12 proof: expanding `#include "bosses/..."` in `RoyaleBosses.h` gives the old file byte-for-byte.
 | # | Batch | Precondition | Seam / content | Proof | Risk |
 |---|---|---|---|---|---|
 | 2 | `FEATURES.md` fixes | FEATURES.md PR merged | Add `RoyaleChuChu.h`, `RoyaleJones.h`, `build_version.h` to focused files; add "shared/server index: `docs/CODE_MAP.md`"; fix "lobby ragdoll test" (unreachable after step 8); fix Terrain.inc description if grenade launch moves. | docs-only diff | none |

@@ -31,7 +31,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 
 ## mod/Royale/ (game-facing; one translation unit `RoyaleMod.cpp`, features in `features/*.inc`)
 - `RoyaleSession.h` host/join layer without game code (transports, host server).
-- `RoyaleBosses.h` bosses as drawn; includes `RoyaleChuChu.h` (ChuChu draw).
+- `RoyaleBosses.h` boss state + shared draw helpers, then includes `bosses/`: `MiniBosses.inc` (with `RoyaleChuChu.h`), `Volvagia.inc` (dragon + custom model), `MajorBosses.inc` (Morpha, Phantom Ganon, Bongo, Twinrova), `BossActor.inc` (stand-in actor, reconcile, HP bars), `StrikeFx.inc` (strike warnings/blasts, body fx).
 - `RoyaleBokoblins.h` Bokoblin helpers (from `WorldObjects.inc`); `RoyaleJones.h` Jones NPC (from `Companions.inc`).
 - `RoyaleLobbyFish.h` lobby aquarium; `RoyaleLobbyPets.h` lobby pet play.
 - `RoyaleWarTable.h` native menu; its fragments in `war_table/` (index: [`war_table/INDEX.md`](../mod/Royale/war_table/INDEX.md)).
@@ -50,17 +50,17 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `allies/`, `avriella/`, `bokoblin/`, `cart/`, `chuchu/`, `fish/`, `gilded_sword/`, `glider/`, `jones/`, `lilo/`, `maya/`, `shockwave_grenade/`, `scenery/`: models per the rule above. `bokoblin/make_sounds.py`, `jones/build_jones_audio.py` write sound headers. `chuchu/check_renderer.cpp` compiles the real ChuChu draw (manual). `gilded_sword/dump_surface_maps.cpp` dumps sword maps (manual).
 - `maps/kingdom/`, `maps/moonfall/`, `maps/riftlands/`: authored islands (`layout.py` places, `pois.py`/`props.py` buildings, `terrain.py` ground, `world.py` assembles, `export.py` writes `shared/*_data.h`/`_model.h`, `blender_build.py` .blend, `routes.py`/`author_nav.py` bot floors, `validate.py`/`scale_audit.py` checks). `riftlands/gallery.py`, `prop_sheet.py`, `maps/preview_lighting.py`: manual Blender QA.
 - `maps/build_convergence.py`, `maps/export_convergence.py` Convergence map; `maps/placement_preview.py` draws placement dumps; `maps/run_map_tests.cmd` Windows map test runner.
-- `build_war_table_assets.py` menu art tiles; `check_war_table_windows.py` local Windows syntax check; `patch_war_table_engine.py` one-off author of patch 0025 (already landed).
+- `build_war_table_assets.py` menu art tiles; `check_war_table_windows.py` local Windows syntax check; `patch_war_table_engine.py` one-off author of patch 0025a (already landed).
 - `song-to-oot.html`, `song_to_oot/` song converter (browser and Python); `rom-extractor.html` ROM collision analyser; `map-viewer.html` map viewer; `test_rom_extractor.js`, `test_song_to_oot_html.js` manual `node` tests.
 - `token_monitor/` local token-savings monitor (`server.py`, tests in `test_monitor.py`).
 - `water/preview.cpp` software water preview.
 
-## patches/ (applied in glob order by `scripts/apply_patches.sh`; number collisions are harmless)
-- Hooks: 0001 ShouldActorInit, 0002 cmake, 0009 hat limb, 0011 run speed, 0012 message table, 0013 custom collision, 0015 cloth limb, 0016 audio mix, 0023 custom sword, 0024 item material.
-- Android: 0005 network permissions, 0006 copy OTRs script, 0007 app/data folders, 0014 ROM loading screen, 0017 exit reason, 0018 updater, 0021 signing key/version code, 0028 menu touch passthrough.
-- Gameplay/engine: 0008 quest option, 0010 title logo, 0019 no first-person aim, 0020 camera lift, 0022 backdrop pass, 0023 no use on take-out, 0025 large collision vertex index, 0027 snow with fairies, 0028 bracelet on adult, 0029 engine limits.
-- Menu: 0025 native War Table, 0026 native menu isolation.
-- `libultraship/`: 0001 gyro semicolon, 0002 data folder, 0003 item surface maps, 0004 vertex layout guard, 0004 shader layout flush, 0005 menu shortcuts, 0006 source texture relief, 0007 renderer limits.
+## patches/ (applied in glob order by `scripts/apply_patches.sh`; letter suffixes keep the old sort order)
+- Hooks: 0001 ShouldActorInit, 0002 cmake, 0009 hat limb, 0011 run speed, 0012 message table, 0013 custom collision, 0015 cloth limb, 0016 audio mix, 0023a custom sword, 0024 item material.
+- Android: 0005 network permissions, 0006 copy OTRs script, 0007 app/data folders, 0014 ROM loading screen, 0017 exit reason, 0018 updater, 0021 signing key/version code, 0028a menu touch passthrough.
+- Gameplay/engine: 0008 quest option, 0010 title logo, 0019 no first-person aim, 0020 camera lift, 0022 backdrop pass, 0023b no use on take-out, 0025b large collision vertex index, 0027 snow with fairies, 0028b bracelet on adult, 0029 engine limits.
+- Menu: 0025a native War Table, 0026 native menu isolation.
+- `libultraship/`: 0001 gyro semicolon, 0002 data folder, 0003 item surface maps, 0004a vertex layout guard, 0004b shader layout flush, 0005 menu shortcuts, 0006 source texture relief, 0007 renderer limits.
 - `ZAPDTR/`: 0001 never hang on failed files.
 
 ## docs/

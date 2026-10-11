@@ -45,7 +45,7 @@ Hireable NPCs wait at 8 stations (two Kokiri, two Zora, two Goron, two Gerudo, e
 
 `tools/maps/moonfall/`: `layout.py` (places, roads, rivers, pads, ally and cart spots), `terrain.py` (heightmap, colours), `kit.py` (houses, towers), `pois.py` (the place builders), `routes.py` (upper floors for bots, found from the baked collision), `export.py` (bakes `shared/moonfall_data.h` and `shared/moonfall_model.h`), `validate.py` (automated checks), `blender_build.py` (the `.blend` and the preview renders). Shared pieces (geometry, textures, surface maps) come from `tools/maps/kingdom/`. Run `python3 tools/maps/moonfall/export.py` after changing a builder (about a minute).
 
-Collision is one baked table (terrain plus every solid). It has to stay under the engine's vertex limit (patch 0025), so the exporter merges deep sea, picks the high-numbered vertices so that no triangle has two, and keeps small decoration non-solid.
+Collision is one baked table (terrain plus every solid). It has to stay under the engine's vertex limit (patch 0025b), so the exporter merges deep sea, picks the high-numbered vertices so that no triangle has two, and keeps small decoration non-solid.
 
 ## Checks
 
