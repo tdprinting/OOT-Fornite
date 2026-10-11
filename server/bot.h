@@ -1875,7 +1875,8 @@ class BotController {
             const bool idle = !foe && s.noFoeKnown && mem.cartLove > 0.4f;
             const bool chase = foe && !fleeing && dist > 1500.0f - 500.0f * mem.cartLove && s.advantage >= 0.8f;   // a fight a long way off
             if ((fleeing || longWay || idle || chase) && !(foe && !fleeing && dist < 450.0f)) {
-                const float reach = fleeing ? 700.0f : (std::min)(1400.0f, (std::max)(500.0f, trip * 0.45f) + 400.0f * mem.cartLove);
+                // Out in the storm there is no time to fetch one: only a cart right at hand.
+                const float reach = s.outsideZone ? 300.0f : fleeing ? 700.0f : (std::min)(1400.0f, (std::max)(500.0f, trip * 0.45f) + 400.0f * mem.cartLove);
                 float best = reach;
                 for (const VehicleState& v : m.Vehicles()) {
                     if (v.gone || v.wrecked || v.health < kCartHealth * 0.3f) continue;
