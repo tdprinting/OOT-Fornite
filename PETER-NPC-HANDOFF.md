@@ -8,6 +8,7 @@ Presentation: Blender model + rigid rig + 13 baked clips (`tools/peter/build_pet
 Special: idle phone call with Joe ("Hey Peter!"), 26.6 s, subtitled Zelda-style text box, cancelled by moving/attacking/hurt/hire. Timing shared by animation, audio and subtitles in `tools/peter/dialogue.py`. Cynthia is credited in the call and on his first hire quip.
 
 Audio: original formant synthesis + babble (`tools/peter/build_peter_audio.py` -> `shared/peter_sounds.h`, WAVs in `assets/npcs/peter/audio`). No show audio, recordings or voice imitation.
+Your own clips (personal use, never committed): `<game data>/voices/peter/*.wav` replace cues, the whole call (`call.wav`) or single lines (`hey_peter.wav`, `line01..10.wav`); see `assets/npcs/peter/audio/CUSTOM-VOICES.md`.
 
 Network: a sixth ally pushed the 32-player snapshot test over 10 KB/s (10380 B/s). Idle free allies are now sent every 4th snapshot (`kIdleAllyEvery`) and clients keep them `kAllyKeepSeconds` (0.6 s), same pattern as parked carts: 9300 B/s.
 

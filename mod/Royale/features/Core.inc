@@ -106,6 +106,7 @@ struct AllyActor {
     int quip=-1;
     uint8_t attackVariant=0;        // which of his moves is playing
     unsigned attackCount=0,hireCount=0;
+    bool customCall=false;          // playing the player's own call.wav
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;

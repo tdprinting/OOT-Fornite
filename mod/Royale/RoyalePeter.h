@@ -6,6 +6,50 @@
 // The server's damage is the same for every move; only the look, sound and quip change.
 // Dedicated to Cynthia, who asked for Peter as a joke and got a real game asset.
 
+// ---- your own voice clips (personal use; they live on your device and are never committed) ----
+// Drop 16-bit .wav files into <game data folder>/voices/peter/ and they replace the built-in synthesised sounds:
+//   greet hire attack hurt belly chicken kick cheer .wav   one-shot cues (names as in kPeterCueNames)
+//   call.wav                                             the whole phone call (ring to hang-up, 26.6 s; subtitles keep their timing)
+//   hey_peter.wav or line01.wav ... line10.wav           single call lines (assets/npcs/peter/audio/CUSTOM-VOICES.md lists them);
+//                                                        the built-in line is muted while yours plays
+// Each file is read once, the first time it is wanted, and converted to mono 22050 Hz.
+inline constexpr const char* kPeterCueNames[]={"greet","hire","attack","hurt","belly","chicken","kick","cheer"};
+static_assert(std::size(kPeterCueNames)==royale::peter_snd::kCall,"one custom-clip name per one-shot cue");
+constexpr int kPeterCustomRate=22050;
+std::shared_ptr<const std::vector<int16_t>> PeterCustomClip(const std::string& name) {
+    static std::unordered_map<std::string,std::shared_ptr<const std::vector<int16_t>>> cache;
+    if(auto it=cache.find(name);it!=cache.end()) return it->second;
+    std::shared_ptr<const std::vector<int16_t>> pcm;
+    const std::filesystem::path file=std::filesystem::path(Ship::Context::GetPathRelativeToAppDirectory("voices"))/"peter"/(name+".wav");
+    std::error_code ec;
+    SDL_AudioSpec spec={};Uint8* buf=nullptr;Uint32 len=0;
+    if(std::filesystem::is_regular_file(file,ec) && SafeLoadWav(file.string(),&spec,&buf,&len)!=nullptr) {
+        SDL_AudioCVT cvt;
+        if(SDL_BuildAudioCVT(&cvt,spec.format,spec.channels,spec.freq,AUDIO_S16SYS,1,kPeterCustomRate)>=0) {
+            std::vector<Uint8> work(static_cast<size_t>(len)*(cvt.len_mult>0?cvt.len_mult:1));
+            std::memcpy(work.data(),buf,len);cvt.buf=work.data();cvt.len=static_cast<int>(len);
+            if(!cvt.needed || SDL_ConvertAudio(&cvt)==0) {
+                const size_t bytes=cvt.needed?static_cast<size_t>(cvt.len_cvt):len;
+                const auto* s=reinterpret_cast<const int16_t*>(work.data());
+                if(bytes>=2) pcm=std::make_shared<const std::vector<int16_t>>(s,s+bytes/2);
+            }
+        }
+        SDL_FreeWAV(buf);
+    }
+    cache[name]=pcm;
+    return pcm;
+}
+std::shared_ptr<const std::vector<int16_t>> PeterCustomLine(int line) {
+    if(line==0) if(auto hey=PeterCustomClip("hey_peter")) return hey;
+    char name[16];std::snprintf(name,sizeof name,"line%02d",line+1);
+    return PeterCustomClip(name);
+}
+// A cue: the player's own clip if there is one, else the built-in.
+void PeterSay(int clip, float x, float z) {
+    auto custom=clip>=0 && clip<static_cast<int>(std::size(kPeterCueNames))?PeterCustomClip(kPeterCueNames[clip]):nullptr;
+    PlayPeterSound(clip,x,z,custom,kPeterCustomRate);
+}
+
 struct PeterMove { int clip,sound,quip; };
 inline constexpr PeterMove kPeterMoves[] = {
     {royale::peter_model::kAttack,royale::peter_snd::kAttack,royale::peter_snd::kQuipHaymaker},
@@ -21,7 +65,7 @@ void PeterAttack(AllyActor& a) {
     if(a.actAge<.5f) return;
     a.attackVariant=static_cast<uint8_t>(a.attackCount++%std::size(kPeterMoves));
     const auto& move=kPeterMoves[a.attackVariant];
-    a.actAge=0;PlayPeterSound(move.sound,a.x,a.z);
+    a.actAge=0;PeterSay(move.sound,a.x,a.z);
     if(a.attackCount%2==1) PeterQuip(a,move.quip);
 }
 
@@ -30,10 +74,10 @@ void PeterOnSnapshot(AllyActor& a, const royale::net::AllyNet& n) {
     namespace P=royale::peter_snd;
     if(n.owner!=a.owner && n.owner!=royale::net::kNoPlayer16) {
         const bool cynthia=a.hireCount++%2==0;   // his first hire (while in view) always credits Cynthia
-        a.cheerAge=0;PlayPeterSound(cynthia?P::kHire:P::kCheer,n.x,n.z);
+        a.cheerAge=0;PeterSay(cynthia?P::kHire:P::kCheer,n.x,n.z);
         PeterQuip(a,cynthia?P::kQuipCynthia:P::kQuipSweet);
     }
-    if(n.hp/255.0f<a.hp-.001f && a.hurtAge>.5f) { a.hurtAge=0;PlayPeterSound(P::kHurt,n.x,n.z);PeterQuip(a,P::kQuipHurt); }
+    if(n.hp/255.0f<a.hp-.001f && a.hurtAge>.5f) { a.hurtAge=0;PeterSay(P::kHurt,n.x,n.z);PeterQuip(a,P::kQuipHurt); }
     if((n.flags&2) && !a.attackSnapshotActive) PeterAttack(a);
     a.attackSnapshotActive=(n.flags&2)!=0;
 }
@@ -66,6 +110,8 @@ float PeterCallVolume(const AllyActor& a) {
 void PeterHangUp(AllyActor& a, double retryAt) {
     if(a.callAge<0) return;
     a.callAge=-1;a.nextCallAt=retryAt;StopVoice(kVoicePeterCall);
+    // A custom line clip shares his cue voice: silence it, unless the cue that interrupted the call just took that voice.
+    if(!(a.hurtAge<.2f || a.actAge<.2f || a.cheerAge<.2f)) StopVoice(kVoicePeter);
 }
 
 void UpdatePeter(Actor* actor, PlayState* play, AllyActor& a, float dt) {
@@ -86,20 +132,30 @@ void UpdatePeter(Actor* actor, PlayState* play, AllyActor& a, float dt) {
     const float playerDist=player?std::hypot(player->actor.world.pos.x-a.x,player->actor.world.pos.z-a.z):1e9f;
     if(a.callAge>=0) {
         if(a.walkW>.3f || a.actAge<.1f || a.hurtAge<.1f || a.cheerAge<.1f) { PeterHangUp(a,now+kPeterCallRetry); return; }
-        a.callAge+=dt;
-        if(a.callAge>=P::kCallDuration) { a.callAge=-1;a.nextCallAt=now+kPeterCallEvery; }
-        else SetVoiceVolume(kVoicePeterCall,PeterCallVolume(a));
+        const float before=a.callAge;a.callAge+=dt;
+        if(a.callAge>=P::kCallDuration) { a.callAge=-1;a.nextCallAt=now+kPeterCallEvery;return; }
+        // The player's own line clips start on cue; the built-in line under them is muted.
+        bool duck=false;
+        if(!a.customCall) for(int i=0;i<static_cast<int>(std::size(P::kLines));++i) {
+            const auto& line=P::kLines[i];auto mine=PeterCustomLine(i);
+            if(!mine) continue;
+            if(before<line.start && a.callAge>=line.start) StartVoice(kVoicePeter,mine,false,kPeterCustomRate,false,PeterCallVolume(a));
+            if(a.callAge>=line.start && a.callAge<=line.end) { duck=true;SetVoiceVolume(kVoicePeter,PeterCallVolume(a)); }
+        }
+        SetVoiceVolume(kVoicePeterCall,duck?0.0f:PeterCallVolume(a));
         return;
     }
     // Ring only when someone is close enough to enjoy it.
     if(a.stillFor>=kPeterIdleBeforeCall && now>=a.nextCallAt && playerDist<1400.0f) {
         a.callAge=0;a.stillFor=0;
         static auto call=std::make_shared<const std::vector<int16_t>>(P::kClips[P::kCall].data,P::kClips[P::kCall].data+P::kClips[P::kCall].count);
-        StartVoice(kVoicePeterCall,call,false,P::kClips[P::kCall].rate,false,PeterCallVolume(a));
+        auto custom=PeterCustomClip("call");a.customCall=custom!=nullptr;
+        if(custom) StartVoice(kVoicePeterCall,custom,false,kPeterCustomRate,false,PeterCallVolume(a));
+        else StartVoice(kVoicePeterCall,call,false,P::kClips[P::kCall].rate,false,PeterCallVolume(a));
         return;
     }
     if(a.owner==royale::net::kNoPlayer16 && playerDist<royale::kHireRange && now>=a.nextGreetingAt) {
-        a.greetAge=0;a.nextGreetingAt=now+12.0;PlayPeterSound(P::kGreet,a.x,a.z);PeterQuip(a,P::kQuipLaugh);
+        a.greetAge=0;a.nextGreetingAt=now+12.0;PeterSay(P::kGreet,a.x,a.z);PeterQuip(a,P::kQuipLaugh);
     }
 }
 
