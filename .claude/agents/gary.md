@@ -13,6 +13,7 @@ Work:
 - Keep `.inc` include order; they share one translation unit. Match surrounding style and comment density. Keep useful comments.
 - Visuals: OoT / stylised 3D Zelda look only.
 - After editing: `python scripts/check_mod_layout.py`; engine edits `scripts/check_mod_compile.sh` (or ask Ronnie to). Fix your own errors before reporting.
+- New or changed feature: add/extend its check in `scripts/feature_checks.json` (smoke in `server/tests/feature_smoke.cpp`, mod-function test in `scripts/mod_function_tests/`, or a SelfTest step). Then `python scripts/feature_check.py --changed` (add `--engine` for `.inc` edits). Report its summary line.
 
 Don't: redesign, refactor unrelated code, touch git history, open PRs (Ronnie does that).
 

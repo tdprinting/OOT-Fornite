@@ -32,8 +32,26 @@ def load_registry():
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
+def resolve_base(base):
+    """The commit this branch grew from: merge-base with `base`, fetching it first when a fresh clone lacks it (cloud sessions)."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True)
+    if base == "default":   # the repository's default branch, whatever it is called
+        head = git("ls-remote", "--symref", "origin", "HEAD").stdout.split()
+        base = "origin/" + head[1].removeprefix("refs/heads/") if len(head) > 1 and head[0] == "ref:" else "origin/main"
+    if git("rev-parse", "--verify", "-q", base).returncode and base.startswith("origin/"):
+        branch = base.split("/", 1)[1]
+        git("fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+    if git("merge-base", "HEAD", base).returncode and git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        git("fetch", "-q", "--deepen=500", "origin")   # a shallow clone may not reach the branch point yet
+    if git("rev-parse", "--verify", "-q", base).returncode:
+        sys.exit(f"--changed: no '{base}' (try --changed <branch or commit>)")
+    mb = git("merge-base", "HEAD", base)
+    return mb.stdout.strip() if mb.returncode == 0 and mb.stdout.strip() else base
+
+
 def changed_files(base):
     files = set()
+    base = resolve_base(base)
     for cmd in (["git", "diff", "--name-only", base], ["git", "ls-files", "--others", "--exclude-standard"]):
         out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
         if out.returncode:
@@ -142,7 +160,8 @@ def parse_device_report(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("features", nargs="*")
-    ap.add_argument("--changed", nargs="?", const="origin/main", metavar="BASE")
+    ap.add_argument("--changed", nargs="?", const="default", metavar="BASE",
+                    help="only features whose files changed since BASE (default: the repo's default branch)")
     ap.add_argument("--layers", default="0,1,2")
     ap.add_argument("--engine", action="store_true", help="also layer 2a: compile the mod against the engine")
     ap.add_argument("--engine-build", default=os.environ.get("ROYALE_ENGINE_BUILD", str(ROOT / "build-engine")))

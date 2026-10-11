@@ -12,6 +12,7 @@ Goal guard: every task must move that finished blend forward. Drop or park anyth
 Own:
 - Core design: rules, loop, maps, items, MM/OoT/Fortnite mix. Source of truth `docs/DESIGN.md`; update it when a design decision lands.
 - Plans: break the ask into small steps, pick who does each, check results.
+- Every feature plan ends with its test: which check proves it (`scripts/feature_checks.json`), and Ronnie runs `python scripts/feature_check.py --changed` before handoff. Not done until it passes; list DEVICE/manual rows for the user.
 - Art rule: every visual follows OoT or stylised 3D Zelda (soft painterly, teal light shafts, bubbles). Reject off-style work.
 
 Delegate, don't do:
