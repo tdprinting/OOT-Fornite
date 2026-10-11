@@ -11,6 +11,8 @@ std::string ClockText(float seconds) {
 // safe zone, what you hold, and the big banners for countdown, elimination and results.
 bool gSandboxGlide = false;   // the Sandbox's "glide from here" button: the skydive behaves as in the drop (glide, hold Z to dive) outside the drop
 bool gSkydiving = false;   // falling in from the sky at the start of the match (see UpdateSkydive)
+int gBusPhase = 0;         // while gSkydiving: 1 sat on the Moonfall Bus, 2 free fall from it, 0 the glider (BattleBus.inc)
+void DrawBusOnMap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap, const royale::HudState& h);
 bool gDiveHeld = false;    // Z is held to dive. The game never sees that Z (see OnEmoteWheelInput), so it can't lock on and flatten the camera
 
 // Sprinting, the Fortnite way: click the left stick while running and Link runs faster, draining a stamina bar under the magic meter.
@@ -353,8 +355,10 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
         }
     }
     DrawCartsOnMap(dl, scale, toMap, inside);
+    DrawBusOnMap(dl, scale, toMap, h);
     for (const auto& st : gSession.Puppets()) {
         if (!st.alive || !MapOption(st.isBot ? "MapBots" : "MapPlayers")) continue;
+        if (st.busSeat >= 0 || (gSkydiving && royale::IsAirborne(st.anim))) continue;   // on the bus or in the sky: the bus's moon stands for them
         const ImVec2 p = toMap(st.x, st.z);
         if (!inside(p)) continue;
         dl->AddCircleFilled(p, 3.4f * scale, IM_COL32(0, 0, 0, 200));

@@ -8,6 +8,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/bus_geometry.h"
 #include "../../shared/engine_limits.h"
 #include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
@@ -166,6 +167,20 @@ static void SpawnProtection() {
 }
 
 // ---- the Moonfall Bus (shared/bus.h) -------------------------------------------------------------------------------------------------------------
+
+// The bus the game draws (tools/bus, shared/bus_geometry.h) has its benches and its exit where the server seats and drops people (shared/bus.h).
+static void BusModelMatchesTheSeats() {
+    namespace BM = busmodel;
+    for (int s = 0; s < BM::kSeatCount; ++s) {
+        float x, y, z;
+        BusSeatLocal(s, &x, &y, &z);
+        CHECK(std::fabs(BM::kSeat[s].x - x) < 0.5f && std::fabs(BM::kSeat[s].y - y) < 0.5f && std::fabs(BM::kSeat[s].z - z) < 0.5f);
+    }
+    CHECK(BM::kSeatCount == kBusSeatRows * kBusSeatsPerRow);
+    CHECK(std::fabs(BM::kExit.x - kBusExitX) < 0.5f && std::fabs(BM::kExit.y - kBusExitY) < 0.5f && std::fabs(BM::kExit.z - kBusExitZ) < 0.5f);
+    CHECK(BM::kExit.x < BM::kMinX + 300.0f);                   // outside the body's flank, not inside a wall
+    for (int k = 0; k < 4; ++k) CHECK(BM::kRopeMoon[k].y > BM::kRopeBody[k].y);   // every rope goes up from the cage to the net
+}
 
 static void BusPathRules() {
     // Moonfall's circle: every line starts and ends past the shore, passes near the middle and takes 25 to 60 s; the doors are open over land.
@@ -4969,7 +4984,7 @@ static void BlocksAreBakedIntoTheCollision() {
 }
 
 int main() {
-    BusPathRules(); EveryoneBoardsTheBus(); JumpIgnoredBeforeTheCoast(); BusForcesEveryoneOffAtTheEnd(); ProtectedUntilTwoSecondsAfterLanding();
+    BusModelMatchesTheSeats(); BusPathRules(); EveryoneBoardsTheBus(); JumpIgnoredBeforeTheCoast(); BusForcesEveryoneOffAtTheEnd(); ProtectedUntilTwoSecondsAfterLanding();
     DropEndsWhenAllLanded(); HornHasACooldown();
     BotController::CalmSeconds() = 0.0f;   // tests put bots in fights straight away
     BotController::GearFirst() = false;

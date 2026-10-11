@@ -109,6 +109,33 @@ inline float BusClimbAltitude(const BusPath& b, float countdownElapsed) {
     return kBusClimbFrom + (b.altitude - kBusClimbFrom) * e;
 }
 
+// Where things are on the bus, in its own frame: x to its right, y up from the floor, z forward (units). The benches are two rows of 16 facing
+// forward, 54 apart, the rows 120 apart with an aisle between (docs/BATTLE_BUS.md section 2). These are the design's numbers; the model's exported
+// Seat empties (shared/bus_geometry.h, once the model is built) are expected to match them.
+constexpr int kBusSeatRows = 2, kBusSeatsPerRow = 16;
+constexpr float kBusSeatPitch = 54.0f, kBusRowGap = 120.0f, kBusSeatHeight = 42.0f;
+inline void BusSeatLocal(int seat, float* x, float* y, float* z) {
+    const int s = std::clamp(seat, 0, kBusSeatRows * kBusSeatsPerRow - 1);
+    const int row = s % kBusSeatRows, along = s / kBusSeatRows;            // seats fill front to back, left and right in turn
+    *x = row == 0 ? -kBusRowGap * 0.5f : kBusRowGap * 0.5f;
+    *y = kBusSeatHeight;
+    *z = (static_cast<float>(kBusSeatsPerRow - 1) * 0.5f - static_cast<float>(along)) * kBusSeatPitch;
+}
+// The open left side, halfway along: where a jumper leaves from.
+constexpr float kBusExitX = -230.0f, kBusExitY = 20.0f, kBusExitZ = 0.0f;
+// The bus's frame in the world: its floor centre and heading, turned into world positions for local points.
+inline void BusLocalToWorld(float yaw, float bx, float by, float bz, float lx, float ly, float lz, float* wx, float* wy, float* wz) {
+    const float s = std::sin(yaw), c = std::cos(yaw);                     // forward is (s, c); right is (c, -s)
+    *wx = bx + lz * s + lx * c;
+    *wz = bz + lz * c - lx * s;
+    *wy = by + ly;
+}
+// Where the bus is past either end of its line (it keeps flying on out to sea after the drop, for the people watching from the ground).
+inline Vec2 BusPosUnclamped(const BusPath& b, float t) {
+    const Vec2 d = BusDir(b);
+    return {b.start.x + d.x * b.speed * t, b.start.z + d.z * b.speed * t};
+}
+
 // A jumper keeps the bus's speed for kBusExitPush seconds, fading out: how far that carries them along the line, t seconds after the jump.
 inline float BusExitCarry(const BusPath& b, float t) {
     const float s = std::clamp(t, 0.0f, kBusExitPush);

@@ -26,6 +26,25 @@ Time to lose all 7 hearts while standing outside the safe zone on a big map (sma
 
 The whole storm now runs about 7.4 minutes instead of 6.8, so the major boss (halfway) arrives a little later too.
 
+## The Moonfall Bus (the drop)
+
+All in `shared/balance.h`; the flight line is made in `shared/bus.h` (MakeBusPath).
+
+| Dial | Value | What it does |
+|---|---|---|
+| `kBusAltitude` | 3200 | Height of the bus above the map's floor |
+| `kBusSpeed` / `kBusMinSpeed` | 300 / 120 | Speed range; it is fitted to a crossing of about 50 s |
+| `kBusMaxCrossSec` | 60 | A huge map is crossed faster rather than taking longer than this |
+| `kBusMargin` | 1500 | How far past the shore the line starts and ends |
+| `kBusCorridor` | 0.45 | The line passes no further than this share of the radius from the centre |
+| `kBusJumpOpen` | 0.92 | The doors are open while the bus is inside this share of the map's radius; at the far edge everyone is pushed off |
+| `kFreefallSpeed` | = dive speed | Falling before the glider opens |
+| `kAutoGlideHeight` | 600 | The glider opens by itself this high above the ground |
+| `kLandedGraceSec` | 2 | Protected this long after landing |
+| `kDropExtraSec` | 25 | The drop ends this long after the bus leaves, if someone is still in the air |
+| `kLandedDeadlineSec` | 8 | Into the match, anyone still not landed counts as landed |
+| `kBusHornCooldown` | 1.5 | Seconds between honks |
+
 ## Weapons
 
 Hits to take a full 7 hearts with no shield, Common / Legendary. Time is the fastest kill at Common (cooldown between hits).

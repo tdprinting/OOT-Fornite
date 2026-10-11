@@ -2,12 +2,16 @@
 
 Design and build spec for the match-start vehicle: Fortnite's Battle Bus, made of Ocarina of Time and Majora's Mask. Everyone starts the
 match aboard it, it flies one straight line over the island, each player picks the moment to jump, free-falls, opens the glider and lands.
-This document is the brief for the build thread (model, animation, code). Nothing here is built yet.
+This document is the brief the build followed (model, animation, code).
 
-Status: design only. Concept renders (rough, not the final model) and the flight-line diagram are in `docs/battle-bus/`
-(`concept-sheet.png`, `flight-paths.png`); the full-size renders, `bus_concept.blend` and Tee's reference images are in the project files
-under `battle-bus/`. `tools/bus/concept_blockout.py` rebuilds the renders (needs `bpy`) and `tools/bus/flight_path_diagram.py` the diagram
-(needs Pillow).
+Status: built. The model is `tools/bus/build_bus.py` (Blender, `bpy`) with `paint_bus.py` (the textures) and `export_bus.py` (to
+`shared/bus_model.h` and `shared/bus_geometry.h`); `render_previews.py` renders `docs/battle-bus/bus-*.png` and `bus-turntable.gif`. The game
+side is `mod/Royale/features/BattleBus.inc`, the rules are in `shared/bus.h`, `server/match.h` and `server/bot.h`.
+What the build changed from the brief, at Tee's request: smooth and higher poly, like a GameCube asset (about 42,000 triangles, smooth normals;
+the far model past 4500 units is 360); the Moon is 900 units across (the concept sheet's proportions, not 1050); the Moon's face is a decal over
+the rock that fades out at its edge, so there is no seam; the net dips under the face so no rope crosses the grin; the window sill is 70 above
+the floor, so a seated Link looks out; the roof is not drawn for the player sat inside, so the camera sees the island and the other riders.
+Concept art (`concept-2d.png`), the flight-line diagram and the earlier concept renders stay in `docs/battle-bus/`.
 Reference video in Tee's message could not be fetched from here (YouTube is blocked for this container), so the bus behaviour below follows
 Fortnite's Battle Bus as it is known to play: a bus under a hot-air balloon, random straight line over the island, horn, jump any time after
 it crosses the coast, forced out at the far end, skydive then glider.

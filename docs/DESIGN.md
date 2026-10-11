@@ -58,8 +58,11 @@ Farore's Wind), and Hyrule Field's large open map.
 
 ### 4.1 Match flow
 1. **Lobby** (Temple of Time scene): up to 32 players, ready-up, 2 minute timer. 1 human is enough to start; empty slots are filled with server-run bots (bots count as players for the storm and loot balance).
-2. **Drop**: in v1, players spawn spread across the map with 5 s of invulnerability. A skydive drop (gliding in
-   from the sky, Kaepora Gaebora style) is a stretch goal.
+2. **Drop: the Moonfall Bus** (docs/BATTLE_BUS.md). Everyone starts on a bench of the bus, a lacquered royal coach under the Majora's Mask
+   Moon. It waits offshore through the countdown, then flies one straight line (from the match seed) across the map. Over the island A
+   jumps: free fall, the glider opens on A or by itself 600 units up, then the usual skydive. Whoever is still aboard when the bus leaves the
+   island is pushed off. You cannot be hurt aboard, in the air, or for 2 s after landing; landed players can fight while others still fall.
+   The drop ends when everyone has landed (or 25 s after the bus leaves). C-Right honks the horn.
 3. **Looting**: weapons and items spawn as chests, pots and ground items at server-chosen points.
 4. **Storm**: 6 phases, closing from the whole map to a final circle (see 4.4).
 5. **End**: last Link standing, or last team. Victory fanfare (Item Get jingle). Return to lobby.

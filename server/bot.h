@@ -753,7 +753,7 @@ class BotController {
         mem.airborne = true;
         mem.freefall = true;
         mem.exitAt = m.Clock();
-        mem.lift = m.Bus().altitude;
+        mem.lift = (std::max)(300.0f, m.Bus().altitude - (nav ? nav->FloorAt(p.pos) : 0.0f));   // a bot's height is above the floor; the bus flies at a world height
         mem.diving = false;
         p.anim = static_cast<uint8_t>(Anim::Freefall);
         return false;

@@ -17,6 +17,7 @@
 | Logo, banners, chest/boss/hit effects | `Effects.inc` |
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
+| Moonfall Bus: seats, jump, free fall, horn, HUD, minimap, model draw | `BattleBus.inc` |
 | Music folder, crash reports, instrument playback | `MusicDiagnostics.inc` |
 | Angry villagers and solid scenery | `Scenery.inc` |
 | Water simulation, textures, caustics and rendering | `Water.inc` |

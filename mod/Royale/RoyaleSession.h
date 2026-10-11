@@ -36,6 +36,7 @@ struct PuppetState {
     ItemId mask = ItemId::Count;
     ItemId tunicGear = ItemId::Count;   // Goron or Zora tunic worn (colours the tunic)
     ItemId gauntlets = ItemId::Count;   // Goron's Bracelet, Silver or Golden Gauntlets worn
+    int busSeat = -1;             // sat on this bench of the Moonfall Bus (-1: not aboard)
 };
 
 // One line of the lobby list.
@@ -103,6 +104,11 @@ struct HudState {
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots have names from shared/names.h
     std::vector<ResultsRow> results; // standings, best score first, once the match has ended
+    // The Moonfall Bus (shared/bus.h): this match's line, seconds since the drop began, and whether you are still on your bench.
+    BusPath bus;                   // valid from the countdown on
+    float busTime = 0;
+    int busSeat = -1;              // your bench (-1 for none)
+    bool aboard = false;           // the server still has you sat on it
 };
 
 class RoyaleSession {
@@ -262,9 +268,40 @@ class RoyaleSession {
             if (p.mask != net::PlayerNet::kNoGear) s.mask = static_cast<ItemId>(p.mask);
             if (p.tunicGear != net::PlayerNet::kNoGear) s.tunicGear = static_cast<ItemId>(p.tunicGear);
             if (p.gauntlets != net::PlayerNet::kNoGear) s.gauntlets = static_cast<ItemId>(p.gauntlets);
+            if (p.flags & net::PlayerNet::kAboard) s.busSeat = SeatOf(id);
+            out.push_back(std::move(s));
+        }
+        // Everyone else still on the bus, who is too far down the list to be in this snapshot (interest management sends the nearest 12): they
+        // are drawn on their benches all the same, from the aboard bits and the seat list the bus line came with.
+        const uint32_t mask = client->AboardMask();
+        const auto& seats = client->BusSeats();
+        for (size_t i = 0; i < seats.size() && i < 32; i++) {
+            const uint16_t id = seats[i];
+            if (!(mask >> i & 1u) || id == net::kNoPlayer16 || id == client->PlayerId()) continue;
+            bool listed = false;
+            for (const auto& o : out) listed = listed || o.id == id;
+            if (listed) continue;
+            PuppetState s;
+            s.id = id;
+            auto it = client->Roster().find(id);
+            s.isBot = it == client->Roster().end();
+            s.name = it != client->Roster().end() ? it->second.name : BotName(id);
+            s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
+            const Vec2 at = BusPosAt(client->Bus(), client->BusTime());
+            s.x = at.x; s.z = at.z; s.y = client->Bus().altitude;
+            s.anim = static_cast<uint8_t>(Anim::BusRide);
+            s.scene = static_cast<uint8_t>(MapOf(client->MapId()).scene);
+            s.busSeat = static_cast<int>(i);
             out.push_back(std::move(s));
         }
         return out;
+    }
+    // Which bench a player sits on (-1 if none).
+    int SeatOf(uint16_t id) const {
+        if (!client) return -1;
+        const auto& seats = client->BusSeats();
+        for (size_t i = 0; i < seats.size(); i++) if (seats[i] == id) return static_cast<int>(i);
+        return -1;
     }
 
     // Things that happened since the last call (players joining, ready changes, state changes, eliminations...).
@@ -308,6 +345,10 @@ class RoyaleSession {
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
         h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        h.bus = client->Bus();
+        h.busTime = client->BusTime();
+        h.busSeat = client->MySeat();
+        h.aboard = client->Aboard();
         for (const net::ResultRow& r : client->Results()) {
             ResultsRow row;
             row.id = r.id;
