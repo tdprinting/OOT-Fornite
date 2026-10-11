@@ -108,7 +108,8 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
-    DrawLocalDressed(player, play, !emote);
+    else if (gSelfKnocked) PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+    DrawLocalDressed(player, play, !emote && !gSelfKnocked);
     DrawVictoryCrown(play,player,gSession.Hud().selfId);
 }
 
@@ -123,6 +124,7 @@ void OnEmoteWheelInput() {
     Input& in = gPlayState->state.input[0];
     const royale::HudState hud = gSession.Hud();
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
+    if (SquadInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // knocked down: the controller only crawls and pings
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
     // A consumable in hand (taken with C-Down or by tapping its slot): B drinks it, so the press is kept from the game or Link would swing the weapon.
     if (gHandStack >= 0 && LiveAndAlive(hud) && InField()) {

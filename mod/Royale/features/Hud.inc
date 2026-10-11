@@ -361,6 +361,9 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
         }
     }
     DrawCartsOnMap(dl, scale, toMap, inside);
+    DrawPadsOnMinimap(dl, scale, toMap);
+    DrawPingsOnMinimap(dl, scale, toMap);
+    DrawTeamOnMinimap(dl, scale, toMap);
     for (const auto& st : gSession.Puppets()) {
         if (!st.alive || !MapOption(st.isBot ? "MapBots" : "MapPlayers")) continue;
         const ImVec2 p = toMap(st.x, st.z);
@@ -874,6 +877,14 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
             dl->AddCircle(c, u * 0.34f, IM_COL32(255, 200, 255, 255), 14, th * 0.8f);
             dl->AddTriangleFilled(P(-0.1f, -0.1f), P(-0.8f, -0.55f), P(-0.45f, 0.2f), IM_COL32(190, 230, 255, 230));
             dl->AddTriangleFilled(P(0.1f, -0.1f), P(0.8f, -0.55f), P(0.45f, 0.2f), IM_COL32(190, 230, 255, 230));
+            break;
+        case ItemId::DekuLaunchFlower:   // a Deku Flower seen from above: a ring of pink petals round a green bud
+            for (int k = 0; k < 6; k++) {
+                const float ang = k * 1.0471976f;
+                dl->AddCircleFilled(P(std::cos(ang) * 0.48f, std::sin(ang) * 0.48f), u * 0.3f, IM_COL32(236, 120, 170, 255), 10);
+            }
+            dl->AddCircleFilled(c, u * 0.3f, IM_COL32(110, 180, 70, 255), 12);
+            dl->AddCircleFilled(c, u * 0.14f, gold, 8);
             break;
         case ItemId::RecoveryHeart: heart(red, 1.0f); break;
         case ItemId::HeartPiece: heart(IM_COL32(240, 120, 150, 255), 0.85f); dl->AddLine(P(0, -0.5f), P(0, 0.7f), white, th * 0.7f); break;

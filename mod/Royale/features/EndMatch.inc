@@ -725,6 +725,8 @@ void DrawOverlay() {
     DrawCompass(dl, font, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
+    DrawPings(dl, font, ds, scale);
+    DrawSquadHud(dl, font, ds, scale, h);
     DrawControlPrompts(dl, font, ds, scale, h);
 
     DrawOotVitals(dl, scale, h);

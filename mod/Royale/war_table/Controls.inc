@@ -73,6 +73,7 @@ void WarSave() {
     gSession.SelectMap(ui.mapId);
     gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
     gSession.SetPlayerLimit(ui.playerLimit);
+    gSession.SetTeamMode(static_cast<royale::TeamMode>(std::clamp(ui.teamMode,0,2)));
     gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0);
     gSession.SetMajorBoss(ui.majorBoss);
     gSession.SetWeatherOptions({static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange)});
@@ -533,6 +534,7 @@ void WarBuild() {
                 WarRow(400,0,std::string("Season   ")+(season==royale::kSeasonRandom?"Random":royale::SeasonName(static_cast<royale::Season>(season))),"Choose the hosted match season",[](int d){Ui().weatherSeason=(Ui().weatherSeason+(d<0?-1:1)+5)%5;WarSave();},can,true);
                 WarRow(401,1,"Weather changes   "+std::to_string(ui.weatherChange)+"%","How often hosted weather changes",[](int d){Ui().weatherChange=std::clamp(Ui().weatherChange+(d<0?-10:10),0,100);WarSave();},can,true);
                 WarRow(402,2,std::string("Temple waiting room   ")+(ui.waitingRoom?"On":"Off"),"Use the Temple while waiting for your lobby",[](int){Ui().waitingRoom=!Ui().waitingRoom;WarSave();},idle,true);
+                WarRow(403,3,std::string("Teams   ")+royale::TeamModeName(static_cast<royale::TeamMode>(std::clamp(ui.teamMode,0,2))),"Solo, Duos or Squads of four. Bots fill the teams.",[](int d){Ui().teamMode=(Ui().teamMode+(d<0?-1:1)+3)%3;WarSave();},can,true);
             } else {
             WarRow(400,0,"Players   "+std::to_string(ui.playerLimit),"Empty places are filled with bots",[](int d){Ui().playerLimit=std::clamp(Ui().playerLimit+(d<0?-1:1),royale::kMinPlayers,royale::kMaxPlayers);WarSave();},can,true);
             const char* difficulty[]={"Easy","Normal","Hard"};

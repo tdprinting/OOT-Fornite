@@ -485,6 +485,17 @@ ImU32 HudColor(uint32_t rgba, int alpha=255) { return IM_COL32(rgba>>24,(rgba>>1
 // follow whichever is chosen. Buttons are drawn like the N64 pad: A blue, B green, C yellow, Z grey, R grey, Start red.
 royale::controls::Scheme ControlScheme() { return royale::controls::Clamp(CVarGetInteger(CVAR_SETTING("Royale.ControlScheme"), 0)); }
 bool gTouchJump = false;   // the on-screen JUMP button was tapped this frame
+// Squads.inc (teams, knocked-down, pings, Deku launch pads). Forward declarations: earlier files call into it, and the HUD calls the Draw functions.
+bool gSelfKnocked = false;   // you are down but not out: crawling, no attack or items
+void UpdateSquad(Player* player, const royale::HudState& hud);
+bool SquadInput(Input& in, const royale::HudState& hud);
+void DrawSquadHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
+void DrawPings(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawTeamOnMinimap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap);
+void DrawPingsOnMinimap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap);
+void DrawPadsOnMinimap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap);
+void DrawLaunchPads(PlayState* play);
+void SquadEvent(const royale::ClientEvent& e, const royale::HudState& hud);
 
 void DrawPadGlyph(ImDrawList* dl, ImFont* font, ImVec2 c, float r, royale::controls::Glyph g, int alpha = 255) {
     using G = royale::controls::Glyph;

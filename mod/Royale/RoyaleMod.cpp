@@ -266,6 +266,7 @@ void WarDraw(GameState* state);
 #include "features/OotVitals.inc"
 #include "features/Effects.inc"
 #include "features/EndMatch.inc"
+#include "features/Squads.inc"
 #include "features/Vehicles.inc"
 #include "features/MusicDiagnostics.inc"
 #include "features/Scenery.inc"

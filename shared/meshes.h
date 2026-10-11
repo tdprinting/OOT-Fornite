@@ -23,7 +23,7 @@ struct MeshVertex {
     uint8_t a = 255;   // opacity; only the see-through ground patches (soft rims) set it, everything else is solid
 };
 
-enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, GildedSword, VictoryCrown, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
+enum class MeshKind : uint8_t { Rock, Boulder, Pillar, Roof, Golem, Glider, Dragon, Platform, Projectile, GliderFrame, Sign, Ally, Cat, Grass, Tree, CatBody, CatHead, CatTailSeg, CatLeg, LeafPile, AshDrift, SandDrift, Ripple, Decor, Clutter, ThemeTree, Grenade, Scenery, Ground, GildedSword, VictoryCrown, DekuFlower, Count }; // Golem: the mini boss (variant = its BossKind); Glider: variant = colour scheme; Dragon: variant = wing pose
 constexpr int kMeshVariants = 4; // different rolls of the same kind, picked by the prop's rotation
 constexpr int kMeshVariantSlots = 32; // golem: one per BossKind; dragon: wing pose (0-3) plus 4 per theme (fire, water, forest, shadow, sand)
 
@@ -1314,6 +1314,24 @@ inline MeshData GildedSwordMesh(uint32_t variant) {
     return m;
 }
 
+// A Deku launch pad: a low flower lying on the ground. Eight pink petals round a gold stamen with a green sepal ring and leaf tips under them.
+inline MeshData DekuFlowerMesh() {
+    Builder b;
+    b.inside = {0, -30, 0};   // below the flower, so every face turns up
+    const float pi2 = 6.2831853f;
+    const int petals = 8;
+    for (int i = 0; i < petals; i++) {
+        const float a0 = pi2 * static_cast<float>(i) / petals, a1 = pi2 * static_cast<float>(i + 1) / petals, am = (a0 + a1) * 0.5f;
+        auto at = [&](float r, float a, float y) { return V3{std::cos(a) * r, y, std::sin(a) * r}; };
+        const Rgb pink = (i & 1) ? Rgb{235, 95, 170} : Rgb{255, 140, 200}, leaf = (i & 1) ? Rgb{60, 150, 60} : Rgb{90, 185, 70};
+        b.Tri(at(18, a0, 8), at(18, a1, 8), at(62, am, 3), pink);                 // petal
+        b.Tri(at(18, a0, 8), at(18, a1, 8), at(8, am, 18), Rgb{255, 120, 180});   // raised lip towards the centre
+        b.Tri(at(30, a0 + 0.2f, 2), at(30, a1 - 0.2f, 2), at(70, am, 0), leaf);   // leaf tip poking out between the petals
+        b.Tri(at(8, a0, 18), at(8, a1, 18), V3{0, 24, 0}, Rgb{255, 215, 80});     // golden stamen cone
+    }
+    return b.mesh;
+}
+
 } // namespace mesh_detail
 
 inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
@@ -1349,6 +1367,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Grenade: return mesh_detail::Grenade(variant);
         case MeshKind::VictoryCrown: return mesh_detail::AuthoredMesh(playtest_models::crown,std::size(playtest_models::crown));
         case MeshKind::GildedSword: return mesh_detail::GildedSwordMesh(variant);
+        case MeshKind::DekuFlower: return mesh_detail::DekuFlowerMesh();
         default: return {};
     }
 }
