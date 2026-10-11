@@ -677,11 +677,15 @@ static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
-    if (!LiveAndAlive(hud) || !InField()) return;
+    if (!LiveAndAlive(hud) || !InField()) { gTouchJump = false; return; }
     const Input& in = gPlayState->state.input[0];
 
-    // C-Up: jump. In the air, if a ledge about knee to chest high is right in front of you, you are hauled up onto it.
-    if ((in.press.button & BTN_CUP) && (player->actor.bgCheckFlags & 1) && !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM))) {
+    // Jump (see shared/controls.h): Battle Royale layout, A when it has nothing to open, take, hire or say; Classic layout, C-Up; or the on-screen JUMP
+    // button. In the air, if a ledge about knee to chest high is right in front of you, you are hauled up onto it.
+    const royale::controls::Scheme scheme = ControlScheme();
+    const bool wantJump = royale::controls::JumpPressed(scheme, in.press.button, true, gTouchJump);   // A's jump is decided before the game reads the pad (OnEmoteWheelInput)
+    gTouchJump = false;
+    if (wantJump && (player->actor.bgCheckFlags & 1) && !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_SHIELDING)) && !gSkydiving) {
         player->actor.velocity.y = 11.5f;
         player->actor.bgCheckFlags &= ~1;
         gJumpAssistFrames = 14;
@@ -756,7 +760,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    if (in.press.button & BTN_DUP) {
+    if (royale::controls::AbilityPressed(scheme, in.press.button)) {
         if (!hud.inv.hasAbility) Say("No ability");
         else if (hud.abilityReadyIn > 0.05f) Say("Ability recharging: " + ClockText(hud.abilityReadyIn));
         else if (hud.magic + 0.001f < royale::AbilityMagic(static_cast<royale::ItemId>(hud.inv.ability.item))) Say("Not enough magic (" + std::to_string(static_cast<int>(hud.magic)) + " of " + std::to_string(static_cast<int>(royale::AbilityMagic(static_cast<royale::ItemId>(hud.inv.ability.item)))) + ")");

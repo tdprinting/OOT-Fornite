@@ -7,6 +7,7 @@
 // Include order matters: our headers first, because the game's headers define short macro names (MIN, MAX, ABS, ...).
 #include "RoyaleSession.h"
 #include "war_table.h"
+#include "controls.h"
 #include "war_table_assets.h"
 #include "anim.h"
 #include "cloth.h"

@@ -759,6 +759,7 @@ bool PuppetRide(PlayState* play, Player* player, PuppetMotion& m, uint16_t id);
 bool CartInput(Input& in, const royale::HudState& hud);
 std::string CartPromptText();
 void DrawCartHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);
+void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 void DrawCartsOnMap(ImDrawList* dl, float scale, const std::function<ImVec2(float, float)>& toMap, const std::function<bool(ImVec2)>& inside);
 bool CartTargetAt(uint16_t id, float* x, float* z);
 

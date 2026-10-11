@@ -314,12 +314,24 @@ void WarBuild() {
             WarSetting(4,"Frame interpolation",CVAR_SETTING("InterpolationFPS"),60,20,120,10,"Higher values may need more GPU power");
             }
         } else if(gWar.section==2) {
+            WarOptionPager(2);
+            if(gWar.optionPage==1) {
+                const int layout=CVarGetInteger(ROYALE_CVAR("ControlScheme"),0)==1?1:0;
+                WarRow(410,0,std::string("Control layout   ")+(layout?"Classic":"Battle Royale"),"Battle Royale: A jumps when it has nothing else to do. Classic: C-Up jumps, as before.",
+                       [](int){CVarSetInteger(ROYALE_CVAR("ControlScheme"),CVarGetInteger(ROYALE_CVAR("ControlScheme"),0)==1?0:1);Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();},true,true);
+                WarSetting(1,"Button prompts",ROYALE_CVAR("ButtonPrompts"),1,0,1,1,"Show what A does next to chests, items, allies and carts");
+                WarSetting(2,"On-screen JUMP button",ROYALE_CVAR("TouchJump"),1,0,1,1,"A round JUMP button above EMOTE, for touch screens");
+                WarRow(413,3,"RESET CONTROLS","Back to the Battle Royale layout with prompts and the JUMP button on",[](int){
+                    CVarSetInteger(ROYALE_CVAR("ControlScheme"),0);CVarSetInteger(ROYALE_CVAR("ButtonPrompts"),1);CVarSetInteger(ROYALE_CVAR("TouchJump"),1);
+                    Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();gWar.notice="Controls reset to the Battle Royale layout.";});
+            } else {
             WarSetting(0,"Reduced menu motion",ROYALE_CVAR("ReducedMotion"),0,0,1,1,"Remove slides and selection pulses");
             WarSetting(1,"Show players on map",ROYALE_CVAR("MapPlayers"),1,0,1,1,"Show nearby known players on the minimap");
             WarSetting(2,"Show bots on map",ROYALE_CVAR("MapBots"),1,0,1,1,"Show nearby bots on the minimap");
             WarSetting(3,"Hit flashes",ROYALE_CVAR("HitFlash"),1,0,1,1,"Flash feedback when attacks connect");
             WarSetting(4,"Blood effects",ROYALE_CVAR("HitBlood"),1,0,1,1,"Optional combat blood effects");
             WarDebugToggle(5,kDbgMinimap);
+            }
         } else if(gWar.section==3) {
             const bool can=idle||(h.isHost&&h.state==royale::MatchState::Lobby&&!gPendingStart);
             WarOptionPager(2);

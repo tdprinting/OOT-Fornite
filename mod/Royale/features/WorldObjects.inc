@@ -59,6 +59,7 @@ bool MayaNear();
 void TalkToMaya();
 bool SignNear();
 bool MessageBoxUp();
+bool TalkTargetNear();
 void PressedATalk();   // A next to Lilo, Maya or the sign: the game's own text box (see "talking")
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
