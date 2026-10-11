@@ -1217,6 +1217,7 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
     gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
     {
         NearDetail nearLod(&player->actor, NeedsNearDetail(gLocalDress.weapon, player->currentShield == PLAYER_SHIELD_DEKU));
+        gGearReport.boots = player->currentBoots;
         Player_Draw(&player->actor, play);
     }
     gGildedPlayer = nullptr;
