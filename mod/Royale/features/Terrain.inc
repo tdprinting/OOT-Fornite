@@ -677,6 +677,27 @@ static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
+    // This hook runs at the end of the player's update, after the game has handled this frame's B: so "was a bomb in his hands before this press" is
+    // remembered from the last call. The first B pulls a bomb or bombchu out, the next throws it (and only the throw is a shot).
+    static bool sHeldExplosiveBefore = false;
+    const bool wasHoldingExplosive = sHeldExplosiveBefore;
+    {
+        const Actor* held = player->heldActor;
+        sHeldExplosiveBefore = held != nullptr && held->parent == &player->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU);
+    }
+    // The game's hookshot: when its chain leaves Link it grabs whoever he is facing within reach (the server pulls and stuns them).
+    static bool sHookOut = false;
+    {
+        bool out = false;
+        if (gPlayState != nullptr)
+            for (const Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next) if (a->id == ACTOR_ARMS_HOOK) out = true;
+        if (out && !sHookOut && hud.weapon == royale::ItemId::Hookshot && LiveAndAlive(hud) && InField()) {
+            float dist = 1e9f;
+            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist);
+            if (dist < 1e8f) gSession.ReportAttack(target, true);
+        }
+        sHookOut = out;
+    }
     if (!LiveAndAlive(hud) || !InField()) { gTouchJump = false; return; }
     const Input& in = gPlayState->state.input[0];
 
@@ -821,8 +842,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
+    if (hud.weapon == royale::ItemId::Hookshot) return;   // the game's own hookshot: B readies it (first person, or the Z-target view) and fires it
     const royale::AmmoKind ammoKind = royale::AmmoUsedBy(hud.weapon);
     const bool hasAmmo = ammoKind == royale::AmmoKind::None || hud.ammo[static_cast<size_t>(ammoKind)] > 0;
+    const bool explosive = hud.weapon == royale::ItemId::Bombs || hud.weapon == royale::ItemId::Bombchus || hud.weapon == royale::ItemId::HomingBombchus;
+    if (explosive && hasAmmo && !wasHoldingExplosive) return;   // this press only pulled it out of the bag
     royale::WeaponStats w = royale::ActiveWeapon(hud.weapon, hasAmmo);   // no ammo: the weapon is only bashed with
     if (w.damage <= 0) return;
     if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
@@ -839,13 +863,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
-    // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
+    // The grenade's blast is the mod's own (a real bomb would hurt him); the hookshot is the game's (see HandleCombatInput).
     if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
         // At somebody in reach it rolls to their feet; with nobody it bounces to a stop just ahead and launches you (the same spots the server marks).
         SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
                             player->actor.world.pos.z, aim, hud.weaponRarity, bestDist < 1e8f ? bestDist : royale::kShockwaveSelfThrow);
-    } else if (hud.weapon == royale::ItemId::Hookshot) {
-        Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
@@ -1104,9 +1126,7 @@ u8 RealItemFor(royale::ItemId w) {
         case ItemId::Bombs: return ITEM_BOMB;
         case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
         case ItemId::DekuNuts: return ITEM_NUT;
-        // The real hookshot is never put on B: its chain and "reel in" are the game's own (they would pull Link to a wall, and with no wall the chain
-        // sound looped forever with the game stuck waiting for it). The mod's hookshot is the Pull weapon effect; Link only holds it up while he shoots.
-        case ItemId::Hookshot: return ITEM_NONE;
+        case ItemId::Hookshot: return ITEM_HOOKSHOT;   // the game's own hookshot: held until B, then first-person or Z-target aiming, B again to fire
         default: return ITEM_NONE;
     }
 }
@@ -1238,6 +1258,13 @@ void HoldFuse(Player* player) {
     else if (held->id == ACTOR_EN_BOM_CHU) reinterpret_cast<EnBomChu*>(held)->timer = 120;
 }
 int gUseRetry = 0;
+void KillHeldExplosive(Player* player) {
+    Actor* held = player->heldActor;
+    if (held == nullptr || held->parent != &player->actor || (held->id != ACTOR_EN_BOM && held->id != ACTOR_EN_BOM_CHU)) return;
+    Actor_Kill(held);
+    player->heldActor = nullptr; player->actor.child = nullptr; player->interactRangeActor = nullptr;
+    player->stateFlags1 &= ~PLAYER_STATE1_CARRYING_ACTOR;
+}
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     ApplyItemCvars(gSession.Joined() && (IsLive(hud) || VictoryWalk(hud)));
     SyncLocalDress(player, hud);
@@ -1258,6 +1285,12 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     const bool free = !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_START_CHANGING_HELD_ITEM | PLAYER_STATE1_SHIELDING)) &&
                       player->stateFlags2 == (player->stateFlags2 & ~PLAYER_STATE2_OCARINA_PLAYING);
     const s8 want = Player_ItemToItemAction(item);
+    if (item == ITEM_BOMB || item == ITEM_BOMBCHU || item == ITEM_NUT) {
+        // Bombs, bombchus and nuts sit on B and nothing else happens: Link does not take them out (the game would) until B is pressed.
+        if (hud.weapon != gLocalWeaponShown) KillHeldExplosive(player);
+        gLocalWeaponShown = hud.weapon;
+        return;
+    }
     if (hud.weapon != gLocalWeaponShown && player->heldItemAction == want) gLocalWeaponShown = hud.weapon;   // same real item (slingshot and triple slingshot, bombchus and homing ones): using it again would fire it
     if (hud.weapon != gLocalWeaponShown || player->heldItemAction != want) {
         if (!free) return;
@@ -1265,14 +1298,8 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
         gLocalWeaponShown = hud.weapon;
         gUseRetry = 10;
         // Whatever bomb or bombchu is still in his hands from the last weapon goes away with it: put down it would sit there with its fuse running.
-        if (Actor* held = player->heldActor; held != nullptr && held->parent == &player->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU)) {
-            Actor_Kill(held);
-            player->heldActor = nullptr; player->actor.child = nullptr; player->interactRangeActor = nullptr;
-            player->stateFlags1 &= ~PLAYER_STATE1_CARRYING_ACTOR;
-        }
-        // The game uses a Deku Nut the moment it is selected (the flash goes off in his hand); here the nut waits in his hand for B, which the game
-        // handles on the press itself, so a nut is shown but not "used" to take it out.
-        if (item != ITEM_NUT) Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
+        KillHeldExplosive(player);
+        Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
         if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
             player->itemAction = player->heldItemAction = look.itemAction;
             Player_SetModelGroup(player, look.modelGroup);
@@ -1378,8 +1405,9 @@ void OnPlayerUpdate() {
     if (gActionFrames > 0) gActionFrames--;
     // Shots are aimed by where Link faces, with a target or without: with nothing to Z-target the game would otherwise swing the camera into the
     // first-person aiming view (a mode this match never uses), so ready and fire in place as it does when locked on.
-    gRoyaleNoAimView = gSession.Joined() && IsLive(hud) ? 1 : 0;
-    gRoyaleNoUseOnTakeOut = gRoyaleNoAimView;
+    // (The hookshot is the exception: B readies it in first-person aiming, or the Z-target view when locked on, as in the original game.)
+    gRoyaleNoAimView = gSession.Joined() && IsLive(hud) && hud.weapon != royale::ItemId::Hookshot ? 1 : 0;
+    gRoyaleNoUseOnTakeOut = gSession.Joined() && IsLive(hud) ? 1 : 0;
     SyncLocalWeapon(player, hud);
     DriveFortnite(player, hud);
     EnsureSolidScenery();
