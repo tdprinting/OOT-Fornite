@@ -8,7 +8,7 @@ void WarMusic() {
         Audio_SetGameVolume(SEQ_PLAYER_FANFARE, 0.0f);
         if(!gWar.music || gWar.savedScene!=gPlayState->sceneNum) {
             gWar.savedSequence=gActiveSeqs[SEQ_PLAYER_BGM_MAIN].seqId;
-            if(gWar.savedSequence==NA_BGM_FILE_SELECT)gWar.savedSequence=gSaveContext.seqId;
+            if(gWar.savedSequence==NA_BGM_FILE_SELECT||gWar.savedSequence==NA_BGM_TITLE)gWar.savedSequence=gSaveContext.seqId; // (the start screen's theme is not the scene's)
             gWar.savedScene=gPlayState->sceneNum;
             gWar.music=true;
             func_800F5E18(SEQ_PLAYER_BGM_MAIN,NA_BGM_FILE_SELECT,0,7,1);
@@ -96,6 +96,15 @@ float WarBoxedAspect(int axis) {
 }
 
 void WarInput() {
+    if(StartScreenHolding()) {
+        // The start screen owns input until the menu boots. Drop its taps and track the keys it saw, so the
+        // Enter or tap that dismissed it cannot also press the first menu button.
+        WarTakeTaps();
+        int count=0;const uint8_t* held=SDL_GetKeyboardState(&count);
+        std::copy(held,held+std::min(count,static_cast<int>(gWar.keys.size())),gWar.keys.begin());
+        gWar.lastTicks=SDL_GetTicks();
+        return;
+    }
     const bool wasOpen = gWar.open;
     const uint32_t now=SDL_GetTicks();
     const float dt=gWar.lastTicks?std::clamp((now-gWar.lastTicks)/1000.0f,0.001f,0.1f):0.05f;

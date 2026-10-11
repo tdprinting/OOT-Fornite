@@ -72,8 +72,13 @@ void WarDraw(GameState* state) {
     p.Rect({-400,-400,1440,1160},0x060D20FF);
     p.Image(wt::art::background,{0,0,640,360},10,6);
     if(!gWar.reduced) {WarShafts(p,gWar.clock);WarMotes(p,gWar.clock);WarShootingStar(p,gWar.clock);}
-    p.Text(26,20,"BATTLE ROYALE",26,wt::theme::Ink,true);
-    p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
+    if(const unsigned char* logo=WarLogoPixels()) {
+        p.Image(logo,{18,2,112,56},8,4);   // above the page tabs (y 62)
+        p.Text(140,26,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
+    } else {
+        p.Text(26,20,"BATTLE ROYALE",26,wt::theme::Ink,true);
+        p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
+    }
     p.Text(498,24,gSession.Joined()?(h.isHost?"HOSTING":"CONNECTED"):"OFFLINE",10,0x9EDCFFFF);
     p.Text(498,38,"VERSION " ROYALE_BUILD_VERSION,9,wt::theme::Gold);
     if(!gWar.bootError.empty()) {

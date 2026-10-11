@@ -17,6 +17,7 @@
 | Original OoT heart/shield/magic textures | `OotVitals.inc` |
 | Winner's wearable crown | `VictoryCrown.inc` |
 | Logo, banners, chest/boss/hit effects | `Effects.inc` |
+| Start screen before the menu: island scene, logo flames, Press Start, intro/outro (scene in `shared/title_scene.h`, preview `tools/title_scene/preview.cpp`) | `StartScreen.inc` |
 | Teams, knocked-down and revive, pings, Deku launch pads (input, crawl, squad HUD, ping and pad drawing, minimap helpers) | `Squads.inc` |
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |

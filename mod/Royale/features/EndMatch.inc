@@ -632,6 +632,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
 void DrawOverlay() {
+    if (DrawStartScreen()) return;   // StartScreen.inc: before the menu boots, it is the whole screen
     if (WarMenuOpen()) return;
     DrawTitleLogo();
     DrawQuestLabel();

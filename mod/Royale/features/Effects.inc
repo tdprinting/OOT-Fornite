@@ -2,8 +2,8 @@
 // The picture in mod/Royale/logo_data.h (made from assets/logo.png by scripts/make_logo_assets.py) is turned into a texture the first time it is
 // wanted, and drawn on the title screen, the file select screen, the match splash and the top of the menu.
 // The game's own title screen (the Zelda logo that fades in when you press start) draws this picture instead of its own logo: patches/0010 calls here.
-// Plain RGBA bytes, the same picture as everywhere else; returns null if there is none.
-extern "C" const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, int* destWidth, int* destHeight) {
+// The logo as plain RGBA bytes (kLogoW x kLogoH), unpacked once; empty if there is none. Every copy of the logo is made from this.
+const std::vector<uint8_t>& LogoRgba() {
     static std::vector<uint8_t> rgba;
     static bool built = false;
     if (!built) {
@@ -23,6 +23,11 @@ extern "C" const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, in
             }
         }
     }
+    return rgba;
+}
+// Plain RGBA bytes, the same picture as everywhere else; returns null if there is none.
+extern "C" const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, int* destWidth, int* destHeight) {
+    const std::vector<uint8_t>& rgba = LogoRgba();
     if (rgba.empty()) return nullptr;
     *width = royale::kLogoW;
     *height = royale::kLogoH;
@@ -36,20 +41,9 @@ ImTextureID LogoTexture(ImVec2* size = nullptr) {
     static bool tried = false;
     if (!tried) {
         tried = true;
-        std::vector<uint8_t> rgba(static_cast<size_t>(royale::kLogoW) * royale::kLogoH * 4, 0);
-        size_t px = 0;
-        for (int r = 0; r < royale::kLogoRuns; r++) {
-            const int count = royale::kLogoRle[r * 3], idx = royale::kLogoRle[r * 3 + 1], alpha = royale::kLogoRle[r * 3 + 2];
-            for (int k = 0; k < count && px * 4 < rgba.size(); k++, px++) {
-                if (idx == 0) continue;
-                rgba[px * 4 + 0] = royale::kLogoPalette[(idx - 1) * 3 + 0];
-                rgba[px * 4 + 1] = royale::kLogoPalette[(idx - 1) * 3 + 1];
-                rgba[px * 4 + 2] = royale::kLogoPalette[(idx - 1) * 3 + 2];
-                rgba[px * 4 + 3] = static_cast<uint8_t>(alpha);
-            }
-        }
+        const std::vector<uint8_t>& rgba = LogoRgba();
         GfxRenderingAPI* api = gfx_get_current_rendering_api();
-        if (api != nullptr) {
+        if (api != nullptr && !rgba.empty()) {
             const int id = api->new_texture();
             api->select_texture(0, id);
             api->set_sampler_parameters(0, true, 0, 0);
@@ -67,9 +61,12 @@ float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255
     ImTextureID tex = LogoTexture(&sz);
     if (tex == nullptr || sz.x <= 0) return 0.0f;
     const float height = width * sz.y / sz.x;
-    if (plaque) {   // the logo has black lettering: on a dark screen it sits on a pale rounded plaque
-        const float pad = width * 0.04f;
-        dl->AddRectFilled(ImVec2(cx - width * 0.5f - pad, top - pad), ImVec2(cx + width * 0.5f + pad, top + height + pad), IM_COL32(246, 241, 229, alpha * 235 / 255), pad * 1.6f);
+    if (plaque) {   // a warm glow behind it, like the title flames on the start screen (features/StartScreen.inc)
+        const ImVec2 c(cx, top + height * 0.5f);
+        for (int ring = 0; ring < 4; ring++) {
+            const float k = 1.0f - ring * 0.22f;
+            dl->AddCircleFilled(c, height * 0.62f * k, IM_COL32(255, 130, 50, alpha * (14 + ring * 10) / 255), 40);
+        }
     }
     dl->AddImage(tex, ImVec2(cx - width * 0.5f, top), ImVec2(cx + width * 0.5f, top + height), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
     return height;

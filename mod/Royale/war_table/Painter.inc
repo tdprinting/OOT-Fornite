@@ -258,6 +258,40 @@ const unsigned char* WarMapPixels(int map) {
     return pixels.data();
 }
 
+// The logo for the menu's header: the shared logo (features/Effects.inc LogoRgba) box-filtered into 256 x 128, centred, as 8 x 4 RGBA16 tiles
+// with one-bit alpha, the layout WarPainter::Image draws. Empty if there is no logo.
+const unsigned char* WarLogoPixels() {
+    static std::vector<unsigned char> pixels;
+    static bool built=false;
+    if(built)return pixels.empty()?nullptr:pixels.data();
+    built=true;
+    const std::vector<uint8_t>& src=LogoRgba();
+    if(src.empty())return nullptr;
+    constexpr int width=256,height=128;
+    const int fitW=std::min(width,static_cast<int>(height*static_cast<float>(royale::kLogoW)/royale::kLogoH)),fitH=std::min(height,fitW*royale::kLogoH/royale::kLogoW);
+    const int ox=(width-fitW)/2,oy=(height-fitH)/2;
+    std::vector<float> rgba(width*height*4,0.0f);
+    for(int y=0;y<fitH;++y)for(int x=0;x<fitW;++x) {
+        const int sx0=x*royale::kLogoW/fitW,sx1=std::max(sx0+1,(x+1)*royale::kLogoW/fitW);
+        const int sy0=y*royale::kLogoH/fitH,sy1=std::max(sy0+1,(y+1)*royale::kLogoH/fitH);
+        float r=0,g=0,b=0,a=0;int n=0;
+        for(int sy=sy0;sy<sy1;++sy)for(int sx=sx0;sx<sx1;++sx,++n) {
+            const uint8_t* p=&src[(static_cast<size_t>(sy)*royale::kLogoW+sx)*4];
+            const float w=p[3]/255.0f;r+=p[0]*w;g+=p[1]*w;b+=p[2]*w;a+=w;
+        }
+        float* o=&rgba[((oy+y)*width+ox+x)*4];
+        if(a>0){o[0]=r/a;o[1]=g/a;o[2]=b/a;}
+        o[3]=n?a/n:0;
+    }
+    pixels.reserve(width*height*2);
+    for(int ty=0;ty<height;ty+=32)for(int tx=0;tx<width;tx+=32)for(int y=0;y<32;++y)for(int x=0;x<32;++x) {
+        const float* p=&rgba[((ty+y)*width+tx+x)*4];
+        const uint16_t v=(static_cast<uint16_t>(p[0])>>3<<11)|(static_cast<uint16_t>(p[1])>>3<<6)|(static_cast<uint16_t>(p[2])>>3<<1)|(p[3]>0.45f?1:0);
+        pixels.push_back(v>>8);pixels.push_back(v&255);
+    }
+    return pixels.data();
+}
+
 void WarPortrait() {
     if(!InGame())return;
     Player* player=GET_PLAYER(gPlayState);

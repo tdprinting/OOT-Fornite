@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGO = os.path.join(ROOT, "assets", "logo.png")
 RES = os.path.join(ROOT, "assets", "generated", "res")
 HEADER = os.path.join(ROOT, "mod", "Royale", "logo_data.h")
-BACKGROUND = (246, 241, 229)  # the launcher icon's backdrop: warm off-white (the logo's lettering is black, so it needs a light backdrop)
+BACKGROUND = (18, 30, 70)  # the launcher icon's backdrop: the deep Hylian-shield blue under the logo's red and gold lettering
 
 
 def placeholder():
@@ -83,13 +83,13 @@ def android_icons(logo):
         os.makedirs(out, exist_ok=True)
         fg = px * 108 // 48          # the adaptive icon is 108dp, the visible part the middle 72dp
         # foreground: the logo inside the safe zone, transparent around it
-        layer = fit(logo, (round(fg * 0.64), round(fg * 0.64)))
+        layer = fit(logo, (round(fg * 0.60), round(fg * 0.60)))   # a wide logo: its corners stay inside the launcher's mask
         canvas = Image.new("RGBA", (fg, fg), (0, 0, 0, 0))
         canvas.alpha_composite(layer, ((fg - layer.width) // 2, (fg - layer.height) // 2))
         canvas.save(os.path.join(out, "ic_launcher_foreground.webp"), "WEBP", quality=95, method=6)
         # the old-style icons: the logo on the backdrop, as a rounded square and as a circle
         base = Image.new("RGBA", (px, px), BACKGROUND + (255,))
-        inner = fit(logo, (round(px * 0.82), round(px * 0.82)))
+        inner = fit(logo, (round(px * 0.90), round(px * 0.90)))
         base.alpha_composite(inner, ((px - inner.width) // 2, (px - inner.height) // 2))
         for name, shape in (("ic_launcher", "round_rect"), ("ic_launcher_round", "circle")):
             mask = Image.new("L", (px * 4, px * 4), 0)
@@ -109,7 +109,7 @@ def android_icons(logo):
 
 
 def header(logo):
-    width = 480
+    width = 800   # sharp enough for the full-screen start screen (features/StartScreen.inc)
     h = max(1, round(logo.height * width / logo.width))
     small = logo.resize((width, h), Image.LANCZOS)
     # a 256-colour version with a transparent colour: small enough to live in the source code
