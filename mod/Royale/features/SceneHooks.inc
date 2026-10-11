@@ -98,6 +98,18 @@ void PressedATalk() {
     else if (SignNear()) StartTalk(gSignActor, kTextSign);
 }
 
+// A pet is the lowest priority for A: it only offers a talk when no chest, item, ally, cart seat, Maya, Lilo or sign is in reach, and Link
+// is not in a fight (swinging, Z-targeting, shielding or just hit). Otherwise its talk would take A from the chest or the battle.
+bool PetMayTalk() {
+    if (!InField() || MessageBoxUp()) return false;
+    if (NearestLootIndex() != kNoLoot || NearbyFreeAlly() >= 0 || TalkTargetNear()) return false;
+    int cart; royale::Seat seat;
+    if (NearbyCartSeat(&cart, &seat)) return false;
+    const Player* player = GET_PLAYER(gPlayState);
+    if (player->meleeWeaponState != 0 || player->invincibilityTimer > 0) return false;
+    return !(player->stateFlags1 & (PLAYER_STATE1_HOSTILE_LOCK_ON | PLAYER_STATE1_SHIELDING));
+}
+
 // A label over the sign from a distance; up close, A reads it in the game's own text box.
 void DrawSign(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     (void)ds;
