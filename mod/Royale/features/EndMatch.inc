@@ -638,6 +638,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 }
 
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
+void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
 void DrawOverlay() {
     if (WarMenuOpen()) return;
     DrawTitleLogo();
@@ -648,6 +649,7 @@ void DrawOverlay() {
     ImFont* font = ImGui::GetFont();
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     DrawUnderwaterOverlay(dl, ds);
+    DrawGearReport(dl, font, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
     const ImU32 white = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold), red = IM_COL32(255, 90, 90, 255),
                 green = IM_COL32(110, 230, 130, 255);

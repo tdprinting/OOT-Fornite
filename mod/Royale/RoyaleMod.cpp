@@ -24,6 +24,8 @@
 #include "jones_animation.h"
 #include "jones_sounds.h"
 #include "jones_guns.h"
+#include "peter_animation.h"
+#include "peter_sounds.h"
 #include "bokoblin_sounds.h"
 #include "maya_sounds.h"
 #include "maya_phone.h"
@@ -42,6 +44,12 @@
 #include "riftlands_layout.h"
 #include "riftlands_model.h"
 namespace royale { namespace riftlands {
+using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
+using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
+} }
+#include "moonfall_layout.h"
+#include "moonfall_model.h"
+namespace royale { namespace moonfall {
 using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
 using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 } }
@@ -93,6 +101,10 @@ using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 #include <vector>
 #include <sstream>
 #include <cstdarg>
+#include <chrono>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <unistd.h>   // sysconf, for the start-up timer in features/MusicDiagnostics.inc
+#endif
 #ifdef __ANDROID__
 #include <csignal>
 #include <dlfcn.h>

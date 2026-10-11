@@ -1622,7 +1622,7 @@ static void HireableAllies() {
     for (int i = 0; i < kAllyCount; i++) CHECK(AllyOf(static_cast<AllyKind>(i)).price >= 30 && AllyOf(static_cast<AllyKind>(i)).maxHealth >= 3 && std::string(AllyOf(static_cast<AllyKind>(i)).name).size() > 2);
     // Jones is a distinct fifth ally and uses the same authoritative hire/follow/combat rules.
     {
-        CHECK(static_cast<int>(AllyKind::Jones) == 4 && kAllyCount == 5);
+        CHECK(static_cast<int>(AllyKind::Jones) == 4 && static_cast<int>(AllyKind::Peter) == 5 && kAllyCount == 6);
         Simulation sj = Duel(611, {0,0}, {0,1900}); Match& mj = sj.match;
         auto* p = mj.Find(1); mj.Find(1000)->stunUntil = 1e9f;
         auto& j = mj.MutableAllies()[4];
@@ -1657,6 +1657,20 @@ static void HireableAllies() {
         p->hasShield=p->hasAbility=false;p->ammo.fill(0);p->rupees=0;p->invulnUntil=0;
         CHECK(mj.Damage(1,100,1000));
         CHECK(!j.Hired() && j.alive && mj.Loot().size()==lootBefore); // owner death leaves Jones's rifles with him
+    }
+    // Peter is a sixth, melee ally on the same hire/follow/combat rules; his moves never use Jones's rifles.
+    {
+        Simulation sp = Duel(612, {0,0}, {0,1900}); Match& mp = sp.match;
+        auto* p = mp.Find(1); mp.Find(1000)->stunUntil = 1e9f;
+        auto& pe = mp.MutableAllies()[5];
+        CHECK(pe.kind == AllyKind::Peter && AllyOf(AllyKind::Peter).melee && pe.health == AllyOf(AllyKind::Peter).maxHealth);
+        pe.pos = {100,0}; p->rupees = AllyOf(AllyKind::Peter).price - 1; CHECK(!mp.HireAlly(1,5));
+        p->rupees = 300; CHECK(mp.HireAlly(1,5) && pe.owner == 1 && p->rupees == 300 - AllyOf(AllyKind::Peter).price);
+        auto* target = mp.Find(1000); target->invulnUntil = 0;
+        target->pos = {pe.pos.x + 400, pe.pos.z}; pe.attackReadyAt = 0; CHECK(!mp.AllyStrike(pe, target->id));   // beyond his reach
+        target->pos = {pe.pos.x + 120, pe.pos.z}; pe.attackReadyAt = 0; const float hp = target->health;
+        CHECK(mp.AllyStrike(pe, target->id) && target->health < hp && pe.weapon == 0);
+        CHECK(!mp.AllyStrike(pe, target->id));   // cooldown
     }
     Simulation sim = Duel(11, {0, 0}, {0, 1900});
     Match& m = sim.match;

@@ -135,7 +135,8 @@ void OnEmoteWheelInput() {
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
     if (gSkydiving) in.cur.button &= ~BTN_Z, in.press.button &= ~BTN_Z, in.rel.button &= ~BTN_Z;
     // Battle Royale layout: A with nothing to open, take, hire or say is the jump. Taken off the pad here so the game does not also roll with it.
-    if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && LiveAndAlive(hud) && InField() &&
+    // While Z-targeting (Z held) A stays the game's own: its normal jumps and the jump slash.
+    if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && !(in.cur.button & BTN_Z) && LiveAndAlive(hud) && InField() &&
         !gSkydiving && !AHasTarget()) {
         gTouchJump = true;
         in.cur.button &= ~BTN_A; in.press.button &= ~BTN_A; in.rel.button &= ~BTN_A;
@@ -175,7 +176,7 @@ void OnEmoteWheelInput() {
 // audio thread makes (patch 0016 calls MixVoices for every buffer, 44.1 kHz stereo), each on a voice of its own, so they play together and none
 // silences another or the game's sound. They used to be queued on extra SDL audio streams, which never open on Windows (the game uses WASAPI
 // there and never starts SDL's audio) and may not on a phone: those sounds stayed silent.
-enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceJones, kVoiceJonesAttack, kVoiceCount };
+enum Voice { kVoiceSong, kVoiceChicken, kVoiceOneShot, kVoiceCat, kVoiceBaby, kVoiceToy, kVoiceToySfx, kVoiceMaya, kVoicePhone, kVoiceBokoblin, kVoiceJones, kVoiceJonesAttack, kVoicePeter, kVoicePeterCall, kVoiceCount };
 struct MixVoiceState {
     std::shared_ptr<const std::vector<int16_t>> pcm;
     bool stereo = false, loop = false;
@@ -1134,4 +1135,18 @@ void PlayJonesSound(int clip, float x, float z, int weapon = 0) {
     static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
     if(!cache[clip]) cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
     StartVoice(attack?kVoiceJonesAttack:kVoiceJones,cache[clip],false,S::kRate,false,volume);
+}
+
+// `custom` (with its rate) replaces the built-in cue: a clip the player supplied (RoyalePeter.h, PeterCustomClip).
+void PlayPeterSound(int clip, float x, float z, std::shared_ptr<const std::vector<int16_t>> custom = nullptr, int customRate = 0) {
+    namespace S=royale::peter_snd;
+    if (clip<0 || clip>=S::kCall || !gPlayState) return;   // the call has its own voice (RoyalePeter.h)
+    Player* player=GET_PLAYER(gPlayState);if(!player) return;
+    const float d=std::hypot(player->actor.world.pos.x-x,player->actor.world.pos.z-z);
+    const float volume=GameVolume(false)*.45f*std::clamp(1.0f-d/1000.0f,0.0f,1.0f);
+    if(volume<.01f) return;
+    if(custom) { StartVoice(kVoicePeter,std::move(custom),false,customRate,false,volume);return; }
+    static std::shared_ptr<const std::vector<int16_t>> cache[S::kClipCount];
+    if(!cache[clip]) cache[clip]=std::make_shared<const std::vector<int16_t>>(S::kClips[clip].data,S::kClips[clip].data+S::kClips[clip].count);
+    StartVoice(kVoicePeter,cache[clip],false,S::kClips[clip].rate,false,volume);
 }

@@ -58,6 +58,8 @@ jobs:
         run: |
           python3 tools/maps/riftlands/scale_audit.py
           python3 scripts/test_riftlands_integration.py
+      - name: Validate Moonfall Isle map (scale, doors, chests, reachability)
+        run: python3 scripts/test_moonfall_authoring.py
       - name: Validate water draw allocation bounds
         run: python3 scripts/test_water_draw_buffers.py
       - name: Build and test with UBSan

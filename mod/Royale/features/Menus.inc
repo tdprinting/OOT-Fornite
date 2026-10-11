@@ -53,7 +53,7 @@ UiState& Ui() {
         gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
         ui.playerLimit = std::clamp(CVarGetInteger(ROYALE_CVAR("PlayerLimit"), royale::kMaxPlayers), royale::kMinPlayers, royale::kMaxPlayers);
         ui.autoStart = CVarGetInteger(ROYALE_CVAR("AutoStart"), 1) != 0;
-        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kKingdomMapIndex);   // Hyrule Kingdom is the main map
+        ui.mapId = CVarGetInteger(ROYALE_CVAR("Map"), royale::kMoonfallMapIndex);   // Moonfall Isle is the main map
         if (!royale::IsPlayableMap(ui.mapId)) ui.mapId = 0;
         ui.majorBoss = CVarGetInteger(ROYALE_CVAR("MajorBoss"), 1) != 0;
         ui.weatherSeason = std::clamp(CVarGetInteger(ROYALE_CVAR("WeatherSeason"), royale::kSeasonRandom), 0, static_cast<int>(royale::kSeasonRandom));
@@ -116,6 +116,7 @@ UiState& Ui() {
         gWaterSparkle = CVarGetInteger(ROYALE_CVAR("WaterSparkle"), 1) != 0;
         gWaterStreaks = CVarGetInteger(ROYALE_CVAR("WaterStreaks"), 1) != 0;
         gWaterBands = CVarGetInteger(ROYALE_CVAR("WaterBands"), 1) != 0;
+        gWaterClouds = CVarGetInteger(ROYALE_CVAR("WaterClouds"), 1) != 0;
         gWaterHaze = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterHaze"), 100), 0, 200) / 100.0f;
         gWaterTone = std::clamp(CVarGetInteger(ROYALE_CVAR("WaterTone"), 100), 0, 200) / 100.0f;
         ui.musicMode = std::clamp(CVarGetInteger(ROYALE_CVAR("MusicMode"), 0), 0, 2);

@@ -86,7 +86,7 @@ inline PoiLayout GenerateKingdomLayout(const PlacementFn& valid = nullptr) {
     PoiLayout out;
     int i=0;
     for (const auto& r : kingdom::kRegions) {
-        out.pois.push_back({static_cast<uint8_t>(kKingdomMapIndex*kNamesPerMap+i++),{r.x,r.z},900.0f});
+        out.pois.push_back({static_cast<uint16_t>(kKingdomMapIndex*kNamesPerMap+i++),{r.x,r.z},900.0f});
         if (r.boss >= 0) out.bossSpots.push_back({r.x,r.z});
     }
     for (const auto& p : kingdom::kLootSites) {
