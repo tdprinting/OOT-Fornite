@@ -344,6 +344,89 @@ inline void MakeFoam(uint8_t* out, int size, uint32_t seed = 37) {
         }
 }
 
+// Sparkle: the bright, sparse glints of the reference ocean (and of Lake Hylia at noon): a few soft specks a tile, each twinkling in its own
+// rhythm across the looping frames, over a faint trace of the glint net so the surface between them is not empty. Softer-edged than a real
+// pin-point (2 to 3 texels) so it reads painterly, not photoreal.
+inline void MakeSparkle(uint8_t* out, int size, int frames, uint32_t seed = 41, int specks = 34) {
+    std::vector<uint8_t> net(static_cast<size_t>(size) * size * frames);
+    MakeGlints(net.data(), size, frames, seed + 1);
+    struct Speck { float x, y, r, phase; int turns; };
+    std::vector<Speck> sp;
+    for (int n = 0; n < specks; n++) {
+        const int turns = 1 + static_cast<int>(Hash01(seed, n, 3) * 3.0f);   // whole turns a loop, so the last frame runs into the first
+        sp.push_back({ Hash01(seed, n, 1) * size, Hash01(seed, n, 2) * size, 0.9f + 0.9f * Hash01(seed, n, 4), Hash01(seed, n, 5) * kTau, turns });
+    }
+    for (int f = 0; f < frames; f++) {
+        const float s = static_cast<float>(f) / frames;
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++) {
+                float v = net[static_cast<size_t>(f) * size * size + y * size + x] / 255.0f * 0.22f;
+                for (const Speck& k : sp) {
+                    const float tw = std::max(0.0f, std::sin(kTau * (s * k.turns) + k.phase));
+                    if (tw < 0.05f) continue;
+                    float dx = x + 0.5f - k.x, dy = y + 0.5f - k.y;   // the nearest copy across the tile's wrap
+                    if (dx > size * 0.5f) dx -= size; if (dx < -size * 0.5f) dx += size;
+                    if (dy > size * 0.5f) dy -= size; if (dy < -size * 0.5f) dy += size;
+                    const float d2 = (dx * dx + dy * dy) / (k.r * k.r);
+                    if (d2 > 9.0f) continue;
+                    const float b = tw * tw * tw;
+                    v += b * std::exp(-d2 * 1.6f);                                                   // the soft dot
+                    v += b * 0.35f * std::exp(-(std::min(dx * dx, dy * dy)) * 2.0f - std::max(dx * dx, dy * dy) / (k.r * k.r * 6.0f));   // a faint four-point star
+                }
+                out[static_cast<size_t>(f) * size * size + y * size + x] = static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+            }
+    }
+}
+
+// Streaks: the long wisps of foam the wind draws across the sea along its own direction (along u in the tile): thin wavering lines in a few
+// layers, each starting and ending along its length, over a faint foam lace. One frame; the game turns and scrolls it along the wind.
+inline void MakeStreaks(uint8_t* out, int size, uint32_t seed = 53) {
+    std::vector<uint8_t> lace(static_cast<size_t>(size) * size);
+    MakeFoam(lace.data(), size, seed + 7);
+    struct Line { int across, along, gate; float sway, phase, gatePhase, power; };
+    std::vector<Line> lines;
+    for (int n = 0; n < 5; n++)
+        lines.push_back({ 2 + static_cast<int>(Hash01(seed, n, 1) * 7.0f), 1 + static_cast<int>(Hash01(seed, n, 2) * 2.0f), 2 + static_cast<int>(Hash01(seed, n, 3) * 3.0f),
+                          0.015f + 0.03f * Hash01(seed, n, 4), Hash01(seed, n, 5) * kTau, Hash01(seed, n, 6) * kTau, 12.0f + 14.0f * Hash01(seed, n, 7) });
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++) {
+            const float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+            float wisp = 0.0f;
+            for (const Line& l : lines) {
+                const float line = 0.5f + 0.5f * std::sin(kTau * (v * l.across + l.sway * std::sin(kTau * u * l.along + l.phase)) + l.phase);
+                const float gate = std::clamp((0.5f + 0.5f * std::sin(kTau * (u * l.gate + v) + l.gatePhase) - 0.5f) / 0.35f, 0.0f, 1.0f);   // the streak starts and ends
+                wisp += std::pow(line, l.power) * gate * 0.9f;
+            }
+            const float tuft = lace[y * size + x] / 255.0f;
+            out[y * size + x] = static_cast<uint8_t>(std::lround(std::clamp(wisp + tuft * 0.35f * std::min(1.0f, wisp * 2.5f), 0.0f, 1.0f) * 255.0f));
+        }
+}
+
+// Swell bands: the shape of the rolling sea between the grid's points, as light: a looping flipbook of mid-sized waves travelling along u (the
+// game turns u along the wind), bright on the crest faces, dark in the troughs. Laid over the sheet it gives the water its rolling, layered
+// look at every distance without more geometry.
+inline void MakeSwellBands(uint8_t* out, int size, int frames, uint32_t seed = 67) {
+    std::vector<TileWave> waves;
+    for (int n = 0; waves.size() < 10 && n < 400; n++) {
+        const int kx = 1 + static_cast<int>(Hash01(seed, n, 1) * 4.0f), ky = static_cast<int>(Hash01(seed, n, 2) * 5.0f) - 2;   // travelling along u, crests roughly across it
+        if (std::abs(ky) > kx) continue;
+        const int turns = kx;   // longer waves roll slower (a fixed loop needs whole turns: the shortest make four)
+        waves.push_back({ kx, ky, -turns, (0.6f + 0.8f * Hash01(seed, n, 4)) / (kx + 0.5f * std::abs(ky)), Hash01(seed, n, 5) * kTau });
+    }
+    for (int f = 0; f < frames; f++) {
+        const float s = static_cast<float>(f) / frames;
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++) {
+                float h, gu, gv;
+                TileWaveAt(waves, (x + 0.5f) / size, (y + 0.5f) / size, s, &h, &gu, &gv);
+                // the face that leans toward -u (the light) is lit, the back and the trough are dark; sharpened toward the crest
+                const float face = std::clamp(0.5f - gu * 0.06f, 0.0f, 1.0f), crest = std::clamp(0.5f + h * 0.4f, 0.0f, 1.0f);
+                const float lit = std::clamp(face * 0.45f + crest * crest * 0.7f - 0.12f, 0.0f, 1.0f);
+                out[static_cast<size_t>(f) * size * size + y * size + x] = static_cast<uint8_t>(std::lround(std::pow(lit, 1.8f) * 255.0f));
+            }
+    }
+}
+
 // How well a texture tiles: the mean jump across its wrap seam over the largest mean jump between two neighbouring columns inside it (at most
 // about 1 when seamless; a texture that does not tile has a seam far above any inner column).
 inline float SeamRatio(const uint8_t* img, int size) {

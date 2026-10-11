@@ -22,8 +22,16 @@ struct LookParams {
     bool skyOn = true;                 // reflections of the sky, the sun and the moon
     float sharpSpec = 1.0f;            // the pin-point sun glint (0 for vertex-shaded grids: one hot vertex lights a whole square; the sparkle
                                        // texture draws those glints instead)
+    // the open-sea look (the rolling, layered sea of the reference: see docs/water/README.md)
+    float sparkle = 0.0f;              // 1: the glint texture is the sparse sparkle, so its alpha gathers on the sun's path and thins elsewhere
+    float streaks = 0.0f;              // strength of the wind-blown foam streaks and whitecaps pass (0 off)
+    float bands = 0.0f;                // strength of the rolling swell-band shading pass (0 off)
+    float haze = 1.0f;                 // how much the far water melts into the sky at the horizon (0 off .. 2 strong)
+    float hazeNear = 900.0f, hazeFar = 2400.0f;   // where the haze starts and where it is complete (units from the eye)
+    float depthTone = 1.0f;            // how much deeper blue the troughs go and the richer the colour is (0 the old flat tone .. 2)
 };
-struct Look { float col[4], glint[4], foam; };   // the water's colour and alpha; the sparkle's colour and alpha; the foam's alpha (all 0-255)
+// The water's colour and alpha; the sparkle's colour and alpha; the foam's alpha; the streaks' alpha; the swell bands' colour and alpha (all 0-255).
+struct Look { float col[4], glint[4], foam, streak, band[4]; };
 
 // (nx, ny, nz) the unit normal, `foamWake` the foam swimmers left, `fold` how near the crest is to breaking, `crest` its height above calm water,
 // `twinkle` a steady random number for the point (0..1), `fade` the distance fade (0..1).
@@ -90,26 +98,82 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
     // P.light and dark on the slopes of the swell and the rings: the side facing away from the P.light is darker, the side toward it P.lighter
     const float shadeK = std::clamp(1.0f - (nx * 0.6f + nz * 0.35f) / std::max(0.2f, ny) * 5.0f, 0.7f, 1.35f);
     for (float& ch : c) ch *= shadeK;
+    // the rolling sea's tone: troughs sink toward the deep blue and the colour is a shade richer, so the swell reads as hills and valleys of
+    // water (the reference's teal faces over deep blue hollows) and not a flat tint
+    if (P.depthTone > 0.0f && vy >= 0.0f) {
+        const float tone = std::min(2.0f, P.depthTone);
+        const float trough = std::clamp(-crest / (P.ampTotal * 0.5f + 0.5f), 0.0f, 1.0f) * ease;   // only where the water is deep enough to be dark
+        const float tk = std::min(0.6f, trough * 0.38f * tone);
+        for (int q = 0; q < 3; q++) c[q] += (dp[q] * P.light * 0.9f - c[q]) * tk;
+        const float lum = c[0] * 0.3f + c[1] * 0.59f + c[2] * 0.11f, sat = 1.0f + 0.14f * tone;
+        for (float& ch : c) ch = std::clamp(lum + (ch - lum) * sat, 0.0f, 255.0f);
+        a += 25.0f * trough * tone;
+    }
     // foam where it is shallow (its edge washing in and out), in the wake of whoever swims, and on crests about to break
     float foam = foamWake * 0.8f;
     if (depth < 26.0f) foam = std::max(foam, std::clamp(1.0f - depth / (14.0f + 9.0f * std::sin(P.t * 1.6f + wx * 0.03f + wz * 0.025f)), 0.0f, 1.0f));   // a band at the waterline, washing in and out
-    foam = std::max(foam, std::clamp((fold - 0.5f) * 2.4f, 0.0f, 0.85f) * (0.55f + 0.45f * std::clamp(P.wind, 0.0f, 1.0f)));
+    const float cap = std::clamp((fold - 0.5f) * 2.4f, 0.0f, 0.85f) * (0.55f + 0.45f * std::clamp(P.wind, 0.0f, 1.0f));   // whitecaps
+    foam = std::max(foam, cap);
     foam = std::clamp(foam, 0.0f, 1.0f);
     const float flat = P.foamAmt > 0.0f ? 0.35f : 1.0f;   // with the foam texture on, the vertex colour only hints at it
     const float fw = (0.6f + 0.4f * P.light);
     c[0] += (238.0f * fw - c[0]) * foam * flat; c[1] += (246.0f * fw - c[1]) * foam * flat; c[2] += (250.0f * fw - c[2]) * foam * flat;
     a += (210.0f - a) * foam * flat;
     o.foam = std::clamp(foam * fade * P.foamAmt * 255.0f, 0.0f, 255.0f);
+    // the wind's foam streaks: they lie on the backs and tops of the swell (most on crests about to break), more the harder the wind blows,
+    // and never on the shallows' foam band, which the foam pass already draws
+    o.streak = 0.0f;
+    if (P.streaks > 0.0f && vy >= 0.0f) {
+        const float crestK = std::clamp(crest / (P.ampTotal * 0.5f + 0.5f), 0.0f, 1.0f), wind = std::clamp(P.wind, 0.0f, 1.0f);
+        // the streaks come in drifts: broad patches of sea with them and without (so they never rule the whole surface)
+        const float drift = 0.5f + 0.5f * std::sin(wx * 0.0029f + wz * 0.0016f + P.t * 0.05f) * std::sin(wx * 0.0011f - wz * 0.0024f + 1.7f - P.t * 0.03f);
+        const float patch = 0.25f + 0.75f * drift * drift;
+        const float st = ((0.1f + 0.3f * wind) * crestK * crestK * crestK + std::clamp((fold - 0.35f) * 1.8f, 0.0f, 1.0f) * (0.6f + 0.6f * wind)) * patch + foamWake * 0.5f;
+        o.streak = std::clamp(st * std::min(2.0f, P.streaks) * ease * fade * (0.5f + 0.5f * P.light) * 255.0f, 0.0f, 255.0f);
+    }
+    // the swell bands: the water under them is a shade darker and bluer, and the pass lays a pale sunlit teal back over it in the rolling
+    // pattern of the texture: lit faces over darker hollows. Stronger when the sun is up and when the water is seen at a slant (the faces of
+    // the waves catch the light), fading out far off with the other textures.
+    o.band[0] = o.band[1] = o.band[2] = 255.0f; o.band[3] = 0.0f;
+    if (P.bands > 0.0f && vy >= 0.0f) {
+        const float bk = std::min(1.0f, P.bands) * ease;
+        c[0] *= 1.0f - 0.2f * bk; c[1] *= 1.0f - 0.14f * bk; c[2] *= 1.0f - 0.06f * bk;
+        const float sunUp = 0.35f + 0.65f * sky.sunA;
+        o.band[0] = std::min(255.0f, c[0] * 0.5f + 78.0f * P.light); o.band[1] = std::min(255.0f, c[1] * 0.5f + 120.0f * P.light); o.band[2] = std::min(255.0f, c[2] * 0.5f + 112.0f * P.light);
+        o.band[3] = std::clamp(std::min(2.0f, P.bands) * ease * fade * P.light * sunUp * (130.0f + 90.0f * (1.0f - cosv)), 0.0f, 255.0f);
+    }
     if (vy >= 0.0f) {
         // the sparkle: the sky's own colour, lifted, turning to the sun's where the sun glints
         for (int q = 0; q < 3; q++) {
             const float skyc = std::min(255.0f, (sky.hor[q] + sky.zen[q]) * 0.65f + 70.0f);
             o.glint[q] = skyc + (o.glint[q] - skyc) * std::min(1.0f, spec * 3.0f + path * 1.5f);
         }
-        // Keep ordinary ripples subtle and reserve bright highlights for the
-        // sun/moon path. A smooth response avoids large saturated white patches.
-        const float energy = (18.0f + 65.0f * fres + 160.0f * spec + 180.0f * path);
-        o.glint[3] = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (160.0f * energy / (160.0f + energy));
+        if (P.sparkle > 0.0f) {
+            // the sparse sparkle: bright where the sun's or the moon's glitter path lies, a thin scatter everywhere else (the specks themselves
+            // are the texture; the alpha only says where they may show)
+            const float energy = 14.0f + 40.0f * fres + 230.0f * spec + 300.0f * path;
+            const float sparse = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (235.0f * energy / (120.0f + energy));
+            // Keep ordinary ripples subtle and reserve bright highlights for the
+            // sun/moon path. A smooth response avoids large saturated white patches.
+            const float net = (18.0f + 65.0f * fres + 160.0f * spec + 180.0f * path);
+            const float netA = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (160.0f * net / (160.0f + net));
+            o.glint[3] = netA + (sparse - netA) * std::min(1.0f, P.sparkle);
+        } else {
+            // Keep ordinary ripples subtle and reserve bright highlights for the
+            // sun/moon path. A smooth response avoids large saturated white patches.
+            const float energy = (18.0f + 65.0f * fres + 160.0f * spec + 180.0f * path);
+            o.glint[3] = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (160.0f * energy / (160.0f + energy));
+        }
+    }
+    // the horizon haze: far off, the sea melts into the sky's horizon colour (the air between), and stays opaque so it meets the sky softly
+    // instead of thinning out over the floor
+    if (P.haze > 0.0f && vy >= 0.0f) {
+        const float d = std::sqrt((P.eye[0] - wx) * (P.eye[0] - wx) + (P.eye[2] - wz) * (P.eye[2] - wz));
+        float hk = std::clamp((d - P.hazeNear) / std::max(1.0f, P.hazeFar - P.hazeNear), 0.0f, 1.0f);
+        hk = hk * hk * (3.0f - 2.0f * hk) * std::min(1.0f, P.haze * 0.85f);
+        for (int q = 0; q < 3; q++) c[q] += (std::min(255.0f, sky.hor[q] * 0.92f + 12.0f) - c[q]) * hk;
+        a += (236.0f - a) * hk;
+        o.glint[3] *= 1.0f - hk; o.band[3] *= 1.0f - hk; o.streak *= 1.0f - hk * 0.8f;
     }
     o.col[0] = c[0]; o.col[1] = c[1]; o.col[2] = c[2]; o.col[3] = a * fade;
 }

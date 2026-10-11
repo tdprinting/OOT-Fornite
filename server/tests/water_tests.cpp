@@ -115,6 +115,78 @@ int main() {
         require(dark > S * S / 5 && bright > S * S / 200, "a texture has dark ground and bright pattern");
     }
     require(SeamRatio(foam.data(), S) <= 1.0f, "foam tiles");
+
+    // The open-sea textures: the sparkle is sparse specks that loop, the streaks run along s and tile, the swell bands loop and tile.
+    std::vector<uint8_t> sparkle(S * S * F), streaks(S * S), bands(S * S * F);
+    MakeSparkle(sparkle.data(), S, F);
+    MakeStreaks(streaks.data(), S);
+    MakeSwellBands(bands.data(), S, F);
+    for (const std::vector<uint8_t>* img : { &sparkle, &bands }) {
+        for (int fr = 0; fr < F; fr++) require(SeamRatio(img->data() + fr * S * S, S) <= 1.0f, "an open-sea flipbook tiles");
+        double loop = 0.0, step = 0.0;
+        for (int k = 0; k < S * S; k++) {
+            loop += std::abs((*img)[(F - 1) * S * S + k] - (*img)[k]);
+            step += std::abs((*img)[S * S + k] - (*img)[k]);
+        }
+        require(loop < step * 1.6 + S * S, "an open-sea flipbook's last frame runs into the first");
+    }
+    {
+        double mean = 0.0; int bright = 0;
+        for (int k = 0; k < S * S * F; k++) { mean += sparkle[k]; bright += sparkle[k] > 200; }
+        require(mean / (S * S * F) < 24.0 && bright > F * 4, "the sparkle is sparse: mostly dark with bright specks");
+        // along s (the wind) the streaks change little, across it a lot
+        double along = 0.0, across = 0.0;
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++) {
+                along += std::abs(streaks[y * S + (x + 1) % S] - streaks[y * S + x]);
+                across += std::abs(streaks[((y + 1) % S) * S + x] - streaks[y * S + x]);
+            }
+        require(SeamRatio(streaks.data(), S) <= 1.2f && across > along * 2.0, "the streaks tile and run along s");
+        int dark = 0;
+        for (int k = 0; k < S * S; k++) dark += bands[k] < 40;
+        require(dark > S * S / 3, "the swell bands are mostly dark, with lit faces");
+    }
+    // The open-sea shading: far water melts into the sky's horizon colour and stays opaque; troughs are darker than crests; the bands pass is
+    // only given alpha when asked for; the sparkle gathers on the sun's path.
+    {
+        LookParams P;
+        P.eye[0] = 0; P.eye[1] = 120.0f; P.eye[2] = 0; P.ampTotal = 16.0f; P.hazeNear = 500.0f; P.hazeFar = 1500.0f;
+        LookSky sk{};
+        sk.sun[1] = 1.0f; sk.sunA = 1.0f;
+        for (int q = 0; q < 3; ++q) { sk.hor[q] = 200.0f; sk.zen[q] = 90.0f; }
+        Look nearL{}, farL{}, farOff{};
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, nearL);
+        ShadeWater(P, sk, 0, 2000, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, farL);
+        P.haze = 0.0f;
+        ShadeWater(P, sk, 0, 2000, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, farOff);
+        P.haze = 1.0f;
+        float dFar = 0, dOff = 0;
+        for (int q = 0; q < 3; q++) { dFar += std::fabs(farL.col[q] - (sk.hor[q] * 0.92f + 12.0f)); dOff += std::fabs(farOff.col[q] - (sk.hor[q] * 0.92f + 12.0f)); }
+        require(dFar < dOff * 0.5f && farL.col[3] > 200.0f, "far water hazes toward the horizon colour and stays opaque");
+        Look crestL{}, troughL{};
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 0, 8.0f, 0.5f, 1, crestL);
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 0, -8.0f, 0.5f, 1, troughL);
+        const float lc = crestL.col[0] + crestL.col[1] + crestL.col[2], lt = troughL.col[0] + troughL.col[1] + troughL.col[2];
+        require(lt < lc, "troughs are darker than crests");
+        require(nearL.band[3] == 0.0f && nearL.streak == 0.0f, "no bands or streaks unless asked");
+        P.bands = 1.0f; P.streaks = 1.0f; P.wind = 1.0f;
+        Look open{};
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 1.0f, 8.0f, 0.5f, 1, open);
+        require(open.band[3] > 20.0f && open.streak > 20.0f, "bands and whitecap streaks show when asked");
+        Look plain{}, banded{};
+        P.bands = 0.0f; P.streaks = 0.0f;
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, plain);
+        P.bands = 1.0f;
+        ShadeWater(P, sk, 0, 300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, banded);
+        require(banded.col[0] + banded.col[1] + banded.col[2] < plain.col[0] + plain.col[1] + plain.col[2], "under the bands the water is a shade darker");
+        // the sparkle: the point under the sun's glitter path shines far more than one well off it
+        P.sparkle = 1.0f; P.eye[1] = 50.0f;
+        LookSky low = sk; low.sun[0] = 0.0f; low.sun[1] = 0.3f; low.sun[2] = 0.954f;
+        Look onPath{}, offPath{};
+        ShadeWater(P, low, 0, 300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, onPath);
+        ShadeWater(P, low, 0, -300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, offPath);
+        require(onPath.glint[3] > offPath.glint[3] * 1.5f, "the sparkle gathers on the sun's path");
+    }
     if (const char* dump = std::getenv("WATER_DUMP")) {   // writes the textures as PGM images to look at
         auto save = [&](const char* name, const uint8_t* p, int w, int h) {
             std::string path = std::string(dump) + "/" + name + ".pgm";
