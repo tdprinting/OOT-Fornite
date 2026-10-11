@@ -30,10 +30,15 @@ texture is 64 x 64 I8, made once on a thread at start-up with the others. Pass o
 | Sparse sparkle | `Royale.WaterSparkle` | on |
 | Foam streaks | `Royale.WaterStreaks` | on (needs Water detail 1+) |
 | Rolling swell shading | `Royale.WaterBands` | on (needs Water detail 2) |
+| Cloud reflections | `Royale.WaterClouds` | on (needs Water detail 1+) |
 | Horizon haze | `Royale.WaterHaze` | 100 % |
 | Deep water tone | `Royale.WaterTone` | 100 % |
 
-Low (detail 0) keeps the sheet, sparkle and foam only: no extra passes over the old look.
+Low (detail 0) keeps the sheet, sparkle and foam only (and smaller meshes): no extra passes over the old look. Medium adds the streaks and the cloud
+reflections, High the rolling swell bands.
+
+All the textures are 256 x 256 now (the engine's baseline, `docs/ENGINE_LIMITS.md`); the flipbooks are 16 frames. See `docs/WATER.md` for the
+three-level mesh, the cloud pass and the sprites.
 
 ## Pictures
 

@@ -58,6 +58,7 @@ bool gWaterRipples = true;          // the local option: the ripple simulation r
 float gWaterUnderAmt = 1.0f;        // the local option: how strong the underwater look is, 0 to 2
 bool gWaterSparkle = true;          // the local option: sparse bright sparkle on the sun's path instead of the even glint net
 bool gWaterStreaks = true;          // the local option: wind-blown foam streaks and whitecaps on the swell (Medium detail and up)
+bool gWaterClouds = true;           // the local option: clouds mirrored in the water (Medium detail and up)
 bool gWaterBands = true;            // the local option: rolling swell-band shading between the grid's points (High detail only)
 float gWaterHaze = 1.0f;            // the local option: how much the far water melts into the sky, 0 to 2
 float gWaterTone = 1.0f;            // the local option: how deep the troughs go and how rich the colour is, 0 to 2
