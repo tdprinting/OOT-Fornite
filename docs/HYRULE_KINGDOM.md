@@ -1,6 +1,6 @@
 # Hyrule Kingdom
 
-The main and default Battle Royale map (map id 8, after Convergence at 7; no other map's id or collision changed). It is a Fortnite-style island built from Zelda places: a castle on a plateau over Zora's River, a clock-tower market town, a stilt village on a lake, a desert ruin, a snowy lodge, a volcano, a forest village, a ranch, docks, a waterfall and more, joined by open field, a great stone bridge and the castle viaduct. It plays in the Hyrule Field scene (like Fortnite, Sandbox and Convergence), so its field music plays automatically, and its collision is swapped in by the existing hook (patch 0013).
+A selectable Battle Royale map (map id 8; Moonfall Isle, id 12, is the default; after Convergence at 7; no other map's id or collision changed). It is a Fortnite-style island built from Zelda places: a castle on a plateau over Zora's River, a clock-tower market town, a stilt village on a lake, a desert ruin, a snowy lodge, a volcano, a forest village, a ranch, docks, a waterfall and more, joined by open field, a great stone bridge and the castle viaduct. It plays in the Hyrule Field scene (like Fortnite, Sandbox and Convergence), so its field music plays automatically, and its collision is swapped in by the existing hook (patch 0013).
 
 Nothing is scattered over it. Trees, rocks, ruins, fences, chests' homes and props are all modelled into the map; the random boulder and prop generation is off here.
 

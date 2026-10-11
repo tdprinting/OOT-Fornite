@@ -278,27 +278,6 @@ void Corpse_Draw(Actor* actor, PlayState* play) {
     gSaveContext.equips.buttonItems[0] = original;
 }
 
-// An emote: a copy of the local player's character stands where they are and plays the gesture, while the real one is hidden. Moving or attacking
-// ends it. Returns the actor so the caller can remove it.
-Actor* SpawnEmoteDouble(const royale::PuppetState& s, int emote) {
-    if (gCorpses.size() >= kMaxCorpses + 2 || gPlayState == nullptr) return nullptr;
-    const uint16_t id = gNextCorpse++;
-    if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
-    gSpawningPuppet = id;
-    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, s.x, s.y, s.z, 0, s.rot, 0, 0, false);
-    gSpawningPuppet = 0;
-    if (actor == nullptr) return nullptr;
-    Corpse c;
-    c.actor = actor;
-    c.pinned = true;
-    c.emote = emote;
-    c.weapon = s.weapon;
-    c.tunic = s.tunic;
-    gCorpses[id] = c;
-    gCorpseOf[actor] = id;
-    return actor;
-}
-
 // The body of player `s`, thrown along (pushX, pushZ). Once per elimination: the elimination event and the puppet list can both report it.
 // Returns the body's id (0 if none was made).
 uint16_t SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
@@ -340,61 +319,6 @@ uint16_t SpawnCorpse(const royale::PuppetState& s, float pushX, float pushZ) {
     gCorpses[id] = c;
     gCorpseOf[actor] = id;
     return id;
-}
-
-// ---- the lobby test ragdoll ---------------------------------------------------------------------------------------------------
-// A dummy that looks like the local player, to try the ragdoll with while waiting: walk into it, hit it with the sword, or hold L to carry it.
-// It never ages out and is not counted with the bodies of eliminated players.
-constexpr size_t kMaxTestRagdolls = 3;
-
-size_t CountTestRagdolls() {
-    size_t n = 0;
-    for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) n++;
-    return n;
-}
-
-void RemoveTestRagdolls() {
-    for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) { body.dying = true; Actor_Kill(body.actor); }
-}
-
-void FlingTestRagdolls() {
-    for (auto& [cid, body] : gCorpses) {
-        if (!body.test || body.dying) continue;
-        body.vel = { (Rand_ZeroOne() - 0.5f) * 700.0f, (Rand_ZeroOne() - 0.5f) * 700.0f };
-        body.vy = 420.0f + Rand_ZeroOne() * 200.0f;
-        body.pitchVel = -9.0f + Rand_ZeroOne() * 4.0f;
-        body.rollVel = (Rand_ZeroOne() - 0.5f) * 14.0f;
-        body.spin = (Rand_ZeroOne() - 0.5f) * 8.0f;
-        body.bounces = 0; body.still = 0;
-        for (auto& l : body.limbVel) { l[0] += (Rand_ZeroOne() - 0.5f) * 12.0f; l[1] += (Rand_ZeroOne() - 0.5f) * 12.0f; }
-    }
-}
-
-void SpawnTestRagdoll(const royale::HudState& hud) {
-    Feat("ragdoll: spawn test dummy");
-    if (gPlayState == nullptr || !InGame()) return;
-    if (CountTestRagdolls() >= kMaxTestRagdolls) {   // the oldest one goes
-        for (auto& [cid, body] : gCorpses) if (body.test && !body.dying) { body.dying = true; Actor_Kill(body.actor); break; }
-    }
-    const Player* self = GET_PLAYER(gPlayState);
-    const float yaw = self->actor.shape.rot.y * (3.14159265f / 32768.0f);
-    const uint16_t id = gNextCorpse++;
-    if (gNextCorpse < kCorpseIdBase) gNextCorpse = kCorpseIdBase;
-    const float x = self->actor.world.pos.x + std::sin(yaw) * 70.0f, z = self->actor.world.pos.z + std::cos(yaw) * 70.0f;
-    gSpawningPuppet = id;
-    Actor* actor = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_PLAYER, x, self->actor.world.pos.y + 60.0f, z, 0, self->actor.shape.rot.y + 0x8000, 0, 0, false);
-    gSpawningPuppet = 0;
-    if (actor == nullptr) return;
-    actor->flags &= ~(ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE);
-    Corpse c;
-    c.actor = actor;
-    c.test = true;
-    c.weapon = hud.weapon;
-    c.tunic = gLocalTunic;
-    c.vy = 120.0f;
-    c.pitchVel = -3.0f;
-    gCorpses[id] = c;
-    gCorpseOf[actor] = id;
 }
 
 // Make the world match the session: spawn missing puppets, drop ones that left, died, are out of range, or are in another scene.

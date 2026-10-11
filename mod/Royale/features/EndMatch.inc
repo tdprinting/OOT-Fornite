@@ -191,14 +191,6 @@ bool UiButton(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, con
     return false;
 }
 
-// A number with a label under it, on a faint tile.
-void UiTile(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& value, const std::string& label, ImU32 col, float alpha = 1.0f) {
-    dl->AddRectFilled(a, b, UiAlpha(kUi.tile, alpha), 8.0f * scale);
-    const float cx = (a.x + b.x) * 0.5f, h = b.y - a.y;
-    UiTextCentred(dl, font, h * 0.46f, cx, a.y + h * 0.1f, UiAlpha(col, alpha), value, b.x - a.x - 8.0f * scale);
-    UiTextCentred(dl, font, h * 0.24f, cx, a.y + h * 0.62f, UiAlpha(kUi.grey, alpha), label, b.x - a.x - 8.0f * scale);
-}
-
 // Dark red closing in from the edges of the screen.
 void UiVignette(ImDrawList* dl, ImVec2 ds, float strength) {
     if (strength <= 0.0f) return;

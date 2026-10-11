@@ -10,6 +10,7 @@
 ## Rules
 - Caveman style: answer first, short sentences, no filler/recaps. Keep code, paths, errors, numbers, negations exact. Full sentences for warnings and irreversible steps.
 - Find code via `mod/Royale/FEATURES.md`; scoped `rg`; read only needed ranges. `.rgignore` hides bulk; `--no-ignore` if needed.
+- Map of the repo: `docs/CODE_MAP.md`. Docs index: `docs/README.md`. Dated handoffs: `docs/archive/`.
 - Edit originals in `mod/Royale/`. Keep `.inc` include order (one translation unit). Never edit generated arrays. No ROM/ROM-derived files in git.
 - Check: `python scripts/check_mod_layout.py`; engine edits `scripts/check_mod_compile.sh`. Build pass ≠ gameplay verified.
 - Git: local first. GitHub: `python scripts/github_brief.py pr N` / `run ID --errors`, `--json` + bounded `--limit`. No log dumps, no polling, no secrets.
