@@ -138,12 +138,12 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
 // Four people wait around the map (a Kokiri, a Zora, a Goron and a Gerudo); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
-// The models are original low-poly ones in the Ocarina of Time style with their own rig and clips (tools/allies, shared/ally_anim.h): they
+// The models are original stylised ones (Ocarina of Time x Majora's Mask x Fortnite) with their own rig and clips (tools/allies, shared/ally_anim.h): they
 // walk, wave you over, sit down when nobody is about (a Goron curls into his rock ball), get up when you come near, cheer when hired, flinch
-// when hit and fight their own way: the Kokiri's slingshot, the Zora's thrown magic, the Goron's left and right punches, the Gerudo's bow. A
-// Goron who falls behind curls up and rolls after his owner.
+// when hit, dance along when their owner does an emote or wins, and fight their own way: the Kokiri's slingshot, the Zora's thrown magic, the
+// Goron's left and right punches, the Gerudo's bow. A Goron who falls behind curls up and rolls after his owner.
 
-// Draws an ally's model in a pose: skinned on the CPU, lit by the sun in the vertex colours, the face picked by swapping the atlas.
+// Draws an ally's model in a pose: skinned on the CPU, lit by the sun in the vertex colours, the face picked from its three textures.
 void DrawAllyModel(PlayState* play, float x, float y, float z, float yaw, const royale::allymodel::Model& m, const royale::allymodel::Pose& pose,
                    int face, float roll, float rollPivot) {
     GfxLayer layer(play, GfxLayerId::Characters);
@@ -182,12 +182,21 @@ void DrawAllyModel(PlayState* play, float x, float y, float z, float yaw, const 
     }
     Matrix_Scale(1.0f / kSub, 1.0f / kSub, 1.0f / kSub, MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    const uint8_t* atlas = m.atlas[std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1)];
-    // LOADBLOCK clamps at 2048 texels; LOADTILE keeps the whole 64x64 atlas in Shipwright.
-    gDPLoadTextureTile(POLY_OPA_DISP++, atlas, G_IM_FMT_RGBA, G_IM_SIZ_16b, A::kAtlasW, A::kAtlasH, 0, 0, A::kAtlasW - 1, A::kAtlasH - 1, 0,
-                       G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+    // Two textures: the 256 x 256 body atlas, then the face in the expression asked for (the batches come body first). LOADBLOCK stops at
+    // 2048 texels; LOADTILE takes the whole texture in Shipwright, as the 128-wide Hyrule Kingdom textures do.
+    int loaded = -1;
     for (int b = 0; b < m.batchCount; b++) {
         const A::Batch& bt = m.batches[b];
+        if (bt.tex != loaded) {
+            loaded = bt.tex;
+            if (bt.tex == A::kTexBody)
+                gDPLoadTextureTile(POLY_OPA_DISP++, m.body, G_IM_FMT_RGBA, G_IM_SIZ_16b, A::kBodyW, A::kBodyH, 0, 0, A::kBodyW - 1, A::kBodyH - 1, 0,
+                                   G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+            else
+                gDPLoadTextureTile(POLY_OPA_DISP++, m.faces[std::clamp(face, 0, static_cast<int>(A::kFaceCount) - 1)], G_IM_FMT_RGBA, G_IM_SIZ_16b,
+                                   A::kFaceW, A::kFaceH, 0, 0, A::kFaceW - 1, A::kFaceH - 1, 0, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP,
+                                   G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+        }
         gSPVertex(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&vtx[bt.firstVert]), bt.vertCount, 0);
         const int end = bt.firstTri + bt.triCount;
         int t = bt.firstTri;
@@ -221,6 +230,16 @@ void AllyDust(PlayState* play, float x, float y, float z, int count, float sprea
         Color_RGBA8 prim = { 200, 180, 150, 255 }, env = { 130, 110, 90, 255 };
         EffectSsDust_Spawn(play, 4, &pos, &vel, &accel, &prim, &env, scale, 8, 14, 0);
     }
+}
+
+// Whether the person an ally works for is dancing (doing an emote) or has just won the match: the ally dances along.
+bool AllyOwnerCelebrates(uint16_t owner) {
+    if (owner == royale::net::kNoPlayer16) return false;
+    const auto& h = gSession.Hud();
+    if (h.winnerId == owner) return true;
+    if (owner == h.selfId) return gEmote.id >= 0;
+    auto it = gState.find(owner);
+    return it != gState.end() && it->second.alive && royale::IsEmote(it->second.anim);
 }
 
 void Ally_Update(Actor* actor, PlayState* play) {
@@ -340,9 +359,10 @@ void Ally_Update(Actor* actor, PlayState* play) {
         a.lonely = 0.0f;
     }
 
-    // Otherwise: walking, waving you over (free, and you are close enough to see), or the ready stance.
+    // Otherwise: walking, dancing along when its owner dances or wins, waving you over (free, and you are close enough to see), or the ready
+    // stance.
     if (a.busy <= 0.0f && !a.rolling && !a.resting) {
-        const int base = a.walking ? A::kWalk : (free && playerDist < 1600.0f) ? A::kInvite : A::kIdle;
+        const int base = a.walking ? A::kWalk : AllyOwnerCelebrates(a.owner) ? A::kDance : (free && playerDist < 1600.0f) ? A::kInvite : A::kIdle;
         a.anim.Play(base, 0.22f);
     }
     const float rate = a.anim.clip == A::kWalk ? std::clamp(a.speed / std::max(1.0f, m.walkSpeed), 0.6f, 1.8f) : 1.0f;
