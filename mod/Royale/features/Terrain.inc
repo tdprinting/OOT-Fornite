@@ -798,8 +798,9 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
     // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
     if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
+        // At somebody in reach it rolls to their feet; with nobody it bounces to a stop just ahead and launches you (the same spots the server marks).
         SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
-                            player->actor.world.pos.z, aim, hud.weaponRarity);
+                            player->actor.world.pos.z, aim, hud.weaponRarity, bestDist < 1e8f ? bestDist : royale::kShockwaveSelfThrow);
     } else if (hud.weapon == royale::ItemId::Hookshot) {
         Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     }
@@ -943,7 +944,7 @@ void LaunchSelfFromShockwave(Player* player, float x, float z, royale::Rarity ra
     if (player == nullptr) return;
     const float dx = player->actor.world.pos.x - x, dz = player->actor.world.pos.z - z;
     const float distance = std::hypot(dx, dz);
-    constexpr float radius = 180.0f;
+    const float radius = royale::WeaponOf(royale::ItemId::ShockwaveGrenade).splashRadius;   // the server's blast (180)
     if (distance <= radius) LaunchSelf(player, rarity, dx, dz);
 }
 
@@ -1624,6 +1625,16 @@ void ReportEvents(const royale::HudState& hud) {
                     const auto owner = gState.find(e.id);
                     if (e.id != hud.selfId && owner != gState.end()) rarity = owner->second.weaponRarity;
                     gPendingShockwaveLaunches.push_back({ e.x, e.z, rarity, ImGui::GetTime() + std::max(0.0f, e.health) });
+                    if (e.id != hud.selfId && owner != gState.end()) {   // somebody else threw it: their ball, from their hand to the spot (mine left on B)
+                        const auto& o = owner->second;
+                        const auto actor = gActorOf.find(e.id);
+                        float y = 0.0f;
+                        if (actor != gActorOf.end() && actor->second != nullptr) y = actor->second->world.pos.y;
+                        else if (!FloorAt(o.x, o.z, &y)) y = GET_PLAYER(gPlayState)->actor.world.pos.y;
+                        const float dx = e.x - o.x, dz = e.z - o.z;
+                        const s16 yaw = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
+                        SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade, o.x, y + 45.0f, o.z, yaw, rarity, std::hypot(dx, dz));
+                    }
                 }
                 break;
             }

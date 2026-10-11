@@ -142,7 +142,7 @@ Generated from `shared/items.h`; the unit tests check that the table is complete
 | Nocturne of Shadow | Ability | Rare to Epic | Vanish and reappear somewhere else |
 | Requiem of Spirit | Ability | Rare to Epic | Stuns and hurts everyone near you |
 | Prelude of Light | Ability | Rare to Epic | Heals 1 heart and protects you briefly |
-| Shockwave Grenade | Weapon (B) | Common to Legendary | B throws it: a shockwave that hurts and stuns everyone around the target |
+| Shockwave Grenade | Weapon (B) | Common to Legendary | B throws it: it bounces, rolls and goes off on a 0.57 s fuse, launching everyone within 180 (no damage). With nobody in reach it lands just ahead and launches you; see docs/BOUNCEBALL-MECHANICS.md |
 | Kokiri Tunic | Gear | Common to Uncommon | Plain: slightly less damage taken |
 | Goron Tunic | Gear | Uncommon to Epic | Half damage from fire and explosions |
 | Zora Tunic | Gear | Uncommon to Epic | Less storm damage |

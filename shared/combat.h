@@ -57,6 +57,12 @@ constexpr WeaponStats WeaponOf(ItemId id) {
     }
 }
 
+// The Shockwave Grenade (docs/BOUNCEBALL-MECHANICS.md): it bounces and goes off on a fuse, not on touch, launching everyone in its splash radius
+// without hurting them. Thrown with nobody in reach it lands just ahead of you, so it launches you; thrown at somebody it goes off at their feet.
+constexpr float kShockwaveFuse = 0.57f;        // seconds from the throw to the blast (34 frames at 60 fps in the reference video)
+constexpr float kShockwaveSelfThrow = 110.0f;  // how far ahead it comes to rest with no target (about two Links: you run onto it)
+constexpr float kShockwaveBotShove = 260.0f;   // how far the server throws a bot from the centre at Common (x rarity); people launch themselves
+
 // What a weapon does right now: one that spends ammo and has none left is just bashed with, like the basic sword.
 constexpr WeaponStats ActiveWeapon(ItemId id, bool hasAmmo) { return AmmoUsedBy(id) != AmmoKind::None && !hasAmmo ? WeaponOf(ItemId::BasicSword) : WeaponOf(id); }
 

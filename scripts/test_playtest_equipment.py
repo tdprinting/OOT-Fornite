@@ -42,7 +42,7 @@ struct LocalDress {bool on=false; s8 boots=0; u8 mask=0; royale::ItemId weapon=r
 LocalDress gLocalDress;
 bool gLocalMaskSaved=false; u8 gSavedLocalMask=PLAYER_MASK_NONE;
 uint32_t gLocalTunic=royale::PackRgb(30,105,27);
-struct Projectile {float x,y,z,vx,vy,vz,life,gravity,spin; uint32_t variant; bool explodes; royale::Rarity rarity;};
+struct Projectile {float x,y,z,vx,vy,vz,life,gravity,spin; uint32_t variant; bool explodes; royale::Rarity rarity; float ox=0,oz=0,reach=0,age=0;};
 std::vector<Projectile> gProjectiles;
 void* gPlayState=reinterpret_cast<void*>(1);
 struct Vec3f {float x,y,z;};
@@ -52,6 +52,7 @@ void Audio_PlaySoundGeneral(u16,Vec3f*,int,float*,float*,float*) {}
 '''
 code += '\n'.join(function(players,n) for n in ('PlayerShieldFor','LocalWearTunic'))
 code += '\n'.join(function(terrain,n) for n in ('WornGear','SyncLocalDress'))
+code += '\n'.join(l for l in projectiles.splitlines() if l.startswith('constexpr float kGrenade')) + '\n'   # the grenade's throw numbers
 code += function(projectiles,'SpawnProjectileFrom')
 code += r'''
 int main() {
@@ -73,13 +74,17 @@ int main() {
  h.hasShield=false; p.stateFlags1=PLAYER_STATE1_SHIELDING; SyncLocalDress(&p,h);
  assert(p.currentShield==0 && p.stateFlags1==0 && equipment[EQUIP_TYPE_SHIELD]==0);
  for(s16 yaw : {s16(0),s16(16384),s16(-16384)}) {
-  gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,yaw,royale::Rarity::Legendary);
+  // The bounceball: on a fuse, thrown down so it reaches the ground long before the fuse ends, and with nobody in reach it rests just ahead.
+  gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,yaw,royale::Rarity::Legendary,-1.0f);
   assert(gProjectiles.size()==1); const auto& g=gProjectiles[0];
-  assert(g.variant==10 && g.explodes && g.gravity>0 && g.life>0.7f);
-  assert(std::fabs(std::hypot(g.vx,g.vz)*g.life-520)<1);
-  assert(45+g.vy*g.life-g.gravity*g.life*g.life/2<5);
+  assert(g.variant==10 && g.explodes && g.gravity>0 && std::fabs(g.life-royale::kShockwaveFuse)<1e-4f);
+  assert(std::fabs(std::hypot(g.vx,g.vz)-1)<1e-3f && std::fabs(g.reach-royale::kShockwaveSelfThrow)<1e-3f);
+  const float a=yaw*(3.14159265f/32768.0f); assert(std::fabs(g.vx-std::sin(a))<1e-3f && std::fabs(g.vz-std::cos(a))<1e-3f);
+  const float t=(g.vy+std::sqrt(g.vy*g.vy+2*g.gravity*45))/g.gravity; assert(t<g.life*0.5f);   // first touch well inside the fuse: it bounces
+  gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,yaw,royale::Rarity::Common,300.0f);
+  assert(gProjectiles.size()==1 && std::fabs(gProjectiles[0].reach-300)<1e-3f);   // at somebody: it comes to rest at their feet
  }
- field=false; gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,0,royale::Rarity::Common);
+ field=false; gProjectiles.clear(); SpawnProjectileFrom(royale::ItemId::ShockwaveGrenade,0,45,0,0,royale::Rarity::Common,-1.0f);
  assert(gProjectiles.empty());
  std::cout<<"Production gear colors, shield resync/removal, and grenade flight passed\n";
 }

@@ -10,7 +10,7 @@
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |
 | Glider, foliage, ground weather and patches | `GroundWeather.inc` |
 | Storm wall, sky, fog, wind, tornado | `Atmosphere.inc` |
-| Flying items and projectiles | `Projectiles.inc` |
+| Flying items and projectiles (Shockwave Grenade bounce: `docs/BOUNCEBALL-MECHANICS.md`; its blast is `StrikeBlast` in `RoyaleBosses.h`, launch in `Terrain.inc`) | `Projectiles.inc` |
 | HUD, weather controls, item icons, emote wheel | `Hud.inc` |
 | Original OoT heart/shield/magic textures | `OotVitals.inc` |
 | Winner's wearable crown | `VictoryCrown.inc` |

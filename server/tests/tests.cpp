@@ -3748,11 +3748,21 @@ static void ShockwaveGrenade() {
         user->weapon = {ItemId::ShockwaveGrenade, Rarity::Rare};
         user->attackReadyAt = 0;
         const float before = target->health;
+        m.DrainEvents();
         CHECK(m.Attack(1, 1000).ok && target->health == before && !m.Stunned(*target));
         CHECK(!m.Stunned(*user) && user->health == user->maxHealth);
         CHECK(!m.Attack(1, 1000).ok);   // recharging: a grenade is slow
+        bool marked = false;   // the blast is marked at the target's feet, after the fuse
+        for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(StrikeStyle::Shockwave))
+            marked = std::fabs(e.x - 300.0f) < 0.01f && std::fabs(e.z) < 0.01f && std::fabs(e.health - kShockwaveFuse) < 0.001f;
+        CHECK(marked);
+        CHECK(target->pos.x == 300.0f);   // not before the fuse runs out
+        for (int i = 0; i < static_cast<int>(kShockwaveFuse * kTickHz) + 2; i++) m.Tick(kDt);
+        // The bot is thrown away from the centre (people launch themselves on their own screens), and nobody is hurt.
+        CHECK(target->alive && target->health == before && Distance(target->pos, {300, 0}) > kShockwaveBotShove * 0.25f);
+        CHECK(user->health == user->maxHealth && Distance(user->pos, {0, 0}) < 0.01f);
     }
-    {   // Throws with no locked target still announce a blast downrange for every client.
+    {   // Thrown with nobody in reach it stops just ahead, inside its own blast, so it launches the thrower; every client is told.
         Simulation sim = Duel(5, {100, 0}, {0, 0});
         Match& m = sim.match;
         PlayerState* user = m.Find(1);
@@ -3763,7 +3773,8 @@ static void ShockwaveGrenade() {
         CHECK(m.ShootAtNothing(1).ok);
         bool announced = false;
         for (const auto& e : m.DrainEvents()) if (e.type == MatchEvent::Type::Strike && e.item == static_cast<uint8_t>(StrikeStyle::Shockwave)) {
-            announced = true; CHECK(std::fabs(e.x) < 0.01f && std::fabs(e.z - 520.0f) < 0.01f && e.health > 0.0f);
+            announced = true; CHECK(std::fabs(e.x) < 0.01f && std::fabs(e.z - kShockwaveSelfThrow) < 0.01f && e.health > 0.0f);
+            CHECK(e.amount >= kShockwaveSelfThrow + 20.0f);   // close enough that the thrower is inside the blast: it launches them
         }
         CHECK(announced);
     }

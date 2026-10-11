@@ -173,6 +173,7 @@ struct Strike {
     bool applied = false;
     bool lightning = false;   // a bolt from a thunderstorm: plain damage, no burning
     StrikeStyle style = StrikeStyle::Fire;   // what it does besides the damage (and how it looks)
+    float shove = 0;   // a Shockwave Grenade: how far a bot inside it is thrown from the centre
 };
 
 struct AttackResult {
@@ -514,29 +515,59 @@ class Match {
         if (state != MatchState::InMatch) return r;
         PlayerState* a = Find(attackerId);
         if (!a || !a->alive) return r;
-        const bool shockwave = a->weapon.item == ItemId::ShockwaveGrenade;
-        if ((!shockwave && AmmoUsedBy(a->weapon.item) == AmmoKind::None) || !HasAmmo(*a, a->weapon.item)) return r;
+        if (a->weapon.item == ItemId::ShockwaveGrenade) return ThrowGrenade(attackerId, nullptr);
+        if (AmmoUsedBy(a->weapon.item) == AmmoKind::None || !HasAmmo(*a, a->weapon.item)) return r;
         const WeaponStats w = ActiveWeapon(a->weapon.item, true);
-        if ((w.damage <= 0 && !shockwave) || clock < a->attackReadyAt || Stunned(*a)) return r;
+        if (w.damage <= 0 || clock < a->attackReadyAt || Stunned(*a)) return r;
         a->attackReadyAt = clock + w.cooldown;
         SpendAmmo(*a, a->weapon.item);
-        if (shockwave) {
-            const float yaw = static_cast<float>(a->rot) * (3.14159265f / 32768.0f);
-            MatchEvent blast{MatchEvent::Type::Strike};
-            blast.a = attackerId;
-            blast.x = a->pos.x + std::sin(yaw) * w.range;
-            blast.z = a->pos.z + std::cos(yaw) * w.range;
-            blast.amount = w.splashRadius; blast.health = 0.8f;
-            blast.item = static_cast<uint8_t>(StrikeStyle::Shockwave);
-            events.push_back(blast);
-        }
         r.ok = true;
         return r;
+    }
+
+    // A Shockwave Grenade thrown at a spot (a boss's feet), or with nothing to throw it at: it bounces to a stop just ahead, so the blast launches the
+    // thrower (the way to get around). Spends it and starts its cooldown like any throw.
+    AttackResult ThrowGrenade(uint32_t attackerId, const Vec2* at) {
+        AttackResult r;
+        if (state != MatchState::InMatch) return r;
+        PlayerState* a = Find(attackerId);
+        if (!a || !a->alive || a->weapon.item != ItemId::ShockwaveGrenade || !HasAmmo(*a, a->weapon.item)) return r;
+        const WeaponStats w = ActiveWeapon(a->weapon.item, true);
+        if (clock < a->attackReadyAt || Stunned(*a)) return r;
+        a->attackReadyAt = clock + w.cooldown;
+        SpendAmmo(*a, a->weapon.item);
+        const float yaw = static_cast<float>(a->rot) * (3.14159265f / 32768.0f);
+        ThrowShockwave(*a, at ? *at : Vec2{a->pos.x + std::sin(yaw) * kShockwaveSelfThrow, a->pos.z + std::cos(yaw) * kShockwaveSelfThrow}, w.splashRadius);
+        r.ok = true;
+        return r;
+    }
+
+    // The Shockwave Grenade's blast: one marked Strike that goes off after the fuse at `at`. It does no damage. Every client launches its own player if
+    // they are inside it (the server does not know heights); bots are thrown away from the centre by TickStrikes.
+    void ThrowShockwave(const PlayerState& thrower, Vec2 at, float radius) {
+        Strike s;
+        s.at = at; s.radius = radius; s.damage = 0.0f; s.hitAt = clock + kShockwaveFuse; s.by = thrower.id; s.style = StrikeStyle::Shockwave;
+        s.shove = kShockwaveBotShove * RarityScale(thrower.weapon.rarity);
+        strikes.push_back(s);
+        MatchEvent blast{MatchEvent::Type::Strike};
+        blast.a = thrower.id; blast.x = at.x; blast.z = at.z;
+        blast.amount = radius; blast.health = kShockwaveFuse;
+        blast.item = static_cast<uint8_t>(StrikeStyle::Shockwave);
+        events.push_back(blast);
     }
 
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
+        if (IsHelperId(targetId) || IsBossId(targetId) || IsVehicleId(targetId)) {   // a Shockwave Grenade at a boss, a cart or a helper
+            const PlayerState* a = Find(attackerId);
+            if (a && a->weapon.item == ItemId::ShockwaveGrenade) {
+                const MiniBoss* boss = IsBossId(targetId) ? FindBoss(targetId) : nullptr;
+                const VehicleState* cart = IsVehicleId(targetId) ? FindVehicle(static_cast<int>(targetId - kVehicleIdBase)) : nullptr;
+                const Vec2 at = boss ? boss->pos : cart ? Vec2{cart->body.x, cart->body.z} : a->pos;
+                return ThrowGrenade(attackerId, boss || cart ? &at : nullptr);   // it goes off at the boss or the cart (a helper: just ahead)
+            }
+        }
         if (IsHelperId(targetId)) return AttackHelper(attackerId, targetId, hit, style);
         if (IsBossId(targetId)) return AttackBoss(attackerId, targetId, hit);
         if (IsVehicleId(targetId)) return AttackVehicle(attackerId, targetId, hit);
@@ -553,6 +584,7 @@ class Match {
         a->attackReadyAt = clock + w.cooldown * (style == AttackStyle::Spin ? kSpinRecovery : style == AttackStyle::JumpSlash ? kJumpSlashRecovery : 1.0f);
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
+        if (shockwave) ThrowShockwave(*a, t->pos, w.splashRadius);   // it rolls to their feet and goes off after the fuse, hit or miss
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
@@ -611,13 +643,6 @@ class Match {
                 default:
                     break;
             }
-        }
-        if (shockwave) {
-            MatchEvent blast{MatchEvent::Type::Strike};
-            blast.a = attackerId; blast.x = t->pos.x; blast.z = t->pos.z;
-            blast.amount = w.splashRadius; blast.health = 0.8f;
-            blast.item = static_cast<uint8_t>(StrikeStyle::Shockwave);
-            events.push_back(blast);
         }
         if (w.splashRadius > 0 && !shockwave) {
             const Vec2 centre = t->pos;
@@ -1658,6 +1683,20 @@ class Match {
         p.dirty = true;
     }
 
+    // Throws a bot `distance` away from `from` (straight on if it stands on the spot), landing inside the map and on ground; a shorter hop if there is none.
+    void ShoveFrom(PlayerState& p, Vec2 from, float distance) {
+        float dx = p.pos.x - from.x, dz = p.pos.z - from.z;
+        const float d = std::hypot(dx, dz);
+        if (d > 1.0f) { dx /= d; dz /= d; }
+        else { const float yaw = static_cast<float>(p.rot) * (3.14159265f / 32768.0f); dx = std::sin(yaw); dz = std::cos(yaw); }
+        for (const float share : {1.0f, 0.6f, 0.3f}) {
+            Vec2 to = {p.pos.x + dx * distance * share, p.pos.z + dz * distance * share};
+            const float off = Distance(to, map.center);
+            if (off > map.radius - 20.0f) to = {map.center.x + (to.x - map.center.x) / off * (map.radius - 20.0f), map.center.z + (to.z - map.center.z) / off * (map.radius - 20.0f)};
+            if (!placement || placement(to)) { Teleport(p, to); return; }
+        }
+    }
+
     void TickStrikes() {
         // WreckVehicle can append another strike while this one is applied.
         // Index iteration plus a value snapshot stays valid across vector growth
@@ -1666,6 +1705,13 @@ class Match {
             if (strikes[index].applied || clock < strikes[index].hitAt) continue;
             strikes[index].applied = true;
             const Strike s = strikes[index];
+            if (s.style == StrikeStyle::Shockwave && s.damage <= 0.0f) {   // a Shockwave Grenade: no damage, it throws people
+                for (auto& p : players) {
+                    if (!p.alive || !p.isBot || Distance(p.pos, s.at) > s.radius) continue;   // people launch themselves (their game knows heights)
+                    ShoveFrom(p, s.at, s.shove);
+                }
+                continue;
+            }
             for (auto& p : players) {
                 if (!p.alive || clock < p.invulnUntil || Distance(p.pos, s.at) > s.radius) continue;
                 if (clock < p.rollUntil && !s.lightning && s.style != StrikeStyle::Bolt && s.by != kNoPlayer) continue;   // a well-timed roll goes through a marked blast

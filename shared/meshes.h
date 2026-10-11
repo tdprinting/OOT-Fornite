@@ -1220,39 +1220,81 @@ inline MeshData SandDrift(uint32_t variant) {
 }
 
 
-// The Shockwave Grenade: a gunmetal ball, about the size of a bomb, with glowing purple bands around its middle and over the top, and a dark
-// cap. The bands are raised rings (not paint) so they read as sharp lines, and they are not shaded, so they look lit from inside.
-inline void GlowRing(MeshData& m, V3 c, float radius, float tube, int segs, bool vertical, float yaw) {
-    const float pi = 3.14159265f;
-    const Rgb face = {225, 150, 255}, edge = {150, 60, 230};
-    const float cy = std::cos(yaw), sy = std::sin(yaw);
-    auto at = [&](int i, int k) {   // point k (0..2) of the tube's triangular cross-section at step i around the ring
-        const float a = 2.0f * pi * static_cast<float>(i) / segs;
-        const float t = 2.0f * pi * static_cast<float>(k) / 3.0f;
-        const float r = radius + std::cos(t) * tube, h = std::sin(t) * tube;
-        V3 q = vertical ? V3{std::cos(a) * r, std::sin(a) * r, h} : V3{std::cos(a) * r, h, std::sin(a) * r};
-        return V3{c.x + q.x * cy + q.z * sy, c.y + q.y, c.z - q.x * sy + q.z * cy};
-    };
-    for (int i = 0; i < segs; i++)
-        for (int k = 0; k < 3; k++) {
-            const Rgb col = k == 0 ? face : edge;   // the outer side brightest
-            const V3 a = at(i, k), b = at(i + 1, k), c2 = at(i + 1, (k + 1) % 3), d = at(i, (k + 1) % 3);
-            Put(m, a, col); Put(m, b, col); Put(m, c2, col);
-            Put(m, a, col); Put(m, c2, col); Put(m, d, col);
-        }
+// The Shockwave Grenade (docs/BOUNCEBALL-MECHANICS.md 1), in the Ocarina of Time way (flat colour, no textures): a pale silver ball about the size of
+// a bomb, with a big faceted purple crystal set in a raised socket ring on its front (+Z), a dark seam around it, and six short round studs around
+// the crystal, each with a glowing purple core. The crystal and the cores are not shaded, so they look lit from inside. Variant 1 is the same ball
+// lit up (the crystal and cores near white): the game blinks between the two, faster as the fuse runs out, like its own bombs.
+inline void GrenadeTri(MeshData& m, V3 a, V3 b, V3 c, Rgb col, bool glow) {
+    const V3 n = Norm(Cross(Sub(b, a), Sub(c, a)));
+    const Rgb k = glow ? col : Light(col, n);
+    Put(m, a, k); Put(m, b, k); Put(m, c, k);
 }
 
-inline MeshData Grenade() {
+// A short round prism standing out of the ball along `dir` from `base`: `sides` faces, `rad` across, `len` long, a flat end with a glowing core.
+inline void GrenadeStud(MeshData& m, V3 base, V3 dir, float rad, float len, int sides, Rgb metal, Rgb core, float coreShare) {
+    const float pi = 3.14159265f;
+    const V3 d = Norm(dir);
+    const V3 u = Norm(Cross(std::fabs(d.y) < 0.9f ? V3{0, 1, 0} : V3{1, 0, 0}, d)), w = Cross(d, u);
+    auto ring = [&](float along, float r, int i) {
+        const float a = 2.0f * pi * static_cast<float>(i) / sides;
+        return V3{base.x + d.x * along + (u.x * std::cos(a) + w.x * std::sin(a)) * r, base.y + d.y * along + (u.y * std::cos(a) + w.y * std::sin(a)) * r,
+                  base.z + d.z * along + (u.z * std::cos(a) + w.z * std::sin(a)) * r};
+    };
+    const V3 tip = {base.x + d.x * len, base.y + d.y * len, base.z + d.z * len};
+    for (int i = 0; i < sides; i++) {
+        const V3 a0 = ring(-1.0f, rad, i), a1 = ring(-1.0f, rad, i + 1), b0 = ring(len, rad, i), b1 = ring(len, rad, i + 1);
+        GrenadeTri(m, a0, a1, b1, metal, false); GrenadeTri(m, a0, b1, b0, metal, false);                 // the side
+        const V3 c0 = ring(len, rad * coreShare, i), c1 = ring(len, rad * coreShare, i + 1);
+        GrenadeTri(m, b0, b1, c1, Mix(metal, {255, 255, 255}, 0.15f), false);                              // the rim (one triangle a side: cheap)
+        GrenadeTri(m, c0, c1, {tip.x + d.x * 0.4f, tip.y + d.y * 0.4f, tip.z + d.z * 0.4f}, core, true);     // the glowing core
+    }
+}
+
+inline MeshData Grenade(uint32_t variant = 0) {
     constexpr float r = 14.0f;
-    const V3 c = {0, r + 1.5f, 0};   // raised a little so the rings over the top clear the ground too
+    const bool lit = variant % 2 == 1;
+    const V3 c = {0, r + 1.5f, 0};   // centred 15.5 up: DrawItemModel and DrawGrenade lift it by that much
+    const Rgb silver = {196, 200, 214}, seam = {92, 90, 112}, socket = {150, 152, 170};
+    const Rgb crystalA = lit ? Rgb{250, 225, 255} : Rgb{176, 108, 255}, crystalB = lit ? Rgb{230, 195, 255} : Rgb{124, 64, 226},
+              crystalTop = lit ? Rgb{255, 245, 255} : Rgb{214, 170, 255};
+    const Rgb core = lit ? Rgb{255, 240, 255} : Rgb{205, 130, 255};
     MeshData m;
-    Ellipsoid(m, c, {r, r, r}, 8, 14, [&](V3 n, V3) {
-        if (n.y > 0.85f) return Rgb{70, 72, 82};                                  // the dark cap on top
-        return n.y < -0.5f ? Rgb{140, 142, 152} : Rgb{176, 178, 188};            // gunmetal grey, darker underneath
+    Ellipsoid(m, c, {r, r, r}, 7, 12, [&](V3 n, V3) {
+        if (std::fabs(n.y) < 0.12f) return seam;                                      // the seam around the middle
+        return n.y < -0.45f ? Mix(silver, {120, 118, 150}, 0.35f) : silver;           // a cool shadow underneath (the game's painted shading)
     });
-    GlowRing(m, c, r + 0.3f, 1.3f, 12, false, 0.0f);                             // around the middle
-    GlowRing(m, c, r + 0.3f, 1.1f, 12, true, 0.0f);                              // over the top, crossing it
-    GlowRing(m, c, r + 0.3f, 1.1f, 12, true, 1.5707963f);
+    // The socket: a raised ring on the front, around the crystal.
+    const float pi = 3.14159265f;
+    constexpr int kRing = 10;
+    const float sockR = 8.6f, sockIn = 6.4f, sockZ = r - 0.6f, sockOut = 2.0f;
+    for (int i = 0; i < kRing; i++) {
+        const float a0 = 2.0f * pi * i / kRing, a1 = 2.0f * pi * (i + 1) / kRing;
+        auto at = [&](float rr, float a, float z) { return V3{c.x + std::cos(a) * rr, c.y + std::sin(a) * rr, c.z + z}; };
+        GrenadeTri(m, at(sockR, a0, sockZ - 2.0f), at(sockR, a1, sockZ - 2.0f), at(sockR, a1, sockZ + sockOut), socket, false);   // outside
+        GrenadeTri(m, at(sockR, a0, sockZ - 2.0f), at(sockR, a1, sockZ + sockOut), at(sockR, a0, sockZ + sockOut), socket, false);
+        GrenadeTri(m, at(sockR, a0, sockZ + sockOut), at(sockR, a1, sockZ + sockOut), at(sockIn, a1, sockZ + sockOut), Mix(socket, silver, 0.6f), false);   // top
+        GrenadeTri(m, at(sockR, a0, sockZ + sockOut), at(sockIn, a1, sockZ + sockOut), at(sockIn, a0, sockZ + sockOut), Mix(socket, silver, 0.6f), false);
+    }
+    // The crystal: an eight-sided gem bulging out of the socket, facets in two purples so it reads as cut, with a pale top facet.
+    constexpr int kFacets = 8;
+    const float gemR = 6.6f, gemZ0 = sockZ + 0.5f, gemMid = sockZ + 3.2f, gemTip = sockZ + 5.6f;
+    const V3 tip = {c.x, c.y, c.z + gemTip};
+    for (int i = 0; i < kFacets; i++) {
+        const float a0 = 2.0f * pi * (i + 0.5f) / kFacets, a1 = 2.0f * pi * (i + 1.5f) / kFacets;
+        const V3 b0 = {c.x + std::cos(a0) * gemR, c.y + std::sin(a0) * gemR, c.z + gemZ0}, b1 = {c.x + std::cos(a1) * gemR, c.y + std::sin(a1) * gemR, c.z + gemZ0};
+        const V3 m0 = {c.x + std::cos(a0) * gemR * 0.72f, c.y + std::sin(a0) * gemR * 0.72f, c.z + gemMid},
+                 m1 = {c.x + std::cos(a1) * gemR * 0.72f, c.y + std::sin(a1) * gemR * 0.72f, c.z + gemMid};
+        const Rgb side = i % 2 ? crystalA : crystalB;
+        GrenadeTri(m, b0, b1, m1, side, true); GrenadeTri(m, b0, m1, m0, side, true);
+        GrenadeTri(m, m0, m1, tip, (i == 1 || i == 2) ? crystalTop : Mix(side, crystalTop, 0.35f), true);   // the upper-left facets catch the light
+    }
+    // Six studs in a ring around the crystal, a little behind the middle of the ball, each with a glowing core.
+    for (int k = 0; k < 6; k++) {
+        const float a = 2.0f * pi * k / 6.0f, tilt = 1.85f;   // about 106 degrees from the front (none straight down, so none goes under the ground)
+        const V3 dir = {std::cos(a) * std::sin(tilt), std::sin(a) * std::sin(tilt), std::cos(tilt)};
+        const V3 base = {c.x + dir.x * r, c.y + dir.y * r, c.z + dir.z * r};
+        GrenadeStud(m, base, dir, 3.4f, 2.6f, 6, Mix(silver, socket, 0.3f), core, 0.55f);
+    }
     return m;
 }
 
@@ -1304,7 +1346,7 @@ inline MeshData BuildMesh(MeshKind kind, uint32_t variant) {
         case MeshKind::Dragon: return mesh_detail::Dragon(variant);
         case MeshKind::Platform: return mesh_detail::Platform(variant);
         case MeshKind::Projectile: return mesh_detail::Projectile(variant);
-        case MeshKind::Grenade: return mesh_detail::Grenade();
+        case MeshKind::Grenade: return mesh_detail::Grenade(variant);
         case MeshKind::VictoryCrown: return mesh_detail::AuthoredMesh(playtest_models::crown,std::size(playtest_models::crown));
         case MeshKind::GildedSword: return mesh_detail::GildedSwordMesh(variant);
         default: return {};

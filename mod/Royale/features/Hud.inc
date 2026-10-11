@@ -765,16 +765,24 @@ void DrawItemIcon(ImDrawList* dl, royale::ItemId id, ImVec2 c, float s, ImU32 ti
         case ItemId::NocturneOfShadow: note(purple); break;
         case ItemId::RequiemOfSpirit: note(orange); break;
         case ItemId::PreludeOfLight: note(IM_COL32(255, 245, 150, 255)); break;
-        case ItemId::ShockwaveGrenade: {   // a grey ball with glowing purple bands, like its model
-            const ImU32 glow = IM_COL32(200, 120, 255, 255), halo = IM_COL32(170, 80, 255, 70);
-            dl->AddCircleFilled(c, u * 0.78f, halo, 24);
-            dl->AddCircleFilled(c, u * 0.62f, IM_COL32(150, 152, 162, 255), 24);
-            dl->AddCircleFilled(P(-0.18f, -0.2f), u * 0.24f, IM_COL32(190, 192, 200, 255), 14);       // the shine
-            dl->AddLine(P(-0.62f, 0), P(0.62f, 0), glow, th * 1.6f);                                    // the band round the middle
-            dl->AddBezierQuadratic(P(0, -0.62f), P(0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);       // and the ones over the top
-            dl->AddBezierQuadratic(P(0, -0.62f), P(-0.42f, 0), P(0, 0.62f), glow, th * 1.4f, 12);
-            dl->AddCircleFilled(P(0, -0.62f), u * 0.12f, IM_COL32(70, 72, 82, 255), 10);              // the cap
-            dl->AddCircle(c, u * 0.62f, IM_COL32(60, 62, 72, 255), 24, th * 0.8f);
+        case ItemId::ShockwaveGrenade: {   // like its model: a silver ball, a faceted purple crystal in a socket, glowing studs round it
+            const ImU32 halo = IM_COL32(170, 80, 255, 70), metal = IM_COL32(196, 200, 214, 255), edge = IM_COL32(70, 66, 96, 255);
+            dl->AddCircleFilled(c, u * 0.84f, halo, 24);
+            for (int k = 0; k < 6; k++) {   // the studs, peeking out round the rim
+                const float a = (k + 0.5f) * 1.0471976f;
+                const ImVec2 stud = P(std::cos(a) * 0.62f, std::sin(a) * 0.62f);
+                dl->AddCircleFilled(stud, u * 0.15f, IM_COL32(170, 172, 190, 255), 10);
+                dl->AddCircleFilled(stud, u * 0.075f, IM_COL32(215, 150, 255, 255), 8);
+            }
+            dl->AddCircleFilled(c, u * 0.6f, metal, 24);
+            dl->AddCircleFilled(P(-0.2f, -0.24f), u * 0.2f, IM_COL32(232, 236, 245, 255), 14);       // the shine
+            dl->AddCircleFilled(c, u * 0.4f, IM_COL32(150, 152, 170, 255), 16);                        // the socket
+            ImVec2 gem[8];
+            for (int k = 0; k < 8; k++) { const float a = (k + 0.5f) * 0.7853982f; gem[k] = P(std::cos(a) * 0.31f, std::sin(a) * 0.31f); }
+            dl->AddConvexPolyFilled(gem, 8, IM_COL32(124, 64, 226, 255));                               // the crystal
+            dl->AddTriangleFilled(gem[4], gem[5], c, IM_COL32(214, 170, 255, 255));                    // its lit facets
+            dl->AddTriangleFilled(gem[5], gem[6], c, IM_COL32(176, 108, 255, 255));
+            dl->AddCircle(c, u * 0.6f, edge, 24, th * 0.8f);
             break;
         }
         case ItemId::KokiriTunic: tunic(green); break;
