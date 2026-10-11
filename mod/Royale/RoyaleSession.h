@@ -242,14 +242,17 @@ class RoyaleSession {
     std::vector<PuppetState> Puppets() const {
         std::vector<PuppetState> out;
         if (!Joined()) return out;
-        for (uint16_t id : client->VisiblePlayers()) {
+        const std::vector<uint16_t> ids = client->VisiblePlayers();
+        out.reserve(ids.size());
+        for (uint16_t id : ids) {
             net::PlayerNet p;
             if (!client->Sample(id, p)) continue;
             PuppetState s;
             s.id = id;
             auto it = client->Roster().find(id);
-            s.name = it != client->Roster().end() ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
-            s.tunic = it != client->Roster().end() ? it->second.tunic : BotTunic(id);
+            const bool known = it != client->Roster().end();
+            s.name = known ? it->second.name : (p.flags & net::PlayerNet::kBot ? BotName(id) : "Player " + std::to_string(id));
+            s.tunic = known ? it->second.tunic : BotTunic(id);
             s.x = p.x; s.y = p.y; s.z = p.z; s.rot = p.rot; s.anim = p.anim; s.scene = p.scene;
             s.alive = p.flags & net::PlayerNet::kAlive;
             s.isBot = p.flags & net::PlayerNet::kBot;
@@ -269,6 +272,11 @@ class RoyaleSession {
 
     // Things that happened since the last call (players joining, ready changes, state changes, eliminations...).
     std::vector<ClientEvent> DrainEvents() { return client ? client->DrainEvents() : std::vector<ClientEvent>(); }
+
+    // The two Hud() fields read every frame on their own, without building the whole HudState (roster and results rows with their names,
+    // the inventory...). The same values Hud() gives.
+    MatchState State() const { return client ? client->State() : HudState{}.state; }
+    uint16_t SelfId() const { return client ? client->PlayerId() : HudState{}.selfId; }
 
     HudState Hud() const {
         HudState h;
@@ -291,6 +299,7 @@ class RoyaleSession {
             h.stormShrinking = info.shrinking;
             h.stormSecondsLeft = info.secondsLeft;
         }
+        h.roster.reserve(client->Roster().size());
         for (const auto& [id, info] : client->Roster()) {
             RosterRow row;
             row.id = id; row.name = info.name; row.host = info.host; row.ready = info.ready; row.self = id == client->PlayerId();
@@ -308,6 +317,7 @@ class RoyaleSession {
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
         h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        h.results.reserve(client->Results().size());
         for (const net::ResultRow& r : client->Results()) {
             ResultsRow row;
             row.id = r.id;

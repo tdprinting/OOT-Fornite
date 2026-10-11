@@ -1,6 +1,6 @@
 void WarMusic() {
     if(!InGame())return;
-    const bool want=gWar.open||EndScreenUp(gSession.Hud());
+    const bool want=gWar.open||(gSession.State()==royale::MatchState::Ending&&EndScreenUp(gSession.Hud()));   // (the end screen needs Ending: the whole HUD is only built then)
     if (gMenuAudioMuted.exchange(want,std::memory_order_relaxed)!=want && want)
         for(u8 bank=0;bank<7;++bank)Audio_StopSfxByBank(bank);
     if(want) {

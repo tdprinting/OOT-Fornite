@@ -404,9 +404,12 @@ bool gHitMarkerKill = false;
 float gHurtAmount = 0.0f;
 
 bool KnownPosition(uint16_t id, float* x, float* z) {
-    if(gPlayState && InGame() && id==gSession.Hud().selfId) {const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;*x=p.x;*z=p.z;return true;}
+    if(gPlayState && InGame() && id==gSession.SelfId()) {const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;*x=p.x;*z=p.z;return true;}
     if (gSession.Client() && royale::IsHelperId(id)) for (const auto& h:gSession.Client()->Helpers()) if (h.Id()==id && h.hp>0) { *x=h.x;*z=h.z;return true; }
-    for (const auto& st : gSession.Puppets()) if (st.id == id) { *x = st.x; *z = st.z; return true; }
+    if (gSession.Joined() && id != gSession.SelfId()) {   // another player: where Puppets() would put them, without building every puppet
+        royale::net::PlayerNet p;
+        if (gSession.Client()->Sample(id, p)) { *x = p.x; *z = p.z; return true; }
+    }
     if (gSession.Client() && royale::IsBossId(id)) for (const auto& bn : gSession.Client()->Bosses()) if (royale::kBossIdBase + bn.index == id) { *x = bn.x; *z = bn.z; return true; }
     if (CartTargetAt(id, x, z)) return true;
     return false;
@@ -555,7 +558,7 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
         gImpactSoundAt=impactNow;
         Audio_PlayActorSound2(actor, kind==HitKind::Metal ? NA_SE_IT_SHIELD_REFLECT_SW : NA_SE_IT_SWORD_STRIKE);
         royale::ItemId weapon=royale::ItemId::Count;
-        if(attacker==gSession.Hud().selfId) weapon=gSession.Hud().weapon;
+        if(attacker==gSession.SelfId()) weapon=gSession.Hud().weapon;
         else {auto it=gState.find(attacker);if(it!=gState.end()) weapon=it->second.weapon;}
         if(weapon==royale::ItemId::BasicSword || weapon==royale::ItemId::KokiriSword || weapon==royale::ItemId::MasterSword || weapon==royale::ItemId::BiggoronSword || weapon==royale::ItemId::GildedSword)
             Audio_PlayActorSound2(actor,NA_SE_IT_SWORD_SWING_HARD);
