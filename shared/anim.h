@@ -52,11 +52,5 @@ constexpr uint8_t EmoteAnim(int index) {
     const int i = index < 0 ? 0 : index >= kEmoteCount ? kEmoteCount - 1 : index;
     return static_cast<uint8_t>(i < 5 ? static_cast<int>(Anim::Emote1) + i : static_cast<int>(Anim::Emote6) + (i - 5));
 }
-// Which emote an anim value is (the inverse of EmoteAnim), or -1.
-constexpr int EmoteIndex(uint8_t a) {
-    if (a >= static_cast<uint8_t>(Anim::Emote1) && a <= static_cast<uint8_t>(Anim::Emote5)) return a - static_cast<uint8_t>(Anim::Emote1);
-    if (a >= static_cast<uint8_t>(Anim::Emote6) && a <= static_cast<uint8_t>(Anim::Emote8)) return 5 + (a - static_cast<uint8_t>(Anim::Emote6));
-    return -1;
-}
 
 } // namespace royale
