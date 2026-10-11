@@ -270,6 +270,11 @@ class RoyaleSession {
     // Things that happened since the last call (players joining, ready changes, state changes, eliminations...).
     std::vector<ClientEvent> DrainEvents() { return client ? client->DrainEvents() : std::vector<ClientEvent>(); }
 
+    // The two Hud() fields read every frame on their own, without building the whole HudState (roster and results rows with their names,
+    // the inventory...). The same values Hud() gives.
+    MatchState State() const { return client ? client->State() : HudState{}.state; }
+    uint16_t SelfId() const { return client ? client->PlayerId() : HudState{}.selfId; }
+
     HudState Hud() const {
         HudState h;
         h.mode = mode == Mode::Hosting ? HudState::Mode::Hosting : mode == Mode::Joined ? HudState::Mode::Joined : HudState::Mode::Idle;
@@ -291,6 +296,7 @@ class RoyaleSession {
             h.stormShrinking = info.shrinking;
             h.stormSecondsLeft = info.secondsLeft;
         }
+        h.roster.reserve(client->Roster().size());
         for (const auto& [id, info] : client->Roster()) {
             RosterRow row;
             row.id = id; row.name = info.name; row.host = info.host; row.ready = info.ready; row.self = id == client->PlayerId();
@@ -308,6 +314,7 @@ class RoyaleSession {
         h.lobbyLeft = h.state == MatchState::Lobby ? client->LobbyLeft() : -1.0f;
         h.botSlots = (std::max)(0, h.playerLimit - h.humanCount);
         if (h.state == MatchState::Countdown) h.countdownLeft = (std::max)(0.0f, kCountdownSec - client->StateElapsed());
+        h.results.reserve(client->Results().size());
         for (const net::ResultRow& r : client->Results()) {
             ResultsRow row;
             row.id = r.id;
