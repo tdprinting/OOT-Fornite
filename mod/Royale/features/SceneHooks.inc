@@ -474,6 +474,7 @@ void OnSceneInit(int16_t) {
 
 void RegisterRoyaleMod() {
     InstallCrashReporter();
+    InstallSelfTest();
     gRoyaleBackdropDraw = DrawBackdrop;   // the sky pass, behind the world (see DrawBackdrop)
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameFrameUpdate>(OnGameFrameUpdate);
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayerUpdate>(OnPlayerUpdate);

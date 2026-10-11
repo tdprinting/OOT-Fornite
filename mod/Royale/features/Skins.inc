@@ -17,6 +17,8 @@ namespace sk = royale::skinmodel;
 const sk::Model* const kSkinModelOf[] = { nullptr, &sk::link_hd::kModel };
 static_assert(sizeof(kSkinModelOf) / sizeof(kSkinModelOf[0]) == royale::kSkinModelCount, "one model per name in royale::kSkinModelNames");
 
+struct SkinStats { unsigned limbsSeen = 0, drawn = 0; };
+SkinStats gSkinStats;   // limbs the skin hook took and skins drawn, for the self-test (SelfTest.inc resets it)
 int gLocalSkinModel = 0;   // the model the local player picked (index into kSkinModelOf); sent to everyone else with the tunic colour
 constexpr float kSkinFarDistance = 1800.0f;   // beyond this from the camera the game's own Link is drawn instead (cheaper, and too small to tell)
 
@@ -378,9 +380,11 @@ void OnPlayerSkinLimb(void* playPtr, void* playerPtr, int32_t limbIndex, void* d
     Matrix_Pop();
     pass.limb[i] = AffFromMtxF(m);
     pass.seen |= 1u << i;
+    gSkinStats.limbsSeen++;
     if (!pass.keep[i]) *dList = nullptr;
     if (pass.seen == (1u << sk::kLimbCount) - 1u) {
         DrawSkinModel(play, pass);
+        gSkinStats.drawn++;
         pass.model = nullptr;   // one draw per pass
     }
 }

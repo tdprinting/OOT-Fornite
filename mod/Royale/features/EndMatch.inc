@@ -735,6 +735,7 @@ void DrawOverlay() {
     DrawStaminaBar(dl, ds, h);
 }
 
+unsigned gHudDraws = 0;   // HUD frames drawn (the self-test checks it moves)
 class RoyaleHudWindow : public Ship::GuiWindow {
   public:
     using GuiWindow::GuiWindow;
@@ -742,7 +743,7 @@ class RoyaleHudWindow : public Ship::GuiWindow {
     void UpdateElement() override {}
     void DrawElement() override {}
     void Draw() override {
-        if (IsVisible()) DrawOverlay();
+        if (IsVisible()) { gHudDraws++; DrawOverlay(); }
     }
 };
 

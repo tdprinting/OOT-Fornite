@@ -104,7 +104,7 @@ void BuildCrashState(char* out, size_t cap, const royale::HudState& hud) {
     for (int i = 0; i < kRegCount; i++) t.Add(" %s=%d", kRegularSettings[i].key, gRegular[i]);
     t.Add("\nDebug switches off:");
     int off = 0;
-    for (int i = 0; i < kDebugCount; i++) if (!DebugOn(i) && i != kDbgGearReport) { t.Add(" %s", kDebugSwitches[i].key); off++; }
+    for (int i = 0; i < kDebugCount; i++) if (!DebugOn(i) && i != kDbgGearReport && i != kDbgSelfTest) { t.Add(" %s", kDebugSwitches[i].key); off++; }
     t.Add(off == 0 ? " none\n" : "\n");
 }
 

@@ -254,6 +254,7 @@ char gCrashState[2][kCrashStateLen];   // the snapshot, double-buffered: gCrashS
 std::atomic<int> gCrashStateNow{-1};
 volatile long gGameThreadId = 0;     // the game thread's id (Android), so the report says whether the crash was on it
 void InstallCrashContext();   // CrashContext.inc: the snapshot's per-frame hook and the scene-load copy in the trace
+void InstallSelfTest();       // SelfTest.inc: Settings > Debug > SelfTest runs scripted checks and writes royale-selftest.txt
 
 // ---- graphics layers ----------------------------------------------------------------------------------------------------------
 // The game's display-list buffers are small and fixed: "Zelda 0" (opaque) holds about 195 KB of commands growing up and Graph_Alloc's vertices and
@@ -496,17 +497,18 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "ItemMaps", "Sword and shield sunlight detail (normal and bump maps)" },
     { "GearReport", "Gear report: show on screen what Link's hands, back and feet draw (off by default)" },
     { "Skins", "Player models: newer bodies for Link on the game's own animations (off: everyone is the game's Link)" },
+    { "SelfTest", "Run the self-test now: hosts a solo Sandbox, checks features, writes royale-selftest.txt (SelfTest.inc; load a save first)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport, kDbgSkins };
-static_assert(kDbgSkins + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport, kDbgSkins, kDbgSelfTest };
+static_assert(kDbgSelfTest + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
     for (int i = 0; i < kDebugCount; i++) {
         const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
-        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport ? 0 : 1) != 0;   // (the gear report is a bug-report aid: off unless asked for)
+        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport || i == kDbgSelfTest ? 0 : 1) != 0;   // (the gear report is a bug-report aid and the self-test a one-shot button: off unless asked for)
     }
     gDebugLoaded = true;
 }
