@@ -43,6 +43,21 @@ int main() {
     const SwellPoint round = Swell(100, 50, 2, 1.0f, 0.0f);
     require(round.ox == 0.0f && round.oz == 0.0f, "no chop means no sideways shift");
 
+    // A grid only gets waves it can draw: neighbouring points on a coarse grid tilt alike (no patchwork of squares), and 0 keeps every wave.
+    require(SwellBandWeight(80.0f, 0.0f) == 1.0f && SwellBandWeight(80.0f, 425.0f) == 0.0f && SwellBandWeight(900.0f, 425.0f) == 1.0f,
+            "short waves fade out of a coarse grid, long ones stay");
+    for (float cell : {105.0f, 170.0f, 225.0f, 364.0f}) {
+        const PreparedSwell coarse(7.0f, 1.9f, 1.0f, 2.5f * cell), raw(7.0f, 1.9f, 1.0f);
+        float jumpCoarse = 0.0f, jumpRaw = 0.0f;
+        for (int i = 0; i < 400; i++) {
+            const float x = (i % 20) * cell, z = (i / 20) * cell;
+            const SwellPoint a = coarse.Sample(x, z), b = coarse.Sample(x + cell, z), c = raw.Sample(x, z), d = raw.Sample(x + cell, z);
+            jumpCoarse = std::max(jumpCoarse, std::fabs(a.nx - b.nx) + std::fabs(a.nz - b.nz));
+            jumpRaw = std::max(jumpRaw, std::fabs(c.nx - d.nx) + std::fabs(c.nz - d.nz));
+        }
+        require(jumpCoarse < jumpRaw * 0.75f, "band-limited swell tilts smoothly from point to point");
+    }
+
     // The ripple field: a push spreads out as a ring, stays stable, fades away, and stays put in the world when the field moves.
     RippleField f(14.0f, 120.0f, 0.55f);
     f.Recenter(0, 0);

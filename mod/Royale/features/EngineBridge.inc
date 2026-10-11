@@ -120,6 +120,7 @@ namespace {
 extern "C" int Royale_NativeMenuIsOpen(void) { return WarMenuOpen(); }
 extern "C" int Royale_NativeMenuHideHud(void) { return WarMenuOpen() || gSession.Joined(); }
 extern "C" int Royale_NativeMenuAllowSfx(u16 id) {
+    if (gMuteChestSfx && (id == NA_SE_EV_TBOX_UNLOCK || id == NA_SE_EV_TBOX_OPEN || id == NA_SE_EV_TRE_BOX_APPEAR)) return false;
     if (!gMenuAudioMuted.load(std::memory_order_relaxed)) return true;
     return id == NA_SE_SY_FSEL_CURSOR || id == NA_SE_SY_FSEL_DECIDE_L ||
            id == NA_SE_SY_FSEL_CLOSE || id == NA_SE_SY_FSEL_ERROR || id == NA_SE_SY_CURSOR || id == NA_SE_SY_DECIDE;

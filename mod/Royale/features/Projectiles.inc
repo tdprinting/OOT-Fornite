@@ -225,6 +225,7 @@ void DrawHeldFinds(PlayState* play) {
 }
 
 void DrawWater(PlayState* play);   // the water section, further down
+void DrawChestLights(PlayState* play);   // the chests' glow and the light that comes out of an opened one (Effects)
 
 // The sky pass. patches/0022 calls this from the game's Play_Draw right after its own skybox and before the scene, so the sky is drawn behind
 // everything, like the game's skybox: without a depth test, and the world drawn over it afterwards. (Drawn with the world it had to be depth tested
@@ -258,7 +259,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
     }
     if (DebugOn(kDbgFoliage)) { Feat("draw: foliage"); GfxLayer layer(play, GfxLayerId::Foliage); DrawFlora(play); }
     if (DebugOn(kDbgScenery)) { Feat("draw: island scenery"); GfxLayer layer(play, GfxLayerId::Scenery); DrawIslandScenery(play); }
-    if (DebugOn(kDbgGroundPatches)) { Feat("draw: ground patches"); GfxLayer layer(play, GfxLayerId::Ground); DrawGroundPatches(play); }
+    { GfxLayer layer(play, GfxLayerId::Ground); if (DebugOn(kDbgGroundPatches)) { Feat("draw: ground patches"); DrawGroundPatches(play); } Feat("draw: chest lights"); DrawChestLights(play); }
     { GfxLayer layer(play, GfxLayerId::Shadows); DrawShadowsAndLights(play); }   // (switched off, it still gives back the game's round shadows)
     if (DebugOn(kDbgWater)) { GfxLayer layer(play, GfxLayerId::Water); DrawWater(play); }
     else DrawWater(play);   // (switched off: it only forgets its state)
@@ -589,6 +590,7 @@ void SpawnLoot(size_t index, const royale::net::LootNet& l, float groundY) {
 }
 
 void ClearLoot() {
+    gMyChestOpens.clear();
     for (auto& [idx, la] : gLoot) Actor_Kill(la.actor);
 }
 
@@ -613,7 +615,9 @@ void ReconcileLoot(const royale::HudState& hud) {
         if (la.chest) {
             // Chests clean up their own entry when the game destroys them (they have collision to remove first).
             if (known && loot[idx].taken && !la.opened) {
-                OpenChest(la);
+                const bool mine = gMyChestOpens.erase(idx) > 0 || dx * dx + dz * dz < 130.0f * 130.0f;   // (or it is right beside us)
+                OpenChest(la, mine);
+                if (!mine && dx * dx + dz * dz < 1800.0f * 1800.0f) SparkBurst(gPlayState, la.actor->world.pos.x, la.actor->world.pos.y + 40.0f, la.actor->world.pos.z, RarityColor(la.rarity), 6 + 4 * static_cast<int>(la.rarity), 3.0f + 0.7f * static_cast<int>(la.rarity));
                 const int gid = GidFor(static_cast<royale::ItemId>(loot[idx].item));
                 if (gid >= 0 && dx * dx + dz * dz < 1800.0f * 1800.0f && gReveals.size() < 8) gReveals.push_back({ la.actor->world.pos.x, la.actor->world.pos.y + 25.0f, la.actor->world.pos.z, gid, 0.0f, la.rarity });
             }

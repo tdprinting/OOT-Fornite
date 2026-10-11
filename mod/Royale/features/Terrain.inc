@@ -1530,6 +1530,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             }
             case royale::ClientEvent::Type::LootTaken:
+                if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyChestOpens.insert(e.index);
                 if (e.id == hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size() && gSession.Client()->Loot()[e.index].chest) gMyStats.chests++;
                 if (e.id != hud.selfId && gSession.Client() && e.index < gSession.Client()->Loot().size())
                     gLastFind[e.id] = { GidFor(static_cast<royale::ItemId>(gSession.Client()->Loot()[e.index].item)), ImGui::GetTime() };

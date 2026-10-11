@@ -2854,6 +2854,30 @@ static void IslandPuddles() {
 // Snow that is walked in: a footprint is a smooth dent (deepest in the middle, a low rim just outside, nothing far away, no creases), the deepest pit
 // wins where prints overlap, prints fill in over time, a hard landing digs a bigger crater than a soft one, feet alternate sides of the line walked,
 // and the new puddle, snow and bank meshes are smooth (soft rim alpha on the puddle, no step at the edge of the snow, lip that stands above the ground).
+// A patch lies on the plane of the ground under it: it takes a slope's lean, shrinks where a wall or ledge rises through it, and is left out when
+// even half its size does not lie flat.
+static void GroundFit() {
+    namespace gp = royale::ground;
+    auto fit = [](auto heightAt, float a, float b, float yaw) {
+        float h[gp::kFitPoints], ox[gp::kFitPoints], oz[gp::kFitPoints];
+        bool have[gp::kFitPoints];
+        for (int i = 0; i < gp::kFitPoints; i++) { gp::FitOffset(i, a, b, yaw, &ox[i], &oz[i]); have[i] = heightAt(ox[i], oz[i], &h[i]); }
+        return gp::FitPlane(h, have, ox, oz, a, b);
+    };
+    const gp::Fit level = fit([](float, float, float* y) { *y = 40.0f; return true; }, 80.0f, 50.0f, 0.7f);
+    CHECK(level.ok && level.scale == 1.0f && std::fabs(level.y - 40.0f) < 1e-3f && std::fabs(level.sx) < 1e-4f && level.lift < 1e-3f);
+    const gp::Fit slope = fit([](float x, float z, float* y) { *y = 10.0f + 0.3f * x - 0.2f * z; return true; }, 90.0f, 60.0f, 2.1f);
+    CHECK(slope.ok && slope.scale == 1.0f && std::fabs(slope.sx - 0.3f) < 1e-3f && std::fabs(slope.sz + 0.2f) < 1e-3f && std::fabs(slope.y - 10.0f) < 1e-2f);
+    const gp::Fit wall = fit([](float x, float, float* y) { *y = x > 45.0f ? 200.0f : 0.0f; return true; }, 90.0f, 90.0f, 0.0f);   // a wall across the far side
+    CHECK(wall.ok ? wall.scale < 1.0f : true);
+    const gp::Fit inWall = fit([](float x, float, float* y) { *y = x > 10.0f ? 200.0f : 0.0f; return true; }, 90.0f, 90.0f, 0.0f);   // a wall right by the middle
+    CHECK(!inWall.ok);
+    const gp::Fit edge = fit([](float x, float, float* y) { *y = 0.0f; return x < 30.0f; }, 80.0f, 80.0f, 0.0f);   // no floor past a cliff edge
+    CHECK(!edge.ok);
+    const gp::Fit cliff = fit([](float x, float, float* y) { *y = 3.0f * x; return true; }, 80.0f, 80.0f, 0.0f);   // far too steep
+    CHECK(!cliff.ok);
+}
+
 static void SnowDeformation() {
     namespace gp = royale::ground;
     const gp::Dent d = {100.0f, 50.0f, 0.7f, 11.0f, 6.5f, 8.0f};
@@ -4664,7 +4688,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsSkydiveIn(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();

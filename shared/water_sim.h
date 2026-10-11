@@ -41,16 +41,25 @@ inline float SwellSteepness(float amp, float chop) {
 }
 
 // Per-frame wave constants. Sampling retains the original waves and shading.
+// `minLength` band-limits the swell for a grid whose points are minLength / 2.5 apart: a wave shorter than about two grid squares can not be
+// drawn by that grid, only aliased (each point lands on a random phase of it, so the heights and normals jump from point to point and the sheet
+// shows as a patchwork of light and dark squares). Those waves fade out instead. 0 keeps every wave.
+inline float SwellBandWeight(float length, float minLength) {
+    if (minLength <= 0.0f) return 1.0f;
+    const float x = std::clamp((length / minLength - 1.0f) / 0.6f, 0.0f, 1.0f);
+    return x * x * (3.0f - 2.0f * x);
+}
+
 class PreparedSwell {
     struct Wave { float k, a, dx, dz, phase; };
     Wave waves_[kSwellCount];
     float q_;
 public:
-    PreparedSwell(float t, float amp, float chop) : q_(SwellSteepness(std::max(0.0f, amp), chop)) {
+    PreparedSwell(float t, float amp, float chop, float minLength = 0.0f) : q_(SwellSteepness(std::max(0.0f, amp), chop)) {
         for (int i = 0; i < kSwellCount; ++i) {
             const auto& w = kSwell[i];
             const float k = kTau / w.length;
-            waves_[i] = {k, w.amp * std::max(0.0f, amp), std::cos(w.angle), std::sin(w.angle), -k * w.speed * t};
+            waves_[i] = {k, w.amp * std::max(0.0f, amp) * SwellBandWeight(w.length, minLength), std::cos(w.angle), std::sin(w.angle), -k * w.speed * t};
         }
     }
     SwellPoint Sample(float x, float z) const {

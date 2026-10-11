@@ -448,8 +448,7 @@ void ActionSounds(Player* player, uint8_t anim, royale::ItemId weapon, int combo
             PuppetSfx(&player->actor, PuppetFloorSfx(player, NA_SE_PL_JUMP));
             break;
         case Anim::Guard: PuppetSfx(&player->actor, NA_SE_IT_SHIELD_POSTURE); break;
-        case Anim::OpenChest: PuppetSfx(&player->actor, NA_SE_EV_TBOX_OPEN); break;
-        case Anim::ItemGet: PuppetSfx(&player->actor, NA_SE_SY_GET_ITEM); break;
+        case Anim::OpenChest: case Anim::ItemGet: break;   // chests are quiet for everyone but whoever opens them
         case Anim::Emote1: PuppetVoice(player, NA_SE_VO_LI_SURPRISE); break;
         case Anim::Hurt: PuppetVoice(player, NA_SE_VO_LI_DAMAGE_S); break;
         case Anim::Dead: PuppetVoice(player, NA_SE_VO_LI_DOWN); break;

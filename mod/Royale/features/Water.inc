@@ -567,7 +567,10 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const float cx = gi0 * cell, cz = gj0 * cell;
     // On lakes and rivers the game draws its own water just under ours, so the swell there is kept small.
     const float amp = WaveAmp() * (island ? 1.0f : 0.35f), chop = gWaterChop;
-    const rw::PreparedSwell swell(t, amp, chop);
+    // Only waves the coarse grid can draw (longer than about two and a half of its squares). Shorter ones landed on a random phase at each
+    // point, so neighbouring squares got unrelated heights, tilts and sun glints: the water read as a patchwork of squares. The fine squares use
+    // the same swell, so the patch round the player does not stand out either; the small chop is left to the sparkle and ripple textures.
+    const rw::PreparedSwell swell(t, amp, chop, 2.5f * cell);
     float ampTotal = 0.0f;
     for (const rw::GerstnerWave& w : rw::kSwell) ampTotal += w.amp * amp;
 
@@ -611,6 +614,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     look.eye[0] = eye.x; look.eye[1] = eye.y; look.eye[2] = eye.z;
     look.t = t; look.light = light; look.reach = reach; look.ampTotal = ampTotal; look.wind = windNow;
     look.glintAmt = glintAmt; look.foamAmt = foamAmt; look.skyOn = gWaterSkyOn;
+    look.sharpSpec = 0.0f;   // pin-point glints come from the sparkle texture; on a vertex they light a whole square
     royale::water::LookSky lsky;
     for (int q = 0; q < 3; q++) { lsky.hor[q] = sky.hor[q]; lsky.zen[q] = sky.zen[q]; lsky.sun[q] = sky.sun[q]; lsky.moon[q] = sky.moon[q]; }
     lsky.sunA = sky.sunA; lsky.moonA = sky.moonA; lsky.sunWarm = sky.sunWarm;

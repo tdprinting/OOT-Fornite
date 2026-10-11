@@ -20,6 +20,8 @@ struct LookParams {
     float wind = 0.0f;                 // 0 calm .. 1 a gale
     float glintAmt = 1.0f, foamAmt = 1.0f;   // the sparkle and foam textures' strengths (0: drawn without them)
     bool skyOn = true;                 // reflections of the sky, the sun and the moon
+    float sharpSpec = 1.0f;            // the pin-point sun glint (0 for vertex-shaded grids: one hot vertex lights a whole square; the sparkle
+                                       // texture draws those glints instead)
 };
 struct Look { float col[4], glint[4], foam; };   // the water's colour and alpha; the sparkle's colour and alpha; the foam's alpha (all 0-255)
 
@@ -56,7 +58,7 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
                 const float hxv = l[0] + vx, hyv = l[1] + vy, hzv = l[2] + vz;
                 const float hl = std::max(0.001f, std::sqrt(hxv * hxv + hyv * hyv + hzv * hzv));
                 const float nh = std::max(0.0f, (nx * hxv + ny * hyv + nz * hzv) / hl);
-                const float s = (std::pow(nh, 160.0f) * tw + 0.22f * std::pow(nh, 18.0f)) * amt * (body == 0 ? 1.0f : 0.55f);
+                const float s = (std::pow(nh, 160.0f) * tw * P.sharpSpec + 0.22f * std::pow(nh, 18.0f)) * amt * (body == 0 ? 1.0f : 0.55f);
                 const float cr = body == 0 ? 255.0f : 215.0f, cg = body == 0 ? 236.0f - 80.0f * sky.sunWarm : 225.0f, cb = body == 0 ? 205.0f - 120.0f * sky.sunWarm : 245.0f;
                 const float mix = std::min(1.0f, s * 2.0f);
                 c[0] += (cr - c[0]) * mix; c[1] += (cg - c[1]) * mix; c[2] += (cb - c[2]) * mix;

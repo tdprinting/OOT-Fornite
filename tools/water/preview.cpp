@@ -3,7 +3,8 @@
 // player, coarse ones of 232 further off), then lays the caustics, the water, the sparkle and the foam over the floor the way the game's
 // translucent passes do. It does not draw the game's models, only a sandy floor, a beach and a sky.
 // Build and run:  g++ -O2 -std=c++17 -Ishared tools/water/preview.cpp -o /tmp/water_preview && /tmp/water_preview out_dir
-// It writes before.ppm, midday.ppm, sunset.ppm, underwater.ppm.
+// It writes before.ppm, midday.ppm, sunset.ppm, underwater.ppm. A second argument `raw` draws the swell unfiltered (as before the
+// band limit), for comparison.
 #include "water_look.h"
 #include "water_sim.h"
 #include <cstdio>
@@ -14,6 +15,7 @@
 namespace rw = royale::water;
 namespace {
 constexpr int W = 640, H = 360, kTex = 64, kFrames = 32;
+bool gBandLimit = true;   // the game's band-limited swell and no per-vertex pin-point glint
 std::vector<uint8_t> gCaus(kTex * kTex * kFrames), gGlint(kTex * kTex * kFrames), gFoam(kTex * kTex);
 
 struct Scene {
@@ -63,6 +65,8 @@ void Render(const Scene& sc, const char* path) {
     P.eye[0] = sc.eye[0]; P.eye[1] = sc.eye[1]; P.eye[2] = sc.eye[2];
     P.t = sc.t; P.light = light; P.reach = 60.0f + 320.0f * sc.clarity; P.ampTotal = ampTotal; P.wind = sc.wind;
     P.glintAmt = sc.glintAmt; P.foamAmt = sc.foamAmt;
+    P.sharpSpec = gBandLimit ? 0.0f : 1.0f;
+    const rw::PreparedSwell swell(sc.t, sc.amp, sc.chop, gBandLimit ? 2.5f * 232.0f : 0.0f);   // the fine squares share the coarse grid's swell
     const bool under = sc.eye[1] < 0.0f;
     // the game's grid points, shaded once each
     std::unordered_map<uint64_t, Point> cache;
@@ -72,7 +76,7 @@ void Render(const Scene& sc, const char* path) {
         if (it != cache.end()) return it->second;
         const float wx = gi * g, wz = gj * g, depth = std::max(0.0f, FloorDepth(wx, wz));
         const float shore = std::min(1.0f, depth / 90.0f);
-        const rw::SwellPoint sp = rw::Swell(wx, wz, sc.t, sc.amp, sc.chop);
+        const rw::SwellPoint sp = swell.Sample(wx, wz);
         float nx = sp.nx * shore, ny = sp.ny, nz = sp.nz * shore;
         const float l = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= l; ny /= l; nz /= l;
         Point p;
@@ -197,6 +201,7 @@ void Render(const Scene& sc, const char* path) {
 
 int main(int argc, char** argv) {
     const std::string out = argc > 1 ? argv[1] : ".";
+    gBandLimit = !(argc > 2 && std::string(argv[2]) == "raw");
     rw::MakeCaustics(gCaus.data(), kTex, kFrames);
     rw::MakeGlints(gGlint.data(), kTex, kFrames);
     rw::MakeFoam(gFoam.data(), kTex);
@@ -205,7 +210,9 @@ int main(int argc, char** argv) {
     const Scene midday{ { 0, 70, 140 },        0.35f, -0.16f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.2f, 7.3f };
     const Scene sunset{ { 0, 80, 140 },        0.92f, -0.10f, 0.45f, 1.0f, 0.08f, 1.2f, 0.7f, 1.0f, 1.0f, 1.0f, 1.0f, 0.4f, 7.3f };
     const Scene under{ { 0, -60, 600 },        0.35f, 0.5f, 1.0f, 0.0f, 0.9f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.2f, 7.3f };
+    const Scene high{ { 0, 420, 900 },         0.35f, -0.55f, 1.0f, 0.0f, 0.7f, 0.96f, 0.6f, 1.0f, 1.0f, 1.0f, 1.0f, 0.3f, 7.3f };   // from a glider, where squares showed
     Render(before, (out + "/before.ppm").c_str());
+    Render(high, (out + "/high.ppm").c_str());
     Render(midday, (out + "/midday.ppm").c_str());
     Render(sunset, (out + "/sunset.ppm").c_str());
     Render(under, (out + "/underwater.ppm").c_str());
