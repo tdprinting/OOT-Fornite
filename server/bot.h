@@ -1521,6 +1521,14 @@ class BotController {
         Circle target = soon;
         target.radius *= 0.9f;
         s.outsideZone = !target.Contains(p.pos);
+        // While the zone holds, leave for the circle it will close to in good time: as soon as the run there (and a little for the way round)
+        // would take as long as the hold has left, not only 15 s before it starts to close.
+        Vec2 zoneGoal = soon.center;
+        if (const auto info = m.GetStorm().InfoAt(m.StormTime()); !info.shrinking && info.phase < kStormPhaseCount) {
+            const Circle& next = m.GetStorm().PhaseEnd(info.phase);
+            const float beyond = Distance(p.pos, next.center) - next.radius * 0.9f;
+            if (beyond > 0 && beyond / kRunSpeed + 8.0f >= info.secondsLeft) { s.outsideZone = true; zoneGoal = TripGoal(p, next); }
+        }
 
         // Flee a fight that is going badly. Once started, keep fleeing for a few seconds so bots don't flip-flop.
         const float fleeBelow = 0.15f + 0.45f * mem.caution;
@@ -1555,7 +1563,7 @@ class BotController {
         if (s.outsideZone) {
             ROYALE_BOT_BRANCH(kBrStorm);
             WantSprint(mem, tune, true);
-            Steer(m, p, mem, soon.center, dt);
+            Steer(m, p, mem, zoneGoal, dt);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
             return;
         }
