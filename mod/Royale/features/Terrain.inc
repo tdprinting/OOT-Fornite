@@ -697,7 +697,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // on the ground so somebody else can take it. A stack in hand is also dropped by switching weapons.
     {
         const std::vector<PotionStack> stacks = PotionStacks(hud);
-        if (gHandStack >= static_cast<int>(stacks.size())) gHandStack = -1;
+        FollowHandStack(stacks);
         const double now = ImGui::GetTime();
         if (in.press.button & BTN_CDOWN) gStackBHold = now;
         if (gStackBHold >= 0.0) {
@@ -711,7 +711,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 gStackBHold = -1.0;
                 if (stacks.empty()) Say("Nothing in your bag");
                 else {
-                    gHandStack = gHandStack + 1 >= static_cast<int>(stacks.size()) ? -1 : gHandStack + 1;
+                    TakeStackInHand(stacks, gHandStack + 1);   // past the last stack: the weapon again
                     Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     if (gHandStack >= 0 && royale::PotionOf(stacks[static_cast<size_t>(gHandStack)].item).revive) Say("A Fairy revives you by itself when you would fall");
                 }
@@ -724,7 +724,9 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                 const royale::PotionDef d = royale::PotionOf(st.item);
                 if (d.revive) Say("A Fairy revives you by itself when you would fall");
                 else if (d.shield > 0 && hud.inv.shield >= d.shieldCap - 0.05f) Say(d.shieldCap < royale::kMaxShield ? "Your shield is over half full" : "Your shield is full");
-                else if (d.shield <= 0 && d.damageTaken >= 1.0f && !d.cleanse && hud.selfHealth >= hud.inv.maxHealth - 0.05f) Say("Your health is full");
+                else if (st.item != royale::ItemId::DekuLaunchFlower && d.shield <= 0 && d.damageTaken >= 1.0f &&   // the flower plants a pad, health or not
+                         !(d.cleanse && (hud.inv.burnLeft > 0 || hud.inv.stunLeft > 0)) && hud.selfHealth >= hud.inv.maxHealth - 0.05f)
+                    Say("Your health is full");   // (the server refuses it too: no drink animation for nothing)
                 else {
                     gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
                     StartAction(royale::Anim::Drink, kDrinkSeconds, st.item);
@@ -794,7 +796,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     const bool explosive = hud.weapon == royale::ItemId::Bombs || hud.weapon == royale::ItemId::Bombchus || hud.weapon == royale::ItemId::HomingBombchus;
     if (explosive && hasAmmo && !wasHoldingExplosive) return;   // this press only pulled it out of the bag
     royale::WeaponStats w = royale::ActiveWeapon(hud.weapon, hasAmmo);   // no ammo: the weapon is only bashed with
-    if (w.damage <= 0) return;
+    if (w.damage <= 0 && hud.weapon != royale::ItemId::ShockwaveGrenade) return;   // the grenade does no hit damage itself: its blast is the server's
     if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 

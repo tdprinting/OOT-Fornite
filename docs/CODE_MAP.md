@@ -36,6 +36,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `RoyaleLobbyFish.h` lobby aquarium; `RoyaleLobbyPets.h` lobby pet play.
 - `RoyaleWarTable.h` native menu; its fragments in `war_table/` (index: [`war_table/INDEX.md`](../mod/Royale/war_table/INDEX.md)).
 - `build_version.h` build number, overwritten by `game-build.yml`.
+- `features/CrashContext.inc` crash context: state snapshot and change breadcrumbs printed into `royale-crash.txt` and each scene load's block in `royale-trace.txt` (see `docs/BUILDING.md`).
 - `logo_data.h` [gen: scripts/make_logo_assets.py]; `gilded_sword_icon.h` [gen: scripts/make_gilded_sword_icon.py].
 
 ## scripts/

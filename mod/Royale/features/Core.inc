@@ -230,6 +230,31 @@ void Trace(const char* step);   // the crash breadcrumb trail, defined with the 
 const char* volatile gFeature = "(none yet)";
 inline void Feat(const char* name) { gFeature = name; }
 
+// ---- crash context: breadcrumbs and a state snapshot (docs/BUILDING.md, "Crash reports and the trace") ----------------------------
+// Crumb("fmt", ...) notes one noteworthy event (a scene load, a match state change, the bus jump, being knocked down...) in a fixed ring of the
+// last kCrumbCount lines, each stamped with the seconds since launch. No allocation and no lock, so the crash handler (MusicDiagnostics.inc) can
+// print the ring as it is. Every Trace() step lands here too. CrashContext.inc writes gCrashState, a text block of the mod's state, a few times a
+// second on the game thread (into the half the handler is not reading), and the handler prints that block as well.
+constexpr int kCrumbCount = 32, kCrumbLen = 128;
+char gCrumbs[kCrumbCount][kCrumbLen];
+std::atomic<unsigned> gCrumbNext{0};
+const auto gLaunchClock = std::chrono::steady_clock::now();
+double SecondsSinceLaunch() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - gLaunchClock).count(); }
+void Crumb(const char* fmt, ...) {
+    char* line = gCrumbs[gCrumbNext.fetch_add(1, std::memory_order_relaxed) % kCrumbCount];
+    char text[kCrumbLen];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(text, sizeof(text), fmt, args);
+    va_end(args);
+    std::snprintf(line, kCrumbLen, "%8.1f s  %s", SecondsSinceLaunch(), text);
+}
+constexpr size_t kCrashStateLen = 3072;
+char gCrashState[2][kCrashStateLen];   // the snapshot, double-buffered: gCrashStateNow names the finished half (-1: none yet)
+std::atomic<int> gCrashStateNow{-1};
+volatile long gGameThreadId = 0;     // the game thread's id (Android), so the report says whether the crash was on it
+void InstallCrashContext();   // CrashContext.inc: the snapshot's per-frame hook and the scene-load copy in the trace
+
 // ---- graphics layers ----------------------------------------------------------------------------------------------------------
 // The game's display-list buffers are small and fixed: "Zelda 0" (opaque) holds about 195 KB of commands growing up and Graph_Alloc's vertices and
 // matrices growing down, "Zelda 1" (translucent) only 4096 commands. They were sized for the original game. Our sky alone writes over 3000

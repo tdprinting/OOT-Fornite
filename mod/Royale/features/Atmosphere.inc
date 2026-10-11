@@ -210,7 +210,7 @@ bool SkyBegin(PlayState* play, const Vec3f* origin = nullptr) {
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
     gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG | G_ZBUFFER);
-    if (gGfxBackdropOpen) gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_XLU_SURF2);   // the sky pass: behind everything, no depth test (see DrawBackdrop)
+    if (gGfxBackdropOpen) { gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_XLU_SURF2); }   // the sky pass: behind everything, no depth test (see DrawBackdrop)
     else {
         gSPSetGeometryMode(POLY_XLU_DISP++, G_ZBUFFER);
         gDPSetRenderMode(POLY_XLU_DISP++, G_RM_PASS, G_RM_ZB_XLU_SURF2);
@@ -1020,6 +1020,7 @@ royale::Weather RegularWeatherNow() {
 }
 void DriveRegularWeather() {
     if (!InRegularGame()) return;
+    if (gPlayState != nullptr && !SceneOutdoors()) { gWeatherBlend = 0.0f; return; }   // indoors is a new scene: no rain or thunder carried in from the field
     const royale::Weather want = RegularWeatherNow();
     gWeatherShown.season = want.season;
     const bool active = want.sky != royale::Sky::Clear && want.intensity > 0;
@@ -1034,7 +1035,13 @@ void DriveRegularWeather() {
 void DriveRealWeather() {
     static bool rainManaged = false, snowManaged = false, lightningManaged = false, sandManaged = false, fogManaged = false;
     static float fogNearAdj = 0.0f, fogFarAdj = 0.0f, fogColAdj[3] = { 0.0f, 0.0f, 0.0f };
-    if ((!InField() && !InRegularGame()) || gPlayState == nullptr) {   // the scene is going (or gone): the next one starts from its own settings
+    static int lastScene = -1;
+    // The scene is going (or gone), or a new one came in (the regular game moves between scenes without leaving InRegularGame): the next
+    // one starts from its own settings, not from the last scene's rain, lightning and fog offsets.
+    const int scene = gPlayState != nullptr ? static_cast<int>(gPlayState->sceneNum) : -1;
+    const bool newScene = scene != lastScene;
+    lastScene = scene;
+    if ((!InField() && !InRegularGame()) || gPlayState == nullptr || newScene) {
         rainManaged = snowManaged = lightningManaged = sandManaged = fogManaged = false;
         fogNearAdj = fogFarAdj = fogColAdj[0] = fogColAdj[1] = fogColAdj[2] = 0.0f;
         return;

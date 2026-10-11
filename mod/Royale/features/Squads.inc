@@ -93,6 +93,8 @@ void StripButtons(Input& in, uint16_t mask) {
     in.cur.button &= ~mask; in.press.button &= ~mask; in.rel.button &= ~mask;
 }
 
+bool LocalSeated();   // in a cart (Vehicles.inc): A is the throttle there, not a revive or a pad launch
+
 void StopRevive() {
     if (gReviveTarget != royale::net::kNoPlayer16) gSession.HoldRevive(gReviveTarget, false);
     gReviveTarget = royale::net::kNoPlayer16;
@@ -111,6 +113,7 @@ bool SquadInput(Input& in, const royale::HudState& hud) {
         StripButtons(in, static_cast<uint16_t>(~keep));
         return false;
     }
+    if (LocalSeated()) { StopRevive(); return false; }   // driving past a downed teammate must not take the throttle (the server refuses riders' revives)
     // Hold A beside a knocked teammate: the revive. The press is kept from the game so Link does not jump or take something instead.
     const float px = player->actor.world.pos.x, pz = player->actor.world.pos.z;
     const royale::TeammateRow* mate = gSkydiving ? nullptr : KnockedMateInReach(hud, px, pz);
@@ -241,7 +244,7 @@ void DrawSquadHud(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const ro
     if (gPlayState == nullptr || !InField()) return;
     const Vec3f me = GET_PLAYER(gPlayState)->actor.world.pos;
     // A knocked teammate in reach: Hold A.
-    if (const royale::TeammateRow* mate = KnockedMateInReach(h, me.x, me.z)) {
+    if (const royale::TeammateRow* mate = LocalSeated() ? nullptr : KnockedMateInReach(h, me.x, me.z)) {
         const ImVec2 c(ds.x * 0.5f, ds.y * 0.66f);
         const float r = 24.0f * scale;
         dl->AddCircleFilled(c, r + 4.0f * scale, IM_COL32(0, 0, 0, 150));

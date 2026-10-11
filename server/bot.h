@@ -1655,7 +1655,7 @@ class BotController {
         if (foe && s.advantage < fleeBelow && dist < 700.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 3.0f + 2.0f * mem.caution;
         // With only the starting sword a bot runs from anybody who comes close rather than trade blows (they only fight when cornered).
         // Only when it has somewhere to run to (loot in mind): with nothing to fetch it may as well fight.
-        if (foe && NeedsGear(m, p) && mem.lootIdx >= 0 && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
+        if (foe && NeedsGear(m, p) && mem.lootIdx >= 0 && static_cast<size_t>(mem.lootIdx) < m.Loot().size() && !m.Loot()[static_cast<size_t>(mem.lootIdx)].taken && dist < 420.0f && dist > 110.0f && now >= mem.fleeUntil) mem.fleeUntil = now + 2.0f;
         // Run out of puff with the foe on its heels: nowhere left to run, so it turns and fights (it can flee again once it has its breath).
         if (now < mem.fleeUntil && foe && mem.stamina < 0.1f && dist < 160.0f && !mem.sprinting) mem.fleeUntil = 0;
         s.fleeing = now < mem.fleeUntil && foe != nullptr;
@@ -1758,7 +1758,7 @@ class BotController {
         if (s.fleeing) {
             ROYALE_BOT_BRANCH(kBrFlee);
             Vec2 away = AwaySafe(p, mem, foe->pos, 500.0f, soon, 0.35f);   // bent toward the safe zone so fleeing doesn't run into the storm
-            if (NeedsGear(m, p) && mem.lootIdx >= 0 && static_cast<size_t>(mem.lootIdx) < m.Loot().size()) {   // run for the weapon it was after, if that is away from the foe
+            if (NeedsGear(m, p) && mem.lootIdx >= 0 && static_cast<size_t>(mem.lootIdx) < m.Loot().size() && !m.Loot()[static_cast<size_t>(mem.lootIdx)].taken) {   // run for the weapon it was after, if that is away from the foe
                 const Vec2 want = m.Loot()[static_cast<size_t>(mem.lootIdx)].spawn.pos;
                 if (Distance(want, foe->pos) > dist) away = want;
             }

@@ -38,12 +38,9 @@ int FreeMemoryMb() {
     return -1;
 }
 
-void Trace(const char* step) {
+// Opens royale-trace.txt to add to it (the first time in a run, the last run's file is moved to royale-trace-prev.txt first).
+std::ofstream OpenTrace() {
     static bool fresh = true;
-    static std::string last;
-    if (last == step) return;   // a step drawn every frame is written once
-    last = step;
-    std::snprintf(gTraceLast, sizeof(gTraceLast), "%s", step);
     const std::filesystem::path file(Ship::Context::GetPathRelativeToAppDirectory("royale-trace.txt"));
     if (fresh) {
         std::error_code ec;
@@ -51,11 +48,27 @@ void Trace(const char* step) {
     }
     std::ofstream out(file, fresh ? std::ios::trunc : std::ios::app);
     fresh = false;
+    return out;
+}
+
+void Trace(const char* step) {
+    static std::string last;
+    if (last == step) return;   // a step drawn every frame is written once
+    last = step;
+    std::snprintf(gTraceLast, sizeof(gTraceLast), "%s", step);
+    Crumb("%s", step);
+    std::ofstream out = OpenTrace();
     if (out) {
         out << step;
         if (std::strncmp(step, "start:", 6) == 0) out << " (free memory " << FreeMemoryMb() << " MB)";
         out << "\n";
     }
+}
+
+// A block of several lines in the trace (the state snapshot on each scene load, see CrashContext.inc), between marker lines.
+void TraceBlock(const char* title, const char* text) {
+    std::ofstream out = OpenTrace();
+    if (out) out << "---- " << title << " (free memory " << FreeMemoryMb() << " MB) ----\n" << text << "---- end ----\n";
 }
 
 // ---- crash report ---------------------------------------------------------------------------------------------------------------
@@ -92,8 +105,9 @@ void CrashHandler(int sig, siginfo_t* info, void*) {
         busy = 1;
         const int fd = open(gCrashPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) {
-            CrashLine(fd, "Version %s\nSignal %d code %d fault address %p thread %ld\nFeature running: %s\nLast step: %s\n", ROYALE_BUILD_VERSION, sig, info ? info->si_code : 0,
-                      info ? info->si_addr : nullptr, static_cast<long>(syscall(SYS_gettid)), gFeature, gTraceLast);
+            CrashLine(fd, "Version %s\nSignal %d code %d fault address %p thread %ld (game thread %ld)\nFeature running: %s\nLast step: %s\nSeconds since launch: %.1f\n",
+                      ROYALE_BUILD_VERSION, sig, info ? info->si_code : 0, info ? info->si_addr : nullptr, static_cast<long>(syscall(SYS_gettid)),
+                      static_cast<long>(gGameThreadId), gFeature, gTraceLast, SecondsSinceLaunch());
             CrashStack st;
             st.n = 0;
             _Unwind_Backtrace(CrashUnwind, &st);
@@ -107,6 +121,26 @@ void CrashHandler(int sig, siginfo_t* info, void*) {
                     CrashLine(fd, "#%d %p\n", i, st.pc[i]);
                 }
             }
+            // The mod's state as of the last snapshot (a few times a second, CrashContext.inc) and the last noteworthy events, oldest first.
+            // Both are plain text in fixed buffers: printed as they are, with no allocation and no lock.
+            const int now = gCrashStateNow.load(std::memory_order_acquire);
+            if (now == 0 || now == 1) {
+                const char* block = gCrashState[now];
+                CrashLine(fd, "---- mod state ----\n");
+                const ssize_t ignored = write(fd, block, strnlen(block, kCrashStateLen)); (void)ignored;
+            } else {
+                CrashLine(fd, "---- mod state ----\n(no snapshot yet: crashed before the first game frame)\n");
+            }
+            CrashLine(fd, "---- last events (seconds since launch) ----\n");
+            const unsigned next = gCrumbNext.load(std::memory_order_relaxed);
+            for (unsigned k = next > static_cast<unsigned>(kCrumbCount) ? next - kCrumbCount : 0; k < next; k++) {
+                const char* line = gCrumbs[k % kCrumbCount];
+                const size_t len = strnlen(line, kCrumbLen);
+                if (len == 0) continue;
+                const ssize_t a = write(fd, line, len); (void)a;
+                const ssize_t b = write(fd, "\n", 1); (void)b;
+            }
+            CrashLine(fd, "---- end ----\n");
             close(fd);
         }
     }
@@ -115,6 +149,7 @@ void CrashHandler(int sig, siginfo_t* info, void*) {
     if (info != nullptr && info->si_code <= 0) raise(sig);   // sent by abort() and the like: send it again; a real fault just happens again on return
 }
 void InstallCrashReporter() {
+    InstallCrashContext();
     const std::string path = Ship::Context::GetPathRelativeToAppDirectory("royale-crash.txt");
     std::snprintf(gCrashPath, sizeof(gCrashPath), "%s", path.c_str());
     for (int i = 0; i < 6; i++) {
@@ -127,7 +162,7 @@ void InstallCrashReporter() {
     }
 }
 #else
-void InstallCrashReporter() {}
+void InstallCrashReporter() { InstallCrashContext(); }
 #endif
 
 // A crash report from the last run, shown at the top of the Battle Royale menu until dismissed.
@@ -169,7 +204,11 @@ void DrawCrashReport() {
             // No crash report, but the last run's trail may end in the middle of a match start: the phone closed the game without a signal
             std::ifstream trail(prev);
             std::string line, lastLine;
-            while (std::getline(trail, line)) if (!line.empty()) lastLine = line;
+            bool inBlock = false;   // (the state blocks TraceBlock writes on scene loads are not steps)
+            while (std::getline(trail, line)) {
+                if (line.rfind("---- ", 0) == 0) { inBlock = line.rfind("---- end", 0) != 0; continue; }
+                if (!inBlock && !line.empty()) lastLine = line;
+            }
             if (std::strncmp(lastLine.c_str(), "start:", 6) == 0 && lastLine.find("match started") == std::string::npos) {
                 text = lastLine;
                 state = 3;
@@ -178,7 +217,9 @@ void DrawCrashReport() {
     }
     if (state == 1) {
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "The game closed unexpectedly last time. Please send a photo of this to Claude:");
-        ImGui::TextWrapped("%s", text.c_str());
+        ImGui::PushTextWrapPos(0.0f);   // (unformatted: the report with the mod state is longer than ImGui's format buffer)
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopTextWrapPos();
         if (ImGui::Button("Dismiss crash report")) {
             std::error_code ec;
             std::filesystem::remove(file, ec);
@@ -837,6 +878,7 @@ void MeasureStartup() {
     done = true;
     // The game stayed up past its first frame: the crash-loop guard in MainActivity (patches/0030) need not rebuild the game files
     { std::error_code rm; std::filesystem::remove(Ship::Context::GetPathRelativeToAppDirectory(".launch-pending"), rm); }
+    { std::error_code rm; std::filesystem::remove(Ship::Context::GetPathRelativeToAppDirectory(".launch-guarded"), rm); }   // reached a frame: the crash-loop guard may fire again (patch 0030)
     double seconds = -1;
     double startEpoch = 0;   // process start, seconds since 1970
 #if defined(__linux__) || defined(__ANDROID__)

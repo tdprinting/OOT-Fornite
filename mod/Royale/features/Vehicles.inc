@@ -133,6 +133,15 @@ void OnEmoteWheelInput() {
         if (in.press.button & BTN_B) gStackBPressed = true;
         in.press.button &= ~BTN_B; in.cur.button &= ~BTN_B; in.rel.button &= ~BTN_B;
     }
+    // Bombs and bombchus: during the throw cooldown B must not pull the next one out. The game would let it be thrown, but HandleCombatInput
+    // ignores B while cooling down, so that throw would hit nobody and spend no ammo.
+    if (gAttackCooldown > 0 && LiveAndAlive(hud) && InField() && (in.press.button & BTN_B) &&
+        (hud.weapon == royale::ItemId::Bombs || hud.weapon == royale::ItemId::Bombchus || hud.weapon == royale::ItemId::HomingBombchus)) {
+        const Player* pl = GET_PLAYER(gPlayState);
+        const Actor* held = pl->heldActor;
+        if (!(held != nullptr && held->parent == &pl->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU)))
+            in.press.button &= ~BTN_B, in.cur.button &= ~BTN_B, in.rel.button &= ~BTN_B;
+    }
     // Skydiving: Z dives faster. It is taken off the controller before the game reads it, so Link doesn't Z-target (which parks the camera level
     // and hides the ground you are heading for); the camera stays free to look down at where you are going to land.
     gDiveHeld = gSkydiving && (in.cur.button & BTN_Z);
@@ -140,7 +149,7 @@ void OnEmoteWheelInput() {
     // Battle Royale layout: A with nothing to open, take, hire or say is the jump. Taken off the pad here so the game does not also roll with it.
     // While Z-targeting (Z held) A stays the game's own: its normal jumps and the jump slash.
     if (!gWheel.open && ControlScheme() == royale::controls::Scheme::BattleRoyale && (in.press.button & BTN_A) && !(in.cur.button & BTN_Z) && LiveAndAlive(hud) && InField() &&
-        !gSkydiving && !AHasTarget()) {
+        !gSkydiving && !AHasTarget() && !(GET_PLAYER(gPlayState)->stateFlags1 & PLAYER_STATE1_IN_WATER)) {   // swimming: A is the game's dive
         gTouchJump = true;
         in.cur.button &= ~BTN_A; in.press.button &= ~BTN_A; in.rel.button &= ~BTN_A;
     }
@@ -442,6 +451,7 @@ struct LocalRide {
     Player* player = nullptr;
 };
 LocalRide gRide;
+bool LocalSeated() { return gRide.seated; }
 
 void LocalRide_Draw(Actor* actor, PlayState* play);
 

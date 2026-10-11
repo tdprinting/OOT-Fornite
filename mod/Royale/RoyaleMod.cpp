@@ -295,3 +295,4 @@ void WarDraw(GameState* state);
 #include "features/Updater.inc"
 #include "features/Lighting.inc"
 #include "features/EngineBridge.inc"
+#include "features/CrashContext.inc"
