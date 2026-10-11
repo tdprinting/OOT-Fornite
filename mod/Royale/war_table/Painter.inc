@@ -1,3 +1,18 @@
+// One of the game's own textures by OTR path (cached forever; nullptr if the archive has none).
+const char* WarGameTexture(const char* name, const char* directory) {
+    static std::unordered_map<std::string,std::string> cache;
+    if(!name)return nullptr;
+    const std::string key=std::string(directory)+"/"+name;
+    auto it=cache.find(key);
+    if(it==cache.end()) {
+        std::string path="__OTR__textures/"+key;
+        try { if(!Ship::Context::GetInstance()->GetResourceManager()->LoadResource(path,true))path.clear(); }
+        catch(...) { path.clear(); }
+        it=cache.emplace(key,path).first;
+    }
+    return it->second.empty()?nullptr:it->second.c_str();
+}
+
 // Native Fast3D painter. Arrays live for two game frames, just like the engine's
 // graphics buffers. No pointers into temporary strings/vertices reach the renderer.
 struct WarPainter {
@@ -120,6 +135,65 @@ struct WarPainter {
             } else line=next;
         }
         if(lines<maxLines)Text(x,y,line,size,color,false,width);
+    }
+    void Otr(const char* path,wt::Rect r,int w,int h,int fmt,int siz,uint32_t color=0xffffffff) {
+        if(!Space())return;
+        gDPPipeSync(out++);gSPTexture(out++,0xffff,0xffff,0,G_TX_RENDERTILE,G_ON);
+        gDPSetCombineMode(out++,G_CC_MODULATEIA_PRIM,G_CC_MODULATEIA_PRIM);Color(color);
+        // The load macro pastes the size token, so each size the HUD uses gets its own literal branch.
+        if(siz==G_IM_SIZ_32b) {gDPLoadTextureBlock(out++,path,G_IM_FMT_RGBA,G_IM_SIZ_32b,w,h,0,G_TX_CLAMP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);}
+        else if(siz==G_IM_SIZ_16b) {gDPLoadTextureBlock(out++,path,G_IM_FMT_RGBA,G_IM_SIZ_16b,w,h,0,G_TX_CLAMP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);}
+        else {gDPLoadTextureBlock(out++,path,G_IM_FMT_IA,G_IM_SIZ_8b,w,h,0,G_TX_CLAMP,G_TX_CLAMP,G_TX_NOMASK,G_TX_NOMASK,G_TX_NOLOD,G_TX_NOLOD);}
+        (void)fmt;
+        Quad(r,w,h);
+    }
+    // OoT heart container: part 0 empty .. 4 full.
+    void Heart(float x,float y,float size,int part) {
+        static const char* names[]={"gHeartEmptyTex","gHeartQuarterTex","gHeartHalfTex","gHeartThreeQuarterTex","gHeartFullTex"};
+        const uint32_t c=part>0?0xFF414BFF:0x782832FF;
+        part=std::clamp(part,0,4);
+        if(const char* t=WarGameTexture(names[part],"parameter_static")){Otr(t,{x,y,size,size},16,16,G_IM_FMT_IA,G_IM_SIZ_8b,c);return;}
+        const float s=size/4;
+        Rect({x+s*0.3f,y+s*0.4f,s*1.7f,s*1.6f},c);Rect({x+s*2,y+s*0.4f,s*1.7f,s*1.6f},c);Rect({x+s*0.8f,y+s*2,s*2.4f,s*1.6f},c);
+    }
+    // OoT magic-meter look.
+    void Meter(wt::Rect r,float fill01,uint32_t tint) {
+        Rect(r,0x14231AE6);Rect({r.x,r.y,r.w*std::clamp(fill01,0.0f,1.0f),r.h},tint);
+        const char* cap=WarGameTexture("gMagicMeterEndTex","parameter_static");
+        const char* mid=WarGameTexture("gMagicMeterMidTex","parameter_static");
+        if(cap&&mid) {
+            const float cw=r.h*0.5f;
+            Otr(mid,r,24,16,G_IM_FMT_IA,G_IM_SIZ_8b);
+            Otr(cap,{r.x-cw*0.5f,r.y,cw,r.h},8,16,G_IM_FMT_IA,G_IM_SIZ_8b);
+            Otr(cap,{r.x+r.w-cw*0.5f,r.y,cw,r.h},8,16,G_IM_FMT_IA,G_IM_SIZ_8b);
+        } else Border(r,0xE6E6DCFF);
+    }
+    // Round item buttons: five stacked Rects.
+    void Disc(float cx,float cy,float r,uint32_t color) {
+        static const float hw[]={0.6f,0.9f,1.0f,0.9f,0.6f};
+        for(int i=0;i<5;++i)Rect({cx-hw[i]*r,cy-r+i*r*0.4f,hw[i]*r*2,r*0.4f},color);
+    }
+    void Ring(float cx,float cy,float r,uint32_t color,float width=2) {
+        const float s=std::max(width,r*0.3f), d=r*0.68f;
+        Rect({cx-r*0.45f,cy-r,r*0.9f,width},color);Rect({cx-r*0.45f,cy+r-width,r*0.9f,width},color);
+        Rect({cx-r,cy-r*0.45f,width,r*0.9f},color);Rect({cx+r-width,cy-r*0.45f,width,r*0.9f},color);
+        for(int i=0;i<4;++i)Rect({cx+(i&1?d:-d)-s/2,cy+(i&2?d:-d)-s/2,s,s},color);
+    }
+    static uint32_t RarityRgba(royale::Rarity q) {
+        const auto& c=kRarityRgb[std::clamp(static_cast<int>(q),0,royale::kRarityCount-1)];
+        return (static_cast<uint32_t>(c.r)<<24)|(static_cast<uint32_t>(c.g)<<16)|(static_cast<uint32_t>(c.b)<<8)|255u;
+    }
+    void ItemIcon(royale::ItemId id,wt::Rect r,uint32_t tint=0xffffffff) {
+        const char* name=RealIconName(id);
+        if(name) {
+            const std::string n=name;
+            const bool quest=n.rfind("gQuestIcon",0)==0;
+            const char* dir=quest?"icon_item_24_static":(n.rfind("gHeart",0)==0||n.rfind("gRupee",0)==0)?"parameter_static":"icon_item_static";
+            if(const char* t=WarGameTexture(name,dir)){const int s=quest?24:32;Otr(t,r,s,s,G_IM_FMT_RGBA,G_IM_SIZ_32b,tint);return;}
+        }
+        Rect(r,0x2D5F8AFF);
+        const std::string s=ShortName(id).substr(0,1);
+        Text(r.x+r.w/2-TextWidth(s,r.h*0.5f)/2,r.y+r.h*0.25f,s,r.h*0.5f,tint);
     }
     void Focus(wt::Rect r) {
         float a=gWar.reduced?1.0f:0.78f+0.22f*std::sin(gWar.clock*3.5f);

@@ -11,6 +11,7 @@ once by RoyaleWarTable.h in this order; do not compile them separately.
 | State, page controls, settings and actions | Controls.inc |
 | Matrices, graphics state, tiles/fonts and map/portrait caching | Painter.inc |
 | Visible pages and panels | Draw.inc |
+| Pause page (vitals, equipment row, N64 button colours, game textures by OTR path) | Draw.inc (`WarPage::Pause`), Painter.inc (`Otr`, `Heart`, `Meter`, `Disc`, `ItemIcon`) |
 | Music, lifecycle, controller/keyboard/touch navigation | Input.inc |
 | Native save preparation and recovery | Save.inc |
 

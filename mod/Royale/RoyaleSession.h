@@ -36,6 +36,30 @@ struct PuppetState {
     ItemId mask = ItemId::Count;
     ItemId tunicGear = ItemId::Count;   // Goron or Zora tunic worn (colours the tunic)
     ItemId gauntlets = ItemId::Count;   // Goron's Bracelet, Silver or Golden Gauntlets worn
+    bool knocked = false;         // down but not out: drawn lying on the ground, crawling
+    float knockLeft = 0, reviveFrac = 0;   // while knocked: the bleed-out bar left (0..1) and how far a teammate's revive has got (0..1)
+    bool teammate = false;        // on your team (team modes)
+};
+
+// One teammate as the squad list and the minimap show them.
+struct TeammateRow {
+    uint16_t id = 0;
+    std::string name;
+    bool isBot = false, alive = true, knocked = false;
+    float health = kMaxHealth;    // hearts
+    float knockLeft = 0, reviveFrac = 0;   // 0..1, while knocked
+    float x = 0, z = 0;
+    float distance = 0;           // from you
+    int slot = 0;                 // 0..2: which of your teammates (decides their minimap colour)
+};
+// One ping your team has up.
+struct PingRow {
+    uint16_t owner = 0;
+    PingKind kind = PingKind::Place;
+    float x = 0, z = 0;
+    uint16_t target = 0xFFFF;
+    float secondsLeft = 0;
+    bool mine = false;
 };
 
 // One line of the lobby list.
@@ -54,6 +78,7 @@ struct ResultsRow {
     bool self = false, isBot = false;
     int placement = 0, kills = 0, chests = 0, score = 0;
     float damage = 0;
+    int team = 0;     // team number in Duos and Squads (0 in Solo); the placement is the team's
 };
 
 struct HudState {
@@ -100,6 +125,13 @@ struct HudState {
     float weatherSecondsLeft = 0;  // until the next spell
     std::array<int, kAmmoKinds> ammo = {};
     float lobbyLeft = -1;          // seconds until the lobby starts the match by itself; -1 when there is no timer
+    TeamMode teamMode = TeamMode::Solo;   // the host's pick (Solo, Duos, Squads)
+    int selfTeam = 0;                      // your team number (team modes)
+    bool selfKnocked = false;              // you are down: crawling and bleeding out
+    float selfKnockLeft = 0, selfReviveFrac = 0;   // 0..1: your bleed-out bar, and how far a teammate's revive of you has got
+    std::vector<TeammateRow> squad;        // your teammates, in id order (empty in Solo)
+    std::vector<PingRow> pings;            // your team's pings (just yours in Solo)
+    std::vector<std::pair<float, float>> launchPads;   // Deku Flower launch pads (x, z)
     uint16_t winnerId = 0xFFFF;   // once the match has ended
     std::string winnerName;       // "You" is left to the UI; bots have names from shared/names.h
     std::vector<ResultsRow> results; // standings, best score first, once the match has ended
@@ -124,6 +156,7 @@ class RoyaleSession {
         server->SetBossCount(5);
         server->SetAutoStart(autoStart);
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
+        if (teamMode != TeamMode::Solo) server->SetTeamMode(teamMode);
         server->SetMajorBoss(majorBoss);
         server->SetWeatherOptions(weatherOptions);
         if (soloTest) {
@@ -186,6 +219,12 @@ class RoyaleSession {
     // Host only: the lobby starts the match by itself after this many seconds; 0 turns the timer off.
     void SetAutoStart(float seconds) { autoStart = seconds; if (server) server->SetAutoStart(seconds); }
     bool SetPlayerLimit(int n) { playerLimit = n; return server ? server->SetPlayerLimit(n) : false; }
+    // Host only, lobby only: Solo, Duos or Squads. Remembered for the next lobby too.
+    bool SetTeamMode(TeamMode m) { teamMode = m; return server ? server->SetTeamMode(m) : false; }
+    TeamMode GetTeamMode() const { return client ? client->GetTeamMode() : teamMode; }
+    // Hold A beside a knocked teammate (about ten times a second while held; once with false on letting go), and L: place a ping.
+    void HoldRevive(uint16_t target, bool active) { if (Joined()) client->HoldRevive(target, active); }
+    void SendPing(PingKind kind, float x, float z, uint16_t target = 0xFFFF) { if (Joined()) client->SendPing(kind, x, z, target); }
     // Host: where the match is played, and whether the dragon turns up halfway through. Both are remembered for the next lobby too.
     void ReportNpcHit(float hearts) { if (Joined()) client->ReportNpcHit(hearts); }
     void ReportPropSmashed(size_t index) { if (Joined()) client->ReportSmash(index); }
@@ -265,6 +304,10 @@ class RoyaleSession {
             if (p.mask != net::PlayerNet::kNoGear) s.mask = static_cast<ItemId>(p.mask);
             if (p.tunicGear != net::PlayerNet::kNoGear) s.tunicGear = static_cast<ItemId>(p.tunicGear);
             if (p.gauntlets != net::PlayerNet::kNoGear) s.gauntlets = static_cast<ItemId>(p.gauntlets);
+            s.knocked = (p.flags & net::PlayerNet::kKnocked) != 0;
+            s.knockLeft = p.knock / 255.0f;
+            s.reviveFrac = p.revive / 255.0f;
+            s.teammate = client->Teammate(id);
             out.push_back(std::move(s));
         }
         return out;
@@ -327,6 +370,7 @@ class RoyaleSession {
             row.name = who != client->Roster().end() ? who->second.name : BotName(r.id);
             row.placement = r.placement; row.kills = r.kills; row.chests = r.chests; row.score = static_cast<int>(r.score);
             row.damage = r.damageTenths / 10.0f;
+            row.team = r.team;
             h.results.push_back(std::move(row));
         }
         h.inv = client->Inventory();
@@ -347,6 +391,39 @@ class RoyaleSession {
             }
         }
         if (h.speedLeft > 0) h.speedMult *= h.inv.speedMult;
+        h.teamMode = client->GetTeamMode();
+        if (h.teamMode != TeamMode::Solo) {
+            h.selfTeam = client->TeamOf(client->PlayerId());
+            int slot = 0;
+            for (uint16_t id : client->Teammates()) {
+                TeammateRow t;
+                t.id = id;
+                auto who = client->Roster().find(id);
+                t.name = who != client->Roster().end() ? who->second.name : BotName(id);
+                t.isBot = id >= 1000;
+                t.slot = slot++ % 3;
+                net::PlayerNet n;
+                if (client->Sample(id, n)) {
+                    t.alive = (n.flags & net::PlayerNet::kAlive) != 0;
+                    t.knocked = (n.flags & net::PlayerNet::kKnocked) != 0;
+                    t.health = n.Health();
+                    t.knockLeft = n.knock / 255.0f;
+                    t.reviveFrac = n.revive / 255.0f;
+                    t.x = n.x; t.z = n.z;
+                } else {
+                    t.alive = false;   // not in the snapshots: out of the match
+                }
+                h.squad.push_back(std::move(t));
+            }
+        }
+        for (const ClientPing& g : client->Pings()) {
+            PingRow p;
+            p.owner = g.owner; p.kind = static_cast<PingKind>(g.kind); p.x = g.x; p.z = g.z; p.target = g.target;
+            p.secondsLeft = g.expiresAt - client->Now();
+            p.mine = g.owner == client->PlayerId();
+            h.pings.push_back(p);
+        }
+        h.launchPads = client->LaunchPads();
         h.winnerId = client->Winner();
         if (h.winnerId != net::kNoPlayer16) {
             auto w = client->Roster().find(h.winnerId);
@@ -356,6 +433,9 @@ class RoyaleSession {
             h.haveSelf = true;
             h.selfHealth = self->Health();
             h.selfAlive = self->flags & net::PlayerNet::kAlive;
+            h.selfKnocked = (self->flags & net::PlayerNet::kKnocked) != 0;
+            h.selfKnockLeft = self->knock / 255.0f;
+            h.selfReviveFrac = self->revive / 255.0f;
             h.potions = self->potions;
             h.weapon = static_cast<ItemId>(self->weapon);
             h.weaponRarity = static_cast<Rarity>(self->weaponRarity);
@@ -365,6 +445,7 @@ class RoyaleSession {
             h.selfX = self->x;
             h.selfZ = self->z;
             h.stormDamagePerSecond = client->StormDamagePerSecond({self->x, self->z});
+            for (TeammateRow& t : h.squad) t.distance = std::hypot(t.x - self->x, t.z - self->z);
         }
         return h;
     }
@@ -393,6 +474,7 @@ class RoyaleSession {
     BotDifficulty botDifficulty = BotDifficulty::Normal;
     uint32_t tunic = SkinRgb(0);
     int playerLimit = kMaxPlayers;
+    TeamMode teamMode = TeamMode::Solo;
     int selectedMap = 0;
     bool solo = false;
     bool isSandbox = false;
