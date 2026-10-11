@@ -10,6 +10,7 @@
 #include "controls.h"
 #include "war_table_assets.h"
 #include "anim.h"
+#include "link_anims.h"
 #include "cloth.h"
 #include "build_version.h"
 #include "lilo_anim.h"
@@ -256,6 +257,7 @@ void WarGameUpdate();
 void WarDraw(GameState* state);
 
 #include "features/Core.inc"
+#include "features/LinkAnims.inc"
 #include "features/Players.inc"
 #include "features/Ragdolls.inc"
 #include "features/WorldObjects.inc"

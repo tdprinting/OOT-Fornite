@@ -5,6 +5,7 @@
 | Feature | Implementation under `features/` |
 |---|---|
 | Session state, graphics/debug settings, travel, floor/platform helpers | `Core.inc` |
+| Our own Link clips (jump, landing, sprint) over local Link and puppets | `LinkAnims.inc` |
 | Remote players, animations, sounds, spells, skins | `Players.inc` |
 | Death ragdolls and lobby ragdoll test | `Ragdolls.inc` |
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |

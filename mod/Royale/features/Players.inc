@@ -741,6 +741,7 @@ struct PuppetMotion {
     float speed = 0;            // units per game frame, smoothed
     float prevFrame = 0;        // for footsteps
     int idleFrames = 0;         // standing about: now and then a look round
+    float clipFrames = 0, clipSprintW = 0, clipPhase = 0;   // our own Link clips over this animation (PosePuppetClips, LinkAnims.inc)
     float jumpT = -1;           // a bot's jump arc, 0..1 (the server only says which floor it is on, so the jump is drawn here)
     int floorCheck = 0;
     royale::ItemId heldWeapon = royale::ItemId::Count;
@@ -1014,6 +1015,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         m.seqAbility = ability;
         if (!respell && !fidget && s.alive) ActionSounds(player, want, s.weapon, m.combo);
         m.jumpT = -1.0f;
+        m.clipFrames = 0.0f;
         if (s.isBot && (want == static_cast<uint8_t>(Anim::Jump) || want == static_cast<uint8_t>(Anim::JumpSlash) || (royale::IsDodge(want) && want != static_cast<uint8_t>(Anim::Roll)))) m.jumpT = 0.0f;
         m.anim = want;
     }
@@ -1038,6 +1040,8 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         if (s.alive && m.anim == static_cast<uint8_t>(Anim::JumpSlash) && m.step == 1) PuppetSfx(actor, NA_SE_IT_SWORD_SWING_HARD);
         if (s.alive && m.anim == static_cast<uint8_t>(Anim::Drink) && m.step == 1) PuppetVoice(player, NA_SE_VO_LI_DRINK);
     }
+    if (s.alive) PosePuppetClips(player, m.anim, m.clipFrames, m.speed, m.clipSprintW, m.clipPhase);   // our jump, landing and sprint (LinkAnims.inc)
+    m.clipFrames += 1.0f;
     // Footsteps: twice a stride, where the game puts them, sounding like the ground underfoot.
     if (walking && m.jumpT < 0.0f) {
         const float cycle = static_cast<float>(Animation_GetLastFrame(m.seq.step[m.step].anim)) + 1.0f;
@@ -1051,7 +1055,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
     // Bots' jumps, hops and jump slashes are lifted into the air here (the server only moves them between floors).
     if (m.jumpT >= 0.0f) {
         const bool big = m.anim == static_cast<uint8_t>(Anim::Jump);
-        const float seconds = big ? 0.55f : 0.4f, height = big ? 48.0f : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
+        const float seconds = big ? royale::kJumpSeconds : 0.4f, height = big ? royale::kJumpApex : m.anim == static_cast<uint8_t>(Anim::JumpSlash) ? 30.0f : 22.0f;
         m.jumpT += 1.0f / (seconds * royale::kTickHz);
         if (m.jumpT >= 1.0f) {
             m.jumpT = -1.0f;

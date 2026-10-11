@@ -632,10 +632,17 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     const bool wantJump = royale::controls::JumpPressed(scheme, in.press.button, true, gTouchJump);   // A's jump is decided before the game reads the pad (OnEmoteWheelInput)
     gTouchJump = false;
     if (wantJump && (player->actor.bgCheckFlags & 1) && !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_SHIELDING)) && !gSkydiving) {
-        player->actor.velocity.y = 11.5f;
+        player->actor.velocity.y = royale::kJumpVelocity;
         player->actor.bgCheckFlags &= ~1;
         gJumpAssistFrames = 14;
+        gOurJump = true;
+        StartLinkJumpClip();
         Audio_PlaySoundGeneral(NA_SE_PL_JUMP, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    }
+    // Our jump falls faster than the game's own: extra gravity until he lands, swims, grabs a ledge or the haul below takes over.
+    if (gOurJump) {
+        if ((player->actor.bgCheckFlags & 1) || (player->stateFlags1 & (PLAYER_STATE1_HANGING_OFF_LEDGE | PLAYER_STATE1_CLIMBING_LADDER | PLAYER_STATE1_IN_WATER)) || gSkydiving) gOurJump = false;
+        else player->actor.velocity.y -= royale::kJumpExtraGravity;
     }
     if (gJumpAssistFrames > 0) {
         gJumpAssistFrames--;
@@ -654,6 +661,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             player->actor.world.pos.x += fx * 5.0f;                     // up and over the edge
             player->actor.world.pos.z += fz * 5.0f;
             player->actor.velocity.y = std::max(player->actor.velocity.y, 7.0f);
+            gOurJump = false;                                            // the haul lifts at the game's own gravity, as before
             if (rise < 14.0f) player->actor.world.pos.y = ledge + 1.0f;  // close enough: on top
         }
     }
