@@ -166,6 +166,7 @@ class BotController {
                     if (p.aboard) { air.onBus = true; air.lift = m.Bus().altitude; PlanBusJump(m, p, air, soon); }
                     else if (air.airborne) { air.lift = kSkyHeight; ChooseLanding(m, p, air, soon); }
                 }
+                ROYALE_BOT_BRANCH(kBrSkydive);
                 if (air.onBus && RideBus(m, p, air)) continue;
                 if (air.airborne) { Glide(m, p, air, soon, dt); continue; }
                 if (state == MatchState::Countdown) continue;

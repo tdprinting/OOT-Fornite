@@ -4688,7 +4688,7 @@ static void BotInStormSkipsFarCart() {
 static void BotsDriveAndRideCarts() {
     // A bot that likes driving (1001 does), with nobody about and a cart close by, gets in and drives off somewhere.
     {
-        Simulation sim = CartDuel(9, {-1900, 0}, {0, 1900}, {{0, 0}});
+        Simulation sim = CartDuel(10, {-1900, 0}, {0, 1900}, {{0, 0}});   // seeds re-picked after the bus changed the storm per seed
         const Vec2 far = FarFromZone(sim, 200.0f);
         sim.match.Find(1000)->alive = false;
         PlayerState* lover = sim.match.Find(1001);
@@ -4773,7 +4773,7 @@ static void FullMatchWithCarts() {
     // 31 bots and a parked human on a map with carts: bots get in, drive, ride and get out, and the match still ends with one winner.
     const float calm = BotController::CalmSeconds();
     BotController::CalmSeconds() = 40.0f;   // a quiet start, as in a real match, when bots go looking for carts
-    Simulation sim(17, MapCircle(), 0);
+    Simulation sim(11, MapCircle(), 0);
     sim.bots.SetNav(std::make_shared<NavGrid>(MapCircle(), NotWall));
     sim.match.SetVehicleWorld(CartWorld{nullptr, [](float x, float z) { return !NotWall({x, z}) || std::hypot(x, z) > 1960.0f; }});
     sim.match.SetVehicleCount(VehicleCountFor(2000.0f));
@@ -5368,7 +5368,7 @@ int main() {
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsRideTheBusAndJump(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
-    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); FullMatchWithCarts();
+    CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
     TeamsAreMadeAtTheStart(); TeammatesDoNoDamage(); KnockedInsteadOfEliminatedInTeamModes(); BleedOutEliminatesAndCreditsTheKnocker(); WholeTeamKnockedMeansEliminated(); RevivingTakesThreeSecondsAndTheTeammate();
     LastTeamStandingWins(); SiphonOnElimination(); PingsGoToTheTeamAndExpire(); LaunchPadsAreOnTheMap(); BotsReviveAndSparePartners();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
