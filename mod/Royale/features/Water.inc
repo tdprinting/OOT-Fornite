@@ -31,7 +31,10 @@ bool GameWaterSurfaceAt(float x, float z, float* y) {
     for (int i = 0; i < h->numWaterBoxes; i++) {
         const WaterBox& b = h->waterBoxes[i];
         const u32 room = (b.properties >> 13) & 0x3F;
-        if ((room != static_cast<u32>(play->roomCtx.curRoom.num) && room != 0x3F) || (b.properties & 0x80000) != 0) continue;
+        // The room you came from stays loaded through an open passage, and its water is hidden too (UpdateGameWater), so ours draws there as well.
+        const bool roomLoaded = room == 0x3F || room == static_cast<u32>(play->roomCtx.curRoom.num) ||
+                                (play->roomCtx.prevRoom.num >= 0 && room == static_cast<u32>(play->roomCtx.prevRoom.num));
+        if (!roomLoaded || (b.properties & 0x80000) != 0) continue;
         if (!(b.xMin < x && x < b.xMin + b.xLength && b.zMin < z && z < b.zMin + b.zLength)) continue;
         const float d = std::fabs(static_cast<float>(b.ySurface) - gWaterRefY);
         if (d < bestD) { bestD = d; *y = b.ySurface; found = true; }
@@ -257,8 +260,11 @@ void ShowGameWater() {
     for (auto it = gGameWaterPatches.rbegin(); it != gGameWaterPatches.rend(); ++it)
         if (std::memcmp(it->at, &it->mine, sizeof(Gfx)) == 0) *it->at = it->orig;
     gGameWaterPatches.clear(); gGameWaterPatched.clear(); gGameWaterHolds.clear(); gGameWaterLooked.clear();
+    // Only actors still in the lists: a room change frees the old room's water actors, and their memory may already hold something else.
     if (gPlayState != nullptr)
-        for (auto& [actor, draw] : gGameWaterActors) if (actor->draw == HiddenWater_Draw) actor->draw = draw;
+        for (int cat = 0; cat < ACTORCAT_MAX; cat++)
+            for (Actor* a = gPlayState->actorCtx.actorLists[cat].head; a != nullptr; a = a->next)
+                if (a->draw == HiddenWater_Draw) { const auto it = gGameWaterActors.find(a); if (it != gGameWaterActors.end()) a->draw = it->second; }
     gGameWaterActors.clear();
     gGameWaterKey = 0;
     gGameWaterHidden = 0;

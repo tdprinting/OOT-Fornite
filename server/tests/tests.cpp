@@ -866,6 +866,12 @@ static void PickupRulesForEveryKind() {
         q->reserve.clear();
         CHECK(m.DropWeapon(1000) && q->weapon.item == ItemId::BasicSword);
         CHECK(!m.DropWeapon(1000));                                                           // the starter sword stays
+        const size_t dropped = m.Loot().size() - 1;
+        const Vec2 stoodAt = q->pos;
+        q->pos = m.Loot()[dropped].spawn.pos;
+        CHECK(!m.PickUp(1000, dropped, false));                                                // walking over it doesn't take it straight back
+        CHECK(m.PickUp(1000, dropped, true) && q->weapon.item == ItemId::MasterSword);         // pressing A on purpose does
+        q->pos = stoodAt;
         q->rupees = kWalletMax;
         CHECK(!grab(ItemId::Rupees, Rarity::Common) || q->rupees == kWalletMax);
     }
@@ -5257,6 +5263,25 @@ static void LastTeamStandingWins() {
     CHECK(n.State() == MatchState::Ending && n.Winner() && n.Winner()->id == 2);           // the one standing is named, not the one lying down
 }
 
+// Duos with only two players: two teams of one, not one team that wins on the first tick.
+static void SmallTeamMatchKeepsTwoTeams() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 2);
+    CHECK(m.Find(1)->team != m.Find(2)->team);
+    m.Tick(kDt);
+    CHECK(m.State() == MatchState::InMatch && m.TeamsAlive() == 2);
+}
+
+// Quitting while knocked down still gives the knocker the kill.
+static void KnockedQuitCreditsTheKnocker() {
+    Match m = TeamMatch(TeamMode::Duos, 2, 4);
+    Place(m, 1, {0, 0}); Place(m, 2, {60, 0}); Place(m, 1000, {900, 0}); Place(m, 1001, {960, 0});
+    const int before = m.Find(1)->kills;
+    m.Damage(1000, 50.0f, 1);
+    CHECK(m.Find(1000)->knocked);
+    m.RemovePlayer(1000);
+    CHECK(m.Find(1)->kills == before + 1);
+}
+
 static void SiphonOnElimination() {
     Match m = TeamMatch(TeamMode::Solo, 2, 4);
     PlayerState* k = m.Find(1);
@@ -5392,7 +5417,7 @@ int main() {
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsRideTheBusAndJump(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
     TeamsAreMadeAtTheStart(); TeammatesDoNoDamage(); KnockedInsteadOfEliminatedInTeamModes(); BleedOutEliminatesAndCreditsTheKnocker(); WholeTeamKnockedMeansEliminated(); RevivingTakesThreeSecondsAndTheTeammate();
-    LastTeamStandingWins(); SiphonOnElimination(); PingsGoToTheTeamAndExpire(); LaunchPadsAreOnTheMap(); BotsReviveAndSparePartners();
+    LastTeamStandingWins(); SmallTeamMatchKeepsTwoTeams(); KnockedQuitCreditsTheKnocker(); SiphonOnElimination(); PingsGoToTheTeamAndExpire(); LaunchPadsAreOnTheMap(); BotsReviveAndSparePartners();
     WeightsSumTo100(); SoloPlayerGets31Bots(); StartNeedsOneHuman(); LobbyFull(); FullMatchHasOneWinner(); SpawnProtection();
     if (failures) { std::printf("%d failure(s)\n", failures); return 1; }
     std::printf("all tests passed\n");

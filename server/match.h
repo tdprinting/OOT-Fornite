@@ -132,6 +132,8 @@ struct MatchEvent {
 struct LootEntry {
     LootSpawn spawn;
     bool taken = false;
+    uint32_t droppedBy = 0;     // a weapon put down on purpose (C-Down): its owner doesn't walk it straight back up
+    float droppedAt = -1e9f;
 };
 
 struct MiniBoss {
@@ -362,6 +364,9 @@ class Match {
                 TickReplay();   // the replay starts with everyone on the bus
                 TickWeather();
                 TickBus();
+                for (auto& p : players) if (p.alive && clock < p.burnUntil) Damage(p.id, p.burnDps * dt, p.burnBy, DamageKind::Fire, false);   // early landers can already fight
+                TickKnocked(dt);   // so a player knocked during the Drop bleeds out or gets revived, and pings fade
+                ExpirePings();
                 if (DropOver()) Enter(MatchState::InMatch);
                 break;
             case MatchState::InMatch:
@@ -461,7 +466,9 @@ class Match {
 
     // Made when the match starts: the people first (in joining order), then the bots, each team filled before the next one is started.
     void AssignTeams() {
-        const int size = TeamSize(teamMode);
+        // Never fewer than two teams: with a small player limit (Duos at 2, Squads at 2-4) one full team would win on the first InMatch tick.
+        const int n = static_cast<int>(players.size());
+        const int size = (std::min)(TeamSize(teamMode), (std::max)(1, (n + 1) / 2));
         int i = 0;
         for (auto& p : players) p.team = size > 1 ? i++ / size : static_cast<int>(p.id);
     }
@@ -675,7 +682,7 @@ class Match {
             return;
         }
         PlayerState* p = Find(id);
-        if (p && p->alive) { p->health = 0; Eliminate(*p, kNoPlayer); }
+        if (p && p->alive) { p->health = 0; Eliminate(*p, p->knocked && Find(p->knockedBy) ? p->knockedBy : kNoPlayer); }   // quitting while knocked still credits the knocker
     }
 
     std::vector<MatchEvent> DrainEvents() {
@@ -776,8 +783,9 @@ class Match {
         AttackResult r;
         if (state != MatchState::InMatch) return r;
         PlayerState* a = Find(attackerId);
-        if (!a || !a->alive || a->weapon.item != ItemId::ShockwaveGrenade || !HasAmmo(*a, a->weapon.item)) return r;
+        if (!a || !a->alive || a->knocked || !OnFoot(*a) || a->weapon.item != ItemId::ShockwaveGrenade || !HasAmmo(*a, a->weapon.item)) return r;
         const WeaponStats w = ActiveWeapon(a->weapon.item, true);
+        if (at && Distance(a->pos, *at) > w.range * 1.1f) return r;   // a boss or cart out of throwing reach
         if (clock < a->attackReadyAt || Stunned(*a)) return r;
         a->attackReadyAt = clock + w.cooldown;
         SpendAmmo(*a, a->weapon.item);
@@ -820,6 +828,7 @@ class Match {
         PlayerState* a = Find(attackerId);
         PlayerState* t = Find(targetId);
         if (!a || !t || a == t || !a->alive || !t->alive || a->knocked || SameTeam(*a, *t)) return r;
+        if (BusProtected(*t)) return r;   // still aboard, falling or just landed: no freeze, burn or stun either (Damage alone only stops the hearts)
         const bool hadAmmo = HasAmmo(*a, a->weapon.item);
         const bool shockwave = hadAmmo && a->weapon.item == ItemId::ShockwaveGrenade;
         WeaponStats w = ActiveWeapon(a->weapon.item, hadAmmo);
@@ -1013,6 +1022,7 @@ class Match {
         const LootSpawn s = loot[index].spawn;
         if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
         if (s.container && !force) return false; // chests have to be opened on purpose
+        if (!force && loot[index].droppedBy == id && clock - loot[index].droppedAt < kDropRegrabSeconds) return false; // left for somebody else
         if (!force && !WorthTaking(*p, s)) return false;
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
@@ -1178,6 +1188,7 @@ class Match {
         if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (IsStarter(p->weapon)) return false;
         DropEquipment(*p, p->weapon);
+        loot.back().droppedBy = id; loot.back().droppedAt = clock;   // (not a starter, so DropEquipment just added it)
         if (!p->reserve.empty()) { p->weapon = p->reserve.front(); p->reserve.erase(p->reserve.begin()); }
         else p->weapon = {ItemId::BasicSword, Rarity::Common};
         p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
@@ -1383,7 +1394,7 @@ class Match {
     bool EnterVehicle(uint32_t playerId, int index, Seat want) {
         PlayerState* p = Find(playerId);
         VehicleState* v = FindVehicle(index);
-        if (!p || !v || !p->alive || v->wrecked || v->gone || !OnFoot(*p) || Stunned(*p) || RidingIn(playerId)) return false;
+        if (!p || !v || !p->alive || v->wrecked || v->gone || state != MatchState::InMatch || !OnFoot(*p) || Stunned(*p) || RidingIn(playerId)) return false;   // carts only drive from InMatch (the Drop doesn't tick them)
         if (std::fabs(v->body.speed) > 200.0f) return false;
         const Seat order[2] = {want == Seat::Passenger ? Seat::Passenger : Seat::Driver, want == Seat::Passenger ? Seat::Driver : Seat::Passenger};
         for (Seat s : order) {
@@ -2774,6 +2785,7 @@ class Match {
 
     const PlayerState* Winner() const {
         if (state != MatchState::Ending) return nullptr;
+        for (const auto& p : players) if (p.id == endWinner && p.alive) return &p;
         for (const auto& p : players) if (p.alive && !p.knocked) return &p;
         for (const auto& p : players) if (p.alive) return &p;
         return nullptr;
@@ -3117,6 +3129,12 @@ class Match {
 
     void Enter(MatchState s) {
         if (s == MatchState::Ending) {
+            endWinner = kNoPlayer;   // named before the knocked winners get up: the one still standing at the end
+            for (const auto& p : players) if (p.alive && !p.knocked) { endWinner = p.id; break; }
+            for (auto& p : players) if (p.alive && p.knocked) {   // the winners stand up for the victory walk
+                p.knocked = false; p.knockHealth = 0; p.reviveProgress = 0; p.health = (std::min)(kReviveHealth, p.maxHealth); p.dirty = true;
+            }
+            reviveHolds.clear();
             for (auto& p : players) if (p.alive) p.placement = 1;
             if (TeamsOn()) for (auto& p : players) for (const auto& o : players) if (o.alive && o.team == p.team) p.placement = 1;   // the winning team wins together
         }
@@ -3199,8 +3217,10 @@ class Match {
             if (Distance(at, map.center) > map.radius || (placement && !placement(at))) at = p.pos;
             return at;
         };
-        for (int left = ShareOf(p.rupees); left > 0 && pile < 8;) {
-            const int lump = (std::min)(left, 50);
+        const int rupeeShare = ShareOf(p.rupees);
+        const int lumpSize = (std::max)(50, (rupeeShare + 7) / 8);   // at most 8 piles, and none of the share lost with the 1000 wallet
+        for (int left = rupeeShare; left > 0 && pile < 8;) {
+            const int lump = (std::min)(left, lumpSize);
             LootSpawn l = {spot(), ItemId::Rupees, Rarity::Common, false, false};
             l.amount = static_cast<uint16_t>(lump);
             AddLoot(l);
@@ -3497,7 +3517,8 @@ class Match {
     Circle sandboxRoom = {};
     std::vector<uint8_t> sandboxRestocked;   // loot entries already put back by SandboxRestock
     TeamMode teamMode = TeamMode::Solo;
-    std::map<uint32_t, ReviveHold> reviveHolds;   // who is holding A on whom
+    std::map<uint32_t, ReviveHold> reviveHolds;
+    uint32_t endWinner = kNoPlayer;   // Winner(): who was standing when the match ended (set on entering Ending)   // who is holding A on whom
     std::vector<Ping> pings;
     std::vector<Vec2> pads, padSpots;
     static constexpr float kReviveHoldGrace = 0.4f;   // a hold the reviver's game stops refreshing lapses after this long

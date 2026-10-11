@@ -101,7 +101,8 @@ void PressedATalk() {
 // A pet is the lowest priority for A: it only offers a talk when no chest, item, ally, cart seat, Maya, Lilo or sign is in reach, and Link
 // is not in a fight (swinging, Z-targeting, shielding or just hit). Otherwise its talk would take A from the chest or the battle.
 bool PetMayTalk() {
-    if (!InField() || MessageBoxUp()) return false;
+    // Pets also live in the lobby and the regular game, where InField() is false: the loot, ally, cart and talk checks below are field-only themselves.
+    if (gPlayState == nullptr || MessageBoxUp()) return false;
     if (NearestLootIndex() != kNoLoot || NearbyFreeAlly() >= 0 || TalkTargetNear()) return false;
     int cart; royale::Seat seat;
     if (NearbyCartSeat(&cart, &seat)) return false;
