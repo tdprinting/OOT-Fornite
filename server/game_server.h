@@ -918,6 +918,8 @@ class GameServer {
         };
         n.boots = worn(GearSlot::Boots);
         n.mask = worn(GearSlot::Mask);
+        n.tunicGear = worn(GearSlot::Tunic);
+        n.gauntlets = worn(GearSlot::Gauntlets);
         return n;
     }
 

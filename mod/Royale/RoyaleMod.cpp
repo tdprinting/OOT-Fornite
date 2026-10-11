@@ -172,6 +172,8 @@ extern EffectSsInfo sEffectSsInfo;   // the game's particle table (z_effect_soft
 extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
+void UpdatePatchHand(void);   // the game's EquipmentAlwaysVisible hand-model patches (soh/Enhancements/mods.cpp): re-run when the match turns the enhancement on or off
+extern s32 gRoyaleBraceletOnAdult;   // 1 = adult Link also wears the Goron's Bracelet as bronze plates (patches/0028)
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
