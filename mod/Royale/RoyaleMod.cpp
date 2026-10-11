@@ -55,6 +55,12 @@ namespace royale { namespace moonfall {
 using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
 using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 } }
+#include "skyloft_layout.h"
+#include "skyloft_model.h"
+namespace royale { namespace skyloft {
+using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
+using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
+} }
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"

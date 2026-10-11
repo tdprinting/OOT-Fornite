@@ -31,7 +31,7 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
 int main() {
     CHECK(kMoonfallMapIndex==12 && kMapCount>kMoonfallMapIndex && IsPlayableMap(12) && IsIslandMap(12) && IsAuthoredMap(12));
     CHECK(std::string(MapOf(12).name)=="Moonfall Isle" && MapOf(12).scene==kHyruleFieldScene);
-    CHECK(std::string(kPoiNames[PoiNameBase(12)])=="Hyrule Castle" && PoiNameBase(12)==246 && PoiNameBase(12)+kNamesPerMap==kPoiNameTotal);
+    CHECK(std::string(kPoiNames[PoiNameBase(12)])=="Hyrule Castle" && PoiNameBase(12)==246 && PoiNameBase(12)+kNamesPerMap==PoiNameBase(kSkyloftMapIndex));
     CHECK(std::string(kPoiNames[PoiNameBase(12)+23])=="Fisherman's Hut");
     fortnite::UseTerrainForMap(12);
     CHECK(fortnite::gTerrainMapId==12 && fortnite::gHeightData==moonfall::kHeights && fortnite::gColourData==moonfall::kColours && fortnite::gCoverData==moonfall::kCover);

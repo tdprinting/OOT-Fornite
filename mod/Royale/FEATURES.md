@@ -53,3 +53,4 @@ The split reduces the amount of code an agent must read; it does not reduce comp
 
 - Hyrule Riftlands map: `docs/HYRULE_RIFTLANDS.md`; authoring `tools/maps/riftlands/`; generated `shared/riftlands_*`; concept and prop specs `map-concepts/hyrule-riftlands/`.
 - Moonfall Isle map (the main map, ID 12): `docs/MOONFALL_ISLE.md`; authoring `tools/maps/moonfall/`; generated `shared/moonfall_*`.
+- Skyloft Isles map (ID 13): `docs/SKYLOFT.md`; authoring `tools/maps/skyloft/`; generated `shared/skyloft_*`.

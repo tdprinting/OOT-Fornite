@@ -1,0 +1,16 @@
+{
+ "loot": 95,
+ "buildings": 28,
+ "doors": 39,
+ "upper_nodes": 2200,
+ "climb_walls": 84,
+ "land_reached_percent": 100.0,
+ "floating": 0,
+ "fails": [],
+ "warnings": [
+  "27 faces at Westwind Homes are between walkable and wall (slope 0.55 to 0.88)",
+  "21 faces at Waterfall Cave are between walkable and wall (slope 0.55 to 0.88)",
+  "17 faces at Fledge's Cove are between walkable and wall (slope 0.55 to 0.88)",
+  "6 cells of land near 2097,5524 (Ember Rock) cannot be walked to"
+ ]
+}
