@@ -236,17 +236,26 @@ void DrawAuthoredStructures(PlayState* play) {
         loaded = texture;
     };
     // a chunk is 1853 x 1926 units across: test its far corner, not its middle
+    const Vec3f eye = play->view.eye;
+    const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
+    const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
     auto inReach = [&](const typename T::Batch& batch) {
-        const Vec3f eye = play->view.eye;
         const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
         if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
-        const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
-        const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
         return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
     };
-    for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
+    // One pass decides what is in reach and sorts it by pass (0 the baked light, else the relief class), in list order, so the passes below walk
+    // only their own batches instead of every batch once per class.
+    static std::vector<uint32_t> visible[T::kSurfaceClasses + 1];
+    for (auto& v : visible) v.clear();
+    for (size_t i = 0; i < kBatchCount; ++i) {
         const auto& batch = T::kBatches[i];
-        if ((batch.surface && relief) || !inReach(batch)) continue;
+        const int pass = relief ? static_cast<int>(batch.surface) : 0;
+        if (pass > T::kSurfaceClasses || !inReach(batch)) continue;   // (a class past the last is never drawn with relief on, as before)
+        visible[pass].push_back(static_cast<uint32_t>(i));
+    }
+    for (const uint32_t i : visible[0]) {   // everything drawn with its baked light
+        const auto& batch = T::kBatches[i];
         if (!GfxHasRoom(play, 20)) break;
         loadTexture(batch.texture);
         gSPDisplayList(POLY_OPA_DISP++, batchList(i, false));
@@ -277,9 +286,8 @@ void DrawAuthoredStructures(PlayState* play) {
             gSPSetLights1(POLY_OPA_DISP++, rig->lights);
             for (int c = 1; c <= T::kSurfaceClasses; ++c) {
                 bool started = false;
-                for (size_t i = 0; i < kBatchCount; ++i) {
+                for (const uint32_t i : visible[c]) {
                     const auto& batch = T::kBatches[i];
-                    if (batch.surface != c || !inReach(batch)) continue;
                     if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
                     loadTexture(batch.texture);
