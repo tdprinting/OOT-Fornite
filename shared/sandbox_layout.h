@@ -19,7 +19,7 @@ inline PoiLayout GenerateSandboxLayout(uint64_t seed) {
     Rng rng(seed ^ 0x73616E64ull);   // "sand"
     for (int i = 0; i < sandbox::kZoneCount; i++) {
         Poi p;
-        p.name = static_cast<uint8_t>(kSandboxMapIndex * kNamesPerMap + i);
+        p.name = static_cast<uint16_t>(kSandboxMapIndex * kNamesPerMap + i);
         p.center = {sandbox::kZones[i].x, sandbox::kZones[i].z};
         p.radius = sandbox::kZones[i].radius;
         out.pois.push_back(p);

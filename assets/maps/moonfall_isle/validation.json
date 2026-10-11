@@ -1,0 +1,19 @@
+{
+ "loot": 125,
+ "buildings": 50,
+ "doors": 65,
+ "upper_nodes": 4125,
+ "climb_walls": 384,
+ "land_reached_percent": 100.0,
+ "floating": 1,
+ "fails": [],
+ "warnings": [
+  "floating solid 188x110x164 at 564,385,-1519 (Lantern Bridge)",
+  "28 faces at Zora Cape are between walkable and wall (slope 0.55 to 0.88)",
+  "24 faces at Kakariko Windmill are between walkable and wall (slope 0.55 to 0.88)",
+  "19 faces at Moon Crater are between walkable and wall (slope 0.55 to 0.88)",
+  "18 faces at Clock Town are between walkable and wall (slope 0.55 to 0.88)",
+  "17 faces at Great Bay Stilts are between walkable and wall (slope 0.55 to 0.88)",
+  "16 faces at Snowhead Lodge are between walkable and wall (slope 0.55 to 0.88)"
+ ]
+}

@@ -97,7 +97,7 @@ inline PoiLayout GenerateRiftlandsLayout(const PlacementFn& valid = nullptr) {
     PoiLayout out;
     int i=0;
     for (const auto& r : riftlands::kRegions) {
-        out.pois.push_back({static_cast<uint8_t>(PoiNameBase(kRiftlandsMapIndex)+i++),{r.x,r.z},900.0f});
+        out.pois.push_back({static_cast<uint16_t>(PoiNameBase(kRiftlandsMapIndex)+i++),{r.x,r.z},900.0f});
 
     }
     for(const auto& b:riftlands::kBossSites) out.bossSpots.push_back({b.x,b.z});

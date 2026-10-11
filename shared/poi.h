@@ -10,7 +10,7 @@ namespace royale {
 // from the match seed (like the scenery), the host sends it to everyone, and the pieces are ordinary props, so the bots' navigation
 // grid treats the walls as solid and the buildings can be walked into through their doors.
 struct Poi {
-    uint8_t name = 0; // index into kPoiNames
+    uint16_t name = 0; // index into kPoiNames
     Vec2 center;
     float radius = 0;
 };
@@ -836,7 +836,7 @@ inline PoiLayout GenerateIslandPois(uint64_t seed, Circle map, int count, const 
         }
         if (!ok) continue;
         Poi p;
-        p.name = static_cast<uint8_t>(kFortniteMapIndex * kNamesPerMap + i);
+        p.name = static_cast<uint16_t>(kFortniteMapIndex * kNamesPerMap + i);
         p.center = c;
         p.radius = kIslandPlaceRadius;
         out.pois.push_back(p);
@@ -851,9 +851,9 @@ inline PoiLayout GenerateIslandPois(uint64_t seed, Circle map, int count, const 
 inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const PlacementFn& valid = nullptr, int mapId = 0) {
     if(IsBossArena(mapId)) {
         PoiLayout arena;
-        arena.pois={ {static_cast<uint8_t>(PoiNameBase(mapId)),{0,0},1500},
-                     {static_cast<uint8_t>(PoiNameBase(mapId)+1),{0,-2400},760},
-                     {static_cast<uint8_t>(PoiNameBase(mapId)+2),{0,-900},650} };
+        arena.pois={ {static_cast<uint16_t>(PoiNameBase(mapId)),{0,0},1500},
+                     {static_cast<uint16_t>(PoiNameBase(mapId)+1),{0,-2400},760},
+                     {static_cast<uint16_t>(PoiNameBase(mapId)+2),{0,-900},650} };
         return arena;
     }
     if (ClampMap(mapId) == kFortniteMapIndex) return GenerateIslandPois(seed, map, count, valid);   // the island's places are painted on it
@@ -862,8 +862,8 @@ inline PoiLayout GeneratePois(uint64_t seed, Circle map, int count, const Placem
     Rng rng(seed ^ 0x706F69ull); // "poi"
     // The names, shuffled for this match.
     const int nameBase = PoiNameBase(ClampMap(mapId));
-    uint8_t names[kNamesPerMap];
-    for (int i = 0; i < kNamesPerMap; i++) names[i] = static_cast<uint8_t>(nameBase + i);
+    uint16_t names[kNamesPerMap];
+    for (int i = 0; i < kNamesPerMap; i++) names[i] = static_cast<uint16_t>(nameBase + i);
     for (int i = kNamesPerMap - 1; i > 1; i--) std::swap(names[i], names[1 + rng.Below(static_cast<uint32_t>(i))]); // name 0 stays the landmark's
 
     // Laid out the way battle royale maps are: a keep in the middle, a ring of towns around it and a wider ring near the edge, each a

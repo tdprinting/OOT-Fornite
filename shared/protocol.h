@@ -262,14 +262,14 @@ struct RosterEntry {
 
 inline void WritePois(ByteWriter& w, const std::vector<Poi>& pois) {
     w.U8(static_cast<uint8_t>(pois.size()));
-    for (const Poi& p : pois) { w.U8(p.name); w.F32(p.center.x); w.F32(p.center.z); w.F32(p.radius); }
+    for (const Poi& p : pois) { w.U16(p.name); w.F32(p.center.x); w.F32(p.center.z); w.F32(p.radius); }
 }
 inline bool ReadPois(ByteReader& r, std::vector<Poi>& pois) {
     const size_t n = r.U8();
     if (n > static_cast<size_t>(kNamesPerMap)) return false;
     pois.assign(n, {});
     for (Poi& p : pois) {
-        p.name = r.U8(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
+        p.name = r.U16(); p.center.x = r.F32(); p.center.z = r.F32(); p.radius = r.F32();
         if (p.name >= kPoiNameTotal || !Finite(p.center.x) || !Finite(p.center.z) || !Finite(p.radius) || p.radius < 0) return false;
     }
     return r.ok;

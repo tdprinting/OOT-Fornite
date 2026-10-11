@@ -58,6 +58,7 @@ bool gWaterRipples = true;          // the local option: the ripple simulation r
 float gWaterUnderAmt = 1.0f;        // the local option: how strong the underwater look is, 0 to 2
 bool gWaterSparkle = true;          // the local option: sparse bright sparkle on the sun's path instead of the even glint net
 bool gWaterStreaks = true;          // the local option: wind-blown foam streaks and whitecaps on the swell (Medium detail and up)
+bool gWaterClouds = true;           // the local option: clouds mirrored in the water (Medium detail and up)
 bool gWaterBands = true;            // the local option: rolling swell-band shading between the grid's points (High detail only)
 float gWaterHaze = 1.0f;            // the local option: how much the far water melts into the sky, 0 to 2
 float gWaterTone = 1.0f;            // the local option: how deep the troughs go and how rich the colour is, 0 to 2
@@ -408,17 +409,19 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "LobbyFish", "Lobby reef aquarium (clownfish and cleaner wrasse)" },
     { "HitFx", "Hit feedback: flash and particles on whatever is hit" },
     { "Shadows", "Dynamic shadows and lights" },
+    { "ItemMaps", "Sword and shield sunlight detail (normal and bump maps)" },
+    { "GearReport", "Gear report: show on screen what Link's hands, back and feet draw (off by default)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows };
-static_assert(kDbgShadows + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport };
+static_assert(kDbgGearReport + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
     for (int i = 0; i < kDebugCount; i++) {
         const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
-        gDebugOn[i] = CVarGetInteger(key.c_str(), 1) != 0;
+        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport ? 0 : 1) != 0;   // (the gear report is a bug-report aid: off unless asked for)
     }
     gDebugLoaded = true;
 }
@@ -652,6 +655,7 @@ bool BlocksAreBaked();   // the climbing blocks are in the island's collision (s
 bool OnAuthoredTerrain() { return OnIsland() && royale::IsAuthoredMap(royale::fortnite::gTerrainMapId); }
 bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kConvergenceMapIndex; }
 bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kRiftlandsMapIndex; }
+bool OnMoonfallTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kMoonfallMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
@@ -671,6 +675,12 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         float lootY;
         if (outY) *outY = royale::RiftlandsLootHeightAt({x,z},&lootY) ? lootY : royale::RiftlandsGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kMoonfallMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::MoonfallLootHeightAt({x,z},&lootY) ? lootY : royale::MoonfallGroundHeight({x,z});   // a chest site on an upper floor or a roof is at its own height
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -793,9 +803,11 @@ bool HazardFloorAt(float x, float z) {
 
 bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kRiftlandsMapIndex) return royale::RiftlandsPlacementValid(p);
+    if (gMapId == royale::kMoonfallMapIndex) return royale::MoonfallPlacementValid(p);
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;
+    if (gMapId == royale::kMoonfallMapIndex && royale::MoonfallObstacleAt(p)) return false;
     float y;
     return FloorAt(p.x, p.z, &y) && std::fabs(y - gMedianFloorY) <= 1200.0f && !UnderWater(p.x, p.z, y) && !OnExitFloor(p.x, p.z) && !NearLoadingZone(p.x, p.z, 380.0f) && !HazardFloorAt(p.x, p.z);
 }
@@ -806,7 +818,7 @@ bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
     if (royale::IsTestMap(gMapId) || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;

@@ -1153,6 +1153,14 @@ struct WornStrength {
     }
     ~WornStrength() { if (on) gSaveContext.inventory.upgrades = saved; }
 };
+// What your own Link last drew in each hand, on the back and on the feet (Debug > GearReport, drawn by DrawGearReport in Equipment.inc).
+struct GearReport {
+    uint32_t frame = 0;
+    bool seen[3] = {};          // the hook was asked about the left hand, the right hand, the back this frame
+    bool drawn[3] = {};         // and the limb had something to draw
+    int boots = -1;             // the boots Link was drawn with (-1: not drawn through the dressed path)
+};
+GearReport gGearReport;
 // Goron and Zora tunics colour the tunic red and blue, as in the game; any other tunic is the player's chosen colour.
 uint32_t PuppetTunicColour(const royale::PuppetState& s) {
     if (s.tunicGear == royale::ItemId::GoronTunic) return royale::PackRgb(100, 20, 0);

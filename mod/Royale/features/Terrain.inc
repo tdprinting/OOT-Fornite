@@ -138,15 +138,51 @@ void DrawConvergenceStructures(PlayState* play) {
 // each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
 // shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
 // batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
-void DrawKingdomStructures(PlayState* play) {
-    if (!OnKingdomTerrain()) return;
-    namespace km = royale::kingdom;
+// The authored maps (Kingdom, Riftlands, Moonfall) draw their baked structures with one routine; each instantiation keeps its own geometry cache.
+struct KingdomTables {
+    using Batch = royale::kingdom::Batch;
+    static constexpr auto& kBatches = royale::kingdom::kBatches;
+    static constexpr auto& kDrawVertices = royale::kingdom::kDrawVertices;
+    static constexpr auto& kTextures = royale::kingdom::kTextures;
+    static constexpr auto& kSurfaceNormal = royale::kingdom::kSurfaceNormal;
+    static constexpr auto& kSurfaceBump = royale::kingdom::kSurfaceBump;
+    static constexpr auto& kSurfaceUnits = royale::kingdom::kSurfaceUnits;
+    static constexpr auto kTextureSize = royale::kingdom::kTextureSize;
+    static constexpr auto kSurfaceSize = royale::kingdom::kSurfaceSize;
+    static constexpr auto kSurfaceClasses = royale::kingdom::kSurfaceClasses;
+};
+struct RiftlandsTables {
+    using Batch = royale::riftlands::Batch;
+    static constexpr auto& kBatches = royale::riftlands::kBatches;
+    static constexpr auto& kDrawVertices = royale::riftlands::kDrawVertices;
+    static constexpr auto& kTextures = royale::riftlands::kTextures;
+    static constexpr auto& kSurfaceNormal = royale::riftlands::kSurfaceNormal;
+    static constexpr auto& kSurfaceBump = royale::riftlands::kSurfaceBump;
+    static constexpr auto& kSurfaceUnits = royale::riftlands::kSurfaceUnits;
+    static constexpr auto kTextureSize = royale::riftlands::kTextureSize;
+    static constexpr auto kSurfaceSize = royale::riftlands::kSurfaceSize;
+    static constexpr auto kSurfaceClasses = royale::riftlands::kSurfaceClasses;
+};
+struct MoonfallTables {
+    using Batch = royale::moonfall::Batch;
+    static constexpr auto& kBatches = royale::moonfall::kBatches;
+    static constexpr auto& kDrawVertices = royale::moonfall::kDrawVertices;
+    static constexpr auto& kTextures = royale::moonfall::kTextures;
+    static constexpr auto& kSurfaceNormal = royale::moonfall::kSurfaceNormal;
+    static constexpr auto& kSurfaceBump = royale::moonfall::kSurfaceBump;
+    static constexpr auto& kSurfaceUnits = royale::moonfall::kSurfaceUnits;
+    static constexpr auto kTextureSize = royale::moonfall::kTextureSize;
+    static constexpr auto kSurfaceSize = royale::moonfall::kSurfaceSize;
+    static constexpr auto kSurfaceClasses = royale::moonfall::kSurfaceClasses;
+};
+template <typename T>
+void DrawAuthoredStructures(PlayState* play) {
     struct BatchCache {
         std::vector<Vtx> baked, lit;
         std::vector<Gfx> bakedList, litList;
         uint32_t seen = 0;
     };
-    constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
+    constexpr size_t kBatchCount = sizeof(T::kBatches) / sizeof(T::kBatches[0]);
     static std::vector<BatchCache> cache(kBatchCount);
     const uint32_t frame = play->state.frames;
     // Free geometry after 180 unseen game frames; never touch the two frames the renderer may still use.
@@ -155,11 +191,11 @@ void DrawKingdomStructures(PlayState* play) {
         auto& c = cache[i]; c.seen = frame;
         auto& vertices = lighting ? c.lit : c.baked;
         auto& list = lighting ? c.litList : c.bakedList;
-        const auto& batch = km::kBatches[i];
+        const auto& batch = T::kBatches[i];
         if (vertices.empty()) {
             vertices.resize(batch.count);
             for (size_t k = 0; k < batch.count; ++k) {
-                const auto& v = km::kDrawVertices[batch.first + k];
+                const auto& v = T::kDrawVertices[batch.first + k];
                 auto& dst = vertices[k].v;
                 dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
                 dst.tc[0] = v.s; dst.tc[1] = v.t;
@@ -182,7 +218,7 @@ void DrawKingdomStructures(PlayState* play) {
     };
     const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
     const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
-    struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
+    struct Rig { Lights1 lights; GfxSurfaceMap maps[T::kSurfaceClasses]; };
     Rig* rig = (normalPercent > 0 || bumpPercent > 0) ? static_cast<Rig*>(FrameAlloc(play, sizeof(Rig))) : nullptr;
     const bool relief = rig != nullptr;
     OPEN_DISPS(play->state.gfxCtx);
@@ -195,12 +231,12 @@ void DrawKingdomStructures(PlayState* play) {
     int loaded = -1;
     auto loadTexture = [&](int texture) {
         if (loaded == texture) return;
-        gDPLoadTextureTile(POLY_OPA_DISP++, km::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, km::kTextureSize, km::kTextureSize, 0, 0, km::kTextureSize - 1, km::kTextureSize - 1, 0,
+        gDPLoadTextureTile(POLY_OPA_DISP++, T::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, T::kTextureSize, T::kTextureSize, 0, 0, T::kTextureSize - 1, T::kTextureSize - 1, 0,
             G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
         loaded = texture;
     };
     // a chunk is 1853 x 1926 units across: test its far corner, not its middle
-    auto inReach = [&](const km::Batch& batch) {
+    auto inReach = [&](const typename T::Batch& batch) {
         const Vec3f eye = play->view.eye;
         const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
         if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
@@ -209,7 +245,7 @@ void DrawKingdomStructures(PlayState* play) {
         return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
     };
     for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
-        const auto& batch = km::kBatches[i];
+        const auto& batch = T::kBatches[i];
         if ((batch.surface && relief) || !inReach(batch)) continue;
         if (!GfxHasRoom(play, 20)) break;
         loadTexture(batch.texture);
@@ -226,143 +262,23 @@ void DrawKingdomStructures(PlayState* play) {
             auto d8 = [](float v) { return static_cast<s8>(std::clamp(v * 127.0f, -127.0f, 127.0f)); };
             const Lights1 base = gdSPDefLights1(c8(ambCol[0]), c8(ambCol[1]), c8(ambCol[2]), c8(sunCol[0]), c8(sunCol[1]), c8(sunCol[2]), d8(sunDir[0]), d8(sunDir[1]), d8(sunDir[2]));
             rig->lights = base;
-            for (int c = 0; c < km::kSurfaceClasses; ++c) {
+            for (int c = 0; c < T::kSurfaceClasses; ++c) {
                 GfxSurfaceMap& m = rig->maps[c];
                 m = {};
-                m.normal = km::kSurfaceNormal[c];
-                m.height = km::kSurfaceBump[c];
-                m.width = m.heightPixels = km::kSurfaceSize;
+                m.normal = T::kSurfaceNormal[c];
+                m.height = T::kSurfaceBump[c];
+                m.width = m.heightPixels = T::kSurfaceSize;
                 m.normalStrength = normalPercent / 100.0f;
                 m.bumpStrength = bumpPercent / 100.0f;
-                m.uvScale = 1.0f / km::kSurfaceUnits[c];
+                m.uvScale = 1.0f / T::kSurfaceUnits[c];
                 for (int k = 0; k < 3; ++k) { m.sunDirection[k] = sunDir[k]; m.sunColor[k] = sunCol[k]; m.ambientColor[k] = ambCol[k]; }
             }
             gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
             gSPSetLights1(POLY_OPA_DISP++, rig->lights);
-            for (int c = 1; c <= km::kSurfaceClasses; ++c) {
+            for (int c = 1; c <= T::kSurfaceClasses; ++c) {
                 bool started = false;
                 for (size_t i = 0; i < kBatchCount; ++i) {
-                    const auto& batch = km::kBatches[i];
-                    if (batch.surface != c || !inReach(batch)) continue;
-                    if (!GfxHasRoom(play, 20)) break;
-                    if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
-                    loadTexture(batch.texture);
-                    gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
-                }
-                if (started) gSPSurfaceMap(POLY_OPA_DISP++, 0);
-            }
-            gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
-        }
-    }
-    gSPTexture(POLY_OPA_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
-    CLOSE_DISPS(play->state.gfxCtx);
-}
-
-void DrawRiftlandsStructures(PlayState* play) {
-    if (!OnRiftlandsTerrain()) return;
-    namespace km = royale::riftlands;
-    struct BatchCache {
-        std::vector<Vtx> baked, lit;
-        std::vector<Gfx> bakedList, litList;
-        uint32_t seen = 0;
-    };
-    constexpr size_t kBatchCount = sizeof(km::kBatches) / sizeof(km::kBatches[0]);
-    static std::vector<BatchCache> cache(kBatchCount);
-    const uint32_t frame = play->state.frames;
-    // Free geometry after 180 unseen game frames; never touch the two frames the renderer may still use.
-    for (auto& c : cache) if ((!c.baked.empty() || !c.lit.empty()) && frame - c.seen > 180) c = BatchCache{};
-    auto batchList = [&](size_t i, bool lighting) -> Gfx* {
-        auto& c = cache[i]; c.seen = frame;
-        auto& vertices = lighting ? c.lit : c.baked;
-        auto& list = lighting ? c.litList : c.bakedList;
-        const auto& batch = km::kBatches[i];
-        if (vertices.empty()) {
-            vertices.resize(batch.count);
-            for (size_t k = 0; k < batch.count; ++k) {
-                const auto& v = km::kDrawVertices[batch.first + k];
-                auto& dst = vertices[k].v;
-                dst.ob[0] = v.x; dst.ob[1] = v.y; dst.ob[2] = v.z; dst.flag = 0;
-                dst.tc[0] = v.s; dst.tc[1] = v.t;
-                if (lighting) {
-                    vertices[k].n.n[0] = v.nx; vertices[k].n.n[1] = v.ny; vertices[k].n.n[2] = v.nz;
-                    vertices[k].n.a = 255;
-                } else { dst.cn[0] = v.r; dst.cn[1] = v.g; dst.cn[2] = v.b; dst.cn[3] = 255; }
-            }
-            list.resize(batch.count / 3 + batch.count / 30 + 3);
-            Gfx* p = list.data();
-            for (uint32_t first = 0; first < batch.count; first += 30) {
-                const int n = static_cast<int>(std::min<uint32_t>(30, batch.count - first));
-                gSPVertex(p++, reinterpret_cast<uintptr_t>(&vertices[first]), n, 0);
-                for (int t = 0; t < n; t += 3) gSP1Triangle(p++, t, t + 1, t + 2, 0);
-            }
-            gSPEndDisplayList(p++);
-            list.resize(static_cast<size_t>(p - list.data()));
-        }
-        return list.data();
-    };
-    const int normalPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
-    const int bumpPercent = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
-    struct Rig { Lights1 lights; GfxSurfaceMap maps[km::kSurfaceClasses]; };
-    Rig* rig = (normalPercent > 0 || bumpPercent > 0) ? static_cast<Rig*>(FrameAlloc(play, sizeof(Rig))) : nullptr;
-    const bool relief = rig != nullptr;
-    OPEN_DISPS(play->state.gfxCtx);
-    Gfx_SetupDL_25Opa(play->state.gfxCtx);
-    Matrix_Translate(0, 0, 0, MTXMODE_NEW);
-    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
-    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
-    int loaded = -1;
-    auto loadTexture = [&](int texture) {
-        if (loaded == texture) return;
-        gDPLoadTextureTile(POLY_OPA_DISP++, km::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, km::kTextureSize, km::kTextureSize, 0, 0, km::kTextureSize - 1, km::kTextureSize - 1, 0,
-            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
-        loaded = texture;
-    };
-    // a chunk is 1853 x 1926 units across: test its far corner, not its middle
-    auto inReach = [&](const km::Batch& batch) {
-        const Vec3f eye = play->view.eye;
-        const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z;
-        if (dx*dx + dz*dz > (batch.reach + batch.radius)*(batch.reach + batch.radius)) return false;
-        const float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
-        const float length = std::sqrt(fx*fx + fy*fy + fz*fz);
-        return length < 1.0f || dx*fx + dy*fy + dz*fz >= -batch.radius * length;
-    };
-    for (size_t i = 0; i < kBatchCount; ++i) {   // everything drawn with its baked light
-        const auto& batch = km::kBatches[i];
-        if ((batch.surface && relief) || !inReach(batch)) continue;
-        if (!GfxHasRoom(play, 20)) break;
-        loadTexture(batch.texture);
-        gSPDisplayList(POLY_OPA_DISP++, batchList(i, false));
-    }
-    if (relief) {   // the lit, relief-mapped faces, one surface class at a time
-        {
-            // The baked light, as a game light: a sky ambient and a sun from the south east late in the morning (tools/maps/kingdom/geom.py SUN).
-            // With "the sun lights the buildings" on (Graphics > Shadows and lights) it is the sun or the moon of this moment instead.
-            float sunDir[3] = { -57.0f / 127.0f, 99.0f / 127.0f, -55.0f / 127.0f }, sunCol[3] = { 107.0f / 255.0f, 104.0f / 255.0f, 98.0f / 255.0f };
-            float ambCol[3] = { 148.0f / 255.0f, 148.0f / 255.0f, 148.0f / 255.0f };
-            if (BuildingSunOn()) BuildingSunNow(sunDir, sunCol, ambCol);
-            auto c8 = [](float v) { return static_cast<u8>(std::clamp(v * 255.0f, 0.0f, 255.0f)); };
-            auto d8 = [](float v) { return static_cast<s8>(std::clamp(v * 127.0f, -127.0f, 127.0f)); };
-            const Lights1 base = gdSPDefLights1(c8(ambCol[0]), c8(ambCol[1]), c8(ambCol[2]), c8(sunCol[0]), c8(sunCol[1]), c8(sunCol[2]), d8(sunDir[0]), d8(sunDir[1]), d8(sunDir[2]));
-            rig->lights = base;
-            for (int c = 0; c < km::kSurfaceClasses; ++c) {
-                GfxSurfaceMap& m = rig->maps[c];
-                m = {};
-                m.normal = km::kSurfaceNormal[c];
-                m.height = km::kSurfaceBump[c];
-                m.width = m.heightPixels = km::kSurfaceSize;
-                m.normalStrength = normalPercent / 100.0f;
-                m.bumpStrength = bumpPercent / 100.0f;
-                m.uvScale = 1.0f / km::kSurfaceUnits[c];
-                for (int k = 0; k < 3; ++k) { m.sunDirection[k] = sunDir[k]; m.sunColor[k] = sunCol[k]; m.ambientColor[k] = ambCol[k]; }
-            }
-            gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
-            gSPSetLights1(POLY_OPA_DISP++, rig->lights);
-            for (int c = 1; c <= km::kSurfaceClasses; ++c) {
-                bool started = false;
-                for (size_t i = 0; i < kBatchCount; ++i) {
-                    const auto& batch = km::kBatches[i];
+                    const auto& batch = T::kBatches[i];
                     if (batch.surface != c || !inReach(batch)) continue;
                     if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
@@ -427,8 +343,9 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     }
     CLOSE_DISPS(play->state.gfxCtx);
     DrawConvergenceStructures(play);
-    DrawKingdomStructures(play);
-    DrawRiftlandsStructures(play);
+    if (OnKingdomTerrain()) DrawAuthoredStructures<KingdomTables>(play);
+    if (OnRiftlandsTerrain()) DrawAuthoredStructures<RiftlandsTables>(play);
+    if (OnMoonfallTerrain()) DrawAuthoredStructures<MoonfallTables>(play);
 }
 
 int FortniteActorId() {
@@ -677,6 +594,27 @@ static void ReportStrikeMoves(Player* player, const royale::HudState& hud, uint8
 
 void HandleCombatInput(Player* player, const royale::HudState& hud) {
     if (gAttackCooldown > 0) gAttackCooldown--;
+    // This hook runs at the end of the player's update, after the game has handled this frame's B: so "was a bomb in his hands before this press" is
+    // remembered from the last call. The first B pulls a bomb or bombchu out, the next throws it (and only the throw is a shot).
+    static bool sHeldExplosiveBefore = false;
+    const bool wasHoldingExplosive = sHeldExplosiveBefore;
+    {
+        const Actor* held = player->heldActor;
+        sHeldExplosiveBefore = held != nullptr && held->parent == &player->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU);
+    }
+    // The game's hookshot: when its chain leaves Link it grabs whoever he is facing within reach (the server pulls and stuns them).
+    static bool sHookOut = false;
+    {
+        bool out = false;
+        if (gPlayState != nullptr)
+            for (const Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next) if (a->id == ACTOR_ARMS_HOOK) out = true;
+        if (out && !sHookOut && hud.weapon == royale::ItemId::Hookshot && LiveAndAlive(hud) && InField()) {
+            float dist = 1e9f;
+            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist);
+            if (dist < 1e8f) gSession.ReportAttack(target, true);
+        }
+        sHookOut = out;
+    }
     if (!LiveAndAlive(hud) || !InField()) { gTouchJump = false; return; }
     const Input& in = gPlayState->state.input[0];
 
@@ -821,8 +759,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
 
     if (!(in.press.button & BTN_B) || gAttackCooldown > 0) return;
+    if (hud.weapon == royale::ItemId::Hookshot) return;   // the game's own hookshot: B readies it (first person, or the Z-target view) and fires it
     const royale::AmmoKind ammoKind = royale::AmmoUsedBy(hud.weapon);
     const bool hasAmmo = ammoKind == royale::AmmoKind::None || hud.ammo[static_cast<size_t>(ammoKind)] > 0;
+    const bool explosive = hud.weapon == royale::ItemId::Bombs || hud.weapon == royale::ItemId::Bombchus || hud.weapon == royale::ItemId::HomingBombchus;
+    if (explosive && hasAmmo && !wasHoldingExplosive) return;   // this press only pulled it out of the bag
     royale::WeaponStats w = royale::ActiveWeapon(hud.weapon, hasAmmo);   // no ammo: the weapon is only bashed with
     if (w.damage <= 0) return;
     if (!hasAmmo && ammoKind != royale::AmmoKind::None && gAttackCooldown <= 0) Say(std::string("Out of ") + royale::AmmoName(ammoKind) + ": bash them with it, or find more");
@@ -839,13 +780,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     }
     StartAction(hasAmmo ? PoseForWeapon(hud.weapon) : royale::Anim::Attack, 0.45f);
     // The swing, shot or throw (its model, sound and flight) is the game's own item code now, run by the item on the B button.
-    // The hookshot's chain and the grenade's blast are the mod's own (the game's real hookshot would fly Link to a wall, a real bomb would hurt him).
+    // The grenade's blast is the mod's own (a real bomb would hurt him); the hookshot is the game's (see HandleCombatInput).
     if (hud.weapon == royale::ItemId::ShockwaveGrenade) {
         // At somebody in reach it rolls to their feet; with nobody it bounces to a stop just ahead and launches you (the same spots the server marks).
         SpawnProjectileFrom(hud.weapon, player->actor.world.pos.x, player->actor.world.pos.y + 45.0f,
                             player->actor.world.pos.z, aim, hud.weaponRarity, bestDist < 1e8f ? bestDist : royale::kShockwaveSelfThrow);
-    } else if (hud.weapon == royale::ItemId::Hookshot) {
-        Audio_PlaySoundGeneral(AbilitySfx(hud.weapon), &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     }
     if (bestDist < 1e8f) { gSession.ReportAttack(best, true); return; }
     // Nothing in reach: the arrow, seed, bomb or bombchu still flies, so the server still spends it (else the count under the hotbar never drops).
@@ -1104,9 +1043,7 @@ u8 RealItemFor(royale::ItemId w) {
         case ItemId::Bombs: return ITEM_BOMB;
         case ItemId::Bombchus: case ItemId::HomingBombchus: return ITEM_BOMBCHU;
         case ItemId::DekuNuts: return ITEM_NUT;
-        // The real hookshot is never put on B: its chain and "reel in" are the game's own (they would pull Link to a wall, and with no wall the chain
-        // sound looped forever with the game stuck waiting for it). The mod's hookshot is the Pull weapon effect; Link only holds it up while he shoots.
-        case ItemId::Hookshot: return ITEM_NONE;
+        case ItemId::Hookshot: return ITEM_HOOKSHOT;   // the game's own hookshot: held until B, then first-person or Z-target aiming, B again to fire
         default: return ITEM_NONE;
     }
 }
@@ -1217,6 +1154,7 @@ void DrawLocalDressed(Player* player, PlayState* play, bool mayPose) {
     gGildedPlayer = gLocalDress.weapon == royale::ItemId::GildedSword ? player : nullptr;
     {
         NearDetail nearLod(&player->actor, NeedsNearDetail(gLocalDress.weapon, player->currentShield == PLAYER_SHIELD_DEKU));
+        gGearReport.boots = player->currentBoots;
         Player_Draw(&player->actor, play);
     }
     gGildedPlayer = nullptr;
@@ -1238,6 +1176,13 @@ void HoldFuse(Player* player) {
     else if (held->id == ACTOR_EN_BOM_CHU) reinterpret_cast<EnBomChu*>(held)->timer = 120;
 }
 int gUseRetry = 0;
+void KillHeldExplosive(Player* player) {
+    Actor* held = player->heldActor;
+    if (held == nullptr || held->parent != &player->actor || (held->id != ACTOR_EN_BOM && held->id != ACTOR_EN_BOM_CHU)) return;
+    Actor_Kill(held);
+    player->heldActor = nullptr; player->actor.child = nullptr; player->interactRangeActor = nullptr;
+    player->stateFlags1 &= ~PLAYER_STATE1_CARRYING_ACTOR;
+}
 void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     ApplyItemCvars(gSession.Joined() && (IsLive(hud) || VictoryWalk(hud)));
     SyncLocalDress(player, hud);
@@ -1258,6 +1203,12 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
     const bool free = !(player->stateFlags1 & (PLAYER_STATE1_IN_CUTSCENE | PLAYER_STATE1_GETTING_ITEM | PLAYER_STATE1_START_CHANGING_HELD_ITEM | PLAYER_STATE1_SHIELDING)) &&
                       player->stateFlags2 == (player->stateFlags2 & ~PLAYER_STATE2_OCARINA_PLAYING);
     const s8 want = Player_ItemToItemAction(item);
+    if (item == ITEM_BOMB || item == ITEM_BOMBCHU || item == ITEM_NUT) {
+        // Bombs, bombchus and nuts sit on B and nothing else happens: Link does not take them out (the game would) until B is pressed.
+        if (hud.weapon != gLocalWeaponShown) KillHeldExplosive(player);
+        gLocalWeaponShown = hud.weapon;
+        return;
+    }
     if (hud.weapon != gLocalWeaponShown && player->heldItemAction == want) gLocalWeaponShown = hud.weapon;   // same real item (slingshot and triple slingshot, bombchus and homing ones): using it again would fire it
     if (hud.weapon != gLocalWeaponShown || player->heldItemAction != want) {
         if (!free) return;
@@ -1265,14 +1216,8 @@ void SyncLocalWeapon(Player* player, const royale::HudState& hud) {
         gLocalWeaponShown = hud.weapon;
         gUseRetry = 10;
         // Whatever bomb or bombchu is still in his hands from the last weapon goes away with it: put down it would sit there with its fuse running.
-        if (Actor* held = player->heldActor; held != nullptr && held->parent == &player->actor && (held->id == ACTOR_EN_BOM || held->id == ACTOR_EN_BOM_CHU)) {
-            Actor_Kill(held);
-            player->heldActor = nullptr; player->actor.child = nullptr; player->interactRangeActor = nullptr;
-            player->stateFlags1 &= ~PLAYER_STATE1_CARRYING_ACTOR;
-        }
-        // The game uses a Deku Nut the moment it is selected (the flash goes off in his hand); here the nut waits in his hand for B, which the game
-        // handles on the press itself, so a nut is shown but not "used" to take it out.
-        if (item != ITEM_NUT) Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
+        KillHeldExplosive(player);
+        Player_UseItem(gPlayState, player, item);   // the game's own take-out: the change animation, the sound, the item in his hand
         if (player->heldItemAction != want) {       // refused (nothing to shoot, say): still show it in the hand
             player->itemAction = player->heldItemAction = look.itemAction;
             Player_SetModelGroup(player, look.modelGroup);
@@ -1378,8 +1323,9 @@ void OnPlayerUpdate() {
     if (gActionFrames > 0) gActionFrames--;
     // Shots are aimed by where Link faces, with a target or without: with nothing to Z-target the game would otherwise swing the camera into the
     // first-person aiming view (a mode this match never uses), so ready and fire in place as it does when locked on.
-    gRoyaleNoAimView = gSession.Joined() && IsLive(hud) ? 1 : 0;
-    gRoyaleNoUseOnTakeOut = gRoyaleNoAimView;
+    // (The hookshot is the exception: B readies it in first-person aiming, or the Z-target view when locked on, as in the original game.)
+    gRoyaleNoAimView = gSession.Joined() && IsLive(hud) && hud.weapon != royale::ItemId::Hookshot ? 1 : 0;
+    gRoyaleNoUseOnTakeOut = gSession.Joined() && IsLive(hud) ? 1 : 0;
     SyncLocalWeapon(player, hud);
     DriveFortnite(player, hud);
     EnsureSolidScenery();
