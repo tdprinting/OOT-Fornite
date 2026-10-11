@@ -21,19 +21,21 @@ index d973825..000b3cd 100644
  void DynaPoly_Init(PlayState* play, DynaCollisionContext* dyna);
  void DynaPoly_Alloc(PlayState* play, DynaCollisionContext* dyna);
 diff --git a/soh/include/z64.h b/soh/include/z64.h
-index 83e1498..9546b3b 100644
+index 83e1498..79b4c93 100644
 --- a/soh/include/z64.h
 +++ b/soh/include/z64.h
-@@ -39,7 +39,7 @@
+@@ -39,7 +39,9 @@
  #endif
  
  #define AUDIO_HEAP_SIZE  0x380000
 -#define SYSTEM_HEAP_SIZE (1024 * 1024 * 4)
-+#define SYSTEM_HEAP_SIZE (1024 * 1024 * 32) // OOT Royale: was 4 MB; the play heap (z_play.c) is taken from it and is 8x bigger now
++// OOT Royale: was 4 MB. The play heap (64 MB, z_play.c) and every other game state heap come from it. 128 MB is small next to
++// the Odin 2 Portal's 8-16 GB, and pages the game never touches are never backed by real memory.
++#define SYSTEM_HEAP_SIZE (1024 * 1024 * 128)
  
  #ifdef __cplusplus
  namespace LUS
-@@ -95,13 +95,15 @@ typedef struct {
+@@ -95,13 +97,15 @@ typedef struct {
  
  typedef struct {
      /* 0x00000 */ u16 headMagic; // GFXPOOL_HEAD_MAGIC
@@ -194,6 +196,44 @@ index 35e51d2..a206555 100644
              polygon.vIC = child->UnsignedAttribute("VertexC");
  
              polygon.normal.x = child->IntAttribute("NormalX");
+diff --git a/soh/src/code/game.c b/soh/src/code/game.c
+index a31cf64..5e10d84 100644
+--- a/soh/src/code/game.c
++++ b/soh/src/code/game.c
+@@ -392,7 +392,9 @@ void GameState_Realloc(GameState* gameState, size_t size) {
+         osSyncPrintf("メモリが足りません。ハイラルサイズを可能な最大値に変更します\n");
+         osSyncPrintf("(hyral=%08x max=%08x free=%08x alloc=%08x)\n", size, systemMaxFree, systemFree, systemAlloc);
+         osSyncPrintf(VT_RST);
+-        size = systemMaxFree - 0x10;
++        // OOT Royale: leave room for the allocation's own headers (GameAllocEntry and the arena node, larger on 64-bit). With only
++        // 0x10 spare the clamped request still did not fit and the game crashed in Fault_AddHungupAndCrash instead of running smaller.
++        size = systemMaxFree - 0x1000;
+     }
+ 
+     osSyncPrintf("ハイラル再確保 サイズ＝%u バイト\n", size); // "Hyral reallocate size = %u bytes"
+@@ -433,7 +435,7 @@ void GameState_Init(GameState* gameState, GameStateFunc init, GraphicsContext* g
+     osSyncPrintf("gamealloc_init 処理時間 %d us\n", OS_CYCLES_TO_USEC(endTime - startTime));
+ 
+     startTime = endTime;
+-    GameState_InitArena(gameState, 0x100000);
++    GameState_InitArena(gameState, 0x400000); // OOT Royale: 4 MB for the title and menu states (was 1 MB)
+     R_UPDATE_RATE = 3;
+     init(gameState);
+ 
+diff --git a/soh/src/code/main.c b/soh/src/code/main.c
+index faeb7d8..f991b84 100644
+--- a/soh/src/code/main.c
++++ b/soh/src/code/main.c
+@@ -109,7 +109,8 @@ void Main(void* arg) {
+     SysCfb_Init(0);
+     sysHeap = (uintptr_t)gSystemHeap;
+     fb = SysCfb_GetFbPtr(0);
+-    gSystemHeapSize = 1024 * 1024 * 4;
++    // OOT Royale: use SYSTEM_HEAP_SIZE (z64.h) instead of a hard-coded 4 MB, or the 8x play heap does not fit and Play_Init crashes
++    gSystemHeapSize = SYSTEM_HEAP_SIZE;
+     // "System heap initalization"
+     osSyncPrintf("システムヒープ初期化 %08x-%08x %08x\n", sysHeap, fb, gSystemHeapSize);
+     SystemHeap_Init((void*)sysHeap, gSystemHeapSize); // initializes the system heap
 diff --git a/soh/src/code/z_bgcheck.c b/soh/src/code/z_bgcheck.c
 index 766214d..4ad199f 100644
 --- a/soh/src/code/z_bgcheck.c
@@ -497,7 +537,7 @@ index 766214d..4ad199f 100644
      if (ssList->head != SS_NULL) {
          curNode = &colCtx->polyNodes.tbl[ssList->head];
 diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
-index 107ad0c..d91c4cc 100644
+index 107ad0c..f562d64 100644
 --- a/soh/src/code/z_play.c
 +++ b/soh/src/code/z_play.c
 @@ -407,7 +407,8 @@ void Play_Init(GameState* thisx) {
@@ -505,8 +545,8 @@ index 107ad0c..d91c4cc 100644
      // This is to avoid some parts of the game, like loading actors, causing OoM
      // This is potionally unavoidable due to struct size differences, but is x2 the right amount?
 -    GameState_Realloc(&play->state, 0x1D4790 * 2);
-+    // OOT Royale: 8x the original play heap (about 15 MB, was 3.8 MB): actors, collision lists and big custom maps all come from it.
-+    GameState_Realloc(&play->state, 0x1D4790 * 8);
++    // OOT Royale: 64 MB play heap (about 17x the original 3.8 MB): actors, collision lists, effects and big custom maps all come from it.
++    GameState_Realloc(&play->state, 1024 * 1024 * 64);
      KaleidoManager_Init(play);
      View_Init(&play->view, gfxCtx);
      Audio_SetExtraFilter(0);
