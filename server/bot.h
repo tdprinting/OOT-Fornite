@@ -1124,11 +1124,12 @@ class BotController {
         return base * (0.75f + 0.08f * static_cast<float>(static_cast<int>(r)));
     }
 
-    float LootValue(const PlayerState& p, const LootSpawn& s) const {
+    // `needGear`: it has only the starting sword, so a real weapon counts double and rupees hardly at all.
+    float LootValue(const PlayerState& p, const LootSpawn& s, bool needGear = false) const {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
                 const float mine = EffectiveDps(p.weapon), v = EffectiveDps({s.item, s.rarity});
-                if (v > mine * 1.1f) return (v - mine) * 1.2f;
+                if (v > mine * 1.1f) return (v - mine) * 1.2f * (needGear ? 2.0f : 1.0f);
                 return static_cast<int>(p.reserve.size()) < kMaxReserveWeapons ? 0.25f + v * 0.1f : 0.0f; // a spare for the hotbar
             }
             case ItemKind::Shield: {
@@ -1150,7 +1151,7 @@ class BotController {
                     case InstantEffect::Heart: return deficit > 0.4f ? 0.3f + deficit * 0.4f : 0.0f;
                     case InstantEffect::HeartPiece: return p.maxHealth < kMaxHealthCap ? 0.9f : 0.0f;
                     case InstantEffect::HeartContainer: return p.maxHealth < kMaxHealthCap ? 1.3f : 0.0f;
-                    case InstantEffect::Rupees: return 0.3f + 0.004f * static_cast<float>(s.amount);
+                    case InstantEffect::Rupees: return (0.05f + 0.004f * static_cast<float>(s.amount)) * (needGear ? 0.3f : 1.0f);
                     case InstantEffect::Ammo: return AmmoWant(p, AmmoGivenBy(s.item));
                     default: return 0.15f;
                 }
@@ -1180,7 +1181,8 @@ class BotController {
         if (m.Clock() < mem.lootEvalAt) return -1;
         mem.lootEvalAt = m.Clock() + 0.45f + 0.15f * std::fmod(p.id * 0.6180339f, 1.0f);
 
-        const float radius = kSearchRadius * (0.8f + mem.greed);
+        const bool needGear = GearFirst() && EffectiveDpsNow(p) < kMinFightDps;   // only the starting sword (for all the match, not just the grace time)
+        const float radius = kSearchRadius * (0.8f + mem.greed) * (needGear ? 1.5f : 1.0f);   // without a real weapon, look further for one
         const Circle safe = {soon.center, soon.radius * 0.95f};
         int best = -1;
         float bestScore = 0, currentScore = 0;
@@ -1191,7 +1193,7 @@ class BotController {
             const float d = Distance(p.pos, s.pos);
             if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) return;
             if (nav && !nav->Connected(p.pos, s.pos, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN())) return;   // a chest upstairs or on an island with no way up is not for the bots
-            const float value = LootValue(p, s) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
+            const float value = LootValue(p, s, needGear) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
             if (value <= 0) return;
             const float climbCost = nav ? std::max(0.0f, nav->StandHeight(s.pos) - FeetAt(p.pos)) * 2.0f : 0;
             const float travelCost = d * (nav && nav->Swimming(s.pos) ? 2.2f : 1.0f) + climbCost;
