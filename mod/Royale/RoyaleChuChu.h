@@ -38,13 +38,25 @@ void ChuChu_Draw(Actor* actor, PlayState* play, BossActor& b) {
         v.v.cn[0]=v.v.cn[1]=v.v.cn[2]=shade; v.v.cn[3]=255;
     }
     const bool stone = clip == chu::Petrify;
-    const float hitFlash = gHitFlash && b.flashLen>0 ? std::clamp(1.0f-b.flashAge/b.flashLen,0.0f,1.0f) : 0.0f;
+    // The hit flash from HitFeedback, or (if that never reached it) the first moments after its health dropped, so a blow always shows.
+    const float eventFlash = gHitFlash && b.flashLen>0 ? std::clamp(1.0f-b.flashAge/b.flashLen,0.0f,1.0f) : 0.0f;
+    const float hitFlash = std::max(eventFlash, b.hurtAge<0.22f ? 1.0f-b.hurtAge/0.22f : 0.0f);
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
     Matrix_RotateY(b.rot * (3.14159265f / 32768.0f), MTXMODE_APPLY);
+    if (gHitReact && b.recoilAge < 0.5f) {   // a blow rocks the jelly away from the attacker
+        HitRecoil r; r.amp = b.recoilAmp; r.age = b.recoilAge; r.dx = b.recoilDx; r.dz = b.recoilDz;
+        float pitch, roll;
+        RecoilTilt(r, b.rot * (3.14159265f / 32768.0f), &pitch, &roll);
+        Matrix_RotateX(pitch, MTXMODE_APPLY);
+        Matrix_RotateZ(roll, MTXMODE_APPLY);
+    }
+    // Jelly squash and wobble after a hit: flattens at once, then bounces back and settles.
+    const float hitAge = std::min(b.hurtAge, std::min(b.recoilAge, b.flashAge));
+    const float squash = hitAge < 0.7f ? std::exp(-hitAge*7.0f)*std::cos(hitAge*24.0f)*0.22f : 0.0f;
     const float scale=royale::BossOf(KindOf(b)).scale;
-    Matrix_Scale(scale*(KindOf(b)==BK::ChuDark?1.18f:1.0f),scale*(KindOf(b)==BK::ChuDark?0.78f:1.0f),scale,MTXMODE_APPLY);
+    Matrix_Scale(scale*(KindOf(b)==BK::ChuDark?1.18f:1.0f)*(1.0f+squash*.6f),scale*(KindOf(b)==BK::ChuDark?0.78f:1.0f)*(1.0f-squash),scale*(1.0f+squash*.6f),MTXMODE_APPLY);
     gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
     gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK | G_TEXTURE_GEN | G_TEXTURE_GEN_LINEAR);
     gDPSetCycleType(POLY_OPA_DISP++,G_CYC_1CYCLE);
