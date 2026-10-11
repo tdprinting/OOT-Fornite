@@ -1,0 +1,87 @@
+{
+  "triangles": 4198,
+  "parts": [
+    "torso",
+    "left_leg",
+    "right_leg",
+    "left_arm",
+    "right_arm",
+    "head",
+    "jaw",
+    "left_brow",
+    "right_brow",
+    "left_forearm",
+    "right_forearm",
+    "phone"
+  ],
+  "height_cm": 196.97,
+  "clips": [
+    {
+      "name": "idle",
+      "seconds": 2.4,
+      "loop": true
+    },
+    {
+      "name": "invite",
+      "seconds": 1.8,
+      "loop": true
+    },
+    {
+      "name": "walk",
+      "seconds": 0.9,
+      "loop": true
+    },
+    {
+      "name": "run",
+      "seconds": 0.65,
+      "loop": true
+    },
+    {
+      "name": "attack",
+      "seconds": 0.7,
+      "loop": false
+    },
+    {
+      "name": "greet",
+      "seconds": 1.0,
+      "loop": false
+    },
+    {
+      "name": "hurt",
+      "seconds": 0.5,
+      "loop": false
+    },
+    {
+      "name": "belly",
+      "seconds": 0.8,
+      "loop": false
+    },
+    {
+      "name": "chicken",
+      "seconds": 0.9,
+      "loop": false
+    },
+    {
+      "name": "kick",
+      "seconds": 0.8,
+      "loop": false
+    },
+    {
+      "name": "cheer",
+      "seconds": 1.2,
+      "loop": false
+    },
+    {
+      "name": "dance",
+      "seconds": 1.6,
+      "loop": true
+    },
+    {
+      "name": "phone",
+      "seconds": 26.6,
+      "loop": false
+    }
+  ],
+  "runtime": "shared/peter_model.h",
+  "rig": "rigid control empties, same baked rotations in Blender and runtime"
+}

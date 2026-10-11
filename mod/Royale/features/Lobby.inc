@@ -2,8 +2,6 @@
 
 int gLobbyAnnounced = 1 << 30;
 
-void OpenRoyaleMenu() { WarOpen(); }
-
 // The lobby counts down on the server. At zero the host's game does what the Start button does (it has to go to the field and measure the
 // map first); the server starts the match by itself if that never happens.
 void DriveLobbyTimer(const royale::HudState& hud) {

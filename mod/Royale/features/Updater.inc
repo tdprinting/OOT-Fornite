@@ -42,15 +42,6 @@ jint UpdaterInt(const char* method) {
     return v;
 }
 
-jlong UpdaterLong(const char* method) {
-    JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
-    jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;
-    if (cls == nullptr) return 0;
-    const jlong v = env->CallStaticLongMethod(cls, env->GetStaticMethodID(cls, method, "()J"));
-    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
-    return v;
-}
-
 std::string UpdaterString(const char* method) {
     JNIEnv* env = static_cast<JNIEnv*>(SDL_AndroidGetJNIEnv());
     jclass cls = env != nullptr ? UpdaterClass(env) : nullptr;

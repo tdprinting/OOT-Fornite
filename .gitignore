@@ -65,3 +65,7 @@ assets/allies/*.blend1
 /tools/jones/__pycache__/
 assets/npcs/jones/*.blend1
 assets/npcs/jones/*build-log.txt
+/tools/peter/__pycache__/
+assets/npcs/peter/*.blend1
+/voices/
+assets/npcs/peter/custom/

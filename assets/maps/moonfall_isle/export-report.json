@@ -1,0 +1,15 @@
+{
+ "collision_vertices": 11004,
+ "collision_triangles": 18453,
+ "high_vertices": 2814,
+ "upper_nodes": 4125,
+ "climb_walls": 384,
+ "obstacles": 2448,
+ "props": 428,
+ "loot_sites": 125,
+ "buildings": 50,
+ "walkways": 53,
+ "doors": 65,
+ "draw_vertices": 206817,
+ "batches": 612
+}

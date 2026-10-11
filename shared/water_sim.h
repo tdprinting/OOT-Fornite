@@ -23,6 +23,7 @@ struct GerstnerWave { float length, amp, angle, speed; };
 inline constexpr GerstnerWave kSwell[] = {
     { 900.0f, 6.5f, 0.60f, 150.0f }, { 560.0f, 4.2f, 1.35f, 118.0f }, { 340.0f, 2.7f, -0.25f, 92.0f },
     { 200.0f, 1.6f, 2.20f, 70.0f },  { 125.0f, 1.0f, 0.95f, 55.0f },  { 80.0f, 0.6f, -1.05f, 44.0f },
+    { 56.0f, 0.42f, 2.70f, 37.0f },  { 40.0f, 0.27f, -1.90f, 32.0f },   // fine chop: only the finest mesh round the player is dense enough to draw these
 };
 inline constexpr int kSwellCount = static_cast<int>(sizeof(kSwell) / sizeof(kSwell[0]));
 
@@ -282,25 +283,40 @@ inline void BlurWrap(std::vector<float>& img, int size) {
 // Caustics: a grid of light rays falls through the wavy surface and bends (a small-angle Snell's law: the ray shifts along the slope); where
 // many land together the floor is bright. `out` is frames x size x size bytes.
 // `kMin`..`kMax` is how many ripples cross the tile, `floor` how bright the floor must be lit to show, `soft` whether it is blurred.
-inline void MakeCaustics(uint8_t* out, int size, int frames, uint32_t seed = 11, int kMin = 2, int kMax = 6, float floor = 0.75f, bool soft = true) {
-    const std::vector<TileWave> waves = MakeTileWaves(seed, 14, kMin, kMax);
-    const int rays = size * 3;
+inline void MakeCaustics(uint8_t* out, int size, int frames, uint32_t seed = 11, int kMin = 2, int kMax = 6, float floor = 0.75f, bool soft = true,
+                         float bend = 0.0042f, int waveCount = 14) {
+    const std::vector<TileWave> waves = MakeTileWaves(seed, waveCount, kMin, kMax);
+    const int rays = size * 5 / 2;
     std::vector<float> acc(static_cast<size_t>(size) * size);
+    struct Rot { double c, s, dc, ds; float gx, gy; };   // one wave along a row of rays: its phase turns by a fixed step per ray
+    std::vector<Rot> rot(waves.size());
     for (int f = 0; f < frames; f++) {
         std::fill(acc.begin(), acc.end(), 0.0f);
         const float s = static_cast<float>(f) / frames;
-        for (int ry = 0; ry < rays; ry++)
+        for (int ry = 0; ry < rays; ry++) {
+            const float v = (ry + 0.5f) / rays;
+            for (size_t k = 0; k < waves.size(); k++) {
+                const TileWave& w = waves[k];
+                const double th = kTau * (w.kx * (0.5 / rays) + w.ky * v + w.turns * s) + w.phase, step = kTau * w.kx / static_cast<double>(rays);
+                rot[k] = { std::cos(th), std::sin(th), std::cos(step), std::sin(step), w.amp * kTau * w.kx, w.amp * kTau * w.ky };
+            }
             for (int rx = 0; rx < rays; rx++) {
-                const float u = (rx + 0.5f) / rays, v = (ry + 0.5f) / rays;
-                float h, gu, gv;
-                TileWaveAt(waves, u, v, s, &h, &gu, &gv);
-                constexpr float kBend = 0.0042f;   // how far a ray moves per unit of slope: sharper focus the larger it is
-                float px = (u + gu * kBend) * size - 0.5f, py = (v + gv * kBend) * size - 0.5f;
+                const float u = (rx + 0.5f) / rays;
+                float gu = 0.0f, gv = 0.0f;
+                for (Rot& r : rot) {
+                    gu += r.gx * static_cast<float>(r.c);
+                    gv += r.gy * static_cast<float>(r.c);
+                    const double c = r.c * r.dc - r.s * r.ds;
+                    r.s = r.s * r.dc + r.c * r.ds;
+                    r.c = c;
+                }
+                float px = (u + gu * bend) * size - 0.5f, py = (v + gv * bend) * size - 0.5f;
                 const float fx = std::floor(px), fy = std::floor(py), ax = px - fx, ay = py - fy;
                 const int ix = static_cast<int>(fx), iy = static_cast<int>(fy);
                 auto put = [&](int x, int y, float w) { acc[((y % size + size) % size) * size + (x % size + size) % size] += w; };
                 put(ix, iy, (1 - ax) * (1 - ay)); put(ix + 1, iy, ax * (1 - ay)); put(ix, iy + 1, (1 - ax) * ay); put(ix + 1, iy + 1, ax * ay);
             }
+        }
         if (soft) BlurWrap(acc, size);
         const float mean = static_cast<float>(rays) * rays / (static_cast<float>(size) * size);
         for (int k = 0; k < size * size; k++) {
@@ -313,17 +329,18 @@ inline void MakeCaustics(uint8_t* out, int size, int frames, uint32_t seed = 11,
 
 // Glints: the sun and the sky caught on small ripples: a thin, broken, sparkling net of light (the bright squiggles of the Zelda games' water).
 // It is the same light-focusing as the caustics, on finer ripples, and only the brightest part of it.
-inline void MakeGlints(uint8_t* out, int size, int frames, uint32_t seed = 23) { MakeCaustics(out, size, frames, seed, 3, 7, 1.25f, false); }
+inline void MakeGlints(uint8_t* out, int size, int frames, uint32_t seed = 23, int kMin = 3, int kMax = 7, float bend = 0.0042f, int waveCount = 14) {
+    MakeCaustics(out, size, frames, seed, kMin, kMax, 1.25f, false, bend, waveCount);
+}
 
 // Foam: lacy cells (the walls between the points of a tiling cellular pattern), in clumps. One frame; it is scrolled and faded instead.
-inline void MakeFoam(uint8_t* out, int size, uint32_t seed = 37) {
-    constexpr int kCells = 5;
+inline void MakeFoam(uint8_t* out, int size, uint32_t seed = 37, int kCells = 5) {
     auto feature = [&](int cx, int cy, float* fx, float* fy) {
         const int wx = (cx % kCells + kCells) % kCells, wy = (cy % kCells + kCells) % kCells;
         *fx = cx + Hash01(seed, wx, wy * 2 + 1);
         *fy = cy + Hash01(seed, wx, wy * 2 + 2);
     };
-    const std::vector<TileWave> clump = MakeTileWaves(seed + 1, 6, 1, 3);
+    const std::vector<TileWave> clump = MakeTileWaves(seed + 1, 6, 1, std::max(3, kCells * 3 / 5));
     for (int y = 0; y < size; y++)
         for (int x = 0; x < size; x++) {
             const float px = (x + 0.5f) / size * kCells, py = (y + 0.5f) / size * kCells;
@@ -347,14 +364,14 @@ inline void MakeFoam(uint8_t* out, int size, uint32_t seed = 37) {
 // Sparkle: the bright, sparse glints of the reference ocean (and of Lake Hylia at noon): a few soft specks a tile, each twinkling in its own
 // rhythm across the looping frames, over a faint trace of the glint net so the surface between them is not empty. Softer-edged than a real
 // pin-point (2 to 3 texels) so it reads painterly, not photoreal.
-inline void MakeSparkle(uint8_t* out, int size, int frames, uint32_t seed = 41, int specks = 34) {
+inline void MakeSparkle(uint8_t* out, int size, int frames, uint32_t seed = 41, int specks = 34, float speckScale = 1.0f, int netScale = 1) {
     std::vector<uint8_t> net(static_cast<size_t>(size) * size * frames);
-    MakeGlints(net.data(), size, frames, seed + 1);
+    MakeGlints(net.data(), size, frames, seed + 1, 3 * netScale, 7 * netScale, 0.0042f / netScale, 14 + 6 * (netScale - 1));
     struct Speck { float x, y, r, phase; int turns; };
     std::vector<Speck> sp;
     for (int n = 0; n < specks; n++) {
         const int turns = 1 + static_cast<int>(Hash01(seed, n, 3) * 3.0f);   // whole turns a loop, so the last frame runs into the first
-        sp.push_back({ Hash01(seed, n, 1) * size, Hash01(seed, n, 2) * size, 0.9f + 0.9f * Hash01(seed, n, 4), Hash01(seed, n, 5) * kTau, turns });
+        sp.push_back({ Hash01(seed, n, 1) * size, Hash01(seed, n, 2) * size, (0.9f + 0.9f * Hash01(seed, n, 4)) * speckScale, Hash01(seed, n, 5) * kTau, turns });
     }
     for (int f = 0; f < frames; f++) {
         const float s = static_cast<float>(f) / frames;
@@ -380,13 +397,13 @@ inline void MakeSparkle(uint8_t* out, int size, int frames, uint32_t seed = 41, 
 
 // Streaks: the long wisps of foam the wind draws across the sea along its own direction (along u in the tile): thin wavering lines in a few
 // layers, each starting and ending along its length, over a faint foam lace. One frame; the game turns and scrolls it along the wind.
-inline void MakeStreaks(uint8_t* out, int size, uint32_t seed = 53) {
+inline void MakeStreaks(uint8_t* out, int size, uint32_t seed = 53, int density = 1) {
     std::vector<uint8_t> lace(static_cast<size_t>(size) * size);
-    MakeFoam(lace.data(), size, seed + 7);
+    MakeFoam(lace.data(), size, seed + 7, 5 * density);
     struct Line { int across, along, gate; float sway, phase, gatePhase, power; };
     std::vector<Line> lines;
     for (int n = 0; n < 5; n++)
-        lines.push_back({ 2 + static_cast<int>(Hash01(seed, n, 1) * 7.0f), 1 + static_cast<int>(Hash01(seed, n, 2) * 2.0f), 2 + static_cast<int>(Hash01(seed, n, 3) * 3.0f),
+        lines.push_back({ (2 + static_cast<int>(Hash01(seed, n, 1) * 7.0f)) * density, 1 + static_cast<int>(Hash01(seed, n, 2) * 2.0f), 2 + static_cast<int>(Hash01(seed, n, 3) * 3.0f),
                           0.015f + 0.03f * Hash01(seed, n, 4), Hash01(seed, n, 5) * kTau, Hash01(seed, n, 6) * kTau, 12.0f + 14.0f * Hash01(seed, n, 7) });
     for (int y = 0; y < size; y++)
         for (int x = 0; x < size; x++) {
@@ -425,6 +442,78 @@ inline void MakeSwellBands(uint8_t* out, int size, int frames, uint32_t seed = 6
                 out[static_cast<size_t>(f) * size * size + y * size + x] = static_cast<uint8_t>(std::lround(std::pow(lit, 1.8f) * 255.0f));
             }
     }
+}
+
+// Tiling value noise (lattice `period` points across the tile, smooth between them) in 0..1.
+inline float TileNoise(float u, float v, int period, uint32_t seed) {
+    const float x = u * period, y = v * period;
+    const int ix = static_cast<int>(std::floor(x)), iy = static_cast<int>(std::floor(y));
+    const float fx = x - ix, fy = y - iy;
+    const float sx = fx * fx * (3.0f - 2.0f * fx), sy = fy * fy * (3.0f - 2.0f * fy);
+    auto at = [&](int a, int b) { return Hash01(seed, static_cast<uint32_t>(((a % period) + period) % period), static_cast<uint32_t>(((b % period) + period) % period)); };
+    const float top = at(ix, iy) * (1 - sx) + at(ix + 1, iy) * sx, bot = at(ix, iy + 1) * (1 - sx) + at(ix + 1, iy + 1) * sx;
+    return top * (1 - sy) + bot * sy;
+}
+
+// Clouds for the water to mirror: soft, rounded masses with painted edges (the clouds of the Zelda skies), over a thin haze, tiling. One frame;
+// the game scrolls it with the wind. The intensity is the cloud's density, so it is also its alpha.
+inline void MakeClouds(uint8_t* out, int size, uint32_t seed = 71) {
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++) {
+            const float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+            float n = 0.0f, amp = 0.5f, norm = 0.0f;
+            for (int o = 0; o < 5; o++) {
+                const int per = 4 << o;
+                n += amp * TileNoise(u, v, per, seed + o * 17);
+                norm += amp;
+                amp *= 0.5f;
+            }
+            n /= norm;
+            // a second, stretched layer so the masses lie in banks along u
+            const float bank = TileNoise(u, v, 3, seed + 101) * 0.5f + TileNoise(u, v, 6, seed + 111) * 0.5f;
+            const float body = n * 0.75f + bank * 0.45f;
+            const float d = std::clamp((body - 0.5f) / 0.26f, 0.0f, 1.0f);
+            const float soft = d * d * (3.0f - 2.0f * d);
+            // lit tops: a little brighter where the density rises quickly
+            const float haze = 0.10f * TileNoise(u, v, 6, seed + 131);
+            out[y * size + x] = static_cast<uint8_t>(std::lround(std::clamp(soft * 0.92f + haze * (1.0f - soft), 0.0f, 1.0f) * 255.0f));
+        }
+}
+
+// The water's particle sprites, four to a texture (2 x 2 cells): a soft droplet, a bubble (a ring with a glint), a puff of spray, and a lacy
+// foam disc. Each lies well inside its cell with an empty margin, so the filtering never bleeds one into the next.
+inline void MakeSplashAtlas(uint8_t* out, int size, uint32_t seed = 83) {
+    const int h = size / 2;
+    for (int cy = 0; cy < 2; cy++)
+        for (int cx = 0; cx < 2; cx++) {
+            const int kind = cy * 2 + cx;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < h; x++) {
+                    const float px = ((x + 0.5f) / h) * 2.0f - 1.0f, py = ((y + 0.5f) / h) * 2.0f - 1.0f;
+                    const float r = std::hypot(px, py);
+                    float v = 0.0f;
+                    if (kind == 0) {   // droplet: round, brightest at the core, a pale glint high on the left
+                        v = std::pow(std::clamp(1.0f - r / 0.82f, 0.0f, 1.0f), 0.9f);
+                        v = std::min(1.0f, v + 0.5f * std::exp(-((px + 0.22f) * (px + 0.22f) + (py + 0.26f) * (py + 0.26f)) / 0.012f));
+                    } else if (kind == 1) {   // bubble: a clear rim, a faint fill, two glints
+                        const float rim = std::exp(-((r - 0.6f) * (r - 0.6f)) / 0.0075f), fill = r < 0.6f ? 0.16f * (0.4f + 0.6f * r / 0.6f) : 0.0f;
+                        const float g1 = std::exp(-((px + 0.28f) * (px + 0.28f) + (py + 0.3f) * (py + 0.3f)) / 0.0105f);
+                        const float g2 = 0.4f * std::exp(-((px - 0.3f) * (px - 0.3f) + (py - 0.28f) * (py - 0.28f)) / 0.006f);
+                        v = (rim * 0.85f + fill + g1 + g2) * std::clamp((0.82f - r) / 0.12f, 0.0f, 1.0f);
+                    } else if (kind == 2) {   // spray puff: a lumpy cloud, dense in the middle
+                        const float lump = TileNoise((x + 0.5f) / h, (y + 0.5f) / h, 4, seed) * 0.6f + TileNoise((x + 0.5f) / h, (y + 0.5f) / h, 8, seed + 9) * 0.4f;
+                        const float rr = r * (0.8f + 0.5f * lump);
+                        v = std::pow(std::clamp(1.0f - rr / 0.8f, 0.0f, 1.0f), 1.3f) * (0.75f + 0.25f * lump);
+                    } else {   // foam disc: a lacy net inside a soft rim, thinning outward
+                        const float lump = TileNoise((x + 0.5f) / h, (y + 0.5f) / h, 6, seed + 21), cells = TileNoise((x + 0.5f) / h, (y + 0.5f) / h, 12, seed + 33);
+                        const float lace = std::clamp(1.0f - std::fabs(cells - 0.5f) * 5.0f, 0.0f, 1.0f);
+                        const float body = std::clamp(1.0f - r / 0.86f, 0.0f, 1.0f);
+                        const float ring = std::exp(-((r - 0.72f) * (r - 0.72f)) / 0.01f);
+                        v = std::clamp(body * (0.3f + 0.55f * lace) * (0.6f + 0.6f * lump) + ring * 0.55f * (0.5f + 0.5f * lump), 0.0f, 1.0f) * std::clamp((0.9f - r) / 0.1f, 0.0f, 1.0f);
+                    }
+                    out[(cy * h + y) * size + cx * h + x] = static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+                }
+        }
 }
 
 // How well a texture tiles: the mean jump across its wrap seam over the largest mean jump between two neighbouring columns inside it (at most

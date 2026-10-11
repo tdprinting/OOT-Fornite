@@ -1,0 +1,91 @@
+diff --git a/Android/app/build.gradle b/Android/app/build.gradle
+index 79ceb6c..0b0710c 100644
+--- a/Android/app/build.gradle
++++ b/Android/app/build.gradle
+@@ -115,3 +115,23 @@ task wrapper(type: Wrapper) {
+ 
+ task prepareKotlinBuildScriptModel {
+ }
++
++// OOT Royale (patches/0030): fingerprints of the game files this APK unpacks, so an update only rebuilds what really changed.
++// MainActivity keeps the ROM-built oot.otr across updates unless EXTRACTOR_VERSION changes, and re-copies soh.otr only when
++// SOH_OTR_VERSION changes. Bump ROYALE_EXTRACT_REVISION when an extractor change (patches/ZAPDTR) changes what it writes.
++def ROYALE_EXTRACT_REVISION = 1
++def royaleFingerprint = { List<File> roots ->
++    def digest = java.security.MessageDigest.getInstance("SHA-1")
++    roots.each { root ->
++        def files = root.isDirectory() ? fileTree(root).files.sort { it.path } : (root.isFile() ? [root] : [])
++        files.each { f ->
++            digest.update(root.toPath().relativize(f.toPath()).toString().replace('\\', '/').getBytes("UTF-8"))
++            f.withInputStream { s -> byte[] buf = new byte[65536]; int n; while ((n = s.read(buf)) > 0) digest.update(buf, 0, n) }
++        }
++    }
++    digest.digest().encodeHex().toString().substring(0, 16)
++}
++android.defaultConfig.buildConfigField "String", "EXTRACTOR_VERSION",
++        "\"r${ROYALE_EXTRACT_REVISION}-${royaleFingerprint([file('src/main/assets/assets')])}\""
++android.defaultConfig.buildConfigField "String", "SOH_OTR_VERSION",
++        "\"${royaleFingerprint([file('src/main/assets/soh.otr')])}\""
+diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+index 77a5f55..8715974 100644
+--- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
++++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
+@@ -135,12 +135,53 @@ public class MainActivity extends SDLActivity{
+     }
+ 
+     private void doVersionCheck(){
+-        int currentVersion = BuildConfig.VERSION_CODE;
+-        int storedVersion = preferences.getInt("appVersion", 1);
+-
+-        if (currentVersion > storedVersion) {
++        // OOT Royale (patches/0030): every build has a new version code, and wiping the game files on each one made every
++        // update re-copy the extractor files and rebuild oot.otr from the ROM. Only throw away what this APK really changed:
++        // the fingerprints are hashes of the packed files (app/build.gradle), kept in the data folder so they also survive a reinstall.
++        File root = new File(Environment.getExternalStorageDirectory(), "TDawgsBattleRoyale");
++        File versionFile = new File(root, GAME_FILES_VERSION);
++        String[] stored = readGameFilesVersion(versionFile);
++        boolean hasRomFiles = new File(root, "oot.otr").exists() || new File(root, "oot-mq.otr").exists();
++        // Builds before this kept no fingerprints; their files came from the same packed extractor, so keep a finished oot.otr.
++        String storedExtractor = stored != null ? stored[0] : (hasRomFiles ? BuildConfig.EXTRACTOR_VERSION : "");
++        String storedSohOtr = stored != null ? stored[1] : "";
++
++        if (!BuildConfig.EXTRACTOR_VERSION.equals(storedExtractor)) {
++            Log.i("GameFiles", "Extractor changed (" + storedExtractor + " -> " + BuildConfig.EXTRACTOR_VERSION + "), rebuilding game files");
+             deleteOutdatedAssets();
+-            preferences.edit().putInt("appVersion", currentVersion).apply();
++        } else if (!BuildConfig.SOH_OTR_VERSION.equals(storedSohOtr)) {
++            Log.i("GameFiles", "soh.otr changed, replacing only soh.otr and keeping oot.otr");
++            File sohOtr = new File(root, "soh.otr");
++            try (InputStream in = getAssets().open("soh.otr")) {
++                if (root.isDirectory()) AssetCopyUtil.writeAtomically(in, sohOtr);
++            } catch (IOException e) {
++                // Missing soh.otr sends checkAndSetupFiles through the normal setup, which copies it again
++                Log.w("GameFiles", "Could not replace soh.otr", e);
++                deleteIfExists(sohOtr);
++            }
++        } else {
++            Log.i("GameFiles", "Game files unchanged, keeping them");
++        }
++        if (root.isDirectory()) {
++            try (OutputStream out = new FileOutputStream(versionFile)) {
++                out.write((BuildConfig.EXTRACTOR_VERSION + "\n" + BuildConfig.SOH_OTR_VERSION + "\n").getBytes());
++            } catch (IOException e) {
++                Log.w("GameFiles", "Could not write " + versionFile, e);
++            }
++        }
++        preferences.edit().putInt("appVersion", BuildConfig.VERSION_CODE).apply();
++    }
++
++    // Fingerprints of the game files in the data folder: line 1 the extractor files, line 2 soh.otr. Null when not written yet.
++    private static final String GAME_FILES_VERSION = ".game-files-version";
++
++    private static String[] readGameFilesVersion(File file) {
++        if (!file.isFile()) return null;
++        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(file))) {
++            String extractor = r.readLine(), sohOtr = r.readLine();
++            return extractor != null && sohOtr != null ? new String[] { extractor.trim(), sohOtr.trim() } : null;
++        } catch (IOException e) {
++            return null;
+         }
+     }
+ 

@@ -71,6 +71,53 @@ bool IsBotActor(const void* actor) {
     return st != gState.end() && st->second.isBot;
 }
 
+// ---- gear report (Debug > GearReport) ----------------------------------------------------------------------------------------------------
+// Swords, shields and boots have been reported invisible on adult Link and the cause could not be found from the code alone, so this shows,
+// for your own Link, exactly what the game picked to draw in each hand, on the back and on the feet. A screenshot of it says which part fails.
+void NoteGearLimb(PlayState* play, const Player* player, int32_t limb, const Gfx* dl) {
+    if (!DebugOn(kDbgGearReport) || player != GET_PLAYER(play)) return;
+    const int i = limb == PLAYER_LIMB_L_HAND ? 0 : limb == PLAYER_LIMB_R_HAND ? 1 : limb == PLAYER_LIMB_SHEATH ? 2 : -1;
+    if (i < 0) return;
+    if (gGearReport.frame != play->state.frames) { gGearReport.frame = play->state.frames; for (int k = 0; k < 3; k++) gGearReport.seen[k] = gGearReport.drawn[k] = false; }
+    gGearReport.seen[i] = true;
+    gGearReport.drawn[i] = dl != nullptr;
+}
+// The game's display list tables hold resource paths: keep the name after the last '/'.
+std::string GearListName(Gfx* const* lists, int index) {
+    if (lists == nullptr) return "(none)";
+    const char* path = reinterpret_cast<const char*>(lists[index]);
+    if (path == nullptr) return "(empty)";
+    const char* slash = std::strrchr(path, '/');
+    return slash != nullptr ? slash + 1 : path;
+}
+void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds) {
+    if (!DebugOn(kDbgGearReport) || !InGame()) return;
+    const Player* p = GET_PLAYER(gPlayState);
+    if (p == nullptr) return;
+    const float size = std::clamp(ds.y / 720.0f, 0.8f, 2.2f) * 15.0f;
+    const float height = p->bodyPartsPos[PLAYER_BODYPART_HEAD].y - p->actor.world.pos.y;
+    const bool fresh = gPlayState->state.frames - gGearReport.frame < 3;
+    auto yes = [&](int i) { return !fresh || !gGearReport.seen[i] ? std::string("not asked") : gGearReport.drawn[i] ? std::string("drawn") : std::string("EMPTY"); };
+    const std::string lines[] = {
+        "GEAR REPORT  save age " + std::string(LINK_IS_ADULT ? "adult" : "child") + "  head height " + std::to_string(static_cast<int>(height)) +
+            "  B item " + std::to_string(gSaveContext.equips.buttonItems[0]) + "  always-visible " + std::to_string(CVarGetInteger(CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), 0)) +
+            "  item maps " + (DebugOn(kDbgItemMaps) ? "on" : "off"),
+        "left hand  type " + std::to_string(p->leftHandType) + "  " + GearListName(p->leftHandDLists, 0) + "  " + yes(0),
+        "right hand type " + std::to_string(p->rightHandType) + "  shield " + std::to_string(p->currentShield) + "  " +
+            GearListName(p->rightHandDLists, p->rightHandType == PLAYER_MODELTYPE_RH_SHIELD ? p->currentShield * 4 : 0) + "  " + yes(1),
+        "back       type " + std::to_string(p->sheathType) + "  " +
+            GearListName(p->sheathDLists, (p->sheathType == PLAYER_MODELTYPE_SHEATH_18 || p->sheathType == PLAYER_MODELTYPE_SHEATH_19) ? p->currentShield * 4 : 0) + "  " + yes(2),
+        "feet       boots drawn " + std::to_string(gGearReport.boots) + "  now " + std::to_string(p->currentBoots) + "  tunic " + std::to_string(p->currentTunic) +
+            "  strength " + std::to_string(CUR_UPG_VALUE(UPG_STRENGTH)) + "  draw " + (p->actor.draw == Player_Draw ? "game" : "dressed"),
+    };
+    float y = ds.y * 0.08f;
+    for (const std::string& t : lines) {
+        dl->AddText(font, size, ImVec2(13.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
+        dl->AddText(font, size, ImVec2(12.0f, y), IM_COL32(255, 240, 160, 255), t.c_str());
+        y += size * 1.25f;
+    }
+}
+
 // Wrap equipment in an explicit material scope. The wrapper and sunlight
 // snapshot live in Claude's double-buffered graphics pool, like character data.
 void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dListPtr) {
@@ -78,7 +125,8 @@ void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dL
     PlayState* play = static_cast<PlayState*>(playPtr);
     Player* player = static_cast<Player*>(playerPtr);
     Gfx** dList = static_cast<Gfx**>(dListPtr);
-    if (!*dList) return;
+    NoteGearLimb(play, player, limb, *dList);
+    if (!*dList || !DebugOn(kDbgItemMaps)) return;
     const int normals = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemNormals"), 100), 0, 200);
     const int bumps = std::clamp(CVarGetInteger(CVAR_SETTING("Royale.ItemBumps"), 50), 0, 200);
     if (!normals && !bumps) return;
@@ -90,18 +138,18 @@ void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dL
         (player->leftHandType == PLAYER_MODELTYPE_LH_SWORD || player->leftHandType == PLAYER_MODELTYPE_LH_SWORD_2 ||
          player->leftHandType == PLAYER_MODELTYPE_LH_BGS)) {
         switch (player->heldItemAction) {
-            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_normal; height = kokiri_sword_bump; break;
-            case PLAYER_IA_SWORD_MASTER: normal = master_sword_normal; height = master_sword_bump; break;
-            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_normal; height = biggoron_sword_bump; break;
+            case PLAYER_IA_SWORD_KOKIRI: normal = kokiri_sword_maps().normal.data(); height = kokiri_sword_maps().bump.data(); break;
+            case PLAYER_IA_SWORD_MASTER: normal = master_sword_maps().normal.data(); height = master_sword_maps().bump.data(); break;
+            case PLAYER_IA_SWORD_BIGGORON: normal = biggoron_sword_maps().normal.data(); height = biggoron_sword_maps().bump.data(); break;
             default: return;
         }
         scale = 1.0f / 4000.0f;
     } else if ((limb == PLAYER_LIMB_R_HAND && player->rightHandType == PLAYER_MODELTYPE_RH_SHIELD) ||
                limb == PLAYER_LIMB_SHEATH) {
         switch (player->currentShield) {
-            case PLAYER_SHIELD_DEKU: normal = deku_shield_normal; height = deku_shield_bump; break;
-            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_normal; height = hylian_shield_bump; break;
-            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_normal; height = mirror_shield_bump; break;
+            case PLAYER_SHIELD_DEKU: normal = deku_shield_maps().normal.data(); height = deku_shield_maps().bump.data(); break;
+            case PLAYER_SHIELD_HYLIAN: normal = hylian_shield_maps().normal.data(); height = hylian_shield_maps().bump.data(); break;
+            case PLAYER_SHIELD_MIRROR: normal = mirror_shield_maps().normal.data(); height = mirror_shield_maps().bump.data(); break;
             default: return;
         }
     } else return;

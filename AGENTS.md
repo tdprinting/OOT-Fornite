@@ -1,12 +1,9 @@
-# Working defaults
+# Agent entry
 
-For a new session, read `START-HERE.md` once before editing.
+Codex and other non-Claude tools read this file. All rules live in [`CLAUDE.md`](CLAUDE.md); follow them.
+Start code lookup at [`mod/Royale/FEATURES.md`](mod/Royale/FEATURES.md) and [`docs/CODE_MAP.md`](docs/CODE_MAP.md). Docs index: [`docs/README.md`](docs/README.md).
+If `../AGENTS.md` exists, apply its shared preferences too. Optional token monitor: `python tools/token_monitor/server.py`, then `http://127.0.0.1:8766`.
 
-Use one primary agent by default. Claude Code also has a project team in `.claude/agents/` (Leader, Ronnie the Runner, Gary); see `CLAUDE.md`. If `../AGENTS.md` exists, apply its shared project preferences alongside these checkout instructions.
+## Startup prompt
 
-- Before substantial work, briefly state the approach and why. Keep updates and replies clear, concise, and free of repetition.
-- Start with `mod/Royale/FEATURES.md`; read only the relevant feature and dependencies. Verify the branch and preserve existing edits.
-- Use scoped `rg` searches and small source ranges. `.rgignore` excludes bulky search results; use explicit paths or `--no-ignore` when needed. Preserve useful comments.
-- Use local Git first. Prefer RTK for supported verbose reads; query GitHub with selected `--json` fields, `--jq`, and bounded `--limit`. Inspect only relevant failed log sections; avoid unchanged polling.
-- Validate affected behavior. Compile the mod for engine changes; device visuals and performance require device testing. Never claim runtime verification from build success.
-- Keep one brief current handoff per feature: status, changed files, validation, next step. Link to archived history instead of repeating it.
+Read CLAUDE.md and AGENTS.md before working. Apply their concise communication, focused reading/search, RTK, bounded GitHub queries, validation, and handoff practices. Start source lookup at mod/Royale/FEATURES.md and docs/CODE_MAP.md. Preserve unrelated changes.
