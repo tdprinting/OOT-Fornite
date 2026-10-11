@@ -1443,8 +1443,11 @@ static void AlliesOverTheWire() {
     { EvAllyAction a,b;a.index=4;a.weapon=2;CHECK(RoundTrips(a,b) && b.weapon==2);a.index=0;CHECK(!RoundTrips(a,b)); }
     { HireAllyRequest a,b; a.index=4; CHECK(RoundTrips(a,b) && b.index==4); }
     { Snapshot a,b; for(int i=0;i<kAllyCount;++i) { AllyNet n; n.index=n.kind=static_cast<uint8_t>(i); a.allies.push_back(n); }
-      CHECK(RoundTrips(a,b) && b.allies.size()==6 && b.allies.back().kind==static_cast<uint8_t>(AllyKind::Peter)); }
+      CHECK(RoundTrips(a,b) && b.allies.size()==7 && b.allies.back().kind==static_cast<uint8_t>(AllyKind::Chief)); }
     { Snapshot a,b; AllyNet n;n.index=n.kind=5;n.weapon=1;a.allies={n};CHECK(!RoundTrips(a,b)); }   // Peter carries no rifle
+    { Snapshot a,b; AllyNet n;n.index=n.kind=6;n.weapon=3;a.allies={n};CHECK(RoundTrips(a,b) && b.allies[0].weapon==3); }   // Chief carries Jones's rifles
+    { Snapshot a,b; AllyNet n;n.index=n.kind=6;n.weapon=4;a.allies={n};CHECK(!RoundTrips(a,b)); }
+    { EvAllyAction a,b;a.index=6;a.weapon=1;CHECK(RoundTrips(a,b) && b.weapon==1);a.weapon=4;CHECK(!RoundTrips(a,b)); }
     { HireAllyRequest a, b; a.index = 3; CHECK(RoundTrips(a, b) && b.index == 3); }
     { HireAllyRequest bad, out; bad.index = 9; CHECK(!RoundTrips(bad, out)); }
     { EvAlly a, b; a.index = 2; a.owner = 5; a.status = 1; CHECK(RoundTrips(a, b) && b.index == 2 && b.owner == 5 && b.status == 1); }

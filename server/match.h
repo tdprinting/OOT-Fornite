@@ -1259,8 +1259,8 @@ class Match {
             targetY = target->isBot && nav ? nav->FloorAt(target->pos) + target->y : target->y;
         }
         const float targetDistance=Distance(a.pos,targetPos);
-        const uint8_t weapon=a.kind==AllyKind::Jones?static_cast<uint8_t>(JonesGunAt(targetDistance)):0;
-        if(a.kind==AllyKind::Jones) {
+        const uint8_t weapon=CarriesJonesGuns(a.kind)?static_cast<uint8_t>(JonesGunAt(targetDistance)):0;
+        if(CarriesJonesGuns(a.kind)) {
             const auto& gun=kJonesGuns[weapon];def.range=gun.range;def.damage=gun.damage;def.cooldown=gun.cooldown;
         }
         if (targetDistance > def.range + extra) return false;

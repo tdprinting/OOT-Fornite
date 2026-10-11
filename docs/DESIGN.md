@@ -587,7 +587,7 @@ Everything below is implemented, covered by the server tests, and described for 
 | Seasons and weather (deterministic from the seed, per-map tables), lightning, fog and sand effects on bot sight | `shared/weather.h`, `server/match.h` (`TickWeather`) |
 | Economy: rupees, ammo, special weapons, death drops (half the kit), supply drops | `shared/items.h`, `shared/combat.h`, `server/match.h` |
 | Magic meter (`kMaxMagic`), Adult Power, Heart Container chests | `shared/balance.h`, `server/match.h` |
-| Hireable allies (four kinds, follow and fight, healed or freed when the owner falls) | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
+| Hireable allies (seven kinds incl. Jones, Peter and Master Chief; follow and fight, healed or freed when the owner falls). Master Chief: 140 rupees, 6 hearts, 118 speed, carries Jones's four private rifles (same server rules); visual rifle-butt bash under 170 units; low-poly body from CC-BY-4.0 model by bizarrefog1 | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
 | Climbs, hideaway chests, spaced chest sites | `shared/poi.h`, `shared/loot.h` |
 | Smarter bots (rolls, lock-on footwork, hazards, calm opening, gear first, magic aware) | `server/bot.h` |
 | Cloth and wind (glider canopy, cap tail, tunic skirt, sheath) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch`, `patches/0015-player-cloth-limb-hook.patch` |
