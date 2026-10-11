@@ -1,7 +1,7 @@
 # Maps: what the ROM says
 
 These numbers come from the game's own collision data, read with `tools/rom-extractor.html` ("Analyse ALL maps"). They are the ground truth the
-five battle royale maps are fitted to.
+five ROM-scene maps (ids 0-4) are fitted to. The other maps (ids 5-12: Fortnite Map, Sandbox, authored islands, boss arenas) live in `shared/map.h`.
 
 | Map | Scene | Collision bounds (x x z) | Floor centre (x, z) | Radius holding 95% of the floor | Loading zones / exit surfaces | Water boxes | Actors |
 |---|---|---|---|---|---|---|---|

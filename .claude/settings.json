@@ -26,5 +26,21 @@
   },
   "enabledPlugins": {
     "caveman@caveman": true
+  },
+  "permissions": {
+    "deny": [
+      "Read(./shared/*_model.h)",
+      "Read(./shared/*_data.h)",
+      "Read(./shared/*_sounds.h)",
+      "Read(./shared/war_table_assets.h)",
+      "Read(./shared/kingdom_surface_maps.h)",
+      "Read(./shared/avriella_toys.h)",
+      "Read(./shared/playtest_models.h)",
+      "Read(./shared/maya_phone.h)",
+      "Read(./shared/jones_guns.h)",
+      "Read(./shared/basic_pitch_model.h)",
+      "Read(./mod/Royale/logo_data.h)",
+      "Read(./mod/Royale/gilded_sword_icon.h)"
+    ]
   }
 }
