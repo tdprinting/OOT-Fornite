@@ -92,7 +92,17 @@ class Metrics:
             self.reset_at = datetime.now(timezone.utc).isoformat()
 
 
-def handler_for(metrics):
+def read_usage(path):
+    """Plan usage saved by statusline.py; age lets the page say how fresh it is."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"missing": True}
+    data["age"] = max(0.0, datetime.now(timezone.utc).timestamp() - float(data.get("updated", 0)))
+    return data
+
+
+def handler_for(metrics, usage_file=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -111,6 +121,8 @@ def handler_for(metrics):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.send((HERE / "index.html").read_text(encoding="utf-8"), "text/html")
+            elif parsed.path == "/api/usage":
+                self.send(read_usage(usage_file) if usage_file else {"missing": True})
             elif parsed.path == "/api/metrics":
                 scope = parse_qs(parsed.query).get("scope", ["workspace"])[0]
                 if scope not in ("workspace", "global"):
@@ -138,9 +150,10 @@ def main():
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--workspace", type=Path, default=ROOT.parent)
     parser.add_argument("--database", type=Path, default=find_database())
+    parser.add_argument("--usage-file", type=Path, default=Path.home() / ".claude" / "plan-usage.json")
     args = parser.parse_args()
     metrics = Metrics(args.database, args.workspace.resolve())
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(metrics))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(metrics, args.usage_file))
     print(f"Token monitor: http://127.0.0.1:{server.server_port} (zero AI/API calls)", flush=True)
     try:
         server.serve_forever()

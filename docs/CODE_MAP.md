@@ -52,7 +52,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `maps/build_convergence.py`, `maps/export_convergence.py` Convergence map; `maps/placement_preview.py` draws placement dumps; `maps/run_map_tests.cmd` Windows map test runner.
 - `build_war_table_assets.py` menu art tiles; `check_war_table_windows.py` local Windows syntax check; `patch_war_table_engine.py` one-off author of patch 0025a (already landed).
 - `song-to-oot.html`, `song_to_oot/` song converter (browser and Python); `rom-extractor.html` ROM collision analyser; `map-viewer.html` map viewer; `test_rom_extractor.js`, `test_song_to_oot_html.js` manual `node` tests.
-- `token_monitor/` local token-savings monitor (`server.py`, tests in `test_monitor.py`).
+- `token_monitor/` local token-savings monitor (`server.py`, tests in `test_monitor.py`); `statusline.py` = Claude Code status line with plan usage %, feeds the page's plan panel.
 - `water/preview.cpp` software water preview.
 
 ## patches/ (applied in glob order by `scripts/apply_patches.sh`; letter suffixes keep the old sort order)
