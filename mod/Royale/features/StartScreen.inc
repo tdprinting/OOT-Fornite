@@ -96,7 +96,7 @@ bool DrawStartScreen() {
     LogoTexture(&sz);
     gStart.scene.SetHero(&sk::link_hd::kModel);   // the player body that ships with the mod (Skins.inc); the ROM's own Link is not loaded yet
     ImTitleCanvas canvas(dl, ImGui::GetFont());
-    const bool reduced = CVarGetInteger(ROYALE_CVAR("ReducedMotion"), 0) != 0;
+    const bool reduced = CVarGetInteger(CVAR_SETTING("Royale.ReducedMotion"), 0) != 0;   // ROYALE_CVAR("ReducedMotion"); that macro comes later (Menus.inc)
     gStart.scene.Draw(canvas, ds.x, ds.y, t, outro, reduced, sz.y > 0 ? sz.x / sz.y : 2.0f, std::string("VERSION ") + ROYALE_BUILD_VERSION);
     return true;
 }
