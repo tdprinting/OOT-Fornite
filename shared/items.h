@@ -28,6 +28,7 @@ enum class ItemId : uint8_t {
     DekuShield, HylianShield, MirrorShield,
     // ---- consumables (bottle contents and potions)
     GreenPotion, RedPotion, BluePotion, Fairy, Milk, Fish, BlueFire, Bug, Poe, SmallShieldPotion, LargeShieldPotion,
+    DekuLaunchFlower,   // plants a Deku Flower launch pad in front of you (a rare find)
     // ---- instant
     RecoveryHeart, HeartPiece, HeartContainer, MagicJar, AdultPower,
     // ---- abilities
@@ -110,6 +111,7 @@ constexpr ItemDef kItems[] = {
     {ItemId::Poe, "Poe", kConsumable, rR, rE, "Take half damage for 6 seconds"},
     {ItemId::SmallShieldPotion, "Small Shield Potion", kConsumable, rC, rU, "Adds a third of a shield bar, up to half of it"},
     {ItemId::LargeShieldPotion, "Large Shield Potion", kConsumable, rR, rL, "Adds two thirds of a shield bar, up to all of it"},
+    {ItemId::DekuLaunchFlower, "Deku Launch Flower", kConsumable, rR, rE, "Plants a Deku Flower: stand on it and press A to launch into the glider"},
     // instant
     {ItemId::RecoveryHeart, "Recovery Heart", kInstant, rC, rU, "Heals 1 heart on the spot"},
     {ItemId::HeartPiece, "Piece of Heart", kInstant, rU, rR, "Four make a Heart Container"},
@@ -292,6 +294,7 @@ constexpr PotionDef PotionOf(ItemId id) {
 constexpr int PotionStackMax(ItemId id) {
     switch (id) {
         case ItemId::Fairy: return 1;
+        case ItemId::DekuLaunchFlower: return 2;
         case ItemId::SmallShieldPotion: case ItemId::Fish: return 6;
         case ItemId::LargeShieldPotion: case ItemId::Poe: case ItemId::BluePotion: return 3;
         default: return 4;

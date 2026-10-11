@@ -345,6 +345,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
         gGfxPool.gameOpaLeft = gfx->polyOpa.d > gfx->polyOpa.p ? static_cast<size_t>(gfx->polyOpa.d - gfx->polyOpa.p) * sizeof(Gfx) : 0;
         gGfxPool.gameXluLeft = gfx->polyXlu.d > gfx->polyXlu.p ? static_cast<size_t>(gfx->polyXlu.d - gfx->polyXlu.p) * sizeof(Gfx) : 0;
     }
+    DrawLaunchPads(play);
     Feat("draw: held finds");
     DrawHeldFinds(play);
     Feat("draw: chest reveals and projectiles");
@@ -481,11 +482,11 @@ void ReconcileProps(const royale::HudState& hud) {
     wants.clear();
     wanted.assign(props.size(), 0);
     for (size_t i = 0; i < props.size(); i++) {
-        if (gBrokenProps.count(i)) continue;
         const float dx = props[i].pos.x - px, dz = props[i].pos.z - pz, d2 = dx * dx + dz * dz;
         const bool town = gPropInTown[i] != 0;
         const float reach = town ? kTownSpawnRadius : kPropSpawnRadius;
         if (d2 > reach * reach) continue;
+        if (gBrokenProps.count(i)) continue;   // (after the cheap distance test: the hash lookup only for the few in reach, same result)
         wants.push_back({town ? d2 * 0.25f : d2, i});
     }
     const bool full = wants.size() > kMaxPropActors;
@@ -530,7 +531,7 @@ int GidFor(royale::ItemId id) {
         case ItemId::ShockwaveGrenade: return kGidGrenade;
         case ItemId::GildedSword: return kGidGilded;
         case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::BombchuAmmo: return GID_BOMBCHU;
-        case ItemId::DekuNuts: case ItemId::NutAmmo: return GID_NUTS;
+        case ItemId::DekuNuts: case ItemId::NutAmmo: case ItemId::DekuLaunchFlower: return GID_NUTS;
         case ItemId::FireArrows: return GID_ARROW_FIRE;
         case ItemId::IceArrows: return GID_ARROW_ICE;
         case ItemId::LightArrows: return GID_ARROW_LIGHT;

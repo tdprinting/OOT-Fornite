@@ -284,7 +284,7 @@ void CatPoof(PlayState* play, float x, float y, float z) {
 
 bool LobbyPetsActive() {
     return MapOption("PetsEnabled",true) && CVarGetInteger(CVAR_SETTING("Royale.LobbyAllPets"),0)!=0 && gSession.Joined() &&
-        gSession.Hud().state==royale::MatchState::Lobby && InPlayableScene(royale::MatchState::Lobby) && !gSkydiving && !gSpectating;
+        gSession.State()==royale::MatchState::Lobby && InPlayableScene(royale::MatchState::Lobby) && !gSkydiving && !gSpectating;
 }
 bool SocialPet_Update(Actor* actor, PlayState* play, int pet);
 royale::lobby::Group gLobbyPetGroup;

@@ -191,14 +191,6 @@ bool UiButton(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, con
     return false;
 }
 
-// A number with a label under it, on a faint tile.
-void UiTile(ImDrawList* dl, ImFont* font, float scale, ImVec2 a, ImVec2 b, const std::string& value, const std::string& label, ImU32 col, float alpha = 1.0f) {
-    dl->AddRectFilled(a, b, UiAlpha(kUi.tile, alpha), 8.0f * scale);
-    const float cx = (a.x + b.x) * 0.5f, h = b.y - a.y;
-    UiTextCentred(dl, font, h * 0.46f, cx, a.y + h * 0.1f, UiAlpha(col, alpha), value, b.x - a.x - 8.0f * scale);
-    UiTextCentred(dl, font, h * 0.24f, cx, a.y + h * 0.62f, UiAlpha(kUi.grey, alpha), label, b.x - a.x - 8.0f * scale);
-}
-
 // Dark red closing in from the edges of the screen.
 void UiVignette(ImDrawList* dl, ImVec2 ds, float strength) {
     if (strength <= 0.0f) return;
@@ -651,7 +643,7 @@ void DrawOverlay() {
     DrawUnderwaterOverlay(dl, ds);
     DrawGearReport(dl, font, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
-    const ImU32 white = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold), red = IM_COL32(255, 90, 90, 255),
+    const ImU32 white = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold),
                 green = IM_COL32(110, 230, 130, 255);
     auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {
         dl->AddText(font, size, ImVec2(x + 1.5f, y + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
@@ -685,16 +677,12 @@ void DrawOverlay() {
     if (!live || !h.haveSelf) return;
 
     // What is at your feet: chests say how rare they are (not what is inside); items on the ground say what they are.
-    // One line: a green A button, then what pressing it does.
+    // One line: the N64 pad's A button (blue), then what pressing it does.
     auto prompt = [&](ImU32 col, const std::string& t) {
         const float size = 24 * scale, btn = 13 * scale, gap = 8 * scale, y = ds.y * 0.66f;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
         const float x = (ds.x - sz.x - btn * 2 - gap) * 0.5f;
-        const ImVec2 c(x + btn, y + sz.y * 0.5f);
-        dl->AddCircleFilled(ImVec2(c.x + 1.5f, c.y + 1.5f), btn, IM_COL32(0, 0, 0, 200), 20);
-        dl->AddCircleFilled(c, btn, IM_COL32(70, 200, 90, 255), 20);
-        const ImVec2 asz = font->CalcTextSizeA(btn * 1.4f, FLT_MAX, 0.0f, "A");
-        dl->AddText(font, btn * 1.4f, ImVec2(c.x - asz.x * 0.5f, c.y - asz.y * 0.5f), white, "A");
+        DrawPadGlyph(dl, font, ImVec2(x + btn, y + sz.y * 0.5f), btn, royale::controls::Glyph::A);
         text(x + btn * 2 + gap, y, col, size, t);
     };
     if (InField() && h.selfAlive && gSession.Client()) {
@@ -733,55 +721,16 @@ void DrawOverlay() {
     DrawAllyLabels(dl, font, ds, scale, h);
     DrawCartHud(dl, font, ds, scale);
     DrawMinimap(dl, ds, scale, h);
+    DrawMatchStats(dl, font, ds, scale, h, gMyStats.kills);
+    DrawCompass(dl, font, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
+    DrawPings(dl, font, ds, scale);
+    DrawSquadHud(dl, font, ds, scale, h);
     DrawControlPrompts(dl, font, ds, scale, h);
 
     DrawOotVitals(dl, scale, h);
     DrawStaminaBar(dl, ds, h);
-
-    // Top right: the match at a glance (where the game's C buttons used to be; the hotbar at the bottom does their job now). Right-aligned,
-    // under the safe-zone compass: how many are left, the zone timer and anything that is affecting you.
-    {
-        const float rx = ds.x - 16 * scale, line = 24 * scale;
-        float y = 150 * scale;
-        auto textR = [&](ImU32 col, float size, const std::string& t) {
-            const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
-            text(rx - sz.x, y, col, size, t);
-            y += size + 4 * scale;
-        };
-        textR(gold, 24 * scale, "ALIVE " + std::to_string(h.alive));
-        if (h.stormPhase >= royale::kStormPhaseCount) textR(red, 20 * scale, "Final zone");
-        else textR(h.stormShrinking || h.stormSecondsLeft <= 5.0f ? red : h.stormSecondsLeft <= 15.0f ? gold : white, 20 * scale, (h.stormShrinking ? "Closing " : "Zone ") + ClockText(h.stormSecondsLeft));
-        // Only what is happening to you right now, short. Gear is already shown as icons above the item bar, the weather is on the screen itself.
-        if (h.selfAlive) {
-            if (h.adultLeft > 0.0f) textR(gold, 18 * scale, "Adult " + ClockText(h.adultLeft));
-            if (h.invulnLeft > 0) textR(gold, 18 * scale, "Invulnerable " + ClockText(h.invulnLeft));
-            if (h.speedLeft > 0) textR(green, 18 * scale, "Speed " + ClockText(h.speedLeft));
-            if (h.revealLeft > 0) textR(green, 18 * scale, "Reveal " + ClockText(h.revealLeft));
-            if (h.shieldLeft > 0) textR(green, 18 * scale, "Guard " + ClockText(h.shieldLeft));
-            if (h.burnLeft > 0) textR(red, 18 * scale, "Burning");
-            if (h.stunLeft > 0) textR(red, 18 * scale, "Stunned");
-            if (h.inv.hasMark) textR(green, 16 * scale, "Farore's Wind set");
-        }
-    }
-
-    // Top right: which way is the safe zone, relative to the way Link is facing.
-    if (InField() && h.selfAlive) {
-        Player* p = GET_PLAYER(gPlayState);
-        float dx = h.safeZone.center.x - p->actor.world.pos.x, dz = h.safeZone.center.z - p->actor.world.pos.z;
-        bool outside = std::sqrt(dx * dx + dz * dz) > h.safeZone.radius;
-        float rel = std::atan2(dx, dz) - p->actor.shape.rot.y * (3.14159265f / 32768.0f);
-        ImVec2 c(ds.x - 74 * scale, 84 * scale);
-        float r = 34 * scale;
-        auto pt = [&](float angle, float len) { return ImVec2(c.x + std::sin(angle) * len, c.y - std::cos(angle) * len); };
-        dl->AddCircleFilled(c, r + 10 * scale, IM_COL32(0, 0, 0, 120));
-        dl->AddTriangleFilled(pt(rel, r), pt(rel + 2.5f, r * 0.75f), pt(rel - 2.5f, r * 0.75f), outside ? red : green);
-        if (outside) {
-            ImVec2 sz = font->CalcTextSizeA(16 * scale, FLT_MAX, 0.0f, "SAFE ZONE");
-            text(c.x - sz.x * 0.5f, c.y + r + 14 * scale, red, 16 * scale, "SAFE ZONE");
-        }
-    }
 }
 
 class RoyaleHudWindow : public Ship::GuiWindow {

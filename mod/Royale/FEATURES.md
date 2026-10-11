@@ -15,6 +15,7 @@
 | Original OoT heart/shield/magic textures | `OotVitals.inc` |
 | Winner's wearable crown | `VictoryCrown.inc` |
 | Logo, banners, chest/boss/hit effects | `Effects.inc` |
+| Teams, knocked-down and revive, pings, Deku launch pads (input, crawl, squad HUD, ping and pad drawing, minimap helpers) | `Squads.inc` |
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
 | Music folder, crash reports, instrument playback | `MusicDiagnostics.inc` |

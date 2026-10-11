@@ -73,6 +73,7 @@ void WarSave() {
     gSession.SelectMap(ui.mapId);
     gSession.SetBotDifficulty(static_cast<royale::BotDifficulty>(ui.botDifficulty));
     gSession.SetPlayerLimit(ui.playerLimit);
+    gSession.SetTeamMode(static_cast<royale::TeamMode>(std::clamp(ui.teamMode,0,2)));
     gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0);
     gSession.SetMajorBoss(ui.majorBoss);
     gSession.SetWeatherOptions({static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange)});
@@ -565,6 +566,7 @@ void WarBuild() {
                 WarRow(400,0,std::string("Season   ")+(season==royale::kSeasonRandom?"Random":royale::SeasonName(static_cast<royale::Season>(season))),"Choose the hosted match season",[](int d){Ui().weatherSeason=(Ui().weatherSeason+(d<0?-1:1)+5)%5;WarSave();},can,true);
                 WarRow(401,1,"Weather changes   "+std::to_string(ui.weatherChange)+"%","How often hosted weather changes",[](int d){Ui().weatherChange=std::clamp(Ui().weatherChange+(d<0?-10:10),0,100);WarSave();},can,true);
                 WarRow(402,2,std::string("Temple waiting room   ")+(ui.waitingRoom?"On":"Off"),"Use the Temple while waiting for your lobby",[](int){Ui().waitingRoom=!Ui().waitingRoom;WarSave();},idle,true);
+                WarRow(403,3,std::string("Teams   ")+royale::TeamModeName(static_cast<royale::TeamMode>(std::clamp(ui.teamMode,0,2))),"Solo, Duos or Squads of four. Bots fill the teams.",[](int d){Ui().teamMode=(Ui().teamMode+(d<0?-1:1)+3)%3;WarSave();},can,true);
             } else {
             WarRow(400,0,"Players   "+std::to_string(ui.playerLimit),"Empty places are filled with bots",[](int d){Ui().playerLimit=std::clamp(Ui().playerLimit+(d<0?-1:1),royale::kMinPlayers,royale::kMaxPlayers);WarSave();},can,true);
             const char* difficulty[]={"Easy","Normal","Hard"};
@@ -659,11 +661,11 @@ void WarBuild() {
         WarRow(64,5,joined?"QUIT TO MAIN MENU":"CANCEL CONNECTION","Leave this session and return to the War Table",[](int){if(gSession.Joined())WarShow(WarPage::Quit);else WarQuit();});
         break;
     case WarPage::Pause:
-        WarAdd(70,{239,147,361,43},"RESUME MATCH","Return to the battlefield",[](int){WarHide();});
-        WarAdd(72,{239,201,175,39},"SETTINGS","Audio, graphics and comfort",[](int){WarShow(WarPage::Settings);});
-        WarAdd(73,{425,201,175,39},"HOW TO PLAY","Battle Royale controls",[](int){WarShow(WarPage::Guide);});
-        WarAdd(71,{239,253,175,39},gSession.Sandbox()?"PRACTICE TOOLS":"CHARACTER","Equipment and character options",[](int){WarShow(gSession.Sandbox()?WarPage::Tools:WarPage::Character);});
-        WarAdd(74,{425,253,175,39},"LEAVE MATCH","Return to the main menu",[](int){WarShow(WarPage::Quit);});
+        WarAdd(70,{239,198,361,34},"RESUME MATCH","Return to the battlefield",[](int){WarHide();});
+        WarAdd(72,{239,240,175,30},"SETTINGS","Audio, graphics and comfort",[](int){WarShow(WarPage::Settings);});
+        WarAdd(73,{425,240,175,30},"HOW TO PLAY","Battle Royale controls",[](int){WarShow(WarPage::Guide);});
+        WarAdd(71,{239,276,175,30},gSession.Sandbox()?"PRACTICE TOOLS":"CHARACTER","Equipment and character options",[](int){WarShow(gSession.Sandbox()?WarPage::Tools:WarPage::Character);});
+        WarAdd(74,{425,276,175,30},"LEAVE MATCH","Return to the main menu",[](int){WarShow(WarPage::Quit);});
         break;
     case WarPage::Death:
         WarAdd(120,{56,251,250,42},"SPECTATE","Watch the remaining players; B also spectates",[](int){WarSpectate();});

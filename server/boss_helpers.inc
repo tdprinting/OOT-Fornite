@@ -1,9 +1,5 @@
 // Included inside Match. A helper kind is separate from bosses, players and hired allies.
 const std::vector<BossHelper>& Helpers() const { return helpers; }
-const BossHelper* FindHelper(uint32_t id) const {
-    for (const auto& h : helpers) if (h.id == id) return &h;
-    return nullptr;
-}
 void HelperMode(BossHelper& h, BokoMode mode, bool restart = false) {
     if (h.mode == mode && !restart) return;
     h.mode = mode; h.modeAt = clock; h.action++; h.resolved = false;

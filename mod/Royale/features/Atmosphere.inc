@@ -355,10 +355,20 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
         Vtx* dv = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(sky_dome.verts) * sizeof(Vtx)));
         if (dv == nullptr) return;
         const float glow[3] = { 255, 128, 62 };
+        // how high each vertex is (k) and how much it faces the sunrise side depend on the model only: worked out once
+        static std::vector<float> domeK, domeToSun;
+        if (domeK.size() != static_cast<size_t>(sky_dome.verts)) {
+            domeK.resize(static_cast<size_t>(sky_dome.verts)); domeToSun.resize(domeK.size());
+            for (int i = 0; i < sky_dome.verts; i++) {
+                const float x = sky_dome.pos[i * 3] * sky_dome.scale, y = sky_dome.pos[i * 3 + 1] * sky_dome.scale, z = sky_dome.pos[i * 3 + 2] * sky_dome.scale;
+                domeK[i] = std::pow(std::clamp(y, 0.0f, 1.0f), 0.6f);
+                const float a = std::atan2(z, x);
+                domeToSun[i] = 0.5f + 0.5f * std::cos(a - 0.6f);
+            }
+        }
         for (int i = 0; i < sky_dome.verts; i++) {
             const float x = sky_dome.pos[i * 3] * sky_dome.scale, y = sky_dome.pos[i * 3 + 1] * sky_dome.scale, z = sky_dome.pos[i * 3 + 2] * sky_dome.scale;
-            const float k = std::pow(std::clamp(y, 0.0f, 1.0f), 0.6f);
-            const float a = std::atan2(z, x), toSun = 0.5f + 0.5f * std::cos(a - 0.6f);
+            const float k = domeK[i], toSun = domeToSun[i];
             const float g = L.twilight * (0.35f + 0.65f * toSun) * (1.0f - k) * (1.0f - ov * 0.7f);
             float col[3];
             for (int ch = 0; ch < 3; ch++) col[ch] = mix(mix(hor[ch], zen[ch], k), glow[ch], g * 0.35f);
@@ -410,12 +420,25 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
     const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
     if (starA > 0.03f && gSkyStars) {
         constexpr int kStars = 150;
+        // each star's place, size and colour are fixed (hashes of its number): worked out once; only the turn and the twinkle change
+        struct Star { float r5, s, c, big, r17, warm; };
+        static Star stars[kStars];
+        static bool starsReady = false;
+        if (!starsReady) {
+            for (int i = 0; i < kStars; i++) {
+                Star& st = stars[i];
+                st.r5 = Flora01(i, 5, 711); st.s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
+                st.c = std::sqrt(1.0f - st.s * st.s); st.big = Flora01(i, 13, 713); st.r17 = Flora01(i, 17, 714); st.warm = Flora01(i, 21, 715);
+            }
+            starsReady = true;
+        }
         for (int i = 0; i < kStars; i++) {
-            const float a = Flora01(i, 5, 711) * kTau + spin * 0.5f, s = 0.04f + 0.96f * std::pow(Flora01(i, 9, 712), 0.8f);
-            const float c = std::sqrt(1.0f - s * s), big = Flora01(i, 13, 713);
-            const float tw = 0.7f + 0.3f * std::sin(t * kTau / kStarTwinkle * (0.6f + 0.8f * Flora01(i, 17, 714)) + i * 2.3f);
+            const Star& st = stars[i];
+            const float a = st.r5 * kTau + spin * 0.5f, s = st.s;
+            const float c = st.c, big = st.big;
+            const float tw = 0.7f + 0.3f * std::sin(t * kTau / kStarTwinkle * (0.6f + 0.8f * st.r17) + i * 2.3f);
             const float fade = std::min(1.0f, s * 6.0f);
-            const float warm = Flora01(i, 21, 715);
+            const float warm = st.warm;
             const float tint[3] = { 1.0f, 1.0f - 0.08f * warm, 1.0f - 0.35f * warm };
             const float dir[3] = { std::cos(a) * c, s, std::sin(a) * c };
             const bool sparkle = big > 0.72f;
@@ -457,9 +480,14 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
         const float tint[3] = { lit * (1.0f - 0.5f * ov) * (1.0f + 0.35f * tw), lit * (1.0f - 0.5f * ov) * (1.0f - 0.05f * tw), lit * (1.0f - 0.3f * ov) * (1.0f - 0.2f * tw) };
         constexpr int kHillCount = 22;
         constexpr float sizeScale = 0.55f;
+        static float hillCos[kHillCount], hillSin[kHillCount];   // the ring's directions never change
+        static bool hillsReady = false;
+        if (!hillsReady) {
+            for (int i = 0; i < kHillCount; i++) { const float a = kTau * i / kHillCount; hillCos[i] = std::cos(a); hillSin[i] = std::sin(a); }
+            hillsReady = true;
+        }
         for (int i = 0; i < kHillCount; i++) {
-            const float a = kTau * i / kHillCount;
-            const float ca = std::cos(a), sa = std::sin(a);
+            const float ca = hillCos[i], sa = hillSin[i];
             const float size = kR * (0.085f + 0.065f * Flora01(i, 5, 742)) * sizeScale;
             const float o[3] = { ca * kR * 0.93f, -kR * 0.001f, sa * kR * 0.93f };
             const float ax[3] = { -sa, 0.0f, ca }, cz[3] = { -ca, 0.0f, -sa };

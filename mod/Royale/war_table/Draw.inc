@@ -107,7 +107,7 @@ void WarDraw(GameState* state) {
     } else {
         p.Panel({24,102,194,207});p.Panel({226,102,391,207});
         const char* titles[]={"PLAY","CHARACTER","SETTINGS","HOW TO PLAY","JOIN FRIENDS","PRACTICE","LOBBY","MATCH MENU","PRACTICE TOOLS","RESULTS","KEYBOARD","LEAVE MATCH?","ELIMINATED"};
-        if(gWar.page!=WarPage::Settings&&gWar.page!=WarPage::Tools)p.Text(36,115,titles[static_cast<int>(gWar.page)],14,wt::theme::Ink,true,174);
+        if(gWar.page!=WarPage::Settings&&gWar.page!=WarPage::Tools&&gWar.page!=WarPage::Pause)p.Text(36,115,titles[static_cast<int>(gWar.page)],14,wt::theme::Ink,true,174);
         if(pets) {
             const char* names[]={"Lilo","Avriella","Maya"};
             p.Text(240,114,"PET PREVIEW",12,wt::theme::Gold,true);
@@ -134,18 +134,72 @@ void WarDraw(GameState* state) {
             const bool hasAmmo=ammo==royale::AmmoKind::None || h.ammo[static_cast<size_t>(ammo)]>0;
             const auto stats=wt::Loadout(h.weapon,h.weaponRarity,hasAmmo,gear.melee,gear.ranged,gear.damageTaken,
                 h.hasShield?royale::ShieldReduction(h.shield,h.shieldRarity):0,h.adultLeft>0);
-            char health[48],shield[48],attack[48],defense[48],magic[48];
-            std::snprintf(health,sizeof(health),"Health   %.1f / %.1f",h.selfHealth,h.maxHealth);
-            std::snprintf(shield,sizeof(shield),"Shield   %.1f / %.1f",h.inv.shield,royale::kMaxShield);
+            char attack[48],defense[48],speed[48],left[48];
             std::snprintf(attack,sizeof(attack),"Attack   %.2f / hit",stats.attack);
             std::snprintf(defense,sizeof(defense),"Defense   %.0f%%",stats.defense);
-            std::snprintf(magic,sizeof(magic),"Magic   %.0f / %.0f",h.magic,royale::kMaxMagic);
-            const char* rows[]={health,shield,attack,defense,magic};
-            for(int i=0;i<5;++i)p.Text(37,142+i*23.0f,rows[i],11,wt::theme::Ink,false,171);
-            p.Text(37,259,std::to_string(h.alive)+" left / "+std::to_string(gMyStats.kills)+" KOs",10,wt::theme::Muted,false,172);
-            p.Text(38,286,"MATCH CONTINUES",10,wt::theme::Gold,true);
-            p.Text(239,117,"BATTLE ROYALE",16,wt::theme::Ink,true);
-            p.Text(239,135,royale::MapOf(h.mapId).name,8,wt::theme::Muted,false,352);
+            std::snprintf(speed,sizeof(speed),"Speed   x%.1f",h.speedMult);
+            p.Text(36,112,"LINK",12,wt::theme::Ink,true);
+            p.Text(36+p.TextWidth("LINK",12,true)+8,114,royale::MapOf(h.mapId).name,8,wt::theme::Muted,false,206-(36+p.TextWidth("LINK",12,true)+8));
+            const int hearts=std::clamp(static_cast<int>(std::ceil(h.maxHealth)),1,10);
+            for(int i=0;i<hearts;++i) {
+                const float amount=std::clamp(h.selfHealth-i,0.0f,1.0f);
+                p.Heart(36+(i%5)*14.0f,130+(i/5)*14.0f,13,amount<=0?0:std::clamp(static_cast<int>(std::ceil(amount*4)),1,4));
+            }
+            const float shieldFill=std::clamp(h.inv.shield/royale::kMaxShield,0.0f,1.0f), magicFill=std::clamp(h.magic/royale::kMaxMagic,0.0f,1.0f);
+            p.Text(36,160,"SHIELD",8,wt::theme::Muted);p.Meter({36,169,150,11},shieldFill,0x55A5F5FF);
+            p.Text(36,185,"MAGIC",8,wt::theme::Muted);p.Meter({36,194,150,11},magicFill,0x3CD255FF);
+            const std::string sv=std::to_string(static_cast<int>(shieldFill*100)), mv=std::to_string(static_cast<int>(h.magic));
+            p.Text(208-p.TextWidth(sv,9),170,sv,9,wt::theme::Ink);p.Text(208-p.TextWidth(mv,9),195,mv,9,wt::theme::Ink);
+            const char* rows[]={attack,defense,speed};
+            for(int i=0;i<3;++i)p.Text(36,216+i*15.0f,rows[i],11,wt::theme::Ink,false,171);
+            p.Rect({39,269,4,4},0x6EF082FF);p.Rect({36,273,10,8},0x6EF082FF);p.Rect({39,281,4,4},0x6EF082FF);
+            char rupees[16];std::snprintf(rupees,sizeof(rupees),"%04d",std::clamp(h.rupees,0,9999));
+            p.Text(54,266,rupees,16,wt::theme::Gold,true);
+            std::snprintf(left,sizeof(left),"%d left   %d KOs",h.alive,gMyStats.kills);
+            p.Text(36,290,left,10,wt::theme::Muted,false,172);
+            // Right panel: heading and stat chips.
+            p.Text(238,110,"MATCH MENU",14,wt::theme::Ink,true);
+            const bool finalZone=h.stormPhase>=royale::kStormPhaseCount;
+            struct Chip { std::string text; uint32_t color; };
+            const Chip chips[]={{finalZone?"FINAL ZONE":"ZONE "+ClockText(h.stormSecondsLeft),h.stormShrinking||h.stormSecondsLeft<=5?0xFF5A5AFFu:wt::theme::Gold},
+                {"ALIVE "+std::to_string(h.alive),wt::theme::Ink},{"KOs "+std::to_string(gMyStats.kills),wt::theme::Ink}};
+            float cx=606;
+            for(int i=2;i>=0;--i){cx-=p.TextWidth(chips[i].text,10);p.Text(cx,113,chips[i].text,10,chips[i].color);cx-=14;}
+            // Equipment row, OoT item-subscreen style with N64 button colours.
+            const uint32_t slot=0x1B3A6AFF, kB=0x3CAF55FF, kC=0xF5CD28FF, kD=0x9A9AA6FF;
+            p.Disc(262,162,24,slot);p.Ring(262,162,24,kB,2);
+            p.ItemIcon(h.weapon,{247,147,30,30});
+            p.Rect({240,186,44,3},p.RarityRgba(h.weaponRarity));
+            p.Disc(244,142,7,kB);p.Text(241.5f,138.5f,"B",8,0x101D3DFF);
+            const auto ammoKind=royale::AmmoUsedBy(h.weapon);
+            p.Text(292,146,ShortName(h.weapon),11,wt::theme::Ink,false,92);
+            p.Text(292,160,std::string(RarityName(h.weaponRarity))+(ammoKind==royale::AmmoKind::None?"  Melee":"  x"+std::to_string(h.ammo[static_cast<size_t>(ammoKind)])),9,wt::theme::Muted,false,92);
+            for(int i=0;i<royale::kMaxReserveWeapons;++i) {
+                const wt::Rect sq{388.0f+i*42,144,36,36};
+                if(i<static_cast<int>(h.inv.reserve.size())) {
+                    const auto& rw=h.inv.reserve[i];
+                    p.Rect(sq,slot);p.Border(sq,0x527EBBFF);
+                    p.ItemIcon(static_cast<royale::ItemId>(rw.item),{sq.x+5,sq.y+5,26,26});
+                    p.Rect({sq.x,sq.y+37,36,3},p.RarityRgba(static_cast<royale::Rarity>(rw.rarity)));
+                } else p.Border(sq,0x3A5A8AFF);
+            }
+            p.Disc(394,189,5,kD);p.Text(401,184,"D-pad L/R",8,wt::theme::Muted);
+            p.Disc(494,162,18,slot);p.Ring(494,162,18,kC,2);
+            if(h.hasShield)p.ItemIcon(h.shield,{481,149,26,26});else p.Disc(494,162,12,0x1B3A6A66);
+            p.Disc(482,188,4,kC);p.Text(488,184,"Left",7,kC);
+            p.Disc(538,162,18,slot);p.Ring(538,162,18,kD,2);
+            if(h.inv.hasAbility)p.ItemIcon(static_cast<royale::ItemId>(h.inv.ability.item),{525,149,26,26});
+            if(h.abilityReadyIn>0.05f)p.Text(530,184,ClockText(h.abilityReadyIn),8,wt::theme::Ink);else {p.Disc(529,188,4,kD);p.Text(535,184,"Up",7,kD);}
+            const auto stacks=PotionStacks(h);
+            for(int i=0;i<royale::kPotionSlots;++i) {
+                const wt::Rect sq{563.0f+(i%3)*16,146.0f+(i/3)*16,14,14};
+                if(i<static_cast<int>(stacks.size())) {
+                    p.Rect(sq,slot);p.Border(sq,p.RarityRgba(stacks[i].rarity));
+                    p.ItemIcon(stacks[i].item,{sq.x+2,sq.y+2,11,11});
+                    if(stacks[i].count>1){const std::string n="x"+std::to_string(stacks[i].count);p.Text(sq.x+sq.w-p.TextWidth(n,7)-1,sq.y+sq.h-8,n,7,wt::theme::Ink);}
+                } else p.Border(sq,0x3A5A8AFF);
+            }
+            p.Disc(571,188,4,kC);p.Text(577,184,"Down",7,kC);
         }
         if(gWar.page==WarPage::Lobby) {
             p.Text(38,139,std::to_string(h.humanCount)+" players / "+std::to_string(h.playerLimit)+" slots",10);
@@ -244,7 +298,7 @@ void WarDraw(GameState* state) {
     std::string hint=gWar.notice;
     if(hint.empty()&&!gWar.controls.empty())hint=gWar.controls[std::clamp(gWar.focus,0,static_cast<int>(gWar.controls.size())-1)].view.hint;
     p.Wrap(29,316,hint,582,10,0xC6E2F4FF,1);
-    p.Text(30,339,gWar.page==WarPage::Death?"A  Select     B  Spectate":"A  Select     B  Back     L / R  Pages",10,wt::theme::Ink);
+    p.Text(30,339,gWar.page==WarPage::Death?"A  Select     B  Spectate":gWar.page==WarPage::Pause?"A  Select     B  Resume     L / R  Pages":"A  Select     B  Back     L / R  Pages",10,wt::theme::Ink);
     p.End(state);
 }
 

@@ -950,7 +950,8 @@ struct WaterCell { float surface, depth; bool have; };
 std::unordered_map<uint64_t, WaterCell> gWaterCells[3];   // one lookup memory per mesh (see DrawWaterSheet)
 int gWaterCellsAge = 0;
 uint64_t gWaterCellsMap = 0;
-void ClearWaterCells() { for (auto& m : gWaterCells) m.clear(); }
+int gWaterCellsGen = 0;   // counts the clears, so what was copied out of gWaterCells knows when it is stale
+void ClearWaterCells() { for (auto& m : gWaterCells) m.clear(); gWaterCellsGen++; }
 uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); }
 
 // ---- caustics: the light the waves focus onto the floor under shallow water, as a sheet that lies on the floor (its own fine grid round the
@@ -1064,6 +1065,8 @@ struct WaterLevel {
     bool want[PS_N] = {};
     std::vector<WaterPoint> pt;
     std::vector<WaterCell> under;
+    int underGi = 0, underGj = 0, underV = -1, underGen = -1;   // what `under` was filled for (DrawWaterSheet step 1)
+    bool underAny = false; float underBase = 0.0f;           // and its first point with water, if any
     Vtx* vtx[PS_N] = {};
     std::vector<uint8_t> live[PS_N];   // a point where the pass has something to show
     bool Hole(int i, int j) const { return i >= hi0 && i < hi1 && j >= hj0 && j < hj1; }
@@ -1109,6 +1112,13 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     float baseY = 0; bool any = false;
     for (int l = 0; l < kWaterLevels; l++) {
         WaterLevel& L = gWaterLevel[l];
+        // The mesh only moves when the camera crosses a snap line, so most frames it covers the very same cells as last frame: then `under`
+        // already holds what the lookups would give (the memory is only ever added to, between clears).
+        if (L.underGen == gWaterCellsGen && L.underGi == L.gi0 && L.underGj == L.gj0 && L.underV == L.V) {
+            if (L.underAny && !any) { any = true; baseY = L.underBase; }
+            continue;
+        }
+        L.underGen = gWaterCellsGen; L.underGi = L.gi0; L.underGj = L.gj0; L.underV = L.V; L.underAny = false; L.underBase = 0.0f;
         L.under.assign(static_cast<size_t>(L.V) * L.V, WaterCell{ 0, 0, false });
         for (int j = 0; j < L.V; j++)
             for (int i = 0; i < L.V; i++) {
@@ -1125,8 +1135,9 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     it = gWaterCells[l].emplace(WaterCellKey(gi, gj), c).first;
                 }
                 L.under[static_cast<size_t>(j) * L.V + i] = it->second;
-                if (it->second.have && !any) { any = true; baseY = it->second.surface; }
+                if (it->second.have && !L.underAny) { L.underAny = true; L.underBase = it->second.surface; }
             }
+        if (L.underAny && !any) { any = true; baseY = L.underBase; }
     }
     if (!any) return;
 
@@ -1181,17 +1192,22 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const float ecx = TexOrigin(eye.x, kCloudUnits), ecz = TexOrigin(eye.z, kCloudUnits);
 
     static std::vector<rw::SwellPoint> sps;
-    static std::vector<float> pushRaw, wakeFoam, surfA, shoreA, alphaA, fadeA;
+    static std::vector<float> pushRaw, wakeFoam, surfA, shoreA, alphaA, fadeA, distA;
     for (int l = kWaterLevels - 1; l >= 0; l--) {
         WaterLevel& L = gWaterLevel[l];
         const int n = L.n, V = L.V;
         const size_t nv = static_cast<size_t>(V) * V;
         L.pt.assign(nv, WaterPoint{});
         sps.assign(nv, rw::SwellPoint{}); pushRaw.assign(nv, 0.0f); wakeFoam.assign(nv, 0.0f); surfA.assign(nv, 0.0f);
-        shoreA.assign(nv, 0.0f); alphaA.assign(nv, 0.0f); fadeA.assign(nv, 0.0f);
+        shoreA.assign(nv, 0.0f); alphaA.assign(nv, 0.0f); fadeA.assign(nv, 0.0f); distA.assign(nv, 0.0f);
         // Only waves this mesh can draw (longer than about two and a half of its squares): shorter ones land on a random phase at each point, so
         // neighbouring squares get unrelated heights, tilts and sun glints, and the water reads as a patchwork of squares.
         const rw::PreparedSwell swell(t, amp, chop, 2.5f * L.cell);
+        // The mesh's points are a regular grid: the swell comes from per-row and per-column tables (rw::SwellGrid, drawing only), made the
+        // first time a point needs it.
+        static rw::SwellGrid swellGrid;
+        static std::vector<float> gridX, gridZ;
+        bool gridReady = false;
         float lastSurface = baseY;
         for (int j = 0; j < V; j++)
             for (int i = 0; i < V; i++) {
@@ -1201,11 +1217,18 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 if (!c.have) { surfA[id] = lastSurface; continue; }
                 lastSurface = c.surface; surfA[id] = c.surface;
                 const float d = std::hypot(wx - eye.x, wz - eye.z);
+                distA[id] = d;
                 fadeA[id] = std::clamp((half - d) / (half * 0.35f), 0.0f, 1.0f);
                 alphaA[id] = ss01((c.depth + 8.0f) / 10.0f);   // the waterline: the surface fades in as the floor drops under it, and the floor's depth test cuts it
                 if (alphaA[id] <= 0.0f || fadeA[id] <= 0.0f) continue;
                 shoreA[id] = std::min(1.0f, std::max(0.0f, c.depth) / 90.0f);
-                sps[id] = swell.Sample(wx, wz);
+                if (!gridReady) {
+                    gridX.resize(static_cast<size_t>(V)); gridZ.resize(static_cast<size_t>(V));
+                    for (int k = 0; k < V; k++) { gridX[k] = (L.gi0 + k - n / 2) * L.cell; gridZ[k] = (L.gj0 + k - n / 2) * L.cell; }
+                    swellGrid.Prepare(swell, gridX.data(), V, gridZ.data(), V);
+                    gridReady = true;
+                }
+                sps[id] = swellGrid.Sample(i, j);
                 if (l < 2 && (gWaterWakes || gWaterRipples)) pushRaw[id] = WaterDisplaceAt(wx, wz, &wakeFoam[id]) * kWaterPush;
             }
         for (int j = 0; j < V; j++)
@@ -1232,7 +1255,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     rw::ShadeWater(look, lsky, wx, wz, y, depth, nx, ny, nz, wakeFoam[id], sp.fold * shore, sp.h * shore, Flora01(static_cast<int>(wx / 16.0f), static_cast<int>(wz / 16.0f), 611), fade, o);
                     // over the game's own water on lakes and rivers, ours has to hide it (it is the same height, just under)
                     if (!island) o.col[3] = std::max(o.col[3], 232.0f * ss01((depth - 3.0f) / 22.0f) * fade);
-                    const float d = std::hypot(wx - eye.x, wz - eye.z);
+                    const float d = distA[id];   // (worked out in the first pass: the same point)
                     const float fine = ss01((reachFine - d) / 300.0f), wide = ss01((reachWide - d) / 800.0f);
                     o.col[3] *= ak; o.glint[3] *= ak * fine; o.foam *= ak * fine; o.streak *= ak * wide; o.band[3] *= ak * wide; o.cloud[3] *= ak;
                 }
