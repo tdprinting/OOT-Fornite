@@ -59,7 +59,8 @@ Link puppets, which the game already draws. A far LOD (Moon as a 12x6 sphere, bo
 Scale check: adult Link is 68 units. The window band is at 230 to 350 above the floor, so a seated Link (about 90 high) looks out of it.
 Seat pitch 54 along the body, two rows 120 apart, an aisle between.
 
-Concept renders (rough, Blender, not the game model): `docs/battle-bus/concept-sheet.png`; the four full-size views and
+Concept art: the four-view sheet `docs/battle-bus/concept-2d.png` (side, front, rear, top, with callouts; `tools/bus/concept_sheet.py`
+draws it) is the look to model from. Blender blockout renders (rough, not the game model): `docs/battle-bus/concept-sheet.png`; the four full-size views and
 `bus_concept.blend` are in the project files under `battle-bus/`. `tools/bus/concept_blockout.py` rebuilds them.
 
 ## 3. Model parts, pivots and rig
