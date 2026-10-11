@@ -10,7 +10,7 @@ index 79ceb6c..0b0710c 100644
 +// OOT Royale (patches/0030): fingerprints of the game files this APK unpacks, so an update only rebuilds what really changed.
 +// MainActivity keeps the ROM-built oot.otr across updates unless EXTRACTOR_VERSION changes, and re-copies soh.otr only when
 +// SOH_OTR_VERSION changes. Bump ROYALE_EXTRACT_REVISION when an extractor change (patches/ZAPDTR) changes what it writes.
-+def ROYALE_EXTRACT_REVISION = 1
++def ROYALE_EXTRACT_REVISION = 2
 +def royaleFingerprint = { List<File> roots ->
 +    def digest = java.security.MessageDigest.getInstance("SHA-1")
 +    roots.each { root ->
@@ -30,7 +30,7 @@ diff --git a/Android/app/src/main/java/com/dishii/soh/MainActivity.java b/Androi
 index 77a5f55..8715974 100644
 --- a/Android/app/src/main/java/com/dishii/soh/MainActivity.java
 +++ b/Android/app/src/main/java/com/dishii/soh/MainActivity.java
-@@ -135,12 +135,53 @@ public class MainActivity extends SDLActivity{
+@@ -135,12 +135,68 @@ public class MainActivity extends SDLActivity{
      }
  
      private void doVersionCheck(){
@@ -48,6 +48,19 @@ index 77a5f55..8715974 100644
 +        // Builds before this kept no fingerprints; their files came from the same packed extractor, so keep a finished oot.otr.
 +        String storedExtractor = stored != null ? stored[0] : (hasRomFiles ? BuildConfig.EXTRACTOR_VERSION : "");
 +        String storedSohOtr = stored != null ? stored[1] : "";
++
++        // Crash-loop guard: a launch that did not stay up for LAUNCH_OK_MS leaves LAUNCH_PENDING behind. If it is still there, the
++        // kept game files may be what crashes the game, so throw them away once and let setup rebuild them from the ROM.
++        File pending = new File(root, LAUNCH_PENDING);
++        if (pending.exists() && hasRomFiles) {
++            Log.w("GameFiles", "Last launch did not stay up, rebuilding game files");
++            deleteOutdatedAssets();
++            storedSohOtr = "";
++        }
++        if (root.isDirectory()) {
++            try { pending.createNewFile(); } catch (IOException e) { Log.w("GameFiles", "Could not write " + pending, e); }
++            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> pending.delete(), LAUNCH_OK_MS);
++        }
 +
 +        if (!BuildConfig.EXTRACTOR_VERSION.equals(storedExtractor)) {
 +            Log.i("GameFiles", "Extractor changed (" + storedExtractor + " -> " + BuildConfig.EXTRACTOR_VERSION + "), rebuilding game files");
@@ -78,6 +91,8 @@ index 77a5f55..8715974 100644
 +
 +    // Fingerprints of the game files in the data folder: line 1 the extractor files, line 2 soh.otr. Null when not written yet.
 +    private static final String GAME_FILES_VERSION = ".game-files-version";
++    private static final String LAUNCH_PENDING = ".launch-pending";
++    private static final long LAUNCH_OK_MS = 15000;
 +
 +    private static String[] readGameFilesVersion(File file) {
 +        if (!file.isFile()) return null;
