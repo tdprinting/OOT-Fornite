@@ -600,7 +600,7 @@ void Baby_Update(Actor* actor, PlayState* play) {
         if (c.sparkleIn <= 0.0f) { BabySparkle(play, c.x, c.y + 24.0f, c.z); c.sparkleIn = 0.3f; }
     }
     // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
-    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && c.mood != BabyMood::Kick && c.mood != BabyMood::Plush && c.mood != BabyMood::Tv && c.mood != BabyMood::Laptop && pspeed < 3.0f &&
+    if (!talking && c.mood != BabyMood::Roll && c.mood != BabyMood::Nap && c.mood != BabyMood::Kick && c.mood != BabyMood::Plush && c.mood != BabyMood::Tv && c.mood != BabyMood::Laptop && pspeed < 3.0f && PetMayTalk() &&
         OfferTalk(actor, play, static_cast<u16>(kTextAvriellaPet + c.line), 110.0f))
         SetBabyMood(c, BabyMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)

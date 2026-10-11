@@ -65,6 +65,7 @@ bool SignNear();
 bool MessageBoxUp();
 bool TalkTargetNear();
 void PressedATalk();   // A next to Lilo, Maya or the sign: the game's own text box (see "talking")
+bool PetMayTalk();     // a pet may take A for a talk only when nothing else is in reach and Link is not fighting (below, with PressedATalk)
 void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);   // below, with the allies
 int NearbyFreeAlly();
 void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h);

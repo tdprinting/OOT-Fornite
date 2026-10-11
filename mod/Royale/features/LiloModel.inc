@@ -461,7 +461,7 @@ void Cat_Update(Actor* actor, PlayState* play) {
         }
     }
     // Talk: stand still facing her and press A (the game's own talk, so the A button says "Speak"). Not while you are on the move.
-    if (!talking && c.mood != CatMood::Jump && c.mood != CatMood::Pounce && pspeed < 3.0f &&
+    if (!talking && c.mood != CatMood::Jump && c.mood != CatMood::Pounce && pspeed < 3.0f && PetMayTalk() &&
         OfferTalk(actor, play, static_cast<u16>(kTextLiloPet + c.line), 120.0f))
         SetMood(c, CatMood::Talk);
     // turn to face the way she goes (or, when still, towards you if you are close)
