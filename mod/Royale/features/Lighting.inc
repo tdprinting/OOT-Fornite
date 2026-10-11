@@ -176,7 +176,7 @@ void UpdateDynamicLights(PlayState* play) {
     if (play == nullptr || play != gPlayState) return;
     if (gLightPlay != nullptr && gLightPlay != play) ForgetDynamicLights();   // a new play state without a scene-init call: its table is new too
     const sh::Settings set = ShadowSettings();
-    const bool on = gShadowCfg.lights && DebugOn(kDbgShadows) && InField() && set.maxLights > 0;
+    const bool on = gShadowCfg.lights && DebugOn(kDbgShadows) && WorldFxOn(kRegShadows, false) && set.maxLights > 0;
     constexpr float dt = 1.0f / royale::kTickHz;
     int live = 0;
     for (int i = 0; i < gFlashCount; i++) {
@@ -677,9 +677,10 @@ void DrawShadowsAndLights(PlayState* play) {
     static std::unordered_set<Actor*> keep;
     keep.clear();
     const sh::Settings set = ShadowSettings();
-    const bool shadowsOn = DebugOn(kDbgShadows) && set.maxMaps > 0;
+    const bool regularOff = InRegularGame() && !RegularOn(kRegShadows);   // switched off for the regular game
+    const bool shadowsOn = DebugOn(kDbgShadows) && set.maxMaps > 0 && !regularOff;
     if (!shadowsOn) { RestoreRoundShadows(play, keep); }
-    if (!DebugOn(kDbgShadows)) return;
+    if (!DebugOn(kDbgShadows) || regularOff) return;
     const uint32_t frame = play->state.frames;
     GatherShadowCollisionRegions(play);
     gShadowFloor.BeginFrame(frame, 64);

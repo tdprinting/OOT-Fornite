@@ -229,6 +229,37 @@ void WarDebugToggle(int row,int id) {
         CVarSetInteger(key.c_str(),!on);WarSave();
     },true,true);
 }
+// ---- Regular game page: our water, sky, weather, shadows, ground and companions in Ocarina of Time itself (a match never reads these) ----
+void WarNamedSetting(int row, const char* label, const char* key, int fallback, const char* const* names, int count, const char* hint) {
+    const int n = std::clamp(CVarGetInteger(key, fallback), 0, count - 1);
+    WarRow(400+row,row,std::string(label)+"   "+names[n],hint,[key,n,count](int d){
+        CVarSetInteger(key,(n+(d<0?-1:1)+count)%count);
+        Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+    },true,true);
+}
+void WarRegularGamePage() {
+    WarOptionPager(3);
+    static const char* const weather[] = { "None", "Changes", "Rain", "Thunder", "Fog", "Snow", "Ash", "Sandstorm" };
+    static const char* const allies[] = { "None", "Kokiri", "Zora", "Goron", "Gerudo", "Jones" };
+    if (gWar.optionPage == 0) {
+        WarSetting(0,"Our water",ROYALE_CVAR("RegularWater"),1,0,1,1,"Our waves, splashes and reflections on every lake, river, fountain and pool");
+        WarSetting(1,"Hide the game's water",ROYALE_CVAR("HideGameWater"),1,0,1,1,"The original water surfaces are not drawn under ours (in matches too)");
+        WarSetting(2,"New sky",ROYALE_CVAR("RegularSky"),1,0,1,1,"Ocarina-style sky, clouds, stars, sun and moon outdoors");
+        WarNamedSetting(3,"Weather",ROYALE_CVAR("RegularWeather"),1,weather,8,"Changes: three spells a day, by place and season. Or always one kind");
+        WarSetting(4,"Fog and wind",ROYALE_CVAR("RegularAir"),1,0,1,1,"Low fog banks and wind streaks outdoors");
+        WarSetting(5,"Shadows and lights",ROYALE_CVAR("RegularShadows"),1,0,1,1,"Dynamic shadows and lights (quality on the Shadows & lights page)");
+    } else if (gWar.optionPage == 1) {
+        WarSetting(0,"Ground patches",ROYALE_CVAR("RegularGround"),1,0,1,1,"Puddles, snow, frost, leaves and blossom with the weather and season");
+        WarSetting(1,"Our grass",ROYALE_CVAR("RegularFlora"),0,0,1,1,"Our grass and flowers outdoors (the scenes have their own)");
+        WarSetting(2,"Companions",ROYALE_CVAR("RegularCompanions"),1,0,1,1,"Your companion follows you through the whole adventure");
+        { int pet=MapOption("LiloPet",false)?PetKind()+1:0; const char* names[]={"None","Lilo","Avriella","Maya"};
+          WarRow(403,3,std::string("Companion   ")+names[std::clamp(pet,0,3)],"Who follows you (the same as on the Character page)",[pet](int d){int n=(pet+(d<0?-1:1)+4)%4;CVarSetInteger(ROYALE_CVAR("LiloPet"),n!=0);CVarSetInteger(ROYALE_CVAR("PetKind"),std::max(0,n-1));if(n!=0)CVarSetInteger(ROYALE_CVAR("PetsEnabled"),1);WarSave();},true,true); }
+        WarNamedSetting(4,"Ally 1",ROYALE_CVAR("RegularAlly1"),0,allies,6,"An ally who follows you and fights the enemies near you");
+        WarNamedSetting(5,"Ally 2",ROYALE_CVAR("RegularAlly2"),0,allies,6,"A second ally, on your other side");
+    } else {
+        WarSetting(0,"Sword and shield detail",ROYALE_CVAR("RegularItemMaps"),1,0,1,1,"Sunlight detail (normal and bump maps) on your sword and shield");
+    }
+}
 // ---- Display page: resolution, widescreen, view distance and performance presets ----
 struct WarAspect { const char* name; float x, y; };
 constexpr WarAspect kWarAspects[] = {{"Fit window",0,0},{"16:9 widescreen",16,9},{"21:9 ultrawide",21,9},{"16:10",16,10},{"4:3 classic",4,3},{"5:3",5,3}};
@@ -466,7 +497,8 @@ void WarBuild() {
         WarRow(43,4,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
-        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced","Display"};
+        const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced","Display","Regular game"};
+        static_assert(sizeof(sections)/sizeof(sections[0])==wt::kSettingsCount,"one name per settings section");
         gWar.optionPages=1;
         const int menuPage=wt::SettingsPage(gWar.section);
         for(int row=0;row<wt::kSettingsPageSize;++row) {
@@ -474,8 +506,8 @@ void WarBuild() {
             const int section=wt::kSettingsOrder[index];
             WarAdd(50+section,{28,108.0f+row*29,184,25},sections[section],"Choose a settings category",[section](int){gWar.section=section;gWar.optionPage=0;});
         }
-        WarAdd(850,{28,280,88,26},"< BACK","Previous categories",[](int){gWar.section=wt::kSettingsOrder[0];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
-        WarAdd(851,{122,280,90,26},"MORE >","World, water, effects, advanced and updates",[](int){gWar.section=wt::kSettingsOrder[6];gWar.optionPage=0;gWar.focus=4;},menuPage==0);
+        WarAdd(850,{28,280,88,26},"< BACK","Previous categories",[menuPage](int){gWar.section=wt::kSettingsOrder[std::max(0,menuPage-1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
+        WarAdd(851,{122,280,90,26},"MORE >",menuPage==0?"World, water, effects and updates":"Advanced switches",[menuPage](int){gWar.section=wt::kSettingsOrder[std::min(wt::kSettingsPages-1,menuPage+1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage+1<wt::kSettingsPages);
         if(gWar.section==0) {
             WarOptionPager(2);
             if(gWar.optionPage==1) {
@@ -554,6 +586,8 @@ void WarBuild() {
             WarSetting(5,"Building sunlight",ROYALE_CVAR("SunOnBuildings"),1,0,1,1,"Hyrule Kingdom lighting follows sun and moon");
         } else if(gWar.section==11) {
             WarDisplayPage();
+        } else if(gWar.section==12) {
+            WarRegularGamePage();
         } else if(gWar.section==6) {
             auto row=[](int id,int line,std::string label,const char* hint,std::function<void(int)> action) {
                 WarAdd(id,{393,115.0f+line*33,213,28},std::move(label),hint,std::move(action),true,true);

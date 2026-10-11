@@ -11,6 +11,65 @@
 //     toward the camera. It is not a true mirror image of the scene (the N64 renderer has no render-to-texture), and trees and cliffs are not mirrored;
 //   * a gentle current that carries a swimming player, and an underwater look (blue tint, light shafts) when the camera is below the surface.
 // Everything is cosmetic and local (nothing is sent), apart from the swimmer's own drift. Debug switch "Water"; the Graphics page has the rest.
+// The water boxes of an Ocarina of Time scene. In a scene with rooms stacked over each other (the Water Temple, Zora's Domain, Jabu-Jabu) one place
+// can have water at several heights, so the box picked is the one whose surface is nearest the player (the game takes the first it finds).
+float gWaterRefY = 0.0f;   // the height the water is looked for near: the player's, set each frame by DrawWater
+bool GameWaterSurfaceAt(float x, float z, float* y) {
+    PlayState* play = gPlayState;
+    if (play == nullptr) return false;
+    if (play->sceneNum == SCENE_ZORAS_DOMAIN) {   // the domain's pool has a box of its own in the game's code
+        float s = gWaterRefY;
+        WaterBox* box = nullptr;
+        if (WaterBox_GetSurface1(play, &play->colCtx, x, z, &s, &box) == 0) return false;
+        *y = s;
+        return true;
+    }
+    const CollisionHeader* h = play->colCtx.colHeader;
+    if (h == nullptr || h->numWaterBoxes == 0 || h->waterBoxes == nullptr) return false;
+    bool found = false;
+    float bestD = FLT_MAX;
+    for (int i = 0; i < h->numWaterBoxes; i++) {
+        const WaterBox& b = h->waterBoxes[i];
+        const u32 room = (b.properties >> 13) & 0x3F;
+        if ((room != static_cast<u32>(play->roomCtx.curRoom.num) && room != 0x3F) || (b.properties & 0x80000) != 0) continue;
+        if (!(b.xMin < x && x < b.xMin + b.xLength && b.zMin < z && z < b.zMin + b.zLength)) continue;
+        const float d = std::fabs(static_cast<float>(b.ySurface) - gWaterRefY);
+        if (d < bestD) { bestD = d; *y = b.ySurface; found = true; }
+    }
+    return found;
+}
+// Something that changes whenever the water of the scene might: the map, the scene, the room the player is in, the level of every box (the Water
+// Temple raises and lowers its water, Lake Hylia fills up), and roughly how high the player is. The water's remembered lookups start over when it changes.
+uint64_t WaterSceneKey() {
+    uint64_t k = static_cast<uint64_t>(gMapId) * 1000003u;
+    if (gPlayState == nullptr) return k;
+    k = k * 31u + static_cast<uint64_t>(gPlayState->sceneNum);
+    k = k * 31u + static_cast<uint64_t>(static_cast<u8>(gPlayState->roomCtx.curRoom.num));
+    const CollisionHeader* h = gPlayState->colCtx.colHeader;
+    if (h != nullptr && h->waterBoxes != nullptr)
+        for (int i = 0; i < h->numWaterBoxes; i++) k = k * 1099511628211ull + static_cast<uint64_t>(static_cast<int64_t>(h->waterBoxes[i].ySurface) + 40000);
+    if (!OnIsland()) k = k * 31u + static_cast<uint64_t>(static_cast<int64_t>(std::floor(gWaterRefY / 500.0f)) + 1000);
+    return k;
+}
+bool WaterSurfaceAt(float x, float z, float* y);
+// The floor under the water at a point: on the island maps their ground, elsewhere the first floor under the surface (cast from just above it,
+// so a ceiling or an upper floor over the water is never taken for its bed).
+bool WaterFloorAt(float x, float z, float* outY) {
+    if (OnIsland()) return RawFloorAt(x, z, outY);
+    float surface = 0;
+    if (gPlayState == nullptr || !WaterSurfaceAt(x, z, &surface)) return RawFloorAt(x, z, outY);
+    Vec3f pos = { x, surface + 4.0f, z };
+    for (int tries = 0; tries < 4; tries++) {
+        CollisionPoly poly;
+        s32 bgId = BGCHECK_SCENE;
+        const float y = BgCheck_AnyRaycastFloor2(&gPlayState->colCtx, &poly, &bgId, &pos);
+        if (y <= BGCHECK_Y_MIN + 1.0f) return false;
+        if (gSolidBgId >= 0 && bgId == gSolidBgId) { pos.y = y - 2.0f; continue; }
+        if (outY) *outY = y;
+        return true;
+    }
+    return false;
+}
 bool WaterSurfaceAt(float x, float z, float* y) {
     namespace fn = royale::fortnite;
     if (OnIsland()) {
@@ -18,13 +77,222 @@ bool WaterSurfaceAt(float x, float z, float* y) {
         *y = OnRiftlandsTerrain() ? royale::RiftlandsWaterY({x,z}) : OnMoonfallTerrain() ? royale::MoonfallWaterY({x,z}) : static_cast<float>(fn::kWaterY);
         return true;
     }
-    float s = 0;
-    WaterBox* box = nullptr;
-    if (WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &s, &box) == 0) return false;
-    *y = s;
-    return true;
+    return GameWaterSurfaceAt(x, z, y);
 }
 
+
+// ---- the game's own water, hidden -------------------------------------------------------------------------------------------------------
+// Ours replaces it everywhere, so the game's flat scrolling sheets would only show through ours (a second surface a few units under, the old
+// texture peeking out where ours is thin). Two kinds are hidden while our water is drawn (Graphics: "Hide the game's water"):
+//   * the water drawn with a room: each loaded room's see-through display lists are looked through once, and every flat triangle lying on a
+//     water box's surface (within a few units, inside its square) is swapped for a no-op. The display list stays loaded while it is changed,
+//     and everything is put back as it was when the option or our water is switched off;
+//   * the water drawn by an actor: the Water Temple's rising and falling water, Kakariko's well, the Forest Temple's well, the Colossus oasis, the
+//     Bottom of the Well's water and Lake Hylia's water plane are not drawn (they still raise and lower their water boxes, and ours follows).
+struct GameWaterPatch { Gfx* at; Gfx orig; Gfx mine; };
+std::vector<GameWaterPatch> gGameWaterPatches;
+std::unordered_set<const Gfx*> gGameWaterPatched;
+std::unordered_map<const void*, std::shared_ptr<Ship::IResource>> gGameWaterHolds;   // the display lists looked at, kept loaded so the changes (and their undo) stay valid
+std::unordered_set<const Gfx*> gGameWaterLooked;                 // display lists already looked through at the current water levels
+std::unordered_map<Actor*, ActorFunc> gGameWaterActors;          // water actors not drawn, and their own draw
+uint64_t gGameWaterKey = 0;
+int gGameWaterHidden = 0;                                         // triangles hidden (shown on the Graphics page)
+
+bool GameWaterHidden() {
+    if (!DebugOn(kDbgWater) || gPlayState == nullptr || OnIsland() || !WorldFxOn(kRegWater, false)) return false;
+    static bool loaded = false;
+    if (!loaded) { RefreshRegularSettings(); loaded = true; }
+    return gRegular[kRegHideWater] != 0;
+}
+
+// Is a triangle (world positions) part of a water surface: flat, at a water box's level and inside its square?
+bool OnWaterBoxSurface(const CollisionHeader* h, const Vec3s& a, const Vec3s& b, const Vec3s& c) {
+    const float y0 = std::min({ a.y, b.y, c.y }), y1 = std::max({ a.y, b.y, c.y });
+    if (y1 - y0 > 10.0f) return false;
+    const float cx = (a.x + b.x + c.x) / 3.0f, cy = (a.y + b.y + c.y) / 3.0f, cz = (a.z + b.z + c.z) / 3.0f;
+    for (int i = 0; i < h->numWaterBoxes; i++) {
+        const WaterBox& w = h->waterBoxes[i];
+        if ((w.properties & 0x80000) != 0 || std::fabs(cy - w.ySurface) > 10.0f) continue;
+        const float x0 = w.xMin - 12.0f, x1 = w.xMin + w.xLength + 12.0f, z0 = w.zMin - 12.0f, z1 = w.zMin + w.zLength + 12.0f;
+        if (cx < x0 || cx > x1 || cz < z0 || cz > z1) continue;
+        auto inReach = [&](const Vec3s& v) { return v.x > x0 - 200.0f && v.x < x1 + 200.0f && v.z > z0 - 200.0f && v.z < z1 + 200.0f; };
+        if (inReach(a) && inReach(b) && inReach(c)) return true;
+    }
+    return false;
+}
+
+void PatchGameWater(Gfx* at, const Gfx& mine) {
+    if (!gGameWaterPatched.insert(at).second) return;
+    gGameWaterPatches.push_back({ at, *at, mine });
+    *at = mine;
+}
+
+// Looks through one display list (and the ones it calls) for water triangles. Only the commands a room's geometry uses are followed: vertex
+// loads (by hash, by file, or already resolved to a pointer), triangles, calls and the end; everything else is stepped over.
+void LookForGameWater(Gfx* dl, const CollisionHeader* h, int depth) {
+    if (dl == nullptr || depth > 4 || !gGameWaterLooked.insert(dl).second) return;
+    // the vertex buffer lives on across the lists a room calls, as it does in the graphics chip
+    static std::vector<Vec3s> vbuf;
+    static std::vector<bool> have;
+    if (depth == 0) { vbuf.assign(256, Vec3s{ 0, 0, 0 }); have.assign(256, false); }
+    auto load = [&](const Vtx* v, int n, int first) {
+        if (v == nullptr || n <= 0 || first < 0 || first + n > 4096) return;
+        if (static_cast<int>(vbuf.size()) < first + n) { vbuf.resize(first + n); have.resize(first + n, false); }
+        for (int i = 0; i < n; i++) { vbuf[first + i] = { v[i].v.ob[0], v[i].v.ob[1], v[i].v.ob[2] }; have[first + i] = true; }
+    };
+    auto water = [&](int i, int j, int k) {
+        const int n = static_cast<int>(vbuf.size());
+        if (i >= n || j >= n || k >= n || !have[i] || !have[j] || !have[k]) return false;
+        return OnWaterBoxSurface(h, vbuf[i], vbuf[j], vbuf[k]);
+    };
+    static const Gfx kNoop[] = { gsDPNoOp() };
+    const Gfx& noop = kNoop[0];
+    for (int guard = 0; guard < 60000; guard++) {
+        Gfx* g = &dl[guard];
+        const u8 op = static_cast<u8>(g->words.w0 >> 24);
+        const uintptr_t w0 = g->words.w0, w1 = g->words.w1;
+        switch (op) {
+            case G_ENDDL: return;
+            case G_VTX: {
+                const int n = static_cast<int>((w0 >> 12) & 0xFF), first = static_cast<int>((w0 >> 1) & 0x7F) - n;
+                if (w1 > 0x0FFFFFFF) load(reinterpret_cast<const Vtx*>(w1), n, first);   // (a segment address would be small: not followed)
+                break;
+            }
+            case G_VTX_OTR_HASH: {
+                const int n = static_cast<int>((w0 >> 12) & 0xFF), first = static_cast<int>((w0 >> 1) & 0x7F) - n;
+                const uint64_t hash = (static_cast<uint64_t>(dl[guard + 1].words.w0) << 32) + static_cast<uint32_t>(dl[guard + 1].words.w1);
+                const Vtx* v = nullptr;
+                if (w1 > 0xFFFFF) v = reinterpret_cast<const Vtx*>(w1);   // the renderer already swapped the hash for the pointer
+                else if (const char* base = static_cast<const char*>(ResourceGetDataByCrc(hash))) v = reinterpret_cast<const Vtx*>(base + w1);
+                load(v, n, first);
+                guard++;
+                break;
+            }
+            case G_VTX_OTR_FILEPATH: {
+                const char* name = reinterpret_cast<const char*>(w1);
+                const Gfx& next = dl[guard + 1];
+                const int n = static_cast<int>(next.words.w0), first = static_cast<int>(next.words.w1 >> 16), off = static_cast<int>(next.words.w1 & 0xFFFF);
+                if (const Vtx* v = static_cast<const Vtx*>(ResourceGetDataByName(name))) load(v + off, n, first);
+                guard++;
+                break;
+            }
+            case G_TRI1:
+                if (water(static_cast<int>((w0 >> 16) & 0xFF) / 2, static_cast<int>((w0 >> 8) & 0xFF) / 2, static_cast<int>(w0 & 0xFF) / 2)) PatchGameWater(g, noop);
+                break;
+            case G_TRI1_OTR:
+                if (water(static_cast<int>(w0 & 0xFFFF), static_cast<int>((w1 >> 16) & 0xFFFF), static_cast<int>(w1 & 0xFFFF))) PatchGameWater(g, noop);
+                break;
+            case G_TRI2:
+            case G_QUAD: {
+                const int a0 = static_cast<int>((w0 >> 16) & 0xFF) / 2, a1 = static_cast<int>((w0 >> 8) & 0xFF) / 2, a2 = static_cast<int>(w0 & 0xFF) / 2;
+                const int b0 = static_cast<int>((w1 >> 16) & 0xFF) / 2, b1 = static_cast<int>((w1 >> 8) & 0xFF) / 2, b2 = static_cast<int>(w1 & 0xFF) / 2;
+                const bool wa = water(a0, a1, a2), wb = water(b0, b1, b2);
+                if (wa && wb) PatchGameWater(g, noop);
+                else if (wa) { const Gfx keep[] = { gsSP1Triangle(b0, b1, b2, 0) }; PatchGameWater(g, keep[0]); }
+                else if (wb) { const Gfx keep[] = { gsSP1Triangle(a0, a1, a2, 0) }; PatchGameWater(g, keep[0]); }
+                break;
+            }
+            case G_DL:
+                if (w1 > 0x0FFFFFFF) LookForGameWater(reinterpret_cast<Gfx*>(w1), h, depth + 1);
+                if (((w0 >> 16) & 0xFF) == G_DL_NOPUSH) return;   // a branch: the rest of this list is never run
+                break;
+            case G_DL_OTR_HASH: {
+                const uint64_t hash = (static_cast<uint64_t>(dl[guard + 1].words.w0) << 32) + static_cast<uint32_t>(dl[guard + 1].words.w1);
+                if (auto res = ResourceLoad(hash)) {
+                    gGameWaterHolds.emplace(res->GetRawPointer(), res);
+                    LookForGameWater(static_cast<Gfx*>(res->GetRawPointer()), h, depth + 1);
+                }
+                guard++;
+                break;
+            }
+            case G_DL_OTR_FILEPATH:
+                if (auto res = ResourceLoad(reinterpret_cast<const char*>(w1))) {
+                    gGameWaterHolds.emplace(res->GetRawPointer(), res);
+                    LookForGameWater(static_cast<Gfx*>(res->GetRawPointer()), h, depth + 1);
+                }
+                if (((w0 >> 16) & 0x1) != 0) return;
+                break;
+            case G_SETTIMG_OTR_HASH: case G_MARKER: case G_BRANCH_Z_OTR: case G_MTX_OTR:
+                guard++;   // the two-part commands
+                break;
+            default: break;
+        }
+    }
+}
+
+// A room's see-through display list, as the room keeps it (a resource path in this port, or a display list).
+void LookForGameWaterIn(void* xlu, const CollisionHeader* h) {
+    if (xlu == nullptr) return;
+    if (ResourceMgr_OTRSigCheck(static_cast<char*>(xlu))) {
+        auto res = ResourceMgr_GetResourceByNameHandlingMQ(static_cast<const char*>(xlu));
+        if (res == nullptr) return;
+        gGameWaterHolds.emplace(res->GetRawPointer(), res);
+        LookForGameWater(static_cast<Gfx*>(res->GetRawPointer()), h, 0);
+    } else {
+        LookForGameWater(static_cast<Gfx*>(xlu), h, 0);
+    }
+}
+void LookForGameWaterInRoom(const Room& room, const CollisionHeader* h) {
+    if (room.num < 0 || room.meshHeader == nullptr) return;
+    const MeshHeader* mesh = room.meshHeader;
+    if (mesh->base.type == 0) {
+        const PolygonDlist* d = static_cast<const PolygonDlist*>(SEGMENTED_TO_VIRTUAL(mesh->polygon0.start));
+        for (int i = 0; d != nullptr && i < mesh->polygon0.num; i++) LookForGameWaterIn(d[i].xlu, h);
+    } else if (mesh->base.type == 2) {
+        const PolygonDlist2* d = static_cast<const PolygonDlist2*>(SEGMENTED_TO_VIRTUAL(mesh->polygon2.start));
+        for (int i = 0; d != nullptr && i < mesh->polygon2.num; i++) LookForGameWaterIn(d[i].xlu, h);
+    }
+}
+
+void HiddenWater_Draw(Actor*, PlayState*) {}
+bool IsGameWaterActor(const Actor* a) {
+    switch (a->id) {
+        case ACTOR_BG_MIZU_WATER: case ACTOR_BG_SPOT01_IDOMIZU: case ACTOR_BG_MORI_IDOMIZU: case ACTOR_BG_SPOT11_OASIS: case ACTOR_BG_HAKA_WATER: return true;
+        case ACTOR_BG_SPOT06_OBJECTS: return a->params == 2;   // Lake Hylia's water plane (its init turns the params into the object's type)
+        default: return false;
+    }
+}
+
+void ShowGameWater() {
+    for (auto it = gGameWaterPatches.rbegin(); it != gGameWaterPatches.rend(); ++it)
+        if (std::memcmp(it->at, &it->mine, sizeof(Gfx)) == 0) *it->at = it->orig;
+    gGameWaterPatches.clear(); gGameWaterPatched.clear(); gGameWaterHolds.clear(); gGameWaterLooked.clear();
+    if (gPlayState != nullptr)
+        for (auto& [actor, draw] : gGameWaterActors) if (actor->draw == HiddenWater_Draw) actor->draw = draw;
+    gGameWaterActors.clear();
+    gGameWaterKey = 0;
+    gGameWaterHidden = 0;
+}
+
+// Once a game frame: hide what has appeared (a room loaded, a water level moved), or put it all back.
+void UpdateGameWater() {
+    if (!GameWaterHidden()) { if (!gGameWaterPatches.empty() || !gGameWaterActors.empty() || gGameWaterKey != 0) ShowGameWater(); return; }
+    PlayState* play = gPlayState;
+    const CollisionHeader* h = play->colCtx.colHeader;
+    if (h != nullptr && h->waterBoxes != nullptr && h->numWaterBoxes > 0) {
+        uint64_t key = static_cast<uint64_t>(play->sceneNum) * 131u + static_cast<u8>(play->roomCtx.curRoom.num);
+        key = key * 131u + static_cast<u8>(play->roomCtx.prevRoom.num);
+        for (int i = 0; i < h->numWaterBoxes; i++) key = key * 1099511628211ull + static_cast<uint64_t>(h->waterBoxes[i].ySurface + 40000);
+        key |= 1;
+        if (key != gGameWaterKey) {
+            gGameWaterKey = key;
+            gGameWaterLooked.clear();   // a moved water level is looked for again (what was hidden stays hidden)
+            const size_t before = gGameWaterPatches.size();
+            LookForGameWaterInRoom(play->roomCtx.curRoom, h);
+            LookForGameWaterInRoom(play->roomCtx.prevRoom, h);
+            if (gGameWaterPatches.size() != before) Trace("water: hid the game's water");
+            gGameWaterHidden = static_cast<int>(gGameWaterPatches.size());
+        }
+    }
+    for (int cat = 0; cat < ACTORCAT_MAX; cat++)
+        for (Actor* a = play->actorCtx.actorLists[cat].head; a != nullptr; a = a->next)
+            if (a->draw != nullptr && a->draw != HiddenWater_Draw && a->update != nullptr && IsGameWaterActor(a)) {
+                gGameWaterActors[a] = a->draw;
+                a->draw = HiddenWater_Draw;
+            }
+}
+// The scene is going: its actors go with it (the display lists stay changed and held; they are the same when it comes back).
+void ForgetGameWaterActors() { gGameWaterActors.clear(); gGameWaterKey = 0; }
 
 float WaveAmp() {
     float wx, wz, wind;
@@ -33,7 +301,12 @@ float WaveAmp() {
 }
 
 // Daylight on the water, 0.38 at night to 1 at noon (the game's own clock).
+bool WaterIndoors() { return InRegularGame() && !SceneOutdoors(); }   // a dungeon's, a grotto's or a house's water: lit by the room, no sky over it
 float WaterLight() {
+    if (WaterIndoors() && gPlayState != nullptr) {
+        const u8* a = gPlayState->envCtx.lightSettings.ambientColor;
+        return std::clamp(0.5f + 0.5f * (a[0] + a[1] + a[2]) / (3.0f * 160.0f), 0.5f, 1.0f);
+    }
     const float f = std::sin((static_cast<float>(gSaveContext.dayTime) - 16384.0f) / 32768.0f * 3.14159265f);
     return 0.38f + 0.62f * std::clamp(f * 1.4f, 0.0f, 1.0f);
 }
@@ -122,7 +395,7 @@ struct WaterInfo { bool water = false; float surface = 0, height = 0, depth = 0,
     if (gPlayState == nullptr || !WaterSurfaceAt(x, z, &w.surface)) return w;
     w.water = true;
     float floorY = 0;
-    w.depth = RawFloorAt(x, z, &floorY) ? w.surface - floorY : 1000.0f;
+    w.depth = WaterFloorAt(x, z, &floorY) ? w.surface - floorY : 1000.0f;
     const float shore = std::min(1.0f, std::max(0.0f, w.depth) / 90.0f);
     const royale::water::SwellPoint sp = royale::water::Swell(x, z, gWaterNow, WaveAmp() * (OnIsland() ? 1.0f : 0.35f), gWaterChop);
     float foam = 0;
@@ -242,7 +515,7 @@ void WaterLife(PlayState* play, float dt, bool paused) {
     if (Flora01(cx, cz, 673) < 0.34f) {
         const float x = (cx + 0.15f + 0.7f * Flora01(cx, cz, 674)) * kVentCell, z = (cz + 0.15f + 0.7f * Flora01(cx, cz, 675)) * kVentCell;
         float surface = 0, floorY = 0;
-        if (WaterSurfaceAt(x, z, &surface) && RawFloorAt(x, z, &floorY) && surface - floorY > 70.0f && surface - floorY < 700.0f && std::hypot(x - px, z - pz) < 1300.0f) {
+        if (WaterSurfaceAt(x, z, &surface) && WaterFloorAt(x, z, &floorY) && surface - floorY > 70.0f && surface - floorY < 700.0f && std::hypot(x - px, z - pz) < 1300.0f) {
             // a vent breathes in puffs: on for a couple of seconds, off for a few
             const float phase = std::fmod(gWaterNow * 0.22f + Flora01(cx, cz, 676), 1.0f);
             if (phase < 0.45f) {
@@ -259,7 +532,7 @@ void WaterLife(PlayState* play, float dt, bool paused) {
         const float a = Flora01(gWaterFrame, 12, 681) * 6.2831853f, r = 350.0f + 1100.0f * Flora01(gWaterFrame, 13, 682);
         const float x = px + std::cos(a) * r, z = pz + std::sin(a) * r;
         float surface = 0, floorY = 0;
-        if (WaterSurfaceAt(x, z, &surface) && (!RawFloorAt(x, z, &floorY) || surface - floorY > 60.0f)) {
+        if (WaterSurfaceAt(x, z, &surface) && (!WaterFloorAt(x, z, &floorY) || surface - floorY > 60.0f)) {
             const float rw = std::clamp(Flora01(gWaterFrame, 14, 683), 0.0f, 1.0f);
             WaterSplashFx(x, z, surface, 10.0f + 6.0f * rw, 0.5f);
             if (gWaterWakes) AddWaterDisturb(x, z, 0.5f, 12.0f);
@@ -276,7 +549,7 @@ void WaterBody(const void* key, float x, float y, float z, float size, float dt,
     WaterTrack& t = gWaterTrack[key];
     float surface = 0, floorY = 0;
     const bool have = WaterSurfaceAt(x, z, &surface);
-    const bool in = have && y < surface + 8.0f && (!RawFloorAt(x, z, &floorY) || floorY < surface - 4.0f);
+    const bool in = have && y < surface + 8.0f && (!WaterFloorAt(x, z, &floorY) || floorY < surface - 4.0f);
     const float mx = x - t.x, mz = z - t.z, my = y - t.y;
     const bool jumped = t.seen == 0 || std::hypot(mx, mz) > 500.0f || std::fabs(my) > 400.0f || dt <= 0.0001f;
     const float speed = jumped ? 0.0f : std::hypot(mx, mz) / dt;
@@ -351,7 +624,7 @@ void WaterRain(PlayState* play, float dt) {
         const float a = Flora01(gWaterFrame, 31, 601) * 6.2831853f, r = 120.0f + 900.0f * Flora01(gWaterFrame, 32, 602);
         const float x = eye.x + std::cos(a) * r, z = eye.z + std::sin(a) * r;
         float s = 0, fy = 0;
-        if (WaterSurfaceAt(x, z, &s) && (!RawFloorAt(x, z, &fy) || fy < s - 8.0f)) {
+        if (WaterSurfaceAt(x, z, &s) && (!WaterFloorAt(x, z, &fy) || fy < s - 8.0f)) {
             WaterRipple(x, z, s, 0.3f + 0.2f * Flora01(gWaterFrame, 33, 603), 0);
             if (gWaterRipples) AddWaterDisturb(x, z, 0.1f, 8.0f);
         }
@@ -383,6 +656,17 @@ void SetupWaterXlu(PlayState* play) {
 struct WaterSky { float hor[3], zen[3], sun[3], moon[3], sunA, moonA, sunWarm; };
 WaterSky WaterSkyNow() {
     WaterSky s;
+    if (WaterIndoors() && gPlayState != nullptr) {   // what is over the water is the room: its fog colour at the far end, its ambient light above
+        const EnvLightSettings& L = gPlayState->envCtx.lightSettings;
+        for (int i = 0; i < 3; i++) {
+            s.hor[i] = 0.75f * L.fogColor[i] + 0.25f * L.ambientColor[i];
+            s.zen[i] = 0.6f * L.ambientColor[i] + 0.15f * L.fogColor[i];
+            s.sun[i] = s.moon[i] = 0.0f;
+        }
+        s.sun[1] = 1.0f; s.moon[1] = -1.0f;
+        s.sunA = s.moonA = s.sunWarm = 0.0f;
+        return s;
+    }
     const SkyLight L = SkyLightNow();
     float tint[3];
     const float ov = SkyOvercast(tint);
@@ -665,7 +949,7 @@ void DrawWaterGrid(PlayState* play, const Vtx* v, int cols, int rows, Use use) {
 struct WaterCell { float surface, depth; bool have; };
 std::unordered_map<uint64_t, WaterCell> gWaterCells[3];   // one lookup memory per mesh (see DrawWaterSheet)
 int gWaterCellsAge = 0;
-int gWaterCellsMap = -1;
+uint64_t gWaterCellsMap = 0;
 int gWaterCellsGen = 0;   // counts the clears, so what was copied out of gWaterCells knows when it is stale
 void ClearWaterCells() { for (auto& m : gWaterCells) m.clear(); gWaterCellsGen++; }
 uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cast<uint32_t>(gi + 100000)) << 32) | static_cast<uint32_t>(gj + 100000); }
@@ -673,7 +957,7 @@ uint64_t WaterCellKey(int gi, int gj) { return (static_cast<uint64_t>(static_cas
 // ---- caustics: the light the waves focus onto the floor under shallow water, as a sheet that lies on the floor (its own fine grid round the
 // camera, 40 units a square) under the surface. Brightest in the shallows in full sun; it fades with depth, at night and under cloud.
 std::unordered_map<uint64_t, WaterCell> gCausticCells;
-int gCausticCellsMap = -1;
+uint64_t gCausticCellsMap = 0;
 
 void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, float sunWarm) {
     if (!gWaterCaustics || gWaterCausticAmt <= 0.0f || !WaterTexturesReady()) return;
@@ -681,7 +965,7 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
     constexpr float cc = 40.0f;
     const Vec3f eye = play->view.eye;
     const bool island = OnIsland();
-    if (gMapId != gCausticCellsMap || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsMap = gMapId; }
+    if (WaterSceneKey() != gCausticCellsMap || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsMap = WaterSceneKey(); }
     const int gi0 = static_cast<int>(std::lround(eye.x / cc)), gj0 = static_cast<int>(std::lround(eye.z / cc));
     const float cx = gi0 * cc, cz = gj0 * cc;
     static std::vector<WaterCell> cells;
@@ -695,7 +979,7 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
             if (it == gCausticCells.end()) {
                 WaterCell c{ 0, 0, false };
                 float fy = 0;
-                if (WaterSurfaceAt(gi * cc, gj * cc, &c.surface) && RawFloorAt(gi * cc, gj * cc, &fy)) {
+                if (WaterSurfaceAt(gi * cc, gj * cc, &c.surface) && WaterFloorAt(gi * cc, gj * cc, &fy)) {
                     c.depth = c.surface - fy;
                     if (island && !OnKingdomTerrain() && !OnRiftlandsTerrain() && !OnMoonfallTerrain()) c.depth = std::min(c.depth, static_cast<float>(royale::fortnite::kSeabedDrop));   // the island's sea bed is drawn no deeper than this
                     c.have = c.depth > 1.0f;
@@ -801,8 +1085,8 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     static const float kCell[kWaterLevels] = { 16.0f, 64.0f, 256.0f };
     const int nCells[kWaterLevels] = { detail == 0 ? 24 : 32, detail == 0 ? 24 : 32, detail == 0 ? 16 : 24 };   // each a multiple of 8 so the finer mesh's rim lies on the coarser one's lines
     const float half = nCells[2] * kCell[2] * 0.5f - 256.0f;   // where the sheet has faded out: a snap and a square inside the outer mesh
-    if (gMapId != gWaterCellsMap || ++gWaterCellsAge > 1200 || gWaterCells[0].size() > 6000 || gWaterCells[1].size() > 6000 || gWaterCells[2].size() > 6000) {
-        ClearWaterCells(); gWaterCellsMap = gMapId; gWaterCellsAge = 0;
+    if (WaterSceneKey() != gWaterCellsMap || ++gWaterCellsAge > 1200 || gWaterCells[0].size() > 6000 || gWaterCells[1].size() > 6000 || gWaterCells[2].size() > 6000) {
+        ClearWaterCells(); gWaterCellsMap = WaterSceneKey(); gWaterCellsAge = 0;
     }
     for (int l = 0; l < kWaterLevels; l++) {
         WaterLevel& L = gWaterLevel[l];
@@ -846,7 +1130,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                     if (WaterSurfaceAt(wx, wz, &c.surface)) {
                         float fy = 0;
                         c.have = true;
-                        c.depth = RawFloorAt(wx, wz, &fy) ? c.surface - fy : 1000.0f;
+                        c.depth = WaterFloorAt(wx, wz, &fy) ? c.surface - fy : 1000.0f;
                     }
                     it = gWaterCells[l].emplace(WaterCellKey(gi, gj), c).first;
                 }
@@ -869,7 +1153,8 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     const float foamAmt = gWaterFoamTex && texOk ? std::min(2.0f, gWaterFoamAmt) : 0.0f;
     const float reach = 60.0f + 320.0f * gWaterClarity;   // how deep the water must be to hide the floor
     float ampTotal = 0.0f;
-    const float amp = WaveAmp() * (island ? 1.0f : 0.35f), chop = gWaterChop;   // on lakes and rivers the game's own water sits just under ours: a small swell
+    // On lakes and rivers the game's own water sits just under ours unless it is hidden (GameWaterHidden): a small swell then, so it never shows through
+    const float amp = WaveAmp() * (island ? 1.0f : GameWaterHidden() ? (WaterIndoors() ? 0.3f : 0.55f) : 0.35f), chop = gWaterChop;
     for (const rw::GerstnerWave& w : rw::kSwell) ampTotal += w.amp * amp;
     rw::LookParams look;
     look.eye[0] = eye.x; look.eye[1] = eye.y; look.eye[2] = eye.z;
@@ -877,7 +1162,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     look.glintAmt = glintAmt; look.foamAmt = foamAmt; look.skyOn = gWaterSkyOn;
     look.sharpSpec = 0.0f;   // pin-point glints come from the sparkle texture; on a vertex they light a whole square
     const bool streaksOn = gWaterStreaks && texOk && detail >= 1 && foamAmt > 0.0f, bandsOn = gWaterBands && texOk && detail >= 2;
-    const bool cloudsOn = gWaterClouds && texOk && detail >= 1 && gWaterSkyOn;
+    const bool cloudsOn = gWaterClouds && texOk && detail >= 1 && gWaterSkyOn && !WaterIndoors();
     look.sparkle = gWaterSparkle && texOk ? 1.0f : 0.0f;
     look.streaks = streaksOn ? std::min(2.0f, gWaterFoamAmt) : 0.0f;
     look.bands = bandsOn ? 1.0f : 0.0f;
@@ -892,7 +1177,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
     for (int q = 0; q < 3; q++) { lsky.hor[q] = sky.hor[q]; lsky.zen[q] = sky.zen[q]; lsky.sun[q] = sky.sun[q]; lsky.moon[q] = sky.moon[q]; }
     lsky.sunA = sky.sunA; lsky.moonA = sky.moonA; lsky.sunWarm = sky.sunWarm;
     // where the surface sits: over the game's own water on lakes and rivers, on the island's (lowered) sea bed there is room to dip
-    const float baseLift = island ? 0.0f : 5.0f, lowest = island ? -34.0f : 1.0f;
+    const float baseLift = island ? 0.0f : GameWaterHidden() ? 2.0f : 5.0f, lowest = island ? -34.0f : GameWaterHidden() ? -6.0f : 1.0f;
     auto ss01 = [](float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); };
     // Textures fade out before the meshes that carry them end (and before their coordinates grow past what the renderer holds).
     const float reachFine = detail == 0 ? 520.0f : 700.0f, reachWide = detail == 0 ? 1400.0f : 2200.0f;
@@ -1174,11 +1459,12 @@ void CollectCartWalkers(const std::function<void(const void*, float, float, floa
 }
 
 void DrawWater(PlayState* play) {
-    if (!DebugOn(kDbgWater) || !InField() || gPlayState == nullptr) { gWaterDist.clear(); gWaterTrack.clear(); ClearWaterCells(); gCausticCells.clear(); gWaterParts.clear(); if (!gRipples.Sleeping()) gRipples.Clear(); gCamUnder = 0.0f; return; }
-    static int previousMap = -1;
-    if (previousMap != gMapId) {
+    if (!DebugOn(kDbgWater) || gPlayState == nullptr || !WorldFxOn(kRegWater, false)) { gWaterDist.clear(); gWaterTrack.clear(); ClearWaterCells(); gCausticCells.clear(); gWaterParts.clear(); if (!gRipples.Sleeping()) gRipples.Clear(); gCamUnder = 0.0f; return; }
+    if (Player* p = GET_PLAYER(play)) gWaterRefY = p->actor.world.pos.y;
+    static int previousMap = -1, previousScene = -1;
+    if (previousMap != gMapId || previousScene != play->sceneNum) {
         gWaterDist.clear(); gWaterTrack.clear(); ClearWaterCells(); gCausticCells.clear(); gWaterParts.clear();
-        gRipples.Clear(); gCamUnder = 0.0f; previousMap = gMapId;
+        gRipples.Clear(); gCamUnder = 0.0f; previousMap = gMapId; previousScene = play->sceneNum;
     }
     Feat("draw: water");
     const float dt = std::min(0.05f, ImGui::GetIO().DeltaTime), t = static_cast<float>(ImGui::GetTime()), light = WaterLight();
@@ -1234,7 +1520,7 @@ void DrawWater(PlayState* play) {
     // Is the camera under the surface?
     float surface = 0, floorY = 0;
     const Vec3f eye = play->view.eye;
-    const bool under = gWaterUnder && WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!RawFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
+    const bool under = gWaterUnder && WaterSurfaceAt(eye.x, eye.z, &surface) && eye.y < surface && (!WaterFloorAt(eye.x, eye.z, &floorY) || floorY < surface - 6.0f);
     gCamUnder += ((under ? 1.0f : 0.0f) - gCamUnder) * std::min(1.0f, dt * 8.0f);
     if (under) gCamDepth = surface - eye.y;
     DrawWaterSheet(play, t, light);
@@ -1297,7 +1583,7 @@ void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds) {
 // Swim physics, once per game update: in the water a current carries you along (so treading water drifts and swimming against it is slower),
 // and you bob with the swell. Only the local player's own body; the server and the others are unaffected.
 void ApplySwimPhysics(Player* player) {
-    if (!DebugOn(kDbgWater) || !gWaterCurrent || !InField() || player == nullptr) return;
+    if (!DebugOn(kDbgWater) || !gWaterCurrent || !InField() || InRegularGame() || player == nullptr) return;   // (no drift in the regular game: its water puzzles are the game's)
     Feat("swim physics");
     if (!(player->stateFlags1 & PLAYER_STATE1_IN_WATER)) return;
     const float t = static_cast<float>(ImGui::GetTime()), dt = 1.0f / royale::kTickHz;
@@ -1305,7 +1591,7 @@ void ApplySwimPhysics(Player* player) {
     WaterCurrentAt(player->actor.world.pos.x, player->actor.world.pos.z, t, &cx, &cz);
     const float nx = player->actor.world.pos.x + cx * dt, nz = player->actor.world.pos.z + cz * dt;
     float floorY = 0;
-    if (WaterSurfaceAt(nx, nz, &surface) && RawFloorAt(nx, nz, &floorY) && floorY < surface - 40.0f) {   // never drift a swimmer into the shore
+    if (WaterSurfaceAt(nx, nz, &surface) && WaterFloorAt(nx, nz, &floorY) && floorY < surface - 40.0f) {   // never drift a swimmer into the shore
         player->actor.world.pos.x = nx;
         player->actor.world.pos.z = nz;
     }

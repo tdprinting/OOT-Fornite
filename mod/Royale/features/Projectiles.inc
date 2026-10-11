@@ -25,7 +25,7 @@ constexpr float kGrenadeRadius = 17.5f;      // the ball as drawn (its 14-unit m
 
 void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 yaw, royale::Rarity rarity, float reach) {
     using royale::ItemId;
-    if (!InField() || gPlayState == nullptr) return;
+    if ((!InField() && !InRegularGame()) || gPlayState == nullptr) return;   // (the regular game's allies shoot too)
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return;
     uint32_t variant = 0;
@@ -307,7 +307,7 @@ extern "C" void (*gRoyaleBackdropDraw)(PlayState* play);   // patches/0022 (z_pl
 namespace {
 uint32_t gBackdropFrame = UINT32_MAX;
 void DrawBackdrop(PlayState* play) {
-    if (play == nullptr || play != gPlayState || !InField() || !DebugOn(kDbgSky)) return;
+    if (play == nullptr || play != gPlayState || !WorldFxOn(kRegSky, true) || !DebugOn(kDbgSky)) return;
     Feat("draw: sky");
     GfxLayer layer(play, GfxLayerId::Sky, true);
     if (!layer.Open()) return;   // no room in the pool this frame: Projectile_Draw draws the sky with the world instead
@@ -420,9 +420,9 @@ void Projectile_Update(Actor* actor, PlayState* play) {
 void Projectile_Destroy(Actor* actor, PlayState*) { if (gProjectileActor == actor) gProjectileActor = nullptr; }
 
 void ReconcileProjectileActor() {
-    if (InField() && gProjectileActor == nullptr && gPlayState != nullptr) {
+    if (AnyWorldFx() && gProjectileActor == nullptr && gPlayState != nullptr) {
         Player* p = GET_PLAYER(gPlayState);
-        Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, p->actor.world.pos.x, p->actor.world.pos.y, p->actor.world.pos.z, 0, 0, 0, 0, false);
+        Actor* a = SpawnStandIn(gPlayState, p->actor.world.pos.x, p->actor.world.pos.y, p->actor.world.pos.z, 0, 0, 0, 0, false);
         if (a == nullptr) return;
         a->update = Projectile_Update;
         a->draw = Projectile_Draw;
@@ -431,7 +431,7 @@ void ReconcileProjectileActor() {
         a->uncullZoneForward = 9000.0f; a->uncullZoneScale = 9000.0f; a->uncullZoneDownward = 9000.0f;
         a->shape.shadowScale = 0.0f;
         gProjectileActor = a;
-    } else if (!InField() && gProjectileActor != nullptr) {
+    } else if (!AnyWorldFx() && gProjectileActor != nullptr) {
         gProjectileActor = nullptr;   // the scene is changing: the actor goes with it
         gProjectiles.clear();
     }

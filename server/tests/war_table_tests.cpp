@@ -36,6 +36,7 @@ int main() {
     for(int section:kSettingsOrder){Check(section>=0&&section<kSettingsCount,"Settings section is valid");settings.insert(section);}
     Check(settings.size()==kSettingsCount&&kSettingsOrder[0]==6,"All settings are reachable and Pets is first");
     Check(SettingsPage(6)==0&&SettingsPage(8)==1&&SettingsPage(5)==1,"Pets, water and updates have reachable sidebar pages");
+    Check(SettingsPage(12)==0&&SettingsPage(10)==2&&kSettingsPages==3,"The regular game is on the first page; advanced has a page of its own");
     for(int bits=0;bits<8;++bits)for(int selected=0;selected<3;++selected)for(int pet=0;pet<3;++pet) {
         const bool enabled=bits&1,lobby=bits&2,follow=bits&4;
         Check(PetEnabled(enabled,lobby,follow,selected,pet)==(enabled&&(lobby||(follow&&selected==pet))),"Master pet toggle overrides lobby group and follower choice");

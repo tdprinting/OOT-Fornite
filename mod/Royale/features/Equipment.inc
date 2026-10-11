@@ -121,7 +121,7 @@ void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds) {
 // Wrap equipment in an explicit material scope. The wrapper and sunlight
 // snapshot live in Claude's double-buffered graphics pool, like character data.
 void OnPlayerItemMaterial(void* playPtr, void* playerPtr, int32_t limb, void* dListPtr) {
-    if (!gSession.Client() || !playPtr || !playerPtr || !dListPtr) return;
+    if ((!gSession.Client() && !RegularOn(kRegItemMaps)) || !playPtr || !playerPtr || !dListPtr) return;
     PlayState* play = static_cast<PlayState*>(playPtr);
     Player* player = static_cast<Player*>(playerPtr);
     Gfx** dList = static_cast<Gfx**>(dListPtr);

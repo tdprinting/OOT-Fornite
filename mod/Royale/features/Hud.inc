@@ -161,6 +161,7 @@ float WeatherAmount() { return gWeatherBlend * gWeatherShown.Strength(); }
 
 void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState& h) {
     (void)scale;
+    if (InRegularGame()) return;   // the regular game's weather is its own (DriveRegularWeather)
     const bool live = InField() && gSession.Joined() && (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
     const bool active = live && h.weather.sky != royale::Sky::Clear && h.weather.intensity > 0;
     if (active) gWeatherShown = h.weather;
