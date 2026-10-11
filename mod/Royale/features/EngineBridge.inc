@@ -65,9 +65,9 @@ CollisionHeader* FortniteHeader() {
     gFortniteHeader = {};
     gFortniteHeader.minBounds = { mesh.lo.x, mesh.lo.y, mesh.lo.z };
     gFortniteHeader.maxBounds = { mesh.hi.x, mesh.hi.y, mesh.hi.z };
-    gFortniteHeader.numVertices = static_cast<u16>(gFortniteVtx.size());
+    gFortniteHeader.numVertices = static_cast<u32>(gFortniteVtx.size());
     gFortniteHeader.vtxList = gFortniteVtx.data();
-    gFortniteHeader.numPolygons = static_cast<u16>(gFortnitePoly.size());
+    gFortniteHeader.numPolygons = static_cast<u32>(gFortnitePoly.size());
     gFortniteHeader.polyList = gFortnitePoly.data();
     gFortniteHeader.surfaceTypeList = gFortniteSurface;
     gFortniteHeader.cameraDataList = gFortniteCam;

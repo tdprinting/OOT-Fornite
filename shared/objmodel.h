@@ -33,7 +33,7 @@ struct ObjModel {
     float mn[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
 };
 
-constexpr size_t kObjMaxTriangles = 40000;
+constexpr size_t kObjMaxTriangles = 500000;   // was 40000
 
 namespace obj_detail {
 inline std::string Lower(std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; }

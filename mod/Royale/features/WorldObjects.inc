@@ -19,7 +19,7 @@ struct LootActor {
 std::unordered_map<size_t, LootActor> gLoot;        // loot index -> its actor
 std::unordered_map<const Actor*, size_t> gLootOf;   // actor -> loot index
 constexpr float kLootSpawnRadius = 1500.0f;          // only draw what is near you
-constexpr size_t kMaxLootActors = 56;
+constexpr size_t kMaxLootActors = 128;   // was 56 (raised for modern phones; the play heap is 8x bigger, patches/0029)
 constexpr float kLootPickupRange = 55.0f;            // the server allows 75 for items on the ground
 constexpr float kChestOpenRange = 90.0f;             // and 100 for chests (they are solid, so you stop a little way off)
 bool gMuteChestSfx = false;                          // true while a chest somebody else opened plays its animation: Royale_NativeMenuAllowSfx drops its sounds
@@ -276,7 +276,7 @@ std::unordered_set<size_t> gBrokenProps;              // rocks and bushes player
 std::unordered_set<size_t> gCulledProps;              // props we removed ourselves (far away), as opposed to smashed ones
 constexpr float kPropSpawnRadius = 2200.0f;
 constexpr float kTownSpawnRadius = 3400.0f;   // the pieces of a town (and the climbing blocks) show from further off, so you see a place before you reach it
-constexpr size_t kMaxPropActors = 170;   // a town is a lot of wall pieces
+constexpr size_t kMaxPropActors = 400;   // a town is a lot of wall pieces (was 170)
 
 void Prop_NoUpdate(Actor*, PlayState*) {} // the roof has no collision: never let the game's rock logic run on its stand-in
 

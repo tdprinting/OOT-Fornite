@@ -102,7 +102,7 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
     collision(terrain)
     # Keep every building shell and tree trunk permanently solid. Furniture and
     # loose cover use the existing nearby-collision actor: the complete world would
-    # otherwise exceed the scene's 13-bit collision vertex indices.
+    # otherwise be a lot of collision for one place (vertex numbers are 32 bit now: patches/0029).
     for key in ['Architecture','Foliage']:
         for o in cols[key].objects:
             if o.type!='MESH':continue
@@ -133,8 +133,8 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
     fountain=next(o for o in cols['Terrain'].objects if o.name=='Market fountain basin')
     collision(fountain);flo,fhi=bounds(fountain)
     obstacles=list(dict.fromkeys(obstacles))
-    assert len(cv)<8192,('Collision exceeds 13-bit vertex limit',len(cv))
-    assert len(cp)<65536
+    assert len(cv)<(1<<29),('Collision exceeds the 29-bit vertex limit',len(cv))   # was 8192 (13 bits) before patches/0029
+    assert len(cp)<(1<<31)
     # Grid coordinates follow the existing island machinery. Blender Y is the negative game Z.
     heights=[]
     for j in range(65):
@@ -157,7 +157,7 @@ def export(root,out,cols,pois,markers,buildings,height,biome,mats,ground_colour)
         f.write('inline constexpr int16_t kHeights[] = {'+','.join(map(str,heights))+'};\n')
         f.write('inline constexpr uint8_t kColours[] = {'+','.join(map(str,colors))+'};\n')
         f.write('inline constexpr char kCover[] =\n'+''.join('"'+cover[i:i+256]+'"\n' for i in range(0,len(cover),256))+';\n')
-        f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint16_t a,b,c; int16_t nx,ny,nz,dist; };\n')
+        f.write('struct Vertex { int16_t x,y,z; };\nstruct Triangle { uint32_t a,b,c; int16_t nx,ny,nz,dist; };\n')
         array(f,'Vertex','kCollisionVertices',cv);array(f,'Triangle','kCollisionTriangles',cp)
         f.write('struct PropCollider { int16_t x0,y0,z0,x1,y1,z1; const char* name; };\n')
         array(f,'PropCollider','kPropColliders',prop_colliders)

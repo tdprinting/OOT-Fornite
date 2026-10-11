@@ -33,7 +33,7 @@ Rebuild from the repository root:
 & 'C:/Program Files/Blender Foundation/Blender 5.1/blender.exe' -b -t 4 --python tools/maps/build_convergence.py
 ```
 
-The authoring script writes `shared/convergence_data.h` (terrain, collision, navigation footprints and placement data) and `shared/convergence_model.h` (textured draw batches). Source geometry is converted from Blender XYZ to engine `(100X,100Z,-100Y)`. The export checks the engine's 8191 maximum collision vertex index and 16-bit polygon count. Terrain triangles use the same diagonal and heights as the game lookup grid. Spatial draw batches are culled by distance. Buildings are rendered from persistent native vertex/display-list buffers, with no GLB parsing at runtime.
+The authoring script writes `shared/convergence_data.h` (terrain, collision, navigation footprints and placement data) and `shared/convergence_model.h` (textured draw batches). Source geometry is converted from Blender XYZ to engine `(100X,100Z,-100Y)`. The export checks the engine's collision limits (29-bit vertex numbers since patch 0029, docs/ENGINE_LIMITS.md). Terrain triangles use the same diagonal and heights as the game lookup grid. Spatial draw batches are culled by distance. Buildings are rendered from persistent native vertex/display-list buffers, with no GLB parsing at runtime.
 
 ## Device-reported texture and collision fixes
 

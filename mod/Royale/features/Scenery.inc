@@ -164,8 +164,8 @@ void DrinkSounds(Player* player) {
 // as you move. Link's own movement then does the rest: he lands on them, walks and rolls across them, hops up small steps, grabs and climbs
 // ledges, and stops at their sides, exactly as on the scene's own floor. The game only has room for so much of this kind of collision
 // (shared with chests, gates and moving platforms), so only the nearest pieces are in it at a time; the far ones don't matter to you.
-constexpr int kSolidMaxVtx = 420;
-constexpr int kSolidMaxPoly = 420;
+constexpr int kSolidMaxVtx = 3000;    // was 420; the game's moving-collision lists hold 8192 on our maps now (patches/0029)
+constexpr int kSolidMaxPoly = 3000;
 constexpr float kSolidRadius = 1500.0f;   // scenery within this of you is solid
 Vec3s gSolidVtx[kSolidMaxVtx];
 CollisionPoly gSolidPoly[kSolidMaxPoly];
@@ -329,8 +329,8 @@ bool BuildSolidMesh(float x, float z, bool force) {
         b.V(-10,-10000,-10);b.V(10,-10000,-10);b.V(0,-10000,10);
         b.T(0,1,2,{0,-10010,0},0,0);
         for(size_t i:chosen) { if(riftlandsMap) b.Box(royale::riftlands::kPropColliders[i]); else if(kingdomMap) b.Box(royale::kingdom::kPropColliders[i]); else b.Box(royale::convergence::kPropColliders[i]); }
-        gSolidHeader={};gSolidHeader.numVertices=static_cast<u16>(b.nv);gSolidHeader.vtxList=gSolidVtx;
-        gSolidHeader.numPolygons=static_cast<u16>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
+        gSolidHeader={};gSolidHeader.numVertices=static_cast<u32>(b.nv);gSolidHeader.vtxList=gSolidVtx;
+        gSolidHeader.numPolygons=static_cast<u32>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
         Vec3s lo=gSolidVtx[0],hi=lo;
         for(int i=1;i<b.nv;++i) {
             lo.x=std::min(lo.x,gSolidVtx[i].x);lo.y=std::min(lo.y,gSolidVtx[i].y);lo.z=std::min(lo.z,gSolidVtx[i].z);
@@ -425,9 +425,9 @@ bool BuildSolidMesh(float x, float z, bool force) {
         }
     }
     gSolidHeader = {};
-    gSolidHeader.numVertices = static_cast<u16>(b.nv);
+    gSolidHeader.numVertices = static_cast<u32>(b.nv);
     gSolidHeader.vtxList = gSolidVtx;
-    gSolidHeader.numPolygons = static_cast<u16>(b.np);
+    gSolidHeader.numPolygons = static_cast<u32>(b.np);
     gSolidHeader.polyList = gSolidPoly;
     gSolidHeader.surfaceTypeList = gSolidSurfaces;
     Vec3s lo = gSolidVtx[0], hi = gSolidVtx[0];

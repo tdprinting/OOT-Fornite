@@ -121,7 +121,7 @@ inline Cover CoverAt(float x, float z) {
 
 struct Vert { int16_t x, y, z; };
 // One triangle the way the game stores it: three vertex numbers, the unit normal times 32767 (always pointing up) and the plane distance.
-struct Poly { uint16_t a, b, c; int16_t nx, ny, nz, dist; uint8_t surface = 0; };   // surface: an index into the map's table (0 plain ground)
+struct Poly { uint32_t a, b, c; int16_t nx, ny, nz, dist; uint8_t surface = 0; };   // surface: an index into the map's table (0 plain ground)
 struct Mesh {
     std::vector<Vert> verts;
     std::vector<Poly> polys;
@@ -137,9 +137,9 @@ struct Block {
     bool operator==(const Block& o) const { return x == o.x && z == o.z && half == o.half && bottom == o.bottom && top == o.top; }
 };
 inline std::vector<Block> gBlocks;
-constexpr int kMaxBlocks = 480;   // the game's 13-bit vertex numbers (8191) leave room for this many 8-corner boxes after the 4225 of the ground
+constexpr int kMaxBlocks = 4000;   // was 480 while the game kept vertex numbers in 13 bits; they are 32 bit now (patches/0029, shared/engine_limits.h)
 
-// The collision triangles. The game keeps vertex numbers in 13 bits (8191), and 65 x 65 vertices is 4225, so they all fit.
+// The collision triangles. Vertex and triangle numbers are 32 bit in the game now (patches/0029), so any size fits that memory allows.
 inline Mesh BuildCollision() {
     Mesh m;
     if (gTerrainMapId == 7) {
@@ -190,7 +190,7 @@ inline Mesh BuildCollision() {
         nx /= len; ny /= len; nz /= len;
         const Vert& P = m.verts[a];
         Poly p;
-        p.a = static_cast<uint16_t>(a); p.b = static_cast<uint16_t>(b); p.c = static_cast<uint16_t>(c);
+        p.a = static_cast<uint32_t>(a); p.b = static_cast<uint32_t>(b); p.c = static_cast<uint32_t>(c);
         p.nx = static_cast<int16_t>(std::lround(nx * 32767.0)); p.ny = static_cast<int16_t>(std::lround(ny * 32767.0)); p.nz = static_cast<int16_t>(std::lround(nz * 32767.0));
         p.dist = static_cast<int16_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
         m.polys.push_back(p);
@@ -205,7 +205,7 @@ inline Mesh BuildCollision() {
     auto addFace = [&](int a, int b, int c, double nx, double ny, double nz) {
         const Vert& P = m.verts[a];
         Poly p;
-        p.a = static_cast<uint16_t>(a); p.b = static_cast<uint16_t>(b); p.c = static_cast<uint16_t>(c);
+        p.a = static_cast<uint32_t>(a); p.b = static_cast<uint32_t>(b); p.c = static_cast<uint32_t>(c);
         p.nx = static_cast<int16_t>(std::lround(nx * 32767.0)); p.ny = static_cast<int16_t>(std::lround(ny * 32767.0)); p.nz = static_cast<int16_t>(std::lround(nz * 32767.0));
         p.dist = static_cast<int16_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
         m.polys.push_back(p);

@@ -19,7 +19,7 @@ namespace royale::gfxlayers {
 
 constexpr size_t kAlign = 16;                      // commands, vertices and matrices all sit on 16-byte boundaries
 constexpr size_t kPoolMin = 512 * 1024;           // the pool starts here (per frame; there are two, one being built while the other is drawn)
-constexpr size_t kPoolMax = 6 * 1024 * 1024;      // and never grows past this
+constexpr size_t kPoolMax = 32 * 1024 * 1024;     // and never grows past this (was 6 MB; it only grows when a frame needs it)
 constexpr size_t kGuard = 64 * 1024;              // spare room past the end, so a layer that overruns writes into nothing that matters
 constexpr size_t kXluMin = 4 * 1024;              // the smallest translucent window a layer gets
 constexpr size_t kEndSlack = 16 * 16;             // room always kept at the end of a stream for its closing commands

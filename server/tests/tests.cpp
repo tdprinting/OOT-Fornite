@@ -8,6 +8,7 @@
 #include "../../shared/poi.h"
 #include "../../shared/props.h"
 #include "../../shared/fortnite_map.h"
+#include "../../shared/engine_limits.h"
 #include "../../shared/sandbox_layout.h"
 #include "../../shared/fortnite_scenery.h"
 #include "../../shared/fortnite_puddles.h"
@@ -2415,7 +2416,7 @@ static void FortniteMapIsSound() {
     CHECK(fn::kMapId < kMapCount && std::string(MapOf(fn::kMapId).name) == "Fortnite Map" && MapOf(fn::kMapId).scene == kHyruleFieldScene);
     const fn::Mesh m = fn::BuildCollision();
     CHECK(m.verts.size() == static_cast<size_t>(fn::kVerts * fn::kVerts) && m.polys.size() == static_cast<size_t>(fn::kCells * fn::kCells * 2));
-    CHECK(m.verts.size() < 8192 && m.polys.size() < 32767);   // the game's vertex numbers have 13 bits, its triangle numbers 15
+    CHECK(m.verts.size() <= royale::engine::kCollisionMaxVertices && m.polys.size() <= royale::engine::kCollisionMaxPolygons);   // 32-bit numbers (patches/0029)
     // Every triangle points up, has a unit normal and sits on its plane; and the ground height query agrees with the triangles.
     bool sound = true;
     float steep = 0;
@@ -4689,7 +4690,7 @@ static void BlocksAreBakedIntoTheCollision() {
     const fn::Mesh withBlocks = fn::BuildCollision();
     fn::gBlocks.clear();
     CHECK(withBlocks.verts.size() == plain.verts.size() + 16 && withBlocks.polys.size() == plain.polys.size() + 20);
-    CHECK(withBlocks.verts.size() < 8191);
+    CHECK(withBlocks.verts.size() <= royale::engine::kCollisionMaxVertices);
     int tops = 0, sides = 0;
     for (size_t i = plain.polys.size(); i < withBlocks.polys.size(); i++) {
         const fn::Poly& p = withBlocks.polys[i];
