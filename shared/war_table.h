@@ -10,9 +10,11 @@
 
 namespace royale::wartable {
 // Pets stay visible on the first settings page; every category remains reachable.
-// Section 11 is Display (resolution, aspect, draw distance, performance presets).
-inline constexpr int kSettingsOrder[]={6,0,11,1,2,3,4,7,8,9,10,5};
-inline constexpr int kSettingsCount=12, kSettingsPageSize=6;
+// Section 11 is Display (resolution, aspect, draw distance, performance presets); 12 is the Regular game (our water, sky, weather, shadows and
+// companions in Ocarina of Time itself).
+inline constexpr int kSettingsOrder[]={6,12,0,11,1,2,3,4,7,8,9,5,10};
+inline constexpr int kSettingsCount=13, kSettingsPageSize=6;
+inline constexpr int kSettingsPages=(kSettingsCount+kSettingsPageSize-1)/kSettingsPageSize;
 inline int SettingsPage(int section) {
     for(int i=0;i<kSettingsCount;++i)if(kSettingsOrder[i]==section)return i/kSettingsPageSize;
     return 0;

@@ -495,7 +495,7 @@ int PetKind() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.PetKind"),
 
 void ReconcileCatPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),0) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
+    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),0) && CompanionScene(hud) && gPlayState != nullptr && !gSkydiving && !gSpectating &&
                       !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gCat.actor != nullptr) { Actor_Kill(gCat.actor); gCat.actor = nullptr; gCat.placed = false; }
@@ -503,7 +503,7 @@ void ReconcileCatPet(const royale::HudState& hud) {
     }
     if (gCat.actor != nullptr) return;
     Player* pl = GET_PLAYER(gPlayState);
-    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
+    Actor* a = SpawnStandIn(gPlayState, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
     if (a == nullptr) return;
     a->update = Cat_Update;
     a->draw = Cat_Draw;

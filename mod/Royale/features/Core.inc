@@ -152,6 +152,64 @@ int WaitingAreaIndex() { return std::clamp(CVarGetInteger(CVAR_SETTING("Royale.W
 bool InWaitingRoom() { return InGame() && royale::lobby::IsWaitingScene(gPlayState->sceneNum); }
 bool InSelectedWaitingRoom() { return InGame() && gPlayState->sceneNum==royale::lobby::WaitingArea(WaitingAreaIndex()).scene; }
 
+// ---- the regular game ----------------------------------------------------------------------------------------------------------
+// A save played as Ocarina of Time: not the Battle Royale quest and no lobby joined. Our water, sky, weather, fog and wind, shadows and lights,
+// ground patches and companions can run in every scene of it (the "Regular game" settings page switches each one); a match never looks at these.
+enum RegularFeature { kRegWater, kRegHideWater, kRegSky, kRegWeather, kRegAir, kRegShadows, kRegGround, kRegFlora, kRegCompanions, kRegAlly1, kRegAlly2,
+                      kRegItemMaps, kRegCount };
+struct RegularSetting { const char* key; int fallback; };
+constexpr RegularSetting kRegularSettings[kRegCount] = {
+    { "RegularWater", 1 },      // our water on every water box
+    { "HideGameWater", 1 },     // the game's own water surfaces hidden under ours (in matches too)
+    { "RegularSky", 1 },        // the Ocarina-style sky dome, stars, sun and moon (outdoors)
+    { "RegularWeather", 1 },    // 0 none, 1 changes by itself, 2 + Sky: always that weather
+    { "RegularAir", 1 },        // fog banks and wind streaks (outdoors)
+    { "RegularShadows", 1 },    // dynamic shadows and lights
+    { "RegularGround", 1 },     // puddles, snow, frost, leaves and blossom with the weather and the season
+    { "RegularFlora", 0 },      // our grass and trees (off: the game's scenes have their own)
+    { "RegularCompanions", 1 }, // the companion picked on the Character page follows you
+    { "RegularAlly1", 0 },      // 0 none, 1 + AllyKind: an ally who follows you and fights for you
+    { "RegularAlly2", 0 },
+    { "RegularItemMaps", 1 },   // the sword and shield sunlight detail
+};
+int gRegular[kRegCount];
+std::string gRegularKeys[kRegCount];
+void RefreshRegularSettings() {
+    for (int i = 0; i < kRegCount; i++) {
+        if (gRegularKeys[i].empty()) gRegularKeys[i] = std::string(CVAR_SETTING("Royale.")) + kRegularSettings[i].key;
+        gRegular[i] = CVarGetInteger(gRegularKeys[i].c_str(), kRegularSettings[i].fallback);
+    }
+}
+bool InRegularGame() { return InGame() && !gSession.Joined() && gSaveContext.ship.quest.id != QUEST_BATTLEROYALE; }
+bool RegularOn(int feature) {
+    static bool loaded = false;
+    if (!loaded) { RefreshRegularSettings(); loaded = true; }
+    return InRegularGame() && gRegular[feature] != 0;
+}
+// A scene with a sky over it (fields, towns, lakes): not a house, a shop, a grotto or a dungeon.
+bool SceneOutdoors() {
+    return gPlayState != nullptr && gPlayState->skyboxId != SKYBOX_NONE && !gPlayState->envCtx.skyboxDisabled;
+}
+// A cutscene is playing: companions step aside and nothing new is spawned.
+bool InCutscene() { return gPlayState != nullptr && gPlayState->csCtx.state != CS_STATE_IDLE; }
+// Where a world effect runs: on a match's map as before, and in the regular game wherever its switch is on (outdoors only, for the sky ones).
+bool WorldFxOn(int feature, bool outdoorsOnly) {
+    if (InRegularGame()) return RegularOn(feature) && (!outdoorsOnly || SceneOutdoors());
+    return InField();
+}
+// The actor our own things borrow (its update, draw and destroy are replaced): a small rock, as always in a match; in the dungeons and houses whose
+// scene does not load the rock's object (it lives in the field and town objects), an invisible marker whose object every scene has.
+Actor* SpawnStandIn(PlayState* play, float x, float y, float z, s16 rx, s16 ry, s16 rz, s16 params, bool) {
+    const bool rock = Object_GetIndex(&play->objectCtx, OBJECT_GAMEPLAY_FIELD_KEEP) >= 0;
+    return Actor_Spawn(&play->actorCtx, play, rock ? ACTOR_EN_ISHI : ACTOR_EN_IT, x, y, z, rx, ry, rz, params, false);
+}
+// Any world effect at all this frame (the stand-in actor that draws them is needed).
+bool AnyWorldFx() {
+    if (!InRegularGame()) return InField();
+    for (int f : { kRegWater, kRegSky, kRegWeather, kRegAir, kRegShadows, kRegGround, kRegFlora, kRegAlly1, kRegAlly2 }) if (RegularOn(f)) return true;   // (allies' shots fly there too)
+    return false;
+}
+
 const char* SceneName(int scene) {
     for (const auto& area:royale::lobby::kAreas) if(area.scene==scene)return area.name;
     static char other[24];
@@ -468,6 +526,11 @@ bool WantsWaitingRoom = false; // set when joining (if the player left the optio
 bool InPlayableScene(royale::MatchState state) {
     return InField() || (state == royale::MatchState::Lobby && InWaitingRoom());
 }
+// Where a companion may follow you: a match's playable scenes (or its lobby), or anywhere in the regular game unless a cutscene is playing.
+bool CompanionScene(const royale::HudState& hud) {
+    if (gSession.Joined()) return InPlayableScene(hud.state);
+    return RegularOn(kRegCompanions) && !InCutscene();
+}
 bool MustBeInField(royale::MatchState state) {
     return state == royale::MatchState::Countdown || state == royale::MatchState::Drop || state == royale::MatchState::InMatch;
 }
@@ -658,8 +721,14 @@ bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId
 bool OnMoonfallTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kMoonfallMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
+// Where the floor raycasts start. A match's maps are open to the sky, so from high above; in the regular game's houses, grottos and dungeons, floors
+// lie over floors, so from a little above the player (the floor of the level they are on, not the roof).
+float FloorProbeTop() {
+    if (InRegularGame() && !SceneOutdoors()) return GET_PLAYER(gPlayState)->actor.world.pos.y + 250.0f;
+    return 4000.0f;
+}
 bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own floor, without our climbing blocks
-    if (!InField()) return false;
+    if (!InField() && !InRegularGame()) return false;
     if (OnIsland() && gMapId == royale::kConvergenceMapIndex) {
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         if (outY) *outY=royale::ConvergenceGroundHeight({x,z});
@@ -684,7 +753,7 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
-    Vec3f pos = { x, 4000.0f, z };
+    Vec3f pos = { x, FloorProbeTop(), z };
     for (int tries = 0; tries < 6; tries++) {
         CollisionPoly poly;
         s32 bgId = BGCHECK_SCENE;
@@ -701,15 +770,15 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
 // spawns or finds a chest where the exit seal (SealExits) would shove them back. The ROM extractor's numbers (docs/MAPS.md) show how many
 // of these each map has: Kakariko alone has nine loading zones and fourteen exit surfaces.
 bool OnExitFloor(float x, float z) {
-    if (!InField() || OnIsland()) return false;   // the island has no exits
+    if ((!InField() && !InRegularGame()) || OnIsland()) return false;   // the island has no exits
     CollisionPoly poly;
-    Vec3f pos = { x, 4000.0f, z };
+    Vec3f pos = { x, FloorProbeTop(), z };
     const float y = BgCheck_AnyRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
     if (y <= BGCHECK_Y_MIN + 1.0f) return false;
     return SurfaceType_GetSceneExitIndex(&gPlayState->colCtx, &poly, BGCHECK_SCENE) != 0;
 }
 bool NearLoadingZone(float x, float z, float within) {
-    if (!InField()) return false;
+    if (!InField() && !InRegularGame()) return false;
     const TransitionActorContext& t = gPlayState->transiActorCtx;
     for (int i = 0; i < t.numActors && t.list != nullptr; i++) {
         if (std::hypot(x - t.list[i].pos.x, z - t.list[i].pos.z) < within) return true;
@@ -766,7 +835,7 @@ bool PlatformTopAt(float x, float z, float* top, float margin = 0.0f) {
 bool FloorAt(float x, float z, float* outY = nullptr) {
     float raw = 0, top = 0;
     const bool haveRaw = RawFloorAt(x, z, &raw);
-    if (!InField()) return false;
+    if (!InField() && !InRegularGame()) return false;
     if (PlatformTopAt(x, z, &top) && (!haveRaw || top > raw)) { if (outY) *outY = top; return true; }
     if (!haveRaw) return false;
     if (outY) *outY = raw;
@@ -788,11 +857,11 @@ bool UnderWater(float x, float z, float floorY) {
 // Ground that hurts or throws you out: lava and other damage floors, floors that put you back at the last door, bottomless drops, and slopes too steep to
 // stand on. (The floor property numbers are the game's own, see FUNC_80041EA4_*.) Looks at the scene's own floor only: our blocks are always fine.
 bool HazardFloorAt(float x, float z) {
-    if (!InField()) return false;
+    if (!InField() && !InRegularGame()) return false;
     if (OnIsland()) return royale::fortnite::GroundUp(x, z) < 0.8f;   // off the island, or too steep to stand on
     CollisionPoly poly;
     s32 bgId = BGCHECK_SCENE;
-    Vec3f pos = { x, 4000.0f, z };
+    Vec3f pos = { x, FloorProbeTop(), z };
     const float y = BgCheck_AnyRaycastFloor2(&gPlayState->colCtx, &poly, &bgId, &pos);
     if (y <= BGCHECK_Y_MIN + 1.0f) return true;   // nothing there at all
     if (gSolidBgId >= 0 && bgId == gSolidBgId) return false;

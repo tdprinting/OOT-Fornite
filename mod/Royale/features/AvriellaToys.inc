@@ -858,7 +858,7 @@ void Baby_Destroy(Actor* actor, PlayState*) { if (gBaby.actor == actor) { gBaby.
 
 void ReconcileBabyPet(const royale::HudState& hud) {
     const bool inMatch = IsLive(hud);
-    const bool want = DebugOn(kDbgAvriella) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),1) && gSession.Joined() && InPlayableScene(hud.state) && gPlayState != nullptr &&
+    const bool want = DebugOn(kDbgAvriella) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),1) && CompanionScene(hud) && gPlayState != nullptr &&
                       !gSkydiving && !gSpectating && !(inMatch && hud.haveSelf && !hud.selfAlive);
     if (!want) {
         if (gBaby.actor != nullptr) { Actor_Kill(gBaby.actor); gBaby.actor = nullptr; gBaby.placed = false; gBabyCoos.clear(); EndBabyToy(gBaby, true); }
@@ -866,7 +866,7 @@ void ReconcileBabyPet(const royale::HudState& hud) {
     }
     if (gBaby.actor != nullptr) return;
     Player* pl = GET_PLAYER(gPlayState);
-    Actor* a = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_ISHI, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
+    Actor* a = SpawnStandIn(gPlayState, pl->actor.world.pos.x, pl->actor.world.pos.y, pl->actor.world.pos.z, 0, 0, 0, 0, false);
     if (a == nullptr) return;
     a->update = Baby_Update;
     a->draw = Baby_Draw;

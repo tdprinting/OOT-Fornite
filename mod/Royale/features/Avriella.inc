@@ -176,7 +176,7 @@ bool PetPathClear(PlayState* play,const Vec3f& pos,float x,float z) {
     return !BgCheck_EntityLineTest1(&play->colCtx,&from,&to,&hit,&poly,true,false,false,true,&bgId);
 }
 bool PetFloorAt(float x,float z,float* y) {
-    if(InField()) return WalkableAt({x,z}) && FloorAt(x,z,y);
+    if(InField() && !InRegularGame()) return WalkableAt({x,z}) && FloorAt(x,z,y);
     return RawFloorAt(x,z,y) && !WaterAt(x,z,*y) && !OnExitFloor(x,z) && !HazardFloorAt(x,z);
 }
 // Where the tablet is in the world right now (centre and orientation), from her pose, facing and the scale she is drawn at.
@@ -354,8 +354,8 @@ void MayaCompanion_Draw(Actor* actor, PlayState* play) {
 }
 void MayaCompanion_Destroy(Actor* actor, PlayState*) { if (gMayaCompanion.actor==actor) { StopMayaVoice(); gMayaCompanion = MayaCompanionState{}; } }
 void ReconcileMayaCompanion(const royale::HudState& hud) {
-    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),2) && gSession.Joined() &&
-        InPlayableScene(hud.state) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
+    const bool want = DebugOn(kDbgAllies) && royale::wartable::PetEnabled(MapOption("PetsEnabled",true),LobbyPetsActive(),MapOption("LiloPet",false),PetKind(),2) &&
+        CompanionScene(hud) && gPlayState != nullptr && !gSkydiving && !gSpectating && !(IsLive(hud) && hud.haveSelf && !hud.selfAlive);
     if (!want) { if (gMayaCompanion.actor) { Actor_Kill(gMayaCompanion.actor); StopMayaVoice(); } gMayaCompanion = MayaCompanionState{}; return; }
     if (gMayaCompanion.actor) return;
     Player* player=GET_PLAYER(gPlayState);
@@ -367,7 +367,7 @@ void ReconcileMayaCompanion(const royale::HudState& hud) {
         float fy;
         if (PetFloorAt(p.x + std::sin(a) * r, p.z + std::cos(a) * r, &fy) && std::fabs(fy - p.y) < 35.0f) { x = p.x + std::sin(a) * r; z = p.z + std::cos(a) * r; y = fy; break; }
     }
-    Actor* a=Actor_Spawn(&gPlayState->actorCtx,gPlayState,ACTOR_EN_ISHI,x,y,z,0,0,0,0,false);
+    Actor* a=SpawnStandIn(gPlayState,x,y,z,0,0,0,0,false);
     if (!a) return;
     a->update=MayaCompanion_Update; a->draw=MayaCompanion_Draw; a->destroy=MayaCompanion_Destroy;
     a->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED | ACTOR_FLAG_DRAW_CULLING_DISABLED;
