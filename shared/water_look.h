@@ -29,9 +29,12 @@ struct LookParams {
     float haze = 1.0f;                 // how much the far water melts into the sky at the horizon (0 off .. 2 strong)
     float hazeNear = 900.0f, hazeFar = 2400.0f;   // where the haze starts and where it is complete (units from the eye)
     float depthTone = 1.0f;            // how much deeper blue the troughs go and the richer the colour is (0 the old flat tone .. 2)
+    float clouds = 0.0f;               // strength of the clouds mirrored in the water (0 off .. 2); `cover` how cloudy the sky is (0 clear .. 1 overcast)
+    float cover = 0.4f;
 };
-// The water's colour and alpha; the sparkle's colour and alpha; the foam's alpha; the streaks' alpha; the swell bands' colour and alpha (all 0-255).
-struct Look { float col[4], glint[4], foam, streak, band[4]; };
+// The water's colour and alpha; the sparkle's colour and alpha; the foam's alpha; the streaks' alpha; the swell bands' colour and alpha; the mirrored
+// clouds' colour and alpha (all 0-255).
+struct Look { float col[4], glint[4], foam, streak, band[4], cloud[4]; };
 
 // (nx, ny, nz) the unit normal, `foamWake` the foam swimmers left, `fold` how near the crest is to breaking, `crest` its height above calm water,
 // `twinkle` a steady random number for the point (0..1), `fade` the distance fade (0..1).
@@ -165,6 +168,19 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
             o.glint[3] = P.glintAmt * fade * (0.3f + 0.7f * P.light) * (160.0f * energy / (160.0f + energy));
         }
     }
+    // the clouds mirrored in the water: seen at a slant the water is a mirror, so the cloud texture (placed by the game where the reflection of
+    // each cloud lies) shows through, pale and lit by the sun (golden at dusk), and dim and cool at night
+    o.cloud[0] = o.cloud[1] = o.cloud[2] = 255.0f; o.cloud[3] = 0.0f;
+    if (P.clouds > 0.0f && P.skyOn && vy >= 0.0f) {
+        const float day = std::clamp(0.28f + 0.72f * P.light, 0.0f, 1.0f), warm = std::clamp(sky.sunWarm, 0.0f, 1.0f);
+        for (int q = 0; q < 3; q++) {
+            const float lit = 0.5f * sky.hor[q] + 0.5f * 255.0f * day;
+            const float dusk = q == 0 ? 255.0f : q == 1 ? 170.0f : 130.0f;
+            o.cloud[q] = std::min(255.0f, (lit + (dusk - lit) * warm * 0.7f) * (0.55f + 0.45f * day));
+        }
+        const float mirror = 0.12f + 0.88f * std::pow(1.0f - cosv, 1.6f);
+        o.cloud[3] = std::clamp(std::min(2.0f, P.clouds) * (0.35f + 0.65f * P.cover) * mirror * fade * (0.45f + 0.55f * P.light) * 170.0f, 0.0f, 255.0f);
+    }
     // the horizon haze: far off, the sea melts into the sky's horizon colour (the air between), and stays opaque so it meets the sky softly
     // instead of thinning out over the floor
     if (P.haze > 0.0f && vy >= 0.0f) {
@@ -173,7 +189,7 @@ inline void ShadeWater(const LookParams& P, const LookSky& sky, float wx, float 
         hk = hk * hk * (3.0f - 2.0f * hk) * std::min(1.0f, P.haze * 0.85f);
         for (int q = 0; q < 3; q++) c[q] += (std::min(255.0f, sky.hor[q] * 0.92f + 12.0f) - c[q]) * hk;
         a += (236.0f - a) * hk;
-        o.glint[3] *= 1.0f - hk; o.band[3] *= 1.0f - hk; o.streak *= 1.0f - hk * 0.8f;
+        o.glint[3] *= 1.0f - hk; o.band[3] *= 1.0f - hk; o.streak *= 1.0f - hk * 0.8f; o.cloud[3] *= 1.0f - hk * 0.5f;
     }
     o.col[0] = c[0]; o.col[1] = c[1]; o.col[2] = c[2]; o.col[3] = a * fade;
 }

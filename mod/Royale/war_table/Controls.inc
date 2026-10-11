@@ -588,6 +588,7 @@ void WarBuild() {
                 {"Sparse sparkle",ROYALE_CVAR("WaterSparkle"),1,0,1,1,"Bright sparse glints on the sun's path instead of an even net"},
                 {"Foam streaks",ROYALE_CVAR("WaterStreaks"),1,0,1,1,"Wind-blown foam streaks and whitecaps on the swell; needs Water detail 1 or more"},
                 {"Rolling swell shading",ROYALE_CVAR("WaterBands"),1,0,1,1,"Light and shade of rolling waves between the grid; needs Water detail 2"},
+                {"Cloud reflections",ROYALE_CVAR("WaterClouds"),1,0,1,1,"The clouds mirrored in the water; needs Water detail 1 or more"},
                 {"Horizon haze",ROYALE_CVAR("WaterHaze"),100,0,200,10,"How much the far sea melts into the sky"},{"Deep water tone",ROYALE_CVAR("WaterTone"),100,0,200,10,"How deep blue the troughs go and how rich the colour is"}});
         } else if(gWar.section==9) {
             WarOptions({

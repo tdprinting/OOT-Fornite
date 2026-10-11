@@ -2,6 +2,7 @@
 #include "water_look.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <vector>
 using namespace royale::water;
@@ -186,6 +187,65 @@ int main() {
         ShadeWater(P, low, 0, 300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, onPath);
         ShadeWater(P, low, 0, -300, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, offPath);
         require(onPath.glint[3] > offPath.glint[3] * 1.5f, "the sparkle gathers on the sun's path");
+    }
+    // The game's own 256 x 256 textures (the water's baseline since the engine limits were raised): same checks, at the parameters the game uses.
+    {
+        constexpr int B = 256, G = 4;   // four frames are enough to test the loop; the game makes sixteen
+        std::vector<uint8_t> c256(static_cast<size_t>(B) * B * G), g256(static_cast<size_t>(B) * B * G), sp256(static_cast<size_t>(B) * B * G), band256(static_cast<size_t>(B) * B * G);
+        std::vector<uint8_t> foam256(B * B), streak256(B * B), cloud256(B * B), atlas(B * B);
+        MakeCaustics(c256.data(), B, G, 11, 4, 12, 0.75f, true, 0.0021f, 20);
+        MakeGlints(g256.data(), B, G, 23, 6, 14, 0.0021f, 20);
+        MakeSparkle(sp256.data(), B, G, 41, 130, 2.0f, 2);
+        MakeSwellBands(band256.data(), B, G);
+        MakeFoam(foam256.data(), B, 37, 10);
+        MakeStreaks(streak256.data(), B, 53, 2);
+        MakeClouds(cloud256.data(), B);
+        MakeSplashAtlas(atlas.data(), B);
+        for (const std::vector<uint8_t>* img : { &c256, &g256, &sp256, &band256 })
+            for (int fr = 0; fr < G; fr++) require(SeamRatio(img->data() + static_cast<size_t>(fr) * B * B, B) <= 1.0f, "a 256 flipbook tiles");
+        for (const std::vector<uint8_t>* img : { &foam256, &streak256, &cloud256 }) require(SeamRatio(img->data(), B) <= 1.0f, "a 256 texture tiles");
+        for (const std::vector<uint8_t>* img : { &c256, &g256 }) {
+            int dark = 0, bright = 0;
+            for (int k = 0; k < B * B; k++) { dark += (*img)[k] < 40; bright += (*img)[k] > 160; }
+            require(dark > B * B / 5 && bright > B * B / 200, "a 256 caustic texture has dark ground and bright pattern");
+        }
+        // the clouds: masses and gaps, both
+        int thick = 0, clear = 0;
+        for (int k = 0; k < B * B; k++) { thick += cloud256[k] > 170; clear += cloud256[k] < 40; }
+        require(thick > B * B / 20 && clear > B * B / 5, "the clouds have both masses and gaps");
+        // the sprite atlas: each of its four cells has something in it, and an empty margin (so filtering never bleeds one into the next)
+        for (int cell = 0; cell < 4; cell++) {
+            const int x0 = (cell & 1) * (B / 2), y0 = (cell >> 1) * (B / 2);
+            int lit = 0, edge = 0;
+            for (int y = 0; y < B / 2; y++)
+                for (int x = 0; x < B / 2; x++) {
+                    const uint8_t v = atlas[(y0 + y) * B + x0 + x];
+                    lit += v > 128;
+                    if (x == 0 || y == 0 || x == B / 2 - 1 || y == B / 2 - 1) edge += v;
+                }
+            require(lit > 40, "an atlas cell has a bright sprite");
+            require(edge == 0, "an atlas cell has an empty margin");
+        }
+        // the finer swell: the new short waves exist on a fine mesh and are left off a coarse one
+        const PreparedSwell fineSwell(5.0f, 1.0f, 0.5f, 2.5f * 16.0f), coarseSwell(5.0f, 1.0f, 0.5f, 2.5f * 256.0f);
+        double fineRough = 0.0, coarseRough = 0.0;
+        for (int i = 0; i < 400; i++) {
+            fineRough += std::fabs(fineSwell.Sample(i * 3.0f + 7.0f, 40.0f).h - fineSwell.Sample(i * 3.0f + 10.0f, 40.0f).h);
+            coarseRough += std::fabs(coarseSwell.Sample(i * 3.0f + 7.0f, 40.0f).h - coarseSwell.Sample(i * 3.0f + 10.0f, 40.0f).h);
+        }
+        require(fineRough > coarseRough * 1.5, "a fine mesh carries the chop a coarse one leaves out");
+        // the clouds in the water: strong at a slant, faint looking straight down, none when switched off
+        LookParams P; P.eye[1] = 40.0f; P.clouds = 1.0f; P.cover = 0.8f; P.skyOn = true;
+        LookSky sk{}; for (int q = 0; q < 3; q++) { sk.hor[q] = 180; sk.zen[q] = 90; }
+        sk.sun[1] = 0.9f; sk.sunA = 1.0f;
+        Look near{}, slant{};
+        ShadeWater(P, sk, 0, 3, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, near);
+        ShadeWater(P, sk, 0, 900, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, slant);
+        require(slant.cloud[3] > near.cloud[3] * 1.5f && slant.cloud[3] > 20.0f, "the clouds show most at a slant");
+        P.clouds = 0.0f;
+        Look off{};
+        ShadeWater(P, sk, 0, 900, 0, 600, 0, 1, 0, 0, 0, 0, 0.5f, 1, off);
+        require(off.cloud[3] == 0.0f, "clouds off draw no clouds");
     }
     if (const char* dump = std::getenv("WATER_DUMP")) {   // writes the textures as PGM images to look at
         auto save = [&](const char* name, const uint8_t* p, int w, int h) {
