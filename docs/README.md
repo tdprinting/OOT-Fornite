@@ -45,4 +45,5 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 - [MENU_RENDERING.md](MENU_RENDERING.md): Native menu rendering
 
 ## Archive
+- [../tools/chief/README.md](../tools/chief/README.md): Master Chief ally build and CC-BY-4.0 model credit (bizarrefog1).
 - [archive/](archive/README.md): dated handoffs (Jones NPC, water polish, ChuChu fix, playtest equipment, playtest fixes). History only.

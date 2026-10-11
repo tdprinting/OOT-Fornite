@@ -109,6 +109,7 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
     else if (gSelfKnocked) PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+    else PoseLocalLinkClips(player, gSprinting, gSkydiving);   // our jump, landing and sprint (LinkAnims.inc)
     DrawLocalDressed(player, play, !emote && !gSelfKnocked);
     DrawVictoryCrown(play,player,gSession.Hud().selfId);
 }

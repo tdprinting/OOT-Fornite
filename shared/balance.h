@@ -56,6 +56,13 @@ constexpr float kBusHornCooldown = 1.5f;     // one honk per player this often
 
 // Sprinting: faster running that drains a stamina bar, which refills after a short rest.
 constexpr float kSprintMult = 1.35f;        // run speed while sprinting
+// The jump (client side, the local player): short and snappy, Fortnite-like timing. Launch speed and the extra pull added on top of the game's own
+// gravity (1.0) while in the air from our jump: apex ~43 units, ~0.6 s in the air (was 11.5 / no extra: apex ~60, ~1.1 s). The ledge haul still
+// reaches blocks up to 105 above the ground (it triggers below 6.5 rising speed, by then Link is ~40 up). Bots' drawn jump arc uses the same.
+constexpr float kJumpVelocity = 15.0f;
+constexpr float kJumpExtraGravity = 1.7f;
+constexpr float kJumpSeconds = 0.6f;
+constexpr float kJumpApex = 43.0f;
 constexpr float kSprintSeconds = 6.0f;      // a full bar lasts this long
 constexpr float kStaminaRefill = 4.0f;      // seconds from empty to full once resting
 constexpr float kStaminaRest = 1.0f;        // pause after sprinting before the bar starts to refill

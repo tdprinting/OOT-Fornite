@@ -84,7 +84,7 @@ bands and a gold tip, drawn over the blade when the sword is stowed). The grip i
 - **After changing the .blend by hand** (or the build script): `python3.11 tools/gilded_sword/export_gilded_sword.py` regenerates `shared/gilded_sword_model.h`
   (points in the game's limb units, colours with a fixed light baked in). Keep the object names `GildedBlade`, `GildedHilt`, `GildedScabbard`.
 - **Previews:** `python3.11 tools/gilded_sword/render_previews.py [folder]` renders the sword from four sides and in its scabbard.
-- **In the game** it uses the Master Sword's own moves, sounds and hit trail (so it swings exactly like it). Patch `0023-royale-custom-sword-hook.patch` adds one
+- **In the game** it uses the Master Sword's own moves, sounds and hit trail (so it swings exactly like it). Patch `0023a-royale-custom-sword-hook.patch` adds one
   hook (`OnPlayerCustomSword`) to Link's hand and sheath limbs: for a player holding the Gilded Sword the hand makes an empty fist, the sheath is drawn without
   the Master Sword in it, and the mod draws the sword in the hand (`OnPlayerCustomSword` in `RoyaleMod.cpp`; gold glints while it swings) or on the back in its
   scabbard. How it sits is set by the `kGilded...` constants just above that function. On the ground it is drawn by `DrawItemModel` (`kGidGilded`).

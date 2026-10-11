@@ -136,7 +136,7 @@ void DrawLilo(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
 }
 
 // ---- hireable allies -----------------------------------------------------------------------------------------------------------
-// Six people wait around the map (the original four allies, Jones and Peter); pay one with rupees and they follow you and fight for you. The
+// Seven people wait around the map (the original four allies, Jones, Peter and Master Chief); pay one with rupees and they follow you and fight for you. The
 // server runs them (BotController::StepAllies); each is drawn by a stand-in actor with our own model, smoothed between snapshots.
 // The models are original stylised ones (Ocarina of Time x Majora's Mask x Fortnite) with their own rig and clips (tools/allies, shared/ally_anim.h): they
 // walk, wave you over, sit down when nobody is about (a Goron curls into his rock ball), get up when you come near, cheer when hired, flinch
@@ -221,7 +221,7 @@ float GoronBallPivot() {
     return pivot;
 }
 
-constexpr float kAllyShadow[royale::kAllyCount] = { 13.0f, 17.0f, 30.0f, 17.0f, 18.0f, 22.0f };
+constexpr float kAllyShadow[royale::kAllyCount] = { 13.0f, 17.0f, 30.0f, 17.0f, 18.0f, 22.0f, 20.0f };
 
 void AllyDust(PlayState* play, float x, float y, float z, int count, float spread, s16 scale) {
     for (int i = 0; i < count; i++) {
@@ -248,6 +248,7 @@ bool AllyOwnerCelebrates(uint16_t owner) {
 
 #include "../RoyaleJones.h"
 #include "../RoyalePeter.h"
+#include "../RoyaleChief.h"
 
 void UpdateJones(Actor* actor, PlayState* play, AllyActor& a, float dt) {
     actor->focus.pos=actor->world.pos;actor->focus.pos.y+=105.0f;
@@ -286,6 +287,7 @@ void Ally_Update(Actor* actor, PlayState* play) {
     actor->world.rot.y = a.rot;
     if(a.kind==static_cast<int>(royale::AllyKind::Jones)) { UpdateJones(actor,play,a,dt); return; }
     if(a.kind==static_cast<int>(royale::AllyKind::Peter)) { UpdatePeter(actor,play,a,dt); return; }
+    if(a.kind==static_cast<int>(royale::AllyKind::Chief)) { UpdateChief(actor,play,a,dt); return; }
     const A::Model& m = A::ModelOf(a.kind);
     a.anim.model = &m;
     actor->focus.pos = actor->world.pos;
@@ -401,6 +403,7 @@ void Ally_Draw(Actor* actor, PlayState* play) {
     AllyActor& a = gAllies[of->second];
     if(a.kind==static_cast<int>(royale::AllyKind::Jones)) { Jones_Draw(actor,play,a); return; }
     if(a.kind==static_cast<int>(royale::AllyKind::Peter)) { Peter_Draw(actor,play,a); return; }
+    if(a.kind==static_cast<int>(royale::AllyKind::Chief)) { Chief_Draw(actor,play,a); return; }
     const A::Model& m = A::ModelOf(a.kind);
     A::Pose pose;
     a.anim.model = &m;
@@ -449,7 +452,7 @@ void ReconcileAllies(const royale::HudState& hud) {
                 a.weapon = n.weapon;
                 a.lastOwner = n.owner;   // one already working for someone when it comes into view does not cheer
                 a.hp = a.shownHp = n.hp / 255.0f;
-                if(n.kind!=static_cast<int>(royale::AllyKind::Jones) && n.kind!=static_cast<int>(royale::AllyKind::Peter)) {
+                if(n.kind!=static_cast<int>(royale::AllyKind::Jones) && n.kind!=static_cast<int>(royale::AllyKind::Peter) && n.kind!=static_cast<int>(royale::AllyKind::Chief)) {
                     a.anim.model=&royale::allymodel::ModelOf(n.kind);
                     a.anim.Play(royale::allymodel::kIdle,0.0f,true);
                 }
@@ -470,6 +473,7 @@ void ReconcileAllies(const royale::HudState& hud) {
                     if((n.flags&2) && !a.attackSnapshotActive && a.actAge>.5f) { PlayJonesSound(2,n.x,n.z,a.weapon);a.actAge=0;a.hasShot=false; }
                     a.attackSnapshotActive=(n.flags&2)!=0;
                 } else if(a.kind==static_cast<int>(royale::AllyKind::Peter)) PeterOnSnapshot(a,n);
+                else if(a.kind==static_cast<int>(royale::AllyKind::Chief)) ChiefOnSnapshot(a,n);
                 else if((n.flags&2) && a.actAge>.5f) { a.actAge=0;a.pending=1; }
                 a.tx=n.x;a.tz=n.z;a.trot=n.rot;a.hp=n.hp/255.0f;a.owner=n.owner;
             }
@@ -502,7 +506,7 @@ void DrawAllyLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const 
         if (d > (free ? 2600.0f : 1800.0f)) continue;
         ImVec2 at;
         if (a.kind == static_cast<int>(royale::AllyKind::Peter)) DrawPeterCall(dl, font, scale, a, d);
-        const float top = a.kind==static_cast<int>(royale::AllyKind::Jones)?170.0f:a.kind==static_cast<int>(royale::AllyKind::Peter)?185.0f:(a.resting || a.rolling)?70.0f:royale::allymodel::ModelOf(a.kind).height+28.0f;
+        const float top = a.kind==static_cast<int>(royale::AllyKind::Jones)?170.0f:a.kind==static_cast<int>(royale::AllyKind::Peter)?185.0f:a.kind==static_cast<int>(royale::AllyKind::Chief)?190.0f:(a.resting || a.rolling)?70.0f:royale::allymodel::ModelOf(a.kind).height+28.0f;
         if (!WorldToScreen(a.x, a.actor->world.pos.y + top, a.z, &at)) continue;
         const royale::AllyDef& def = royale::kAllyDefs[a.kind];
         const float k = std::clamp(1500.0f / (d + 700.0f), 0.7f, 1.3f), ts = 18.0f * scale * k;
@@ -537,6 +541,7 @@ void AllyActionFx(const royale::ClientEvent& e, const royale::HudState& h) {
         a.actAge=0;JonesShotFx(a,e.x,e.z);return;
     }
     if(a.kind==static_cast<int>(royale::AllyKind::Peter)) { PeterActionFx(a,e.x,e.z);return; }
+    if(a.kind==static_cast<int>(royale::AllyKind::Chief)) { ChiefActionFx(a,e.x,e.z,static_cast<uint8_t>(e.item));return; }
     a.actAge = 0.0f;
     a.pending = e.id == a.owner ? 2 : 1;   // the model plays its attack (or the Zora's healing) on its next update
     const float ay = a.actor->world.pos.y;

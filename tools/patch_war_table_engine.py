@@ -85,5 +85,5 @@ for name, before in changes.items():
     after = (engine/name).read_text(encoding='utf-8')
     patch.append('diff --git a/'+name+' b/'+name+'\n')
     patch.extend(difflib.unified_diff(before.splitlines(True),after.splitlines(True),'a/'+name,'b/'+name))
-(root/'patches/0025-native-war-table.patch').write_text(''.join(patch),encoding='utf-8',newline='\n')
-print('Wrote patches/0025-native-war-table.patch')
+(root/'patches/0025a-native-war-table.patch').write_text(''.join(patch),encoding='utf-8',newline='\n')
+print('Wrote patches/0025a-native-war-table.patch')

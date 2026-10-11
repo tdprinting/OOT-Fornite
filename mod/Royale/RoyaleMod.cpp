@@ -10,6 +10,7 @@
 #include "controls.h"
 #include "war_table_assets.h"
 #include "anim.h"
+#include "link_anims.h"
 #include "cloth.h"
 #include "build_version.h"
 #include "lilo_anim.h"
@@ -25,6 +26,7 @@
 #include "jones_sounds.h"
 #include "jones_guns.h"
 #include "peter_animation.h"
+#include "chief_animation.h"
 #include "peter_sounds.h"
 #include "bokoblin_sounds.h"
 #include "maya_sounds.h"
@@ -256,6 +258,7 @@ void WarGameUpdate();
 void WarDraw(GameState* state);
 
 #include "features/Core.inc"
+#include "features/LinkAnims.inc"
 #include "features/Players.inc"
 #include "features/Ragdolls.inc"
 #include "features/WorldObjects.inc"

@@ -38,9 +38,16 @@
       "Read(./shared/playtest_models.h)",
       "Read(./shared/maya_phone.h)",
       "Read(./shared/jones_guns.h)",
+      "Read(./shared/chief_model.h)",
+      "Read(./shared/link_anims.h)",
       "Read(./shared/basic_pitch_model.h)",
       "Read(./mod/Royale/logo_data.h)",
       "Read(./mod/Royale/gilded_sword_icon.h)"
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 tools/token_monitor/statusline.py 2>/dev/null || python tools/token_monitor/statusline.py",
+    "padding": 0
   }
 }

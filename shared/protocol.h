@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 41; // 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 42; // 42: Master Chief, a seventh ally carrying Jones's rifles. 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -483,7 +483,7 @@ struct AllyNet {
     uint8_t hp = 255;           // health as a fraction of its maximum, 0..255
     uint16_t owner = kNoPlayer16;   // who hired it (kNoPlayer16 while it is free)
     uint8_t flags = 0;          // 1 walking, 2 attacking
-    uint8_t weapon = 0;         // Jones-only equipment, never a player ItemId
+    uint8_t weapon = 0;         // Jones/Chief rifle, never a player ItemId
     // Position to the nearest unit as 16 bits (maps fit +-32000); Jones's rifle rides in bits 2..3 of the flags byte. 13 bytes an ally.
     void Write(ByteWriter& w) const {
         auto unit = [](float f) { return static_cast<int16_t>(std::lround(std::clamp(f, -32000.0f, 32000.0f))); };
@@ -493,7 +493,7 @@ struct AllyNet {
         index = r.U8(); kind = r.U8(); x = r.I16(); z = r.I16(); rot = r.I16(); hp = r.U8(); owner = r.U16();
         const uint8_t packed = r.U8(); flags = packed & 3; weapon = packed >> 2;
         return r.ok && index < kAllyCount && kind < kAllyCount && Finite(x) && Finite(z) && packed < 16 &&
-            (kind==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0);
+            AllyWeaponValid(kind, weapon);
     }
 };
 
@@ -642,7 +642,7 @@ struct EvAllyAction {
     uint8_t weapon=0;
     void Write(ByteWriter& w) const { w.U8(index); w.U16(target); w.F32(x); w.F32(z); w.U8(weapon); }
     bool Read(ByteReader& r) { index = r.U8(); target = r.U16(); x = r.F32(); z = r.F32(); weapon=r.U8(); return r.ok && index < kAllyCount && Finite(x) && Finite(z) &&
-        (index==static_cast<uint8_t>(AllyKind::Jones)?weapon<static_cast<uint8_t>(JonesGun::Count):weapon==0); }
+        AllyWeaponValid(index, weapon); }
 };
 
 // The replay of the match that just ended, in two kinds of message: this describes it (who, how many frames, who eliminated whom)...

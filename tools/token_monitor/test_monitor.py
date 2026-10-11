@@ -53,5 +53,21 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(missing.database.exists())
 
 
+class StatusLineTests(unittest.TestCase):
+    def test_line_and_usage_file(self):
+        spec2 = importlib.util.spec_from_file_location("statusline", Path(__file__).with_name("statusline.py"))
+        sl = importlib.util.module_from_spec(spec2)
+        spec2.loader.exec_module(sl)
+        u = sl.pick({"model": {"display_name": "Opus"}, "context_window": {"used_percentage": 12},
+                     "rate_limits": {"five_hour": {"used_percentage": 23.4, "resets_at": 1000 + 5400}}})
+        self.assertEqual(sl.line(u, now=1000), "Opus | 5h 23% (resets 1h30m) | ctx 12%")
+        self.assertIn("after first reply", sl.line(sl.pick({}), now=1000))
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "u.json"
+            path.write_text('{"updated": 0, "limits": {}}', encoding="utf-8")
+            self.assertIn("age", server.read_usage(path))
+            self.assertTrue(server.read_usage(Path(d) / "none.json")["missing"])
+
+
 if __name__ == "__main__":
     unittest.main()

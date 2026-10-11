@@ -67,6 +67,12 @@ Farore's Wind), and Hyrule Field's large open map.
 4. **Storm**: 6 phases, closing from the whole map to a final circle (see 4.4).
 5. **End**: last Link standing, or last team. Victory fanfare (Item Get jingle). Return to lobby.
 
+### 4.1a Movement feel
+Jump is short and snappy (Fortnite timing, OoT charm): launch 15, extra gravity 1.7 on top of the game's while airborne from our jump, apex ~43 units,
+~0.6 s airtime (was apex ~60, ~1.1 s). Ledge haul still reaches 105 above ground. Link plays our own authored clips (`shared/link_anims.h`):
+jump (push-off, stretch, OoT split with arms flung out at the apex, reach down), landing absorb, sprint (forward lean, pumping arms), on the local
+player and puppets, crossfaded with the game's pose over 3 frames.
+
 ### 4.2 Combat and items
 
 The loot pool holds 83 items, 82 of them from Ocarina of Time and the Shockwave Grenade in six kinds (the full list is in section 4.2.1). Each kind works differently:
@@ -590,7 +596,7 @@ Everything below is implemented, covered by the server tests, and described for 
 | Seasons and weather (deterministic from the seed, per-map tables), lightning, fog and sand effects on bot sight | `shared/weather.h`, `server/match.h` (`TickWeather`) |
 | Economy: rupees, ammo, special weapons, death drops (half the kit), supply drops | `shared/items.h`, `shared/combat.h`, `server/match.h` |
 | Magic meter (`kMaxMagic`), Adult Power, Heart Container chests | `shared/balance.h`, `server/match.h` |
-| Hireable allies (four kinds, follow and fight, healed or freed when the owner falls) | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
+| Hireable allies (seven kinds incl. Jones, Peter and Master Chief; follow and fight, healed or freed when the owner falls). Master Chief: 140 rupees, 6 hearts, 118 speed, carries Jones's four private rifles (same server rules); visual rifle-butt bash under 170 units; low-poly body from CC-BY-4.0 model by bizarrefog1 | `shared/ally.h`, `server/bot.h` (`StepAllies`), `server/match.h` |
 | Climbs, hideaway chests, spaced chest sites | `shared/poi.h`, `shared/loot.h` |
 | Smarter bots (rolls, lock-on footwork, hazards, calm opening, gear first, magic aware) | `server/bot.h` |
 | Cloth and wind (glider canopy, cap tail, tunic skirt, sheath) | `shared/cloth.h`, `patches/0009-player-hat-limb-hook.patch`, `patches/0015-player-cloth-limb-hook.patch` |

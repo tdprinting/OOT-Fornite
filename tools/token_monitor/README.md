@@ -1,5 +1,10 @@
 # Local token monitor
 
+## Claude plan usage (always visible)
+- Terminal: the project status line (`.claude/settings.json` → `statusLine`) runs `statusline.py` and shows `5h 24% (resets 1h23m) | 7d 41% | ctx 12% | $1.50` under the prompt. Restart Claude Code once to pick it up.
+- Window: run `python tools/token_monitor/server.py`, open http://127.0.0.1:8766 and keep the tab beside your editor; the "Claude plan usage" panel reads `~/.claude/plan-usage.json` (written by the status line) every 3 s.
+- Numbers come from Claude Code's own `rate_limits` feed (Pro/Max only, after the first reply). They refresh when Claude Code replies; between replies the page shows the last value and its age. Other machines/cloud sessions don't write this file.
+
 Run `python tools/token_monitor/server.py`, then open http://127.0.0.1:8766.
 Default scope is the checkout's parent workspace and its worktrees. For a standalone clone, use `--workspace .`. Use `--port NUMBER` if the port is occupied; `--database PATH` selects another RTK history database.
 

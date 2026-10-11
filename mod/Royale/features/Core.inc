@@ -108,6 +108,7 @@ struct AllyActor {
     uint8_t attackVariant=0;        // which of his moves is playing
     unsigned attackCount=0,hireCount=0;
     bool customCall=false;          // playing the player's own call.wav
+    float downAge=0;                // Master Chief: seconds since his health hit zero (his fall)
 };
 std::unordered_map<uint8_t, AllyActor> gAllies;
 std::unordered_map<const Actor*, uint8_t> gAllyOf;

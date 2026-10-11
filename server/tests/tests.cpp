@@ -1651,7 +1651,7 @@ static void HireableAllies() {
     for (int i = 0; i < kAllyCount; i++) CHECK(AllyOf(static_cast<AllyKind>(i)).price >= 30 && AllyOf(static_cast<AllyKind>(i)).maxHealth >= 3 && std::string(AllyOf(static_cast<AllyKind>(i)).name).size() > 2);
     // Jones is a distinct fifth ally and uses the same authoritative hire/follow/combat rules.
     {
-        CHECK(static_cast<int>(AllyKind::Jones) == 4 && static_cast<int>(AllyKind::Peter) == 5 && kAllyCount == 6);
+        CHECK(static_cast<int>(AllyKind::Jones) == 4 && static_cast<int>(AllyKind::Peter) == 5 && static_cast<int>(AllyKind::Chief) == 6 && kAllyCount == 7);
         Simulation sj = Duel(611, {0,0}, {0,1900}); Match& mj = sj.match;
         auto* p = mj.Find(1); mj.Find(1000)->stunUntil = 1e9f;
         auto& j = mj.MutableAllies()[4];
@@ -1700,6 +1700,28 @@ static void HireableAllies() {
         target->pos = {pe.pos.x + 120, pe.pos.z}; pe.attackReadyAt = 0; const float hp = target->health;
         CHECK(mp.AllyStrike(pe, target->id) && target->health < hp && pe.weapon == 0);
         CHECK(!mp.AllyStrike(pe, target->id));   // cooldown
+    }
+    // Master Chief is a seventh ally carrying Jones's private rifles: same distance pick, damage, cooldown and range; never drops them.
+    {
+        Simulation sc = Duel(613, {0,0}, {0,1900}); Match& mc = sc.match;
+        auto* p = mc.Find(1); mc.Find(1000)->stunUntil = 1e9f;
+        auto& c = mc.MutableAllies()[6];
+        CHECK(c.kind == AllyKind::Chief && CarriesJonesGuns(c.kind) && !AllyOf(AllyKind::Chief).melee && c.health == AllyOf(AllyKind::Chief).maxHealth);
+        CHECK(AllyOf(AllyKind::Chief).price > AllyOf(AllyKind::Jones).price && AllyOf(AllyKind::Chief).maxHealth > AllyOf(AllyKind::Jones).maxHealth &&
+              AllyOf(AllyKind::Chief).speed < AllyOf(AllyKind::Jones).speed);   // pays for armour with rupees and pace
+        c.pos = {100,0}; p->rupees = AllyOf(AllyKind::Chief).price - 1; CHECK(!mc.HireAlly(1,6) && p->rupees == AllyOf(AllyKind::Chief).price - 1);
+        p->rupees = 300; CHECK(mc.HireAlly(1,6) && c.owner == 1 && p->rupees == 300 - AllyOf(AllyKind::Chief).price);
+        auto* target = mc.Find(1000); target->invulnUntil = 0;
+        for(const auto& shot:std::array<std::pair<float,JonesGun>,4>{{{150,JonesGun::Carbine},{400,JonesGun::Assault},{700,JonesGun::Burst},{1000,JonesGun::Scoped}}}) {
+            c.attackReadyAt=0;target->health=target->maxHealth;target->armor=0;target->hasShield=false;target->gearMask=0;
+            target->rollUntil=target->adultUntil=target->dmgTakenUntil=target->frozenUntil=0;target->pos={c.pos.x+shot.first,c.pos.z};
+            CHECK(mc.AllyStrike(c,target->id) && c.weapon==static_cast<uint8_t>(shot.second));
+            CHECK(std::fabs(target->maxHealth-target->health-kJonesGuns[c.weapon].damage*kPlayerDamageScale)<.001f);
+            CHECK(!mc.AllyStrike(c,target->id));
+        }
+        target->pos={c.pos.x+1300,c.pos.z};c.attackReadyAt=0;CHECK(!mc.AllyStrike(c,target->id));
+        const auto lootBefore=mc.Loot().size();
+        mc.ReleaseAlly(c,true); CHECK(!c.alive && mc.Loot().size()==lootBefore);
     }
     Simulation sim = Duel(11, {0, 0}, {0, 1900});
     Match& m = sim.match;

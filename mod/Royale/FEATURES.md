@@ -5,6 +5,7 @@
 | Feature | Implementation under `features/` |
 |---|---|
 | Session state, graphics/debug settings, travel, floor/platform helpers; the regular game's switches (`InRegularGame`, `WorldFxOn`, `SpawnStandIn`; `docs/REGULAR_GAME.md`) | `Core.inc` |
+| Our own Link clips (jump, landing, sprint) over local Link and puppets | `LinkAnims.inc` |
 | Remote players, animations, sounds, spells, skins | `Players.inc` |
 | Death ragdolls and lobby ragdoll test | `Ragdolls.inc` |
 | Loot, projection, chests, model drawing; includes `RoyaleBosses.h` | `WorldObjects.inc` |
@@ -28,8 +29,7 @@
 | Lilo model and toxic cloud | `LiloModel.inc` |
 | Avriella model and behavior | `Avriella.inc` |
 | Avriella toys; includes `RoyaleLobbyPets.h` | `AvriellaToys.inc` |
-| Lilo behavior and hireable allies (regular-game allies: `ReconcileRegularAllies`) | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md` |
->>>>>>> 2406688 (Regular game: our water everywhere, sky/weather/shadows, companions and allies)
+| Lilo behavior and hireable allies (regular-game allies: `ReconcileRegularAllies`) | `Companions.inc`; existing NPCs: `shared/ally_anim.h`, `tools/allies`; Jones: `RoyaleJones.h`, `tools/jones/`, private loadout in `shared/ally.h` and `server/match.h`; Peter (phone call, quips, attack moves): `RoyalePeter.h`, `tools/peter/`, `assets/npcs/peter/DESIGN.md`; Master Chief (Jones's rifles, own body/clips): `RoyaleChief.h`, `shared/chief_animation.h`, `tools/chief/` |
 | Link clothes, cloth, Gilded Sword | `Equipment.inc` |
 | Map sign, aquarium include, pause inventory, update hooks | `SceneHooks.inc` |
 | Legacy sidebar/play menu | `Menus.inc` |
