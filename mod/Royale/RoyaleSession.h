@@ -273,11 +273,12 @@ class RoyaleSession {
     // Lobby only.
     void SetReady(bool ready) { if (Joined()) client->SetReady(ready); }
     void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { if (Joined()) client->ReportAttack(target, hit, style); }
-    void RequestPickup(uint32_t lootIndex, bool force = false) { if (Joined()) client->RequestPickup(lootIndex, force); }
+    void RequestPickup(uint32_t lootIndex, bool force = false, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) { if (Joined()) client->RequestPickup(lootIndex, force, replaceItem, replaceRarity); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
     void UseStack(uint8_t item, uint8_t rarity) { if (Joined()) client->UseStack(item, rarity); }
     void DropWeapon() { if (Joined()) client->DropWeapon(); }
+    void DropSlot(uint8_t item, uint8_t rarity) { if (Joined()) client->DropSlot(item, rarity); }
     void UseShield() { if (Joined()) client->UseShield(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
     // Carts: get in, get out, change seats, and (driving) report where the cart is each tick.

@@ -89,7 +89,7 @@ void Loot_Update(Actor* actor, PlayState* play) {
     float dx = player->actor.world.pos.x - actor->world.pos.x, dz = player->actor.world.pos.z - actor->world.pos.z;
     float dy = player->actor.world.pos.y - la.baseY;
     if (dx * dx + dz * dz <= kLootPickupRange * kLootPickupRange && std::fabs(dy) < 100.0f) {
-        gSession.RequestPickup(static_cast<uint32_t>(idx->second), false); // the server only takes upgrades this way
+        gSession.RequestPickup(static_cast<uint32_t>(idx->second), false); // walking over only takes rupees and ammo; anything else needs A
         la.pickupCooldown = royale::kTickHz; // ask again in a second if the server said no
     }
 }

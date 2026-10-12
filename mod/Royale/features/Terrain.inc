@@ -681,41 +681,33 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    if (in.press.button & BTN_DDOWN) {
-        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, false)); DrinkSounds(player); }
-        else Say("No potions");
-    }
-
-    // C-Left: drink a shield potion (the bar under your hearts).
-    if (in.press.button & BTN_CLEFT) {
-        bool has = false;
-        for (const auto& pot : hud.inv.potions) has |= royale::PotionOf(static_cast<royale::ItemId>(pot.item)).shield > 0;
-        if (!has) Say("No shield potion");
-        else if (hud.inv.shield >= royale::kMaxShield - 0.05f) Say("Your shield is full");
-        else { gSession.UseShield(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, true)); DrinkSounds(player); }
-    }
-
-    // C-Down: a tap takes the next consumable stack in hand (B then drinks one; the last tap puts the weapon back); holding it drops the weapon in hand
-    // on the ground so somebody else can take it. A stack in hand is also dropped by switching weapons.
+    // The five-slot hotbar (see HotbarSlots in Hud.inc): potions and shield potions are hotbar slots like weapons, drunk with B once selected.
+    // C-Down: a tap selects the next slot (like D-pad Right); holding it drops the selected slot (a whole potion stack, or the weapon in hand).
     {
         const std::vector<PotionStack> stacks = PotionStacks(hud);
         FollowHandStack(stacks);
+        const std::vector<HotbarSlot>& slots = HotbarSlots(hud);
         const double now = ImGui::GetTime();
         if (in.press.button & BTN_CDOWN) gStackBHold = now;
         if (gStackBHold >= 0.0) {
             if (in.cur.button & BTN_CDOWN) {
                 if (now - gStackBHold > 0.6) {
                     gStackBHold = -1.0;
-                    if (hud.weapon == royale::ItemId::BasicSword && hud.weaponRarity == royale::Rarity::Common) Say("Your starting sword stays with you");
+                    if (gHandStack >= 0) {
+                        gSession.DropSlot(static_cast<uint8_t>(gHandItem), static_cast<uint8_t>(gHandRarity));
+                        gHandStack = -1;
+                        Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    } else if (IsStarterWeapon(hud.weapon, hud.weaponRarity)) Say("Your starting sword stays with you");
                     else { gSession.DropWeapon(); Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
                 }
             } else {
                 gStackBHold = -1.0;
-                if (stacks.empty()) Say("Nothing in your bag");
+                if (slots.empty()) Say("Your hotbar is empty: open chests to fill it");
                 else {
-                    TakeStackInHand(stacks, gHandStack + 1);   // past the last stack: the weapon again
+                    const int cur = HotbarSelected(hud, slots), n = static_cast<int>(slots.size());
+                    SelectHotbarSlot(hud, slots, cur < 0 ? 0 : (cur + 1) % n);
                     Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-                    if (gHandStack >= 0 && royale::PotionOf(stacks[static_cast<size_t>(gHandStack)].item).revive) Say("A Fairy revives you by itself when you would fall");
+                    if (gHandStack >= 0 && royale::PotionOf(gHandItem).revive) Say("A Fairy revives you by itself when you would fall");
                 }
             }
         }
@@ -743,7 +735,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // While a text box is up, A belongs to it.
     if ((in.press.button & BTN_A) && !MessageBoxUp()) {
         const size_t target = NearestLootIndex();
-        if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
+        if (target != kNoLoot) {   // with the hotbar full, the selected slot is swapped out for it
+            uint8_t ri = 0, rr = 0;
+            HotbarReplaceTarget(&ri, &rr);
+            gSession.RequestPickup(static_cast<uint32_t>(target), true, ri, rr);
+        }
         else {   // nothing to open or take: maybe somebody to hire
             const int ally = NearbyFreeAlly();
             if (ally >= 0) {
@@ -756,21 +752,16 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    // D-pad Right: your next weapon; D-pad Left: back to the one before (like the bumpers on a hotbar). With spares B and C, the hand goes A, B, C, A...
+    // D-pad Right / Left: the next / previous hotbar slot (weapons and potion stacks alike), wrapping round, like the bumpers on Fortnite's hotbar.
     if (in.press.button & (BTN_DLEFT | BTN_DRIGHT)) {
-        const int spares = static_cast<int>(hud.inv.reserve.size());
-        gHandStack = -1;
-        if (spares == 0) {
-            Say("No other weapon: open chests to find more");
-        } else if (in.press.button & BTN_DRIGHT) {
-            gNextWeaponSlot = gNextWeaponSlot > spares ? 1 : gNextWeaponSlot;
-            gSession.SelectWeapon(gNextWeaponSlot);
-            gLastWeaponSlot = gNextWeaponSlot;
-            gNextWeaponSlot = gNextWeaponSlot >= spares ? 1 : gNextWeaponSlot + 1;
-        } else {   // back: swap again with the slot we last swapped, which puts the earlier weapon back in hand
-            const int back = gLastWeaponSlot >= 1 && gLastWeaponSlot <= spares ? gLastWeaponSlot : spares;
-            gSession.SelectWeapon(back);
-            gNextWeaponSlot = back;
+        const std::vector<HotbarSlot>& slots = HotbarSlots(hud);
+        const int n = static_cast<int>(slots.size());
+        if (n == 0) {
+            Say("Your hotbar is empty: open chests to fill it");
+        } else {
+            const int cur = HotbarSelected(hud, slots), dir = (in.press.button & BTN_DRIGHT) ? 1 : -1;
+            SelectHotbarSlot(hud, slots, cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n);
+            if (gHandStack >= 0 && royale::PotionOf(gHandItem).revive) Say("A Fairy revives you by itself when you would fall");
         }
     }
 
@@ -1099,6 +1090,7 @@ void ApplyItemCvars(bool on) {
     // starts, so switching the enhancement on mid-scene left adult Link with a child's fist: only the handle showed. Patch them now.
     UpdatePatchHand();
     gRoyaleBraceletOnAdult = on ? 1 : 0;
+    gRoyaleBootsOnChild = on ? 1 : 0;   // the game has no child boot models, so Hover and Iron Boots were invisible on child Link (you and puppets)
 }
 // The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
 void SyncRealAmmo(const royale::HudState& hud) {
