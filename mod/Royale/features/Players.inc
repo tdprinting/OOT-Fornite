@@ -195,6 +195,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
 
 // ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
 
+void CrawlShuffle(Player* player, float speed, float t);   // Vehicles.inc
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
 
 // How a weapon is held decides which of Link's move sets it uses (one-handed sword, two-handed sword, hammer, bow...).
