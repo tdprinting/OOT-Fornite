@@ -124,7 +124,9 @@ bool AutoRun(const AutoStep& s, float secs) {
             gPlayState->transitionTrigger = TRANS_TRIGGER_START;
             gPlayState->transitionType = TRANS_TYPE_FADE_BLACK;
         }
-        return InGame() && gPlayState->transitionTrigger == TRANS_TRIGGER_OFF && gAuto.stepFrames > 20;
+        if (!InGame() || gPlayState->transitionTrigger != TRANS_TRIGGER_OFF || gAuto.stepFrames <= 20) return false;
+        if (WarMenuOpen()) WarHide();   // the War Table opens over the waiting room at boot; a player closes it to walk around
+        return true;
     }
     if (s.verb == "wait") return secs >= std::atof(s.arg.c_str());
     if (s.verb == "cvar") {
@@ -155,6 +157,7 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "regular") {
         if (gSession.GetMode() != royale::RoyaleSession::Mode::Idle) gSession.Leave();
         gSaveContext.ship.quest.id = QUEST_NORMAL;
+        if (WarMenuOpen()) WarHide();
         RefreshRegularSettings();
         return true;
     }

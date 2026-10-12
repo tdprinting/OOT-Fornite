@@ -1783,7 +1783,7 @@ void ReportEvents(const royale::HudState& hud) {
 // (loot, spawns and storm on ground that exists), then begin.
 void DriveStart(const royale::HudState& hud) {
     if (gSoloStartWanted) {   // the solo test needs no one else: press Start for the host as soon as they are in the lobby
-        if (!gSession.Joined() || !gSession.SoloTest()) gSoloStartWanted = false;
+        if (!gSession.SoloTest()) gSoloStartWanted = false;   // (joining our own lobby takes a few frames: keep waiting while still hosting it)
         else if (hud.isHost && hud.state == royale::MatchState::Lobby && hud.haveSelf && InGame() && !gPendingStart) { gPendingStart = true; gSoloStartWanted = false; }
     }
     if (!gPendingStart) return;

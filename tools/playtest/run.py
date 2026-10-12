@@ -82,7 +82,7 @@ def find_game(build: Path):
 def start_display():
     for n in range(97, 110):
         if not Path(f"/tmp/.X11-unix/X{n}").exists():
-            proc = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "1280x720x24", "+extension", "GLX", "-nolisten", "tcp"],
+            proc = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "960x540x24", "+extension", "GLX", "-nolisten", "tcp"],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for _ in range(50):
                 if Path(f"/tmp/.X11-unix/X{n}").exists():
@@ -107,6 +107,9 @@ def prepare_home(run_dir: Path, otr: Path, fresh: bool):
     if fresh and run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
+    cfg = run_dir / "shipofharkinian.json"
+    if not cfg.exists():   # the game window fills the virtual 16:9 screen (like the Odin), so screenshots show only the game
+        cfg.write_text(json.dumps({"Window": {"Width": 960, "Height": 540, "PositionX": 0, "PositionY": 0}}))
     link = run_dir / "oot.otr"
     if not link.exists():
         link.symlink_to(otr.resolve())   # a link, never a copy
@@ -198,7 +201,7 @@ def collect(name, script, run_dir, secs, hang):
     code = int(exit_m.group(1) or "0", 8) if exit_m else None
     sig_m = re.search(r"received signal (SIG\w+)", text)
     sig = sig_m.group(1) if sig_m else None
-    ok_steps = len(re.findall(r"^OK ", result, re.M))
+    ok_steps = len(re.findall(r"^OK ", result, re.M)) + (1 if re.search(r"^PASS ", result, re.M) else 0)   # quit logs PASS, not OK
     total_steps = len([s for s in script.split(";") if s.strip()])
     fail_line = next((l for l in result.splitlines() if l.startswith("FAIL")), "")
     warns = sorted(set(l.strip() for l in result.splitlines() if "WARN" in l))
