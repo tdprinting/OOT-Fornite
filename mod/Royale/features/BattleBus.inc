@@ -390,6 +390,8 @@ void PlaceOnBusSeat(Player* player, int seat) {
     player->actor.velocity = { 0, 0, 0 };
     player->actor.speedXZ = 0;
     player->linearVelocity = 0;
+    // Sat on the bench the game's camera must see a floor under Link, or it settles against the island far below and ends up under the bus.
+    player->actor.floorHeight = player->actor.world.pos.y;
     player->fallStartHeight = static_cast<s16>(player->actor.world.pos.y);
     player->fallDistance = 0;
     const s16 yaw = BusYawBinang();

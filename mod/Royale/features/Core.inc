@@ -4,6 +4,8 @@ bool InGame() {
     return gPlayState != nullptr && GET_PLAYER(gPlayState) != nullptr && gSaveContext.fileNum >= 0 && gSaveContext.fileNum <= 2 &&
            gSaveContext.gameMode == GAMEMODE_NORMAL;
 }
+uint32_t gBootInputAt = 0;
+Input* gBootInput = nullptr;   // the boot screen's pad while the War Table is open before any save is loaded (Royale_NativeMenuBoot); the menu reads it in WarInput
 int gMapId = 0;   // which place this match is played in (from the server, see HudState::mapId)
 bool gFortniteSandbox = false;   // ...and its ground is the Sandbox test map's (shared/sandbox_terrain.h) rather than the island's
 bool gFortniteScene = false;   // the scene now loaded is Hyrule Field with the Fortnite map's collision (see "the Fortnite map" below)

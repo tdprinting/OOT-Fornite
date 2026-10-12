@@ -107,7 +107,8 @@ void WarInput() {
     int keyCount=0;const uint8_t* keys=SDL_GetKeyboardState(&keyCount);
     auto pressed=[&](SDL_Scancode key){return key<keyCount&&keys[key]&&!gWar.keys[key];};
     auto held=[&](SDL_Scancode key){return key<keyCount&&keys[key];};
-    Input* in=InGame()?&gPlayState->state.input[0]:nullptr;
+    // Before a save is loaded (the menu boots over the file-choose state) the pad is the boot screen's own, remembered by Royale_NativeMenuBoot.
+    Input* in=InGame()?&gPlayState->state.input[0]:(gWar.open&&gBootInput&&SDL_GetTicks()-gBootInputAt<100?gBootInput:nullptr);   // (only while the boot screen is still the running state: it was seen this instant)
     const u16 press=in?in->press.button:0, buttons=in?in->cur.button:0;
     const bool start=(press&BTN_START)||pressed(SDL_SCANCODE_ESCAPE)||pressed(SDL_SCANCODE_F1);
     if(InGame()&&start) {

@@ -60,11 +60,23 @@ for _id in MAPS:
         SCENARIOS[f"match-{_id}"] = (f"ingame; hostbots:{_id}; state:Drop; shot:match-{_id}-bus; jump; wait:3; shot:match-{_id}-skydive; "
                                      f"state:InMatch; wait:30; shot:match-{_id}-hud; check; quit")
 
+# Performance: game updates per second (20 is full speed) and where the game thread's time goes, sampled with perf.
+SCENARIOS["perf-lobby"] = "ingame; wait:5; prof:15; quit"
+SCENARIOS["perf-regular"] = "ingame; regular; warp:57; wait:10; prof:15; quit"
+for _id in (8, 12, 13):
+    SCENARIOS[f"perf-{_id}"] = f"ingame; hostbots:{_id}; state:Drop; jump; state:InMatch; wait:10; prof:20; quit"
+
+# One main map in depth (Moonfall Isle): a whole bot match with screenshots and state checks every minute of game time.
+SCENARIOS["deep-12"] = ("ingame; hostbots:12; state:Countdown; shot:d-bus; check; state:Drop; wait:8; shot:d-bus-drop; jump; wait:4; shot:d-freefall; "
+                        "wait:12; shot:d-glide; state:InMatch; wait:20; shot:d-ground; check; wait:60; shot:d-60s; check; wait:60; shot:d-120s; check; "
+                        "wait:60; shot:d-180s; check; prof:20; quit")
+
 SUITES = {
     "smoke": ["boot", "solo-12", "match-12", "skin", "regular"],
     "maps": [f"solo-{i}" for i in MAPS],
     "matches": [f"match-{i}" for i in MAPS if i not in TEST_MAPS],
     "scenes": ["tour-overworld", "tour-dungeons"],
+    "perf": ["perf-lobby", "perf-regular", "perf-8", "perf-12", "perf-13"],
 }
 SUITES["full"] = SUITES["smoke"] + [s for s in SUITES["maps"] + SUITES["matches"] + SUITES["scenes"] if s not in SUITES["smoke"]]
 
@@ -113,7 +125,7 @@ def prepare_home(run_dir: Path, otr: Path, fresh: bool):
     link = run_dir / "oot.otr"
     if not link.exists():
         link.symlink_to(otr.resolve())   # a link, never a copy
-    for name in ("autotest-result.txt", "autotest-heartbeat.txt", "royale-trace.txt", "shot-request.txt"):
+    for name in ("autotest-result.txt", "autotest-heartbeat.txt", "royale-trace.txt", "shot-request.txt", "prof-request.txt", "perf.data"):
         (run_dir / name).unlink(missing_ok=True)
     for png in run_dir.glob("*.png"):
         png.unlink()
@@ -125,6 +137,55 @@ def take_shot(req: Path, run_dir: Path, display: str):
     subprocess.run(["import", "-display", display, "-window", "root", "-resize", "640x", str(run_dir / f"{name}.png")],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     req.unlink(missing_ok=True)
+
+
+def perf_bin():
+    found = sorted(Path("/usr/lib/linux-tools").glob("*/perf")) if Path("/usr/lib/linux-tools").exists() else []
+    return str(found[-1]) if found else shutil.which("perf")
+
+
+def take_profile(req: Path, run_dir: Path, pid):
+    """Sample the game thread's CPU use (the main thread: game logic, our mod and display-list building; the software
+    renderer's own threads are left out, they stand in for the Odin's GPU)."""
+    secs = max(1, int(float(req.read_text().strip() or "10")))
+    perf = perf_bin()
+    if perf and pid:
+        subprocess.run([perf, "record", "-q", "-e", "cpu-clock", "-F", "299", "-t", str(pid), "-o", str(run_dir / "perf.data"),
+                        "--", "sleep", str(secs)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=secs + 120)
+    req.unlink(missing_ok=True)
+
+
+def profile_summary(run_dir: Path, top=12):
+    """Game thread's top functions by own time, then our mod's functions by total time (with what they call), in % of game-thread samples."""
+    data = run_dir / "perf.data"
+    perf = perf_bin()
+    if not data.exists() or not perf:
+        return []
+
+    def report(children):
+        cmd = [perf, "report", "-i", str(data), "--stdio", "-g", "none", "--sort", "comm,symbol", "--percent-limit", "0.3",
+               "--no-children"]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=180).stdout
+        except subprocess.TimeoutExpired:
+            return []
+        rows = []
+        for line in out.splitlines():
+            m = re.match(r"\s+([\d.]+)%\s+(?:([\d.]+)%\s+)?(\S+)\s+\[[.k]\]\s+(.*)", line)
+            if m:
+                rows.append((float(m.group(1)), m.group(3), m.group(4).strip()))   # children mode: first column is total
+        return rows
+
+    def short(n):
+        return re.sub(r"\(anonymous namespace\)::|royale::", "", n)[:90]
+
+    own = report(False)
+    main = own[0][1] if own else ""
+    lines = []
+    lines += [f"  self  {p:5.1f}%  {short(n)}" for p, c, n in own if c == main][:top]
+    ours = [(p, n) for p, c, n in own if c == main and ("(anonymous namespace)::" in n or "royale::" in n)]
+    lines += [f"  mod   {p:5.1f}%  {short(n)}  (self time)" for p, n in ours[:top]]
+    return lines
 
 
 def summarize_stack(gdb_out: str, limit=12):
@@ -174,10 +235,14 @@ def run_scenario(name, script, args, game, display):
         proc = subprocess.Popen(gdb, cwd=game.parent, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         beat = run_dir / "autotest-heartbeat.txt"
         shot_req = run_dir / "shot-request.txt"
+        prof_req = run_dir / "prof-request.txt"
         while proc.poll() is None:
             time.sleep(0.5)
             if shot_req.exists():
                 take_shot(shot_req, run_dir, display)
+            if prof_req.exists():
+                take_profile(prof_req, run_dir, child_pid(proc.pid))
+                beat.touch()   # the game kept running; perf just held this loop
             now = time.time()
             last = beat.stat().st_mtime if beat.exists() else started
             if now - last > args.hang or now - started > args.timeout:
@@ -224,12 +289,14 @@ def collect(name, script, run_dir, secs, hang):
         status, why = "FAIL", fail_line or f"exit code {code} at {step}"
     return {"name": name, "status": status, "why": why, "secs": round(secs), "steps": f"{ok_steps}/{total_steps}", "stack": stack,
             "asserts": asserts, "log_errors": sorted(set(logs))[:8], "log_error_count": len(logs), "missing": missing[:8],
-            "warnings": warns[:5], "shots": sorted(str(p) for p in run_dir.glob("*.png")), "last_crumbs": crumbs, "run_dir": str(run_dir), "script": script}
+            "warnings": warns[:5], "profile": profile_summary(run_dir), "fps": re.findall(r"prof: .*", result), "shots": sorted(str(p) for p in run_dir.glob("*.png")), "last_crumbs": crumbs, "run_dir": str(run_dir), "script": script}
 
 
 def print_result(r, verbose):
     head = f"{r['status']:<5} {r['name']:<16} {r['secs']:>4}s steps {r['steps']:<6} log errors {r['log_error_count']}"
     print(head + (f"  {r['why']}" if r["why"] else ""))
+    for line in r.get("fps", []) + r.get("profile", []):
+        print(f"      {line}")
     if r.get("shots"):
         print(f"      shots: {len(r['shots'])} in {r['run_dir']}")
     if r["status"] == "PASS" and not verbose:
