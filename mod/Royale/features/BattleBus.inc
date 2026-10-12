@@ -414,14 +414,12 @@ void LeaveBusLocal(Player* player, bool pushed) {
     gBusPhase = 2;
     gBusExitAt = ImGui::GetTime();
     Player_PlaySfx(&player->actor, static_cast<u16>(NA_SE_VO_LI_AUTO_JUMP + player->ageProperties->unk_92));
-    Audio_PlaySoundGeneral(NA_SE_EV_FLYING_AIR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
     if (pushed) ShowBanner("Off you go!", IM_COL32(200, 150, 255, 255), 2.0f);
 }
 
 void OpenGliderFromFreefall() {
     gBusPhase = 0;
     gGliderPopAt = ImGui::GetTime();
-    Audio_PlaySoundGeneral(NA_SE_EV_WIND_TRAP, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
 }
 // The glider pops open: it grows from a third of its size to full over 0.4 s.
 float GliderPopScale() {

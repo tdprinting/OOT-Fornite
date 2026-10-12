@@ -887,6 +887,9 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
     if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    // The rush of air while falling and gliding. FLYING_AIR is a looping sound: it has to be kept going every frame (the bus exit and glider
+    // used to start it, and WIND_TRAP, once with the plain id, which gave a stuck or cut-off whoosh). Free fall is higher and louder than the glider.
+    if (gBusPhase != 1) func_800F436C(&gSfxDefaultPos, NA_SE_EV_FLYING_AIR - SFX_FLAG, gBusPhase == 2 ? 1.15f : 0.8f);
     if (UpdateBusRide(player, hud)) return;                                   // sat on the Moonfall Bus, or falling from it (BattleBus.inc)
     const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
