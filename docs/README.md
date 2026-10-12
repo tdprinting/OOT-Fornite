@@ -23,6 +23,7 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 - [HYRULE_RIFTLANDS.md](HYRULE_RIFTLANDS.md): Hyrule Riftlands
 - [HYRULE_CONVERGENCE.md](HYRULE_CONVERGENCE.md): Hyrule Convergence
 - [SANDBOX.md](SANDBOX.md): The Sandbox test map
+- [PLAYTEST.md](PLAYTEST.md): Headless playtests of the real game (PC build, scripted scenarios, crash stacks)
 - [BOSS_TEST_ARENAS.md](BOSS_TEST_ARENAS.md): Boss test arenas
 - [PLACEMENT.md](PLACEMENT.md): Where chests, boulders and scenery go
 
