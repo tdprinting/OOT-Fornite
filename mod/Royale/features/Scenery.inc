@@ -142,17 +142,8 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
 
 // Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
 // the game has settled Link on the scene's own floor.
-// Drinking: which bottle Link takes out (the potion the server will most likely pick: the first that heals, or the first shield potion),
-// how long it takes, and its sounds (Link's gulp and the hearts refilling).
+// Drinking from a hotbar slot: how long it takes, and its sounds (Link's gulp and the hearts refilling).
 constexpr float kDrinkSeconds = 1.5f;
-royale::ItemId BottleToDrink(const royale::HudState& hud, bool shield) {
-    for (const auto& pot : hud.inv.potions) {
-        const royale::ItemId id = static_cast<royale::ItemId>(pot.item);
-        const royale::PotionDef d = royale::PotionOf(id);
-        if (shield ? d.shield > 0 : (!d.revive && d.heal > 0)) return id;
-    }
-    return shield ? royale::ItemId::BluePotion : royale::ItemId::RedPotion;
-}
 void DrinkSounds(Player* player) {
     Player_PlaySfx(&player->actor, static_cast<u16>(NA_SE_VO_LI_DRINK + player->ageProperties->unk_92));
     Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);

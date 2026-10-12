@@ -215,8 +215,8 @@ void WarDraw(GameState* state) {
             p.Wrap(38,150,"Drop into Hyrule, gather gear, stay inside the safe zone and be the last survivor.",154,12,wt::theme::Muted,8);
             p.Text(244,121,"BATTLE ROYALE CONTROLS",15,wt::theme::Ink,true);
             const bool classic=CVarGetInteger(ROYALE_CVAR("ControlScheme"),0)==1;
-            const char* lines[]={"A   Open, take, hire, talk. With nothing else to do it JUMPS","B   Attack with the weapon in hand","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Up   Ability     C-Right   Emote","Stick click   Sprint     Z   Lock on / dive     R   Shield / exit cart"};
-            const char* classicLines[]={"A   Open, take, hire, talk","B   Attack with the weapon in hand","C-Up   JUMP     D-pad Up   Ability","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Right   Emote     Stick click   Sprint"};
+            const char* lines[]={"A   Open, take, hire, talk. With nothing else to do it JUMPS","B   Use the hotbar slot: attack, or drink a potion","D-pad L / R   Next / last of 5 slots     Hold C-Down   Drop it","C-Up or D-pad Up   Ability     C-Right   Emote","Stick click   Sprint     Z   Lock on / dive     R   Shield / exit cart"};
+            const char* classicLines[]={"A   Open, take, hire, talk","B   Use the hotbar slot: attack, or drink a potion","C-Up   JUMP     D-pad Up   Ability","D-pad L / R   Next / last of 5 slots     Hold C-Down   Drop it","C-Right   Emote     Stick click   Sprint"};
             p.Text(244,143,classic?"CLASSIC LAYOUT":"BATTLE ROYALE LAYOUT",10,wt::theme::Gold);
             for(int i=0;i<5;++i)p.Text(244,163+i*17,classic?classicLines[i]:lines[i],10,wt::theme::Ink,false,346);
             p.Text(244,252,"Change it in Settings > Comfort > Options. Menus: L / R pages, A select, B back.",9,wt::theme::Muted,false,346);
