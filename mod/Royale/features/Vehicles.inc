@@ -1076,7 +1076,7 @@ void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, co
         std::string label;
         const size_t loot = NearestLootIndex();
         int cart; royale::Seat seat;
-        if (loot != kNoLoot) { auto it = gLoot.find(loot); label = it != gLoot.end() && it->second.chest ? "Open" : "Take"; }
+        if (loot != kNoLoot) {}   // the find's own panel (EndMatch.inc) already says what A does here; a second chip only crowded it
         else if (const int ally = NearbyFreeAlly(); ally >= 0) label = std::string("Hire the ") + royale::kAllyDefs[ally].name + " (" + std::to_string(royale::kAllyDefs[ally].price) + ")";
         else if (NearbyCartSeat(&cart, &seat)) label = seat == royale::Seat::Driver ? "Drive" : "Ride along";
         else if (TalkTargetNear()) label = "Talk";
