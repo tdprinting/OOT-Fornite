@@ -17,3 +17,4 @@ Work:
 Don't: redesign, refactor unrelated code, touch git history, open PRs (Ronnie does that).
 
 Token rules: caveman style. Small edits over rewrites. Report ≤6 lines: files changed, check results, open issues.
+- After a gameplay change: `tools/playtest/build.sh` and the covering scenario of `tools/playtest/run.py` (docs/PLAYTEST.md). A CRASH line gives the stack; the run folder's autotest-result.txt has the mod state. Re-run until PASS.

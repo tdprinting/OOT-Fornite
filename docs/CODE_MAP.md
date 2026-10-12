@@ -37,6 +37,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `RoyaleWarTable.h` native menu; its fragments in `war_table/` (index: [`war_table/INDEX.md`](../mod/Royale/war_table/INDEX.md)).
 - `build_version.h` build number, overwritten by `game-build.yml`.
 - `features/CrashContext.inc` crash context: state snapshot and change breadcrumbs printed into `royale-crash.txt` and each scene load's block in `royale-trace.txt` (see `docs/BUILDING.md`).
+- `features/AutoTest.inc` playtest step-script driver (`ROYALE_AUTOTEST`; inert otherwise), used by `tools/playtest/`.
 - `logo_data.h` [gen: scripts/make_logo_assets.py]; `gilded_sword_icon.h` [gen: scripts/make_gilded_sword_icon.py].
 
 ## scripts/
@@ -55,6 +56,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `song-to-oot.html`, `song_to_oot/` song converter (browser and Python); `rom-extractor.html` ROM collision analyser; `map-viewer.html` map viewer; `test_rom_extractor.js`, `test_song_to_oot_html.js` manual `node` tests.
 - `token_monitor/` local token-savings monitor (`server.py`, tests in `test_monitor.py`); `statusline.py` = Claude Code status line with plan usage %, feeds the page's plan panel.
 - `water/preview.cpp` software water preview.
+- `playtest/`: headless playtests of the real PC build (`build.sh`, `run.py` scenarios and suites, `sync_mod.py` incremental mod copy); docs/PLAYTEST.md.
 
 ## patches/ (applied in glob order by `scripts/apply_patches.sh`; letter suffixes keep the old sort order)
 - Hooks: 0001 ShouldActorInit, 0002 cmake, 0009 hat limb, 0011 run speed, 0012 message table, 0013 custom collision, 0015 cloth limb, 0016 audio mix, 0023a custom sword, 0024 item material.

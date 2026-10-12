@@ -300,3 +300,4 @@ void WarDraw(GameState* state);
 #include "features/Lighting.inc"
 #include "features/EngineBridge.inc"
 #include "features/CrashContext.inc"
+#include "features/AutoTest.inc"
