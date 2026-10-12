@@ -1117,6 +1117,7 @@ struct LocalDress {
     royale::ItemId weapon = royale::ItemId::BasicSword;
 };
 LocalDress gLocalDress;
+int gAutoBoots = -1;   // playtest (AutoTest `boots:<n>`): the boots Link is dressed in whatever the HUD says; -1 = off
 bool gLocalMaskSaved = false;
 u8 gSavedLocalMask = PLAYER_MASK_NONE;
 bool LocalDressOn() { return gLocalDress.on; }
@@ -1131,7 +1132,7 @@ void SyncLocalDress(Player* player, const royale::HudState& hud) {
     gLocalDress.on = dressOn;
     gSelfInvulnLeft = hud.invulnLeft;
     if (!gLocalDress.on) return;
-    gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
+    gLocalDress.boots = gAutoBoots >= 0 ? static_cast<s8>(gAutoBoots) : PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
     gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
     player->currentMask = gLocalDress.mask;
     gLocalDress.weapon = hud.weapon;

@@ -50,6 +50,8 @@ SCENARIOS = {
     "tour-overworld": "ingame; regular; tour:overworld; check; quit",
     "tour-dungeons": "ingame; regular; tour:dungeons; check; quit",
     "tour-all": "ingame; regular; tour:all; check; quit",
+    "boots": ("ingame; host:6; wait:12; boots:1; wait:2; shot:boots-iron; boots:2; wait:2; shot:boots-hover; "
+              "boots:0; wait:2; shot:boots-kokiri; check; quit"),
     "sandbox": "ingame; host:6; wait:15; shot:sandbox; check; quit",
 }
 for _id in MAPS:

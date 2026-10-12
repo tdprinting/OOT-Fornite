@@ -339,6 +339,19 @@ struct SkyBatch {
 };
 
 // The sky with the Blender models. `zen` and `hor` are the zenith and horizon colours DrawSky worked out for the time of day and weather.
+// Closes the dome underneath: the lowest ring sits just under the horizon, so where a map ends in open air (the rim of Desert Colossus, the
+// crater maps) looking down past the ground showed the bare clear colour, a black wedge. A fan from that ring to the nadir, in the horizon's haze.
+void SkyNadirCap(PlayState* play, const Vtx* ring0, int segs, const float hor[3]) {
+    Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(segs + 2) * sizeof(Vtx)));
+    if (v == nullptr) return;
+    std::memcpy(v, ring0, static_cast<size_t>(segs + 1) * sizeof(Vtx));
+    SetVtx(v[segs + 1], 0.0f, -7000.0f, 0.0f, hor[0] * 0.8f, hor[1] * 0.8f, hor[2] * 0.85f, 255.0f);
+    OPEN_DISPS(play->state.gfxCtx);
+    gSPVertex(POLY_XLU_DISP++, reinterpret_cast<uintptr_t>(v), segs + 2, 0);
+    for (int j = 0; j < segs; j++) gSP1Triangle(POLY_XLU_DISP++, j, j + 1, segs + 1, 0);
+    CLOSE_DISPS(play->state.gfxCtx);
+}
+
 void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[3], const float zen[3], const float hor[3]) {
     static const char drawKey = 0;
     DrawIdentity identity(&drawKey, 0, 0);
@@ -381,6 +394,7 @@ void DrawSkyOot(PlayState* play, const SkyLight& L, float ov, const float tintW[
             for (int j = 0; j < kDomeSegs; j++) gSP2Triangles(POLY_XLU_DISP++, j, j + 1, w + j, 0, j + 1, w + j + 1, w + j, 0);
         }
         CLOSE_DISPS(play->state.gfxCtx);
+        SkyNadirCap(play, dv, kDomeSegs, hor);
     }
 
     SkyBatch sky;
@@ -580,6 +594,7 @@ void DrawSky(PlayState* play) {
         for (int j = 0; j < kSegs; j++) gSP2Triangles(POLY_XLU_DISP++, j, j + 1, kSegs + 1 + j, 0, j + 1, kSegs + 2 + j, kSegs + 1 + j, 0);
     }
     CLOSE_DISPS(play->state.gfxCtx);
+    SkyNadirCap(play, dv, kSegs, hor);
 
     // Stars: a field that turns slowly through the night, twinkling, fading in as the sun sets and out as it rises (and behind cloud).
     const float starA = L.night * (1.0f - ov) * (1.0f - 0.8f * std::min(1.0f, gStormWeather * 1.4f));
