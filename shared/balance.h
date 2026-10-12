@@ -52,6 +52,7 @@ constexpr float kAutoGlideHeight = 600.0f;   // the glider opens by itself this 
 constexpr float kBusExitPush = 1.0f;         // seconds a jumper keeps the bus's speed, so a jump carries you on ahead of it
 constexpr float kLandedGraceSec = 2.0f;      // protection ends this long after touching down
 constexpr float kDropExtraSec = 25.0f;       // the drop ends at the latest this long after the bus leaves the island
+constexpr float kDropBotForceSec = 10.0f;   // a bot still in the air this long after the bus leaves is put down on the ground (the drop would stall on it)
 constexpr float kLandedDeadlineSec = 8.0f;   // anyone still not down this long into the match loses the protection anyway
 constexpr float kBusHornCooldown = 1.5f;     // one honk per player this often
 

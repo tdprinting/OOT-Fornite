@@ -650,6 +650,22 @@ class Match {
         }
         events.push_back(MatchEvent{MatchEvent::Type::PadsChanged});
     }
+    // A bot standing on a launch pad is thrown `carry` units toward `toward` (a player's own game does this for them; bots move on flat ground, so the
+    // server carries them, like the Launch effect). False if it is not on a pad or there is no ground to land on.
+    bool BotUsePad(uint32_t id, Vec2 toward, float carry) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || !p->isBot || p->knocked || state != MatchState::InMatch) return false;
+        bool onPad = false;
+        for (const Vec2& pad : pads) onPad |= Distance(pad, p->pos) <= kLaunchPadRadius;
+        const float d = Distance(p->pos, toward);
+        if (!onPad || d < 1.0f) return false;
+        carry = (std::min)(carry, d);
+        for (float f : {1.0f, 0.6f, 0.3f}) {   // no ground at the full throw: a shorter hop
+            const Vec2 to = {p->pos.x + (toward.x - p->pos.x) / d * carry * f, p->pos.z + (toward.z - p->pos.z) / d * carry * f};
+            if (PadValid(to)) { Teleport(*p, to); return true; }
+        }
+        return false;
+    }
     // The Deku Launch Flower: plants a pad a step in front of the player. False (and the item stays) if there is no room or no ground there.
     bool PlacePad(uint32_t id) {
         PlayerState* p = Find(id);
@@ -1070,7 +1086,11 @@ class Match {
             case ItemKind::Weapon: {
                 const bool upgrade = WeaponDps(s.item, s.rarity) > WeaponDps(p->weapon.item, p->weapon.rarity) * 1.05f;
                 if (IsStarter(p->weapon)) {                 // empty hand: it goes there if a slot is free (else swap out the selected slot first)
-                    if (!HotbarFree(*p) && !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    if (!HotbarFree(*p)) {   // full: only a stack the player named is swapped out. The starter in hand is no slot, so never guess a backup to drop.
+                        bool named = false;
+                        for (const Equipped& e : p->potions) named |= replaceItem != kHandSlot && static_cast<uint8_t>(e.item) == replaceItem && static_cast<uint8_t>(e.rarity) == replaceRarity;
+                        if (!named || !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    }
                     if (!IsStarter(p->weapon)) p->reserve.push_back(p->weapon);   // (freeing a stack can't change the hand; this is defensive)
                     p->weapon = {s.item, s.rarity};
                 } else if (HotbarFree(*p)) {               // a free slot: an upgrade goes in hand (the old one becomes a backup), else a backup
@@ -3189,6 +3209,14 @@ class Match {
     void TickBus() {
         SeatPassengers(stateTime);
         if (stateTime >= BusCloseSec(bus)) for (auto& p : players) if (p.alive && p.aboard) LeaveBus(p.id, true);   // the bus is leaving the island
+        if (stateTime >= (bus.valid ? BusCloseSec(bus) : 0.0f) + kDropBotForceSec)
+            for (auto& p : players) {   // a bot that never lands (a glider drifting over water) must not hold the whole drop: set it down where it is
+                if (!p.alive || !p.isBot || !p.rodeBus || p.aboard || p.landedAt >= 0) continue;
+                if (p.jumpedAt < 0) p.jumpedAt = clock - kLandedGraceSec;
+                if (IsBusSeat(p.anim) || IsAirborne(p.anim)) { p.anim = static_cast<uint8_t>(Anim::Idle); p.y = 0; }
+                p.landedAt = clock;
+                p.dirty = true;
+            }
     }
     bool DropOver() const {
         if (stateTime >= DropMaxSec()) return true;
