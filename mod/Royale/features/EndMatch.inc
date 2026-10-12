@@ -679,9 +679,13 @@ void DrawOverlay() {
     // What is at your feet: chests say how rare they are (not what is inside); items on the ground say what they are.
     // One line: the N64 pad's A button (blue), then what pressing it does.
     auto prompt = [&](ImU32 col, const std::string& t) {
-        const float size = 24 * scale, btn = 13 * scale, gap = 8 * scale, y = ds.y * 0.66f;
+        const float size = 26 * scale, btn = 14 * scale, gap = 9 * scale, pad = 12 * scale, y = ds.y * 0.66f;
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, t.c_str());
         const float x = (ds.x - sz.x - btn * 2 - gap) * 0.5f;
+        // On a dark HUD panel rimmed in the find's colour (like the compass box), so it reads over bright walls and sand.
+        const ImVec2 a(x - pad, y - 0.45f * pad), b(x + btn * 2 + gap + sz.x + pad, y + sz.y + 0.45f * pad);
+        dl->AddRectFilled(a, b, HudColor(royale::wartable::theme::Panel, 225), 6.0f * scale);
+        dl->AddRect(a, b, col, 6.0f * scale, 0, 2.0f * scale);
         DrawPadGlyph(dl, font, ImVec2(x + btn, y + sz.y * 0.5f), btn, royale::controls::Glyph::A);
         text(x + btn * 2 + gap, y, col, size, t);
     };

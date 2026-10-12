@@ -134,7 +134,7 @@ void DrawConvergenceStructures(PlayState* play) {
 // reach per batch (landmarks are drawn from far away, foliage only near). The texture is a 128-wide tile: gDPLoadTextureBlock is limited to 4095 texels
 // (64 x 64 at 16 bits), the tile load is not, and its coordinates are S10.5 so one repeat is 4096.
 //
-// The outsides of stone, wood, roofs, thatch, cobbles, plaster and bark are also drawn lit, with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
+// The outsides of stone, rock, roofs, cobbles and plaster are also drawn lit (wood, thatch and bark grain stay baked, see below), with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
 // each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
 // shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
 // batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
@@ -262,7 +262,9 @@ void DrawAuthoredStructures(PlayState* play) {
     for (auto& v : visible) v.clear();
     for (size_t i = 0; i < kBatchCount; ++i) {
         const auto& batch = T::kBatches[i];
-        const int pass = relief ? static_cast<int>(batch.surface) : 0;
+        // Grain classes (3 wood, 5 thatch, 8 bark) stay baked: the engine projects surface maps onto the face's dominant axis, so a grain turns
+        // 90 degrees from one wall or trunk facet to the next and reads as big rippling stripes over the painted texture.
+        const int pass = relief && batch.surface != 3 && batch.surface != 5 && batch.surface != 8 ? static_cast<int>(batch.surface) : 0;
         if (pass > T::kSurfaceClasses || !inReach(batch)) continue;   // (a class past the last is never drawn with relief on, as before)
         visible[pass].push_back(static_cast<uint32_t>(i));
     }
