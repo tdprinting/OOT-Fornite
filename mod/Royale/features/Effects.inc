@@ -77,6 +77,18 @@ float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255
     return height;
 }
 
+// The main menu (the War Table): the logo in the header's left corner, mapped from the menu's 640 x 360 layout to the screen.
+void DrawMenuLogo() {
+    ImVec2 sz;
+    if (LogoTexture(&sz) == nullptr || sz.y <= 0) return;
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = std::min(ds.x / 640.0f, ds.y / 360.0f);
+    const ImVec2 origin((ds.x - 640.0f * k) * 0.5f, (ds.y - 360.0f * k) * 0.5f);
+    const float boxW = 160.0f * k, boxH = 84.0f * k;
+    const float width = std::min(boxW, boxH * sz.x / sz.y);
+    DrawLogo(ImGui::GetForegroundDrawList(), origin.x + 18.0f * k + boxW * 0.5f, origin.y + 6.0f * k, width, 255);
+}
+
 // The game's title screen and file select screen (nothing of the game is running yet): our logo takes the place of the 3D title on the first, and
 // sits at the top of the second.
 // Which of the game's own screens is running is read from the game state itself: its title (the Nintendo 64 logo) or its file select. The moment the

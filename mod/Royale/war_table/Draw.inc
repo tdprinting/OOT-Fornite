@@ -72,8 +72,8 @@ void WarDraw(GameState* state) {
     p.Rect({-400,-400,1440,1160},0x060D20FF);
     p.Image(wt::art::background,{0,0,640,360},10,6);
     if(!gWar.reduced) {WarShafts(p,gWar.clock);WarMotes(p,gWar.clock);WarShootingStar(p,gWar.clock);}
-    p.Text(26,20,"BATTLE ROYALE",26,wt::theme::Ink,true);
-    p.Text(28,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
+    // the TDawgs logo takes the header's left corner: DrawMenuLogo (Effects.inc) paints it over the menu, in the box x 18..178, y 6..90 of this 640 x 360 layout
+    p.Text(190,48,"H Y R U L E   W A R   T A B L E",9,wt::theme::Gold);
     p.Text(498,24,gSession.Joined()?(h.isHost?"HOSTING":"CONNECTED"):"OFFLINE",10,0x9EDCFFFF);
     p.Text(498,38,"VERSION " ROYALE_BUILD_VERSION,9,wt::theme::Gold);
     if(!gWar.bootError.empty()) {

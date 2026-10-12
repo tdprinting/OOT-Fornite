@@ -632,7 +632,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
 void DrawOverlay() {
-    if (WarMenuOpen()) return;
+    if (WarMenuOpen()) { DrawMenuLogo(); return; }
     DrawTitleLogo();
     DrawQuestLabel();
     if (!gSession.Joined()) return;
