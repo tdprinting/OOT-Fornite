@@ -218,19 +218,22 @@ index 35e51d2..a206555 100644
  namespace SOH {
  std::shared_ptr<Ship::IResource>
  ResourceFactoryBinaryCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File> file,
-@@ -39,8 +43,9 @@ ResourceFactoryBinaryCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File>
+@@ -39,8 +43,12 @@ ResourceFactoryBinaryCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File>
  
          polygon.type = reader->ReadUInt16();
  
 -        polygon.flags_vIA = reader->ReadUInt16();
 -        polygon.flags_vIB = reader->ReadUInt16();
 +        // OOT Royale: vertex numbers are 32 bit in memory, with the flags moved up (z64bgcheck.h)
-+        polygon.flags_vIA = COLPOLY_FROM_ROM(reader->ReadUInt16());
-+        polygon.flags_vIB = COLPOLY_FROM_ROM(reader->ReadUInt16());
++        // read once: COLPOLY_FROM_ROM uses its argument twice
++        const uint16_t romVIA = reader->ReadUInt16();
++        const uint16_t romVIB = reader->ReadUInt16();
++        polygon.flags_vIA = COLPOLY_FROM_ROM(romVIA);
++        polygon.flags_vIB = COLPOLY_FROM_ROM(romVIB);
          polygon.vIC = reader->ReadUInt16();
  
          polygon.normal.x = reader->ReadUInt16();
-@@ -163,8 +168,8 @@ ResourceFactoryXMLCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File> fi
+@@ -163,8 +171,8 @@ ResourceFactoryXMLCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File> fi
  
              polygon.type = child->UnsignedAttribute("Type");
  
