@@ -199,6 +199,27 @@ bool AutoRun(const AutoStep& s, float secs) {
                 gPlayState->actorCtx.total, link->actor.world.pos.x, link->actor.world.pos.y, link->actor.world.pos.z, link->actor.floorHeight);
         if (link->actor.floorHeight <= BGCHECK_Y_MIN + 1.0f && !gSkydiving && !hud.aboard)
             AutoLog("  WARN no floor under Link (void or missing collision)");
+        {   // where the drawn camera is; in a match it must not sit inside the ground or behind a solid face from Link (patches/0020)
+            Vec3f eye = gPlayState->view.eye;
+            Vec3f at = gPlayState->view.lookAt;
+            Vec3f hit;
+            Vec3f top = { eye.x, eye.y + 3000.0f, eye.z };
+            CollisionPoly floorPoly;
+            CollisionPoly* poly = nullptr;
+            s32 bgId = 0;
+            const f32 ground = BgCheck_AnyRaycastFloor2(&gPlayState->colCtx, &floorPoly, &bgId, &top);
+            const bool blocked = BgCheck_CameraLineTest1(&gPlayState->colCtx, &at, &eye, &hit, &poly, 1, 1, 1, 1, &bgId);
+            // Ground above the eye is an overhang (a ledge, a sign, an arch) when its underside faces the eye; inside a hill there is none.
+            bool underside = false;
+            if (ground > eye.y + 2.0f) {
+                Vec3f up = { eye.x, ground - 1.0f, eye.z };
+                underside = BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &up, &hit, &poly, 1, 1, 1, 1, &bgId);
+            }
+            AutoLog("  camera eye (%.0f, %.0f, %.0f) at (%.0f, %.0f, %.0f) ground under eye %.0f%s%s", eye.x, eye.y, eye.z, at.x, at.y, at.z, ground,
+                    underside ? " (under an overhang)" : "", blocked ? " (solid between Link and eye)" : "");
+            if (gRoyaleCamGuard && ground > eye.y + 2.0f && ground < eye.y + 2900.0f && !underside) AutoLog("  WARN camera inside the ground");
+            else if (gRoyaleCamGuard && blocked) AutoLog("  WARN camera behind a solid face");
+        }
         AutoState("state at check");
         return true;
     }
