@@ -525,16 +525,28 @@ void ApplyRocks(Player* player) {
     }
 }
 
+// Nothing solid (a wall, a hill, a house) between Link's chest and theirs: the game's side of the server's height-grid sight test.
+static bool ClearShotTo(const Player* player, const Actor* target) {
+    if (gPlayState == nullptr || target == nullptr) return true;
+    Vec3f from = { player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z };
+    Vec3f to = { target->world.pos.x, target->world.pos.y + 40.0f, target->world.pos.z }, hit;
+    CollisionPoly* poly = nullptr; s32 bgId = 0;
+    return !BgCheck_EntityLineTest1(&gPlayState->colCtx, &from, &to, &hit, &poly, true, true, false, true, &bgId);
+}
+
 // What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
+// A shot (`ranged`) aims: a 30 degree cone where Link faces, nobody behind him. Players must have a clear line from Link either way.
 // Returns 0 with *outDist left at 1e9 when there is none.
-static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
+static constexpr int kMeleeHalfCone = 0x2000;   // 45 degrees each side (binary angle)
+static constexpr int kRangedHalfCone = 0x0AAB;  // 15 degrees each side
+static uint16_t PickStrikeTarget(Player* player, float range, float* outDist, bool ranged = false) {
     uint16_t best = 0;
     float bestDist = 1e9f;
     // Z-targeting something (a player, a mini boss, a major boss) is choosing it: the blow goes to that one while it is in reach, whichever way the
     // sticks point (the game turns Link to face it, so the usual cone is not needed).
     if (const Actor* locked = player->focusActor) {
         uint16_t id = 0; float tx = 0, tz = 0, edge = 0;
-        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive) { tx = st->second.x; tz = st->second.z; } else id = 0; }
+        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive && ClearShotTo(player, locked)) { tx = st->second.x; tz = st->second.z; } else id = 0; }
         else if (auto b = gBossOf.find(locked); b != gBossOf.end() && b->second <= 0xFFFFu) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
@@ -554,11 +566,13 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
         float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
         float d = std::sqrt(dx * dx + dz * dz);
         if (d > range * 1.05f) continue;
-        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        // A swing: a 90 degree cone in front of Link, or anyone right on top of him. A shot: the narrow cone only.
         s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
         s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
-        if (d < bestDist) { bestDist = d; best = id; }
+        const int offAbs = std::abs(static_cast<int>(off));
+        if (ranged ? offAbs > kRangedHalfCone : (offAbs > kMeleeHalfCone && d > 60.0f)) continue;
+        if (d >= bestDist || !ClearShotTo(player, actor)) continue;   // behind a wall or over a hill: not this one
+        bestDist = d; best = id;
     }
     // The mini bosses are big: they count from their edge, not their middle.
     if (gSession.Client()) {
@@ -631,7 +645,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             for (const Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next) if (a->id == ACTOR_ARMS_HOOK) out = true;
         if (out && !sHookOut && hud.weapon == royale::ItemId::Hookshot && LiveAndAlive(hud) && InField()) {
             float dist = 1e9f;
-            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist);
+            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist, true);
             if (dist < 1e8f) gSession.ReportAttack(target, true);
         }
         sHookOut = out;
@@ -792,7 +806,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
     float bestDist = 1e9f;
-    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist);
+    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist, w.ranged);
     // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
     s16 aim = player->actor.shape.rot.y;
     if (bestDist < 1e8f) {

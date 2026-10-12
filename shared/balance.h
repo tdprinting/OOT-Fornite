@@ -146,7 +146,7 @@ constexpr int kStormPhaseCount = 6;
 constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
     // Time to lose all 7 starting hearts standing outside (big map): 35 s, 17 s, 10 s, 7 s, 4.7 s, 3.5 s. Early storm is a nudge you can
     // run out of; late storm still kills, but a potion buys you real time. The shrinks are a little slower than before so there is time to run.
-    {55, 65, 0.60f, 0.2f},
+    {40, 65, 0.60f, 0.2f},   // the drop already takes 60 to 85 s: a short first hold
     {45, 55, 0.38f, 0.4f},
     {35, 45, 0.22f, 0.7f},
     {28, 38, 0.12f, 1.0f},
