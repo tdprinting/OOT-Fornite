@@ -541,7 +541,7 @@ int EntranceFor(int mapId) {
         case 1: return ENTR_LAKE_HYLIA_0_1;
         case 2: return ENTR_KAKARIKO_VILLAGE_0_1;
         case 3: return ENTR_DEATH_MOUNTAIN_CRATER_0_1;
-        case 4: return ENTR_DESERT_COLOSSUS_0_4;
+        case 4: return ENTR_DESERT_COLOSSUS_0_1;   // the game adds the scene layer (adult +2, night +1): 0_4 + 2 lands in Gerudo's Fortress
         default: return ENTR_HYRULE_FIELD_0_1;
     }
 }
