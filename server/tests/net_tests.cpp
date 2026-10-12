@@ -558,10 +558,10 @@ static void PickupAndPotionOverTheWire() {
     rig.Run(0.5f);
     CHECK(a.Loot().size() == 3 && b.Loot().size() == 3);
 
-    a.RequestPickup(static_cast<uint32_t>(farPotion));   // too far
-    a.RequestPickup(9999);                              // doesn't exist
-    a.RequestPickup(static_cast<uint32_t>(sword));
-    a.RequestPickup(static_cast<uint32_t>(potion));
+    a.RequestPickup(static_cast<uint32_t>(farPotion), true);   // too far
+    a.RequestPickup(9999, true);                              // doesn't exist
+    a.RequestPickup(static_cast<uint32_t>(sword), true);      // A pressed: items are only taken on purpose
+    a.RequestPickup(static_cast<uint32_t>(potion), true);
     rig.Run(0.5f);
     CHECK(rig.M().Find(1)->weapon.item == ItemId::MasterSword && rig.M().Find(1)->potions.size() == 1);
     CHECK(a.Loot()[sword].taken && b.Loot()[sword].taken && !b.Loot()[farPotion].taken);

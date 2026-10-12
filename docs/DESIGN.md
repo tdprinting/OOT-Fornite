@@ -469,8 +469,8 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
     on the real floor with a raycast. Names use the engine's name tag system.
   - Enemies are not allowed to spawn during a match, and existing ones are removed at countdown.
 - **Gameplay in the game (written and compiled, not yet played):**
-  - Loot actors for the loot near you, using the game's rupee model in the tier's color with a rarity-colored name label, grabbed by
-    walking over them (the server checks range).
+  - Loot actors for the loot near you, using the game's rupee model in the tier's color with a rarity-colored name label, taken with
+    A (walking over them only takes rupees and ammo; the server checks range).
   - B attacks with the server-side weapon at the nearest player in a cone in front of you; D-pad Down drinks a potion; hits flash red.
   - Other players hold the weapon the server says they have (swords, hammer, bow, slingshot, boomerang) and can be Z-targeted.
   - An always-on HUD: alive count, storm phase and timer, a pointer to the safe zone, weapon, shield and potions, plus banners for

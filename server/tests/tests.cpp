@@ -2508,7 +2508,7 @@ static void BotsAdvantageMath() {
     CHECK(BotController::Advantage(sim.match, *a, *h) > 3.0f);
 }
 
-static void WalkingOverLootOnlyTakesUpgrades() {
+static void WalkingOverLootTakesOnlyMoneyAndAmmo() {
     Simulation sim = Duel(5, {1900, 0}, {1900, 100});
     Match& m = sim.match;
     PlayerState* p = m.Find(1);
@@ -2519,7 +2519,8 @@ static void WalkingOverLootOnlyTakesUpgrades() {
     CHECK(!m.PickUp(1, stick, false));                                   // walking over a worse weapon leaves it alone
     CHECK(p->weapon.item == ItemId::MasterSword && !m.Loot()[stick].taken);
     const size_t better = m.AddLoot({{0, 0}, ItemId::MasterSword, Rarity::Legendary, false});
-    CHECK(m.PickUp(1, better, false) && p->weapon.rarity == Rarity::Legendary);   // an upgrade is taken on its own
+    CHECK(!m.PickUp(1, better, false) && !m.Loot()[better].taken);              // not even an upgrade: items are only taken on purpose
+    CHECK(m.PickUp(1, better, true) && p->weapon.rarity == Rarity::Legendary);   // pressing A swaps it into the hand
     // The swapped-out sword lands a step away, not underfoot, so it can't be re-grabbed at once.
     bool away = false;
     for (const auto& l : m.Loot()) if (!l.taken && l.spawn.item == ItemId::MasterSword && l.spawn.rarity == Rarity::Epic) away = Distance(l.spawn.pos, p->pos) > kPickupRange;
@@ -4242,11 +4243,12 @@ static void ShieldBar() {
     CHECK(!m.UsePotion(1) && h->health == 1.0f);
     h->potions = {{ItemId::RedPotion, Rarity::Common}};
     CHECK(!m.UseShield(1));
-    // Walking over a shield potion picks it up only if the bag has room; chests give them out like any item.
+    // Walking over a shield potion leaves it; pressing A takes it into the hotbar.
     h->potions = {};
     const size_t pick = m.AddLoot({{100, 0}, ItemId::LargeShieldPotion, Rarity::Rare, false});
     h->pos = {100, 0};
-    CHECK(m.PickUp(1, pick, false) && h->potions.size() == 1);
+    CHECK(!m.PickUp(1, pick, false) && h->potions.empty());
+    CHECK(m.PickUp(1, pick, true) && h->potions.size() == 1);
     // A bot with a shield potion and nobody around drinks it.
     Simulation botSim = Duel(5, {1900, 0}, {0, 0});
     PlayerState* bot = botSim.match.Find(1000);
@@ -5432,7 +5434,7 @@ int main() {
     PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
-    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootOnlyTakesUpgrades(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
+    BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootTakesOnlyMoneyAndAmmo(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
     NavKnowsLedgesAndCliffs(); BotsClimbBlocksAndBoulders(); BotsRideTheBusAndJump(); BotsSprintLikePlayers(); BotsUseCoverAndHighGround();
     CartPhysics(); CartBlastVectorGrowth(); CartsSeatsRamsAndWrecks(); BotsDriveAndRideCarts(); BotInStormSkipsFarCart(); FullMatchWithCarts();
     TeamsAreMadeAtTheStart(); TeammatesDoNoDamage(); KnockedInsteadOfEliminatedInTeamModes(); BleedOutEliminatesAndCreditsTheKnocker(); WholeTeamKnockedMeansEliminated(); RevivingTakesThreeSecondsAndTheTeammate();

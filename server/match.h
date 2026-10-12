@@ -1064,6 +1064,7 @@ class Match {
         if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
         if (s.container && !force) return false; // chests have to be opened on purpose
         if (!force && loot[index].droppedBy == id && clock - loot[index].droppedAt < kDropRegrabSeconds) return false; // left for somebody else
+        if (!force && KindOf(s.item) != ItemKind::Instant) return false; // walking over only takes money and ammo; items need A (Tee, 2026-10-12)
         if (!force && !WorthTaking(*p, s)) return false;
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
