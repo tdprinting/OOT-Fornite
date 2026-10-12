@@ -1,24 +1,42 @@
 diff --git a/soh/src/code/z_camera.c b/soh/src/code/z_camera.c
-index 1695b5b..5cec173 100644
+index 1695b5b..da1e355 100644
 --- a/soh/src/code/z_camera.c
 +++ b/soh/src/code/z_camera.c
-@@ -7513,6 +7513,9 @@ void Camera_UpdateDistortion(Camera* camera) {
+@@ -7513,6 +7513,11 @@ void Camera_UpdateDistortion(Camera* camera) {
  }
  
  s32 sOOBTimer = 0;
 +// OOT Royale: how far the mod lifts the main camera's view (see Camera_Update); 0 normally.
 +f32 gRoyaleCamLift = 0.0f;
++// OOT Royale: when set, the main camera's drawn eye never sits behind or inside solid ground from where it looks (see Camera_Update).
++s32 gRoyaleCamGuard = 0;
 +
  Vec3s Camera_Update(Camera* camera) {
      Vec3f viewAt;
      Vec3f viewEye;
-@@ -7726,6 +7729,12 @@ Vec3s Camera_Update(Camera* camera) {
+@@ -7726,6 +7731,28 @@ Vec3s Camera_Update(Camera* camera) {
          View_SetScale(&camera->play->view, 1.0f);
      }
      camera->play->view.fovy = viewFov;
 +    // OOT Royale: the mod lifts the whole view (eye and look-at together, so the angle is unchanged) while the player drives a cart, since the camera
 +    // follows Link's feet on the ground under the saddle. Only what is drawn moves; the camera's own state and collision are untouched.
 +    if (camera->thisIdx == MAIN_CAM) {
++        // OOT Royale: the normal camera swings round walls but lets thin things (tree trunks, pillars) come between it and Link, and the free camera
++        // has no collision at all. With the guard on, the drawn eye is pulled in to just in front of the first solid face on the way out from the
++        // look-at point. Like the lift, only the view moves; the camera's own state is untouched, so it springs back once the way is clear.
++        if (gRoyaleCamGuard) {
++            Vec3f hit;
++            CollisionPoly* hitPoly;
++            s32 hitBgId;
++            if (BgCheck_CameraLineTest1(&camera->play->colCtx, &viewAt, &viewEye, &hit, &hitPoly, 1, 1, 1, -1, &hitBgId)) {
++                f32 dx = viewAt.x - hit.x, dy = viewAt.y - hit.y, dz = viewAt.z - hit.z;
++                f32 len = sqrtf(dx * dx + dy * dy + dz * dz);
++                f32 step = len > 1.0f ? CLAMP_MAX(12.0f, len * 0.5f) / len : 0.0f;
++                viewEye.x = hit.x + dx * step;
++                viewEye.y = hit.y + dy * step;
++                viewEye.z = hit.z + dz * step;
++            }
++        }
 +        viewEye.y += gRoyaleCamLift;
 +        viewAt.y += gRoyaleCamLift;
 +    }

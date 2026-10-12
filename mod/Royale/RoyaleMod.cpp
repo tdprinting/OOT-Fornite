@@ -197,6 +197,7 @@ extern s32 gRoyaleNoUseOnTakeOut;   // 1 = taking an item out never uses it too 
 extern s32 gRoyaleNoAimView;    // 1 = bow, slingshot, boomerang and hookshot ready and fire in place, never the first-person aiming view (patches/0019)
 extern EffectSsInfo sEffectSsInfo;   // the game's particle table (z_effect_soft_sprite.c): explosions and fire give off light
 extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
+extern s32 gRoyaleCamGuard;  // nonzero: the main camera's drawn eye is pulled in front of solid ground between it and Link (patches/0020)
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 void UpdatePatchHand(void);   // the game's EquipmentAlwaysVisible hand-model patches (soh/Enhancements/mods.cpp): re-run when the match turns the enhancement on or off

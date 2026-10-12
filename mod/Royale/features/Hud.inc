@@ -176,21 +176,36 @@ void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     if (t < gBoltFlashUntil) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(225, 232, 255, static_cast<int>(std::min(1.0, (gBoltFlashUntil - t) / 0.35) * 150.0)));
 }
 
-// Town names hanging over each point of interest, big enough to read from the sky while you skydive.
+// Town names hanging over each point of interest, big enough to read from the sky while you skydive. On foot a name shows only for a place
+// near you that you are not already in ("Entering ..." says that), and only while nothing solid stands between the camera and it, fading in and out.
 void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     if (!gSession.Client() || !InField()) return;
     (void)h;
     Player* pl = GET_PLAYER(gPlayState);
-    const float reach = gSkydiving ? 14000.0f : 5000.0f;
-    for (const royale::Poi& p : gSession.Client()->Pois()) {
+    const float reach = gSkydiving ? 14000.0f : 3200.0f;
+    static float shown[64] = {};   // how visible each place's name is now, 0 to 1, eased so a name does not blink as trunks pass in front
+    Vec3f eye = gPlayState->view.eye;
+    const auto& pois = gSession.Client()->Pois();
+    for (size_t i = 0; i < pois.size(); i++) {
+        const royale::Poi& p = pois[i];
+        float& vis = shown[i & 63];
         const float dx = p.center.x - pl->actor.world.pos.x, dz = p.center.z - pl->actor.world.pos.z;
         const float d = std::sqrt(dx * dx + dz * dz);
-        if (d > reach) continue;
         float y = pl->actor.world.pos.y;
         FloorAt(p.center.x, p.center.z, &y);
+        bool want = d <= reach && (gSkydiving || d > p.radius * 0.6f);
+        if (want && !gSkydiving) {   // the way from the camera to the name must be open
+            Vec3f to = { p.center.x, y + 650.0f, p.center.z }, hit;
+            CollisionPoly* poly = nullptr;
+            s32 bgId = 0;
+            want = !BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &to, &hit, &poly, true, true, true, true, &bgId);
+        }
+        vis = std::clamp(vis + (want ? 0.08f : -0.08f), 0.0f, 1.0f);
+        if (vis <= 0.0f) continue;
         ImVec2 at;
         if (!WorldToScreen(p.center.x, y + 650.0f, p.center.z, &at)) continue;
-        const int alpha = static_cast<int>(255.0f * std::min(1.0f, (reach - d) / (reach * 0.4f)));
+        const int alpha = static_cast<int>(255.0f * vis * std::clamp((reach - d) / (reach * 0.4f), 0.0f, 1.0f));
+        if (alpha <= 0) continue;
         const float size = std::clamp(34.0f * scale * (2400.0f / (d + 1200.0f)), 15.0f * scale, 38.0f * scale);
         const char* name = royale::kPoiNames[p.name];
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name);
