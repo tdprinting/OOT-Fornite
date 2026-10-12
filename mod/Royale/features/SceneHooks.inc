@@ -435,6 +435,7 @@ void OnGameFrameUpdate() {
 void OnSceneInit(int16_t) {
     Feat("scene init");
     Trace("scene: init");
+    UndoAdultHandPatches();   // (the game's scene-start hook just re-applied them)
     gOurTravel = false;
     ForgetDynamicLights();   // the scene's light table starts empty again
     ForgetShadows();

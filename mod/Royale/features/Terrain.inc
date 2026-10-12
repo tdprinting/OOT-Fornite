@@ -1083,6 +1083,20 @@ u8 RealItemFor(royale::ItemId w) {
 const char* const kItemCvars[5] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment"), CVAR_ENHANCEMENT("PersistentMasks"), CVAR_ENHANCEMENT("AdultMasks") };
 int gSavedItemCvars[5] = {};
 bool gItemCvarsOn = false;
+// The game's EquipmentAlwaysVisible patch for adult Link (UpdatePatchHand) writes a call to the adult hand over one fixed command of four child
+// hand-and-item lists. In this port's resources those commands are not that call but the texture loads of the models (G_SETTIMG_OTR_HASH), so the
+// patch cut the load in two and left its 64-bit hash behind as a stray command: the renderer logged "Unhandled OP code 0x30 / 0xA9" thousands of
+// times a second and the models drew with the wrong textures. Take the four patches back out (the child's own fist stays on the item); run after
+// every UpdatePatchHand, which the game also does on each scene start.
+void UndoAdultHandPatches() {
+    static const struct { const char* path; const char* name; } kPatches[] = {
+        { "__OTR__objects/object_link_child/gLinkChildLeftFistAndKokiriSwordNearDL", "adultKokiriSword" },
+        { "__OTR__objects/object_link_child/gLinkChildRightHandHoldingSlingshotNearDL", "adultSlingshot" },
+        { "__OTR__objects/object_link_child/gLinkChildLeftFistAndBoomerangNearDL", "adultBoomerang" },
+        { "__OTR__objects/object_link_child/gLinkChildRightFistAndDekuShieldNearDL", "adultDekuShield" },
+    };
+    for (const auto& p : kPatches) ResourceMgr_UnpatchGfxByName(p.path, p.name);
+}
 void ApplyItemCvars(bool on) {
     if (on == gItemCvarsOn) return;
     gItemCvarsOn = on;
@@ -1093,6 +1107,7 @@ void ApplyItemCvars(bool on) {
     // The game only swaps the child's hand-and-item models onto the adult hand (Kokiri sword, Deku shield, slingshot, boomerang) when a scene
     // starts, so switching the enhancement on mid-scene left adult Link with a child's fist: only the handle showed. Patch them now.
     UpdatePatchHand();
+    UndoAdultHandPatches();
     gRoyaleBraceletOnAdult = on ? 1 : 0;
 }
 // The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
