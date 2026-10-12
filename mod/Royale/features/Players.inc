@@ -1038,6 +1038,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         player->skelAnime.playSpeed = std::clamp(m.speed / stride, 0.55f, 1.8f);
     }
     const bool finished = LinkAnimation_Update(play, &player->skelAnime);
+    if (want == static_cast<uint8_t>(Anim::Knocked) && s.alive) CrawlShuffle(player, m.speed, static_cast<float>(ImGui::GetTime()) + s.id);   // crawling
     if (finished && !m.seq.step[m.step].loop && m.step + 1 < m.seq.count) {
         StartStep(play, player, m, m.step + 1, 0.0f);
         // Feet back on the ground after a hop, a flip or a jump; the jump slash coming down.
