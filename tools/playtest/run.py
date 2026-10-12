@@ -51,7 +51,13 @@ SCENARIOS = {
     "tour-dungeons": "ingame; regular; tour:dungeons; check; quit",
     "tour-all": "ingame; regular; tour:all; check; quit",
     "sandbox": "ingame; host:6; wait:15; shot:sandbox; check; quit",
+    # One whole match (docs/PLAYTEST.md): bus, jump, land, fight, die or win, results, New match (host), Leave. Passes only if every step is reached.
+    "whole-match": ("ingame; hostbots:12; state:Drop; shot:wm-bus; check; jump; land; shot:wm-land; check; fight; shot:wm-fight; check; "
+                    "outcome; shot:wm-outcome; results; shot:wm-results; rematch; board; state:Drop; fresh; shot:wm-rematch; "
+                    "leave; wait:3; check; shot:wm-left; quit"),
 }
+# Scenarios that play a whole match need more wall time than the default per-scenario limit (--timeout).
+SCENARIO_TIMEOUT = {"whole-match": 3600}
 for _id in MAPS:
     if _id in TEST_MAPS:
         SCENARIOS[f"solo-{_id}"] = f"ingame; host:{_id}; wait:15; shot:solo-{_id}; check; quit"
@@ -169,6 +175,7 @@ def run_scenario(name, script, args, game, display):
            "-ex", "thread apply all bt 10", "--args", str(game)]
     out_path = run_dir / "game-output.txt"
     started = time.time()
+    limit = SCENARIO_TIMEOUT.get(name, args.timeout)
     hang = None
     with open(out_path, "w") as out:
         proc = subprocess.Popen(gdb, cwd=game.parent, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
@@ -180,8 +187,8 @@ def run_scenario(name, script, args, game, display):
                 take_shot(shot_req, run_dir, display)
             now = time.time()
             last = beat.stat().st_mtime if beat.exists() else started
-            if now - last > args.hang or now - started > args.timeout:
-                hang = "no frame for %d s" % (now - last) if now - last > args.hang else "over the %d s limit" % args.timeout
+            if now - last > args.hang or now - started > limit:
+                hang = "no frame for %d s" % (now - last) if now - last > args.hang else "over the %d s limit" % limit
                 pid = child_pid(proc.pid)
                 if pid:
                     os.kill(pid, signal.SIGABRT)   # gdb stops on it and prints every thread's stack

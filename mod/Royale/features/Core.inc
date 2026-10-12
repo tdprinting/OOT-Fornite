@@ -575,6 +575,7 @@ ImU32 HudColor(uint32_t rgba, int alpha=255) { return IM_COL32(rgba>>24,(rgba>>1
 // follow whichever is chosen. Buttons are drawn like the N64 pad: A blue, B green, C yellow, Z grey, R grey, Start red.
 royale::controls::Scheme ControlScheme() { return royale::controls::Clamp(CVarGetInteger(CVAR_SETTING("Royale.ControlScheme"), 0)); }
 bool gTouchJump = false;   // the on-screen JUMP button was tapped this frame
+bool gAutoPressB = false;  // the playtest holds B this frame (AutoTest "fight"); OnEmoteWheelInput feeds it
 // Squads.inc (teams, knocked-down, pings, Deku launch pads). Forward declarations: earlier files call into it, and the HUD calls the Draw functions.
 bool gSelfKnocked = false;   // you are down but not out: crawling, no attack or items
 void UpdateSquad(Player* player, const royale::HudState& hud);

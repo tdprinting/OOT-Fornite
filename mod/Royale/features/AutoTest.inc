@@ -13,6 +13,13 @@
 //   state:<Lobby|Countdown|Drop|InMatch|Ending>   wait until the match reaches that state
 //   jump                    press A on the bus until Link is off it (and A again in free fall: the glider)
 //   leave                   leave the session (back to the waiting room)
+//   land                    off the bus, glider closed, feet on the ground in the field
+//   fight                   swing B until the server takes a hit from Link (fails on timeout: nobody in reach)
+//   outcome                 wait until Link is out (died) or the match is won by him (stand still and the storm decides)
+//   results                 wait until the end screen is up (state Ending)
+//   rematch                 host "New match": re-asks until the state is Countdown
+//   board                   during the Countdown Link is sat on the bus again
+//   fresh                   in Drop after a rematch: alive, no death card or end screen left, Link drawn (else FAIL)
 //   regular                 leave any session and play the save as the normal quest (the regular game's water, sky, companions)
 //   warp:<scene hex>        travel to the scene's first entrance and wait until it is loaded
 //   tour:<overworld|dungeons|all>   warp through each scene of the list in turn, 3 seconds in each
@@ -36,6 +43,7 @@ struct AutoTest {
     int tourLoads = 0;            // scenesLoaded when the warp to tourScene started
     int sub = 0;                  // per-step progress
     int scenesLoaded = 0, lastScene = -1;
+    int attacksAt = 0;            // gSession.attacksReported when the fight step started
 };
 AutoTest gAuto;
 
@@ -155,6 +163,43 @@ bool AutoRun(const AutoStep& s, float secs) {
         return !hud.aboard && hud.state != royale::MatchState::Countdown && (gAuto.stepFrames > 40 || !gSkydiving);
     }
     if (s.verb == "leave") { gSession.Leave(); return true; }
+    if (s.verb == "land") {
+        if (!InGame() || gAuto.stepFrames <= 40 || !gSession.Joined() || hud.aboard || gSkydiving || !InField()) return false;
+        return (GET_PLAYER(gPlayState)->actor.bgCheckFlags & 1) != 0;
+    }
+    if (s.verb == "fight") {
+        if (gAuto.sub == 0) { gAuto.sub = 1; gAuto.attacksAt = gSession.attacksReported; }
+        gAutoPressB = gAuto.stepFrames % 15 == 0;   // a B press every 15 frames: the sword, or the bow when that is what Link holds
+        if (gSession.attacksReported > gAuto.attacksAt) {
+            gAutoPressB = false;
+            AutoLog("  fight: %d swing(s) reported to the server", gSession.attacksReported - gAuto.attacksAt);
+            return true;
+        }
+        return false;
+    }
+    if (s.verb == "outcome") {
+        if (!gSession.Joined() || !hud.haveSelf) return false;
+        if (!hud.selfAlive) { AutoLog("  outcome: died with %d alive", hud.alive); return true; }
+        if (hud.state == royale::MatchState::Ending && hud.winnerId == hud.selfId) { AutoLog("  outcome: won"); return true; }
+        return false;
+    }
+    if (s.verb == "results") return hud.state == royale::MatchState::Ending && EndScreenUp(hud);
+    if (s.verb == "rematch") {
+        if (hud.state == royale::MatchState::Ending && hud.isHost && gAuto.stepFrames % 60 == 0) {
+            AutoLog("  rematch: asked the server");
+            gSession.RequestPlayAgain();
+        }
+        return hud.state == royale::MatchState::Countdown;
+    }
+    if (s.verb == "board") return hud.state == royale::MatchState::Countdown && hud.aboard && hud.busSeat >= 0;
+    if (s.verb == "fresh") {
+        if (!InGame() || !hud.haveSelf || hud.state != royale::MatchState::Drop) return false;
+        const bool drawn = (GET_PLAYER(gPlayState)->stateFlags2 & PLAYER_STATE2_DISABLE_DRAW) == 0;
+        const bool clean = !gDeath.active && !gEnd.open && hud.selfAlive;
+        AutoLog("  fresh: alive %d death card %d end screen %d drawn %d", hud.selfAlive ? 1 : 0, gDeath.active ? 1 : 0, gEnd.open ? 1 : 0, drawn ? 1 : 0);
+        if (!clean || !drawn) AutoFinish(false, "fresh: the last match's death card, end screen or hidden Link is still here");
+        return true;
+    }
     if (s.verb == "regular") {
         if (gSession.GetMode() != royale::RoyaleSession::Mode::Idle) gSession.Leave();
         gSaveContext.ship.quest.id = QUEST_NORMAL;
@@ -248,6 +293,9 @@ float AutoTimeout(const AutoStep& s) {
     if (s.verb == "ingame") return 180;
     if (s.verb == "state") return 600;
     if (s.verb == "host" || s.verb == "hostbots") return 300;
+    if (s.verb == "land" || s.verb == "board" || s.verb == "rematch") return 120;
+    if (s.verb == "fight") return 300;
+    if (s.verb == "outcome" || s.verb == "results") return 1800;   // the storm and the rest of the match: game time, not wall time
     if (s.verb == "warp" || s.verb == "tour") return 90;   // per scene
     return 60;
 }

@@ -272,7 +272,8 @@ class RoyaleSession {
     void SendLocalPose(float x, float y, float z, int16_t rot, uint8_t anim, uint8_t scene) { if (Joined()) client->SendInput(x, y, z, rot, anim, scene); }
     // Lobby only.
     void SetReady(bool ready) { if (Joined()) client->SetReady(ready); }
-    void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { if (Joined()) client->ReportAttack(target, hit, style); }
+    int attacksReported = 0;   // swings this session reported to the server (the playtest "fight" step counts them)
+    void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { ++attacksReported; if (Joined()) client->ReportAttack(target, hit, style); }
     void RequestPickup(uint32_t lootIndex, bool force = false, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) { if (Joined()) client->RequestPickup(lootIndex, force, replaceItem, replaceRarity); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }

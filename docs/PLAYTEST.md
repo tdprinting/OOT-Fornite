@@ -40,12 +40,16 @@ CRASH match-12          212s steps 2/7    log errors 3  SIGSEGV in #2 DynaPoly_E
 Full output per scenario sits in its run folder: `game-output.txt` (game + gdb, all thread stacks), `autotest-result.txt` (steps and the mod
 state block at each `check` and at a failure), `royale-trace.txt`, `logs/`. `last-results.json` there holds every result as JSON.
 
+`whole-match`: one full match with 12 slots (bus, jump, land, fight, die or win, results screen, New match as host, Leave). It PASSes only if
+every step is reached, and it takes a long wall time: `python3 tools/playtest/run.py whole-match` (per-scenario limit 3600 s in `SCENARIO_TIMEOUT`).
+
 ## Step scripts
 
 The in-game driver is `mod/Royale/features/AutoTest.inc`; it does nothing unless `ROYALE_AUTOTEST` is set. Steps, separated by `;`:
 `ingame`, `wait:<sec>`, `cvar:<name>=<int>`, `skin:<n>`, `host:<map>` (solo test), `hostbots:<map>` (lobby + Start, bots fill it),
 `state:<Lobby|Countdown|Drop|InMatch|Ending>`, `jump` (off the bus, then glider), `leave`, `regular` (normal quest, regular-game features),
-`warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`. Times are game time (20 frames a second), so a slow renderer still plays
+`warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`.
+`land`, `fight`, `outcome`, `results`, `rematch`, `board`, `fresh` are the whole-match steps (see `whole-match` below). Times are game time (20 frames a second), so a slow renderer still plays
 the same amount of game. Add a scenario for a new feature in `SCENARIOS` in `tools/playtest/run.py`.
 
 ## Workflow for agents
