@@ -39,7 +39,7 @@ Everything is sized from adult Link, 68 units tall (1 m = 40 units). Doors are 1
 | Spirit Oasis | none | palms and a pavilion round a pond at the desert's edge |
 | Fisherman's Hut | none | a hut on its own little island in the lagoon |
 
-Hireable NPCs wait at 8 stations (two Kokiri, two Zora, two Goron, two Gerudo, each beside the place that suits them). Six cart stations stand along the roads. Chests: 125 authored sites, 84 used per match, spread over rooftops, upper floors, towers, ledges, piers, a crater floor and cliff feet, each in a reachable spot.
+Hireable NPCs wait at 8 stations (two Kokiri, two Zora, two Goron, two Gerudo, each beside the place that suits them). Six cart stations stand along the roads. Chests: 125 authored sites, all used per match (plus floor weapons beside them; Rare+ chests spill a second item), spread over rooftops, upper floors, towers, ledges, piers, a crater floor and cliff feet, each in a reachable spot.
 
 ## How it is built
 

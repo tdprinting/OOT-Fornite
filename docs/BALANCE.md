@@ -99,6 +99,20 @@ Every boss hit is 75% of what it was: a Stalfos swing goes from 0.8 to 0.6 heart
 
 Eight seeds, so a point or two either way is noise (the same numbers with only the Triple Slingshot changed gave 331 s and 11.9 alive at 1:00). The starting sword buff is what costs the early survivors: the plan's 0.7 x 0.55 s gave 11.1 alive at 1:00, the old sword 15.6 with everything else changed; 0.65 x 0.6 s is the middle. The 20+ at 1:00 target was already missed before this pass (bots still die holding the starting sword: more loot on Moonfall is the next lever).
 
+## Moonfall loot density (`royale_balance 8 normal 12 32`)
+
+All 125 authored sites already held a chest (the `lootCount=84` cap in `game_server.h` never reached Moonfall, since the authored maps pass 0 scattered chests; the line is removed). What changed: a Rare or better chest spills a second item (one tier down) on the floor beside it, and 190 Common/Uncommon/Rare weapons lie on the floor beside the chest sites (`GenerateFloorWeapons`, `shared/loot.h`; about 1.5 per site, A to take).
+
+| | Before | Now |
+|---|---|---|
+| Match length | 346 s | 318 s |
+| First kill | 36 s | 39 s |
+| Alive at 1:00 / 3:00 (of 31) | 11.2 / 4.9 | 11.0 / 3.9 |
+| Chests opened per match | 34 | 28 |
+| Weapon at death: Basic Sword | 25.6 | 17.0 |
+
+Basic Sword deaths fall by a third (of about 31 deaths, 55% now, was 82%). The first kill stays near 40 s: most sword-only deaths are bots that land together and brawl in the first minute before looting (0 chests opened, no backup), which is bot behaviour, not loot count. Floor items beside the chests also replaced some chest opening (28 vs 34). Eight seeds, so a few seconds either way is noise.
+
 ## One set of hit rules
 
 A boss's swing or charge and a hired helper's strike now go through `Match::Blow`, the same rules a player's weapon follows: rolling dodges it, a shield's own reduction comes off, and a raised shield facing it blocks most of the rest. Rolling also dodges marked blasts (not lightning). Breath, explosions and magic still ignore shields, as they do for players.

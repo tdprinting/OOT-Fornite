@@ -90,6 +90,33 @@ int main() {
         CHECK(server.StartMatch());
         CHECK(server.Sim().match.Bosses().size()==7);
         CHECK(server.Sim().match.Loot().size()>=1);
+        // Every authored site holds a chest, and weapons lie on the ground beside them.
+        size_t chests=0,floorWeapons=0,rareIdx=SIZE_MAX;
+        const auto& loot=server.Sim().match.Loot();
+        for (size_t i=0;i<loot.size();i++) {
+            if (loot[i].spawn.container) { chests++; }
+            else if (KindOf(loot[i].spawn.item)==ItemKind::Weapon) floorWeapons++;
+        }
+        CHECK(chests==sizeof(moonfall::kLootSites)/sizeof(moonfall::kLootSites[0]));
+        CHECK(floorWeapons>=chests);
+        // A Rare or better chest spills a second item (not a rupee) beside it.
+        {
+            float wait=0;
+            while (wait<120.0f && server.Sim().match.State()!=MatchState::InMatch && server.Sim().match.State()!=MatchState::Drop) { server.Sim().Tick(kDt);wait+=kDt; }
+            for (size_t i=0;i<loot.size() && rareIdx==SIZE_MAX;i++)   // one nobody has opened yet
+                if (loot[i].spawn.container && !loot[i].taken && !loot[i].spawn.special && loot[i].spawn.rarity>=Rarity::Rare) rareIdx=i;
+            CHECK(rareIdx!=SIZE_MAX);
+            if (rareIdx==SIZE_MAX) rareIdx=0;
+            PlayerState* me=server.Sim().match.Find(1);
+            const size_t before=server.Sim().match.Loot().size();
+            const Vec2 at=server.Sim().match.Loot()[rareIdx].spawn.pos;
+            me->pos=at;me->aboard=false;   // (still on the bus at this point of the Drop)
+            CHECK(server.Sim().match.PickUp(1,rareIdx,true));
+            bool second=false;
+            const auto& after=server.Sim().match.Loot();
+            for (size_t i=before;i<after.size();i++) if (!after[i].spawn.container && after[i].spawn.item!=ItemId::Rupees && Distance(after[i].spawn.pos,at)<100.0f) second=true;
+            CHECK(second);
+        }
         float elapsed=0;
         while (elapsed<8.0f && server.Sim().match.State()!=MatchState::Ending) { server.Sim().Tick(kDt);elapsed+=kDt; }
         CHECK(server.Sim().match.State()!=MatchState::Lobby);

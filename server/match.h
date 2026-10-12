@@ -264,7 +264,7 @@ class Match {
     // Where the scattered chests may go (shared/placement.h): at camps, boulders, thickets, cliffs and the map's own scenery, on level ground. Without a
     // plan (the unit tests' bare matches) they fall back to random points on valid ground.
     void SetLootPlan(LootPlan plan) { lootPlan = std::make_shared<LootPlan>(std::move(plan)); }
-    void RegenerateLoot(int count, float chestFraction = 0.15f) {
+    void RegenerateLoot(int count, float chestFraction = 0.15f, int floorWeapons = 0) {
         loot.clear();
         // The scattered chests keep their distance from every building, climb and hideaway chest and from each other.
         std::vector<Vec2> taken = lootSpots;
@@ -275,6 +275,7 @@ class Match {
             for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
         }
         for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
+        for (const LootSpawn& l : GenerateFloorWeapons(seed, lootSpots, floorWeapons, placement)) loot.push_back({l, false});   // after the chests: ScatteredLoot() counts from the end
         Rng siteRng(seed ^ 0x73697465ull); // "site"
         const size_t firstSite = loot.size();
         for (const ChestSite& s : chestSites) loot.push_back({SiteChest(siteRng, s.pos, s.bonus), false});
@@ -1149,12 +1150,25 @@ class Match {
         if (s.container) {
             p->chestsOpened++;
             SpillRupees(s.pos, index);
+            if (s.rarity >= Rarity::Rare && !s.special) SpillSecondItem(s, index);
         }
         loot[index].taken = true;
         MatchEvent e{MatchEvent::Type::LootTaken};
         e.a = id; e.index = index;
         events.push_back(e);
         return true;
+    }
+
+    // A Rare or better chest holds a second item, a tier down, on the floor beside it (A takes it).
+    void SpillSecondItem(const LootSpawn& chest, size_t index) {
+        Rng r(seed ^ 0x326E64ull ^ (static_cast<uint64_t>(index) * 0x9E3779B97F4A7C15ull));   // "2nd"
+        const Rarity tier = static_cast<Rarity>(static_cast<int>(chest.rarity) - 1);
+        ItemId item;
+        if (!PickItem(r, tier, &item)) return;
+        const float angle = static_cast<float>(r.Unit() * 6.2831853);
+        Vec2 to = {chest.pos.x + std::cos(angle) * 70.0f, chest.pos.z + std::sin(angle) * 70.0f};
+        if (Distance(to, map.center) > map.radius || (placement && !placement(to))) to = chest.pos;
+        AddLoot({to, item, tier, false, false});
     }
 
     // An opened chest spills a few green and blue rupees around it, to pick up (money for hiring helpers).
