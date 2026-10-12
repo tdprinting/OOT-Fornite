@@ -92,14 +92,13 @@ void Bus_Update(Actor* actor, PlayState*) {
     static double nextBurn = 0;
     if (now >= nextBurn) {
         nextBurn = now + 2.5;
-        Vec3f at = BusWorld(royale::busmodel::kNozzle.x, royale::busmodel::kNozzle.y + 60.0f, royale::busmodel::kNozzle.z);
-        Audio_PlaySoundGeneral(NA_SE_EV_FLAME_IGNITION, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        // SfxAt (Core.inc): the roar used a stack position in world units, so it crackled and jumped left and right.
+        const Vec3f at = BusWorld(royale::busmodel::kNozzle.x, royale::busmodel::kNozzle.y + 60.0f, royale::busmodel::kNozzle.z);
+        SfxAt(NA_SE_EV_FLAME_IGNITION, at.x, at.y, at.z, 1.0f, 0.7f);
     }
-    if (gPlayState != nullptr && (gPlayState->gameplayFrames % 20) == 0) {
-        const auto& hub = royale::busmodel::kPivot[royale::busmodel::kPropeller];
-        Vec3f prop = BusWorld(hub.x, hub.y, hub.z);
-        Audio_PlaySoundGeneral(NA_SE_EV_WINDMILL_LEVEL, &prop, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-    }
+    // The hum is a looping sound: it is kept going every frame on the bus actor. Starting it again every 20 frames (as before) cut it off and
+    // restarted it three times a second, which buzzed and stuttered.
+    func_8002F974(actor, NA_SE_EV_WINDMILL_LEVEL - SFX_FLAG);
 }
 // ---- drawing the bus (shared/bus_model.h, made by tools/bus) ---------------------------------------------------------------------------------
 // Rigid parts, as the cart is drawn: the body (with the burner cage, the deck, the benches inside), the roof, the Moon (its rock, its face as a
@@ -375,9 +374,8 @@ void PlayBusHorn() {
     at = BusWorld(royale::busmodel::kHorn.x, royale::busmodel::kHorn.y, royale::busmodel::kHorn.z);
     const Player* me = GET_PLAYER(gPlayState);
     if (std::hypot(at.x - me->actor.world.pos.x, at.z - me->actor.world.pos.z) > kBusHornHearing) return;
-    static f32 high = 1.0f, low = 0.84f;   // D then B, three semitones down
-    Audio_PlaySoundGeneral(NA_SE_OC_OCARINA, &at, 4, &high, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-    Audio_PlaySoundGeneral(NA_SE_OC_OCARINA, &at, 4, &low, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    SfxAt(NA_SE_OC_OCARINA, at.x, at.y, at.z, 1.0f);    // D then B, three semitones down
+    SfxAt(NA_SE_OC_OCARINA, at.x, at.y, at.z, 0.84f);
 }
 
 // ---- you, on the bus and falling from it ----------------------------------------------------------------------------------------------------

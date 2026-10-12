@@ -52,8 +52,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
         p.ox = x; p.oz = z;
         p.reach = std::clamp(reach > 0.0f ? reach : royale::kShockwaveSelfThrow, 0.0f, royale::WeaponOf(weapon).range * 1.1f);
         if (gProjectiles.size() < 160) gProjectiles.push_back(p);
-        Vec3f at = { x, y, z };
-        Audio_PlaySoundGeneral(NA_SE_IT_BOMB_IGNIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+        SfxAt(NA_SE_IT_BOMB_IGNIT, x, y, z);
         return;
     }
     const int count = weapon == ItemId::TripleSlingshot ? 3 : 1;
@@ -62,8 +61,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
         Projectile p = { x, y, z, std::sin(a) * speed, gravity > 0 ? 330.0f : 0.0f, std::cos(a) * speed, std::clamp(std::min(w.range, 1500.0f) / speed, 0.28f, 1.2f), gravity, spin, variant, explodes, rarity };
         if (gProjectiles.size() < 160) gProjectiles.push_back(p);
     }
-    Vec3f at = { x, y, z };
-    Audio_PlaySoundGeneral(sfx, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    SfxAt(sfx, x, y, z);
 }
 
 // Arrows, bombs, bombchus and boomerangs are drawn with the game's own models (the same display lists and skeleton the real arrow, bomb, bombchu and
@@ -387,7 +385,7 @@ void Projectile_Draw(Actor*, PlayState* play) {
                 Vec3f pos = { p.x, std::max(p.y, floorY) + 10.0f, p.z }, vel = { 0, 0, 0 }, accel = { 0, 0, 0 };
                 EffectSsBomb2_SpawnLayered(play, &pos, &vel, &accel, 40, 10);
                 AddLightFlash(pos.x, pos.y + 20.0f, pos.z, 255, 170, 80, 380.0f, 0.7f, 1);
-                Audio_PlaySoundGeneral(NA_SE_IT_BOMB_EXPLOSION, &pos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                SfxAt(NA_SE_IT_BOMB_EXPLOSION, pos.x, pos.y, pos.z);
             }
             gProjectiles.erase(gProjectiles.begin() + static_cast<long>(i));
             continue;
@@ -744,6 +742,7 @@ double gBannerUntil = 0;
 void NotePickup(royale::ItemId item, const std::string& label, royale::Rarity rarity, bool fromChest) {
     gPickupLog.push_front({ (fromChest ? "Chest: " : "") + label, rarity });
     while (gPickupLog.size() > 10) gPickupLog.pop_back();
+    if (royale::InstantOf(item) == royale::InstantEffect::Rupees) return;   // money: only the counter ticks up, no pickup card
     gBannerText = label;
     gBannerDescription = royale::DefOf(item).effect;
     gBannerRarity = rarity;

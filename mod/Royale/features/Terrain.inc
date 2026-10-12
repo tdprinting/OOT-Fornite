@@ -1598,8 +1598,7 @@ void ReportEvents(const royale::HudState& hud) {
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
                         StartAction(royale::Anim::ItemGet, 0.9f);   // everyone else sees you hold it up
-                        Vec3f at = { l.x, py + 30.0f, l.z };
-                        Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(NA_SE_EV_TBOX_OPEN, l.x, py + 30.0f, l.z);
                     }
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     if (itemId == royale::ItemId::HeartContainer) Audio_PlayFanfare(NA_BGM_HEART_GET);
@@ -1628,8 +1627,7 @@ void ReportEvents(const royale::HudState& hud) {
                     if (std::hypot(pr.pos.x - me->actor.world.pos.x, pr.pos.z - me->actor.world.pos.z) < kPuppetHearing && FloorAt(pr.pos.x, pr.pos.z, &py)) {
                         const bool bush = pr.kind == royale::PropKind::Bush;
                         SparkBurst(gPlayState, pr.pos.x, py + 20.0f, pr.pos.z, bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
-                        Vec3f at = { pr.pos.x, py + 20.0f, pr.pos.z };
-                        Audio_PlaySoundGeneral(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, pr.pos.x, py + 20.0f, pr.pos.z);
                     }
                 }
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;

@@ -135,8 +135,7 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
     float y = player->actor.world.pos.y;
     FloorAt(props[best].pos.x, props[best].pos.z, &y);
     SparkBurst(gPlayState, props[best].pos.x, y + 20.0f, props[best].pos.z, props[best].kind == royale::PropKind::Bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
-    Vec3f at = { props[best].pos.x, y + 20.0f, props[best].pos.z };
-    Audio_PlaySoundGeneral(props[best].kind == royale::PropKind::Bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    SfxAt(props[best].kind == royale::PropKind::Bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, props[best].pos.x, y + 20.0f, props[best].pos.z);
     Actor_Kill(it->second.actor);   // Prop_Destroy tells the server it was broken
 }
 
