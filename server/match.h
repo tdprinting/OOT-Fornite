@@ -966,25 +966,61 @@ class Match {
     // would do nothing (a heart at full health).
     // Would taking this be an improvement? Walking over loot only picks up what passes this; anything else needs the player to ask
     // (force), so a Common stick doesn't replace your Epic sword just because you walked past it.
-    // Is there room in the bag for one more of this? It joins the stack of its own kind and tier, or starts one in a free slot.
-    static bool PotionRoom(const PlayerState& p, ItemId item, Rarity rarity) {
-        int same = 0, stacks = 0;
-        std::vector<std::pair<ItemId, Rarity>> kinds;
-        for (const Equipped& e : p.potions) {
-            if (e.item == item && e.rarity == rarity) same++;
-            bool known = false;
-            for (const auto& k : kinds) known |= k.first == e.item && k.second == e.rarity;
-            if (!known) { kinds.push_back({e.item, e.rarity}); stacks++; }
+    // The hotbar: kHotbarSlots usable slots shared by the weapon in hand, the backup weapons and the potion stacks (one slot per kind and tier).
+    // The starter sword is the fallback in hand when nothing else is (Fortnite's pickaxe) and takes no slot; worn gear and the ability take none.
+    static int PotionStackCount(const PlayerState& p) {
+        int stacks = 0;
+        for (size_t i = 0; i < p.potions.size(); i++) {
+            bool seen = false;
+            for (size_t j = 0; j < i; j++) seen |= p.potions[j].item == p.potions[i].item && p.potions[j].rarity == p.potions[i].rarity;
+            if (!seen) stacks++;
         }
+        return stacks;
+    }
+    static int HotbarUsed(const PlayerState& p) { return (IsStarter(p.weapon) ? 0 : 1) + static_cast<int>(p.reserve.size()) + PotionStackCount(p); }
+    static bool HotbarFree(const PlayerState& p) { return HotbarUsed(p) < kHotbarSlots; }
+
+    // Is there room for one more of this? It joins the stack of its own kind and tier, or starts one in a free hotbar slot.
+    static bool PotionRoom(const PlayerState& p, ItemId item, Rarity rarity) {
+        int same = 0;
+        for (const Equipped& e : p.potions) if (e.item == item && e.rarity == rarity) same++;
         if (same > 0) return same < PotionStackMax(item);
-        return stacks < kPotionSlots;
+        return HotbarFree(p);
+    }
+
+    // Empties one hotbar slot to make room, dropping what was in it: the potion stack of `item`/`rarity`, or (kHandSlot, or a stack the
+    // player doesn't have) the weapon in hand, whose place a backup weapon or the starter sword takes. False if nothing could be freed.
+    bool FreeHotbarSlot(PlayerState& p, uint8_t item, uint8_t rarity) {
+        if (item != kHandSlot) {
+            bool any = false;
+            for (size_t i = 0; i < p.potions.size();) {
+                if (static_cast<uint8_t>(p.potions[i].item) == item && static_cast<uint8_t>(p.potions[i].rarity) == rarity) {
+                    DropEquipment(p, p.potions[i]);
+                    p.potions.erase(p.potions.begin() + static_cast<long>(i));
+                    any = true;
+                } else i++;
+            }
+            if (any) return true;
+        }
+        if (!IsStarter(p.weapon)) {
+            DropEquipment(p, p.weapon);
+            if (!p.reserve.empty()) { p.weapon = p.reserve.front(); p.reserve.erase(p.reserve.begin()); }
+            else p.weapon = {ItemId::BasicSword, Rarity::Common};
+            return true;
+        }
+        if (!p.reserve.empty()) { DropEquipment(p, p.reserve.back()); p.reserve.pop_back(); return true; }
+        if (!p.potions.empty()) {   // only potions: the last stack goes
+            const Equipped last = p.potions.back();
+            return FreeHotbarSlot(p, static_cast<uint8_t>(last.item), static_cast<uint8_t>(last.rarity));
+        }
+        return false;
     }
 
     static bool WorthTaking(const PlayerState& p, const LootSpawn& s) {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
-                if (WeaponDps(s.item, s.rarity) > WeaponDps(p.weapon.item, p.weapon.rarity) * 1.05f) return true; // an upgrade
-                if (static_cast<int>(p.reserve.size()) >= kMaxReserveWeapons) return false;                  // no room for a spare
+                if (WeaponDps(s.item, s.rarity) > WeaponDps(p.weapon.item, p.weapon.rarity) * 1.05f && (HotbarFree(p) || !IsStarter(p.weapon))) return true; // an upgrade (full: it swaps with the weapon in hand)
+                if (!HotbarFree(p)) return false;                                                             // hotbar full: only on purpose (A swaps)
                 if (s.item == p.weapon.item && s.rarity == p.weapon.rarity) return false;
                 for (const Equipped& e : p.reserve) if (e.item == s.item && e.rarity == s.rarity) return false;
                 return true;                                                                                 // fills an empty hotbar slot
@@ -1009,13 +1045,18 @@ class Match {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (slot < 1 || slot > static_cast<int>(p->reserve.size()) || p->knocked) return false;
-        std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
+        if (IsStarter(p->weapon)) {   // the starter sword takes no slot: the backup simply comes into hand
+            p->weapon = p->reserve[static_cast<size_t>(slot - 1)];
+            p->reserve.erase(p->reserve.begin() + (slot - 1));
+        } else {
+            std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
+        }
         p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
         p->dirty = true;
         return true;
     }
 
-    bool PickUp(uint32_t id, size_t index, bool force = true) {
+    bool PickUp(uint32_t id, size_t index, bool force = true, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || p->aboard || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (index >= loot.size() || loot[index].taken || p->knocked) return false;
@@ -1027,15 +1068,20 @@ class Match {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
                 const bool upgrade = WeaponDps(s.item, s.rarity) > WeaponDps(p->weapon.item, p->weapon.rarity) * 1.05f;
-                const bool room = static_cast<int>(p->reserve.size()) < kMaxReserveWeapons;
-                if (upgrade) {                       // the better weapon goes in hand; the old one becomes a backup if there is room
-                    if (room && !IsStarter(p->weapon)) p->reserve.push_back(p->weapon); else DropEquipment(*p, p->weapon);
+                if (IsStarter(p->weapon)) {                 // empty hand: it goes there if a slot is free (else swap out the selected slot first)
+                    if (!HotbarFree(*p) && !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    if (!IsStarter(p->weapon)) p->reserve.push_back(p->weapon);   // (freeing a stack can't change the hand; this is defensive)
                     p->weapon = {s.item, s.rarity};
-                } else if (room) {                   // not better, but there is a free hotbar slot
-                    p->reserve.push_back({s.item, s.rarity});
-                } else {                             // hotbar full: replace the weapon in hand
-                    DropEquipment(*p, p->weapon);
-                    p->weapon = {s.item, s.rarity};
+                } else if (HotbarFree(*p)) {               // a free slot: an upgrade goes in hand (the old one becomes a backup), else a backup
+                    if (upgrade) { p->reserve.push_back(p->weapon); p->weapon = {s.item, s.rarity}; }
+                    else p->reserve.push_back({s.item, s.rarity});
+                } else {                                   // hotbar full: swap with the selected slot (Fortnite), the old item drops
+                    if (replaceItem == kHandSlot) { DropEquipment(*p, p->weapon); p->weapon = {s.item, s.rarity}; }
+                    else {
+                        if (!FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                        if (upgrade) { p->reserve.push_back(p->weapon); p->weapon = {s.item, s.rarity}; }
+                        else p->reserve.push_back({s.item, s.rarity});
+                    }
                 }
                 break;
             }
@@ -1045,7 +1091,11 @@ class Match {
                 p->hasShield = true;
                 break;
             case ItemKind::Consumable:
-                if (!PotionRoom(*p, s.item, s.rarity)) return false;
+                if (!PotionRoom(*p, s.item, s.rarity)) {   // a new kind with the hotbar full: swap it with the selected slot when asked on purpose
+                    bool stacked = false;
+                    for (const Equipped& e : p->potions) stacked |= e.item == s.item && e.rarity == s.rarity;
+                    if (!force || stacked || !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                }
                 p->potions.push_back({s.item, s.rarity});
                 break;
             case ItemKind::Instant:
@@ -1178,6 +1228,24 @@ class Match {
             if (d.damageTaken < 1.0f) { p->dmgTakenUntil = clock + d.seconds; p->dmgTakenMult = d.damageTaken; }
         }
         p->potions.erase(p->potions.begin() + static_cast<long>(idx));
+        p->dirty = true;
+        return true;
+    }
+
+    // Put a hotbar slot on the ground: a whole potion stack (item, rarity), or (kHandSlot) the weapon in hand, see DropWeapon.
+    bool DropSlot(uint32_t id, uint8_t item, uint8_t rarity) {
+        if (item == kHandSlot) return DropWeapon(id);
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        const size_t before = p->potions.size();
+        for (size_t i = 0; i < p->potions.size();) {
+            if (static_cast<uint8_t>(p->potions[i].item) == item && static_cast<uint8_t>(p->potions[i].rarity) == rarity) {
+                DropEquipment(*p, p->potions[i]);
+                loot.back().droppedBy = id; loot.back().droppedAt = clock;
+                p->potions.erase(p->potions.begin() + static_cast<long>(i));
+            } else i++;
+        }
+        if (p->potions.size() == before) return false;
         p->dirty = true;
         return true;
     }

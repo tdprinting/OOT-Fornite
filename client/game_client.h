@@ -122,9 +122,10 @@ class GameClient {
     // style: 0 an ordinary swing, 1 a jump slash, 2 a spin attack (AttackStyle)
     void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { net::AttackReport m; m.target = target; m.hit = hit; m.style = style; SendIfJoined(m); }
     // `force` false = auto-pickup while walking (upgrades only); true = the player pressed the swap button.
-    void RequestPickup(uint32_t index, bool force = false) { net::PickupRequest m; m.index = index; m.force = force; SendIfJoined(m); }
+    void RequestPickup(uint32_t index, bool force = false, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) { net::PickupRequest m; m.index = index; m.force = force; m.replaceItem = replaceItem; m.replaceRarity = replaceRarity; SendIfJoined(m); }
     void UseStack(uint8_t item, uint8_t rarity) { net::UseItemRequest m; m.item = item; m.rarity = rarity; SendIfJoined(m); }
     void DropWeapon() { SendIfJoined(net::DropItemRequest{}); }
+    void DropSlot(uint8_t item, uint8_t rarity) { net::DropItemRequest m; m.item = item; m.rarity = rarity; SendIfJoined(m); }
     void RequestUsePotion() { SendIfJoined(net::UsePotionRequest{}); }
     // Use the ability slot. The server may refuse (recharging, stunned, no target); the inventory update tells you what happened.
     void UseAbility() { SendIfJoined(net::UseAbilityRequest{}); }

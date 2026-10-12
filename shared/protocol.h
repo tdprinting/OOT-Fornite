@@ -24,7 +24,7 @@
 // Every message is `[u8 type][fields...]`. Decode() rejects wrong types, short data, trailing bytes, NaN and Inf.
 namespace royale::net {
 
-constexpr uint16_t kProtocolVersion = 44; // 44: player skin models (Hello, roster and EvPlayerJoined carry a skin byte). 43: Skyloft Isles, map 13 (14 maps, 24 more POI names). 42: Master Chief, a seventh ally carrying Jones's rifles. 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
+constexpr uint16_t kProtocolVersion = 45; // 45: five-slot hotbar (weapons and potion stacks share kHotbarSlots; PickupRequest and DropItemRequest name a hotbar slot). 44: player skin models (Hello, roster and EvPlayerJoined carry a skin byte). 43: Skyloft Isles, map 13 (14 maps, 24 more POI names). 42: Master Chief, a seventh ally carrying Jones's rifles. 41: the Moonfall Bus (EvBusPath, EvBusHorn, Snapshot.aboardMask, PlayerNet kAboard). 40: teams (Solo/Duos/Squads), knocked players and revives, pings, Deku launch pads, Siphon (the Deku Launch Flower item shifts every later ItemId). 39: Peter, a sixth ally. 38: allies sent as 13 bytes (int16 position, rifle packed in flags). 37: Jones ally and private rifles. 36: potion stacking/use/drop. 35: worn equipment. Peers must update together.
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
@@ -103,8 +103,13 @@ struct PickupRequest {
     static constexpr MsgType kType = MsgType::PickupRequest;
     uint32_t index = 0;
     bool force = false; // false: walking over it (the server only takes it if it is an upgrade); true: the player chose to swap
-    void Write(ByteWriter& w) const { w.U32(index); w.U8(force ? 1 : 0); }
-    bool Read(ByteReader& r) { index = r.U32(); const uint8_t f = r.U8(); force = f != 0; return r.ok && f <= 1; }
+    // With all kHotbarSlots full, the selected hotbar slot is swapped out (dropped) for it: a potion stack (item, rarity) or kHandSlot (the weapon in hand).
+    uint8_t replaceItem = kHandSlot, replaceRarity = 0;
+    void Write(ByteWriter& w) const { w.U32(index); w.U8(force ? 1 : 0); w.U8(replaceItem); w.U8(replaceRarity); }
+    bool Read(ByteReader& r) {
+        index = r.U32(); const uint8_t f = r.U8(); force = f != 0; replaceItem = r.U8(); replaceRarity = r.U8();
+        return r.ok && f <= 1 && (replaceItem == kHandSlot || replaceItem < static_cast<uint8_t>(ItemId::Count)) && replaceRarity < kRarityCount;
+    }
 };
 
 struct UsePotionRequest {
@@ -131,11 +136,13 @@ struct UseItemRequest {
     bool Read(ByteReader& r) { item = r.U8(); rarity = r.U8(); return r.ok && item < static_cast<uint8_t>(ItemId::Count) && rarity < kRarityCount; }
 };
 
-// Put the weapon in hand on the ground in front of you (a backup weapon, if you have one, comes into your hand).
+// Put a hotbar slot on the ground in front of you: kHandSlot = the weapon in hand (a backup weapon, if you have one, comes into your hand),
+// otherwise the whole potion stack of that item and rarity.
 struct DropItemRequest {
     static constexpr MsgType kType = MsgType::DropItemRequest;
-    void Write(ByteWriter&) const {}
-    bool Read(ByteReader& r) { return r.ok; }
+    uint8_t item = kHandSlot, rarity = 0;
+    void Write(ByteWriter& w) const { w.U8(item); w.U8(rarity); }
+    bool Read(ByteReader& r) { item = r.U8(); rarity = r.U8(); return r.ok && (item == kHandSlot || item < static_cast<uint8_t>(ItemId::Count)) && rarity < kRarityCount; }
 };
 
 struct UseShieldRequest {

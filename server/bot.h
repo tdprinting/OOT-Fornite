@@ -1212,7 +1212,7 @@ class BotController {
             case ItemKind::Weapon: {
                 const float mine = EffectiveDps(p.weapon), v = EffectiveDps({s.item, s.rarity});
                 if (v > mine * 1.1f) return (v - mine) * 1.2f * (needGear ? 2.0f : 1.0f);
-                return static_cast<int>(p.reserve.size()) < kMaxReserveWeapons ? 0.25f + v * 0.1f : 0.0f; // a spare for the hotbar
+                return Match::HotbarFree(p) ? 0.25f + v * 0.1f : 0.0f; // a spare in a free hotbar slot (weapons and potions share kHotbarSlots)
             }
             case ItemKind::Shield: {
                 const float v = ShieldReduction(s.item, s.rarity);
@@ -1221,7 +1221,7 @@ class BotController {
                 return v > mine + 0.02f ? (v - mine) * 4.0f : 0.0f;
             }
             case ItemKind::Consumable: {
-                if (PotionOf(s.item).revive) return HasFairy(p) ? 0.0f : 1.3f;
+                if (PotionOf(s.item).revive) return HasFairy(p) || !Match::PotionRoom(p, s.item, s.rarity) ? 0.0f : 1.3f;
                 if (PotionOf(s.item).shield > 0) return p.armor < PotionOf(s.item).shieldCap - 0.3f && Match::PotionRoom(p, s.item, s.rarity) ? 0.55f : 0.0f;
                 if (!Match::PotionRoom(p, s.item, s.rarity)) return 0.0f;
                 const float need = 1.0f + (p.maxHealth - p.health) * 0.3f;

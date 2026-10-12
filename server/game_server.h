@@ -582,7 +582,7 @@ class GameServer {
             case net::MsgType::PickupRequest: {
                 net::PickupRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
+                if (!sim.match.PickUp(c->playerId, m.index, m.force, m.replaceItem, m.replaceRarity)) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PropSmashRequest: {
@@ -645,7 +645,7 @@ class GameServer {
             case net::MsgType::DropItemRequest: {
                 net::DropItemRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.DropWeapon(c->playerId)) stats.rejectedActions++;
+                if (!sim.match.DropSlot(c->playerId, m.item, m.rarity)) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::UseShieldRequest: {
