@@ -205,6 +205,16 @@ bool MapOption(const char* name, bool fallback = true) {
     std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), name);
     return CVarGetInteger(key, fallback ? 1 : 0) != 0;
 }
+// Developer mode (Settings > Updates, off by default): shows test maps, debug switches, Regular game, pets, Practice/Sandbox and the
+// Jones / Peter / Master Chief stations. Off, the War Table offers only the release game. Nothing is removed, only hidden.
+bool DevMode() { return CVarGetInteger(CVAR_SETTING("Royale.DevMode"), 0) != 0; }
+// Release battlefields: Moonfall Isle, with Hyrule Kingdom and Skyloft Isles as beta.
+bool ReleaseMap(int id) { return id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
+std::string MapLabel(int id) {
+    std::string s = royale::MapOf(id).name;
+    if (!DevMode() && (id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex)) s += " (beta)";
+    return s;
+}
 
 // The game's own overworld minimap for the scene (the light-blue map that sits in the corner in Ocarina of Time), read from the player's ROM
 // like the rest of the game's art. Its 4-bit grey and alpha pixels are turned into white for ImGui and tinted when drawn; drawn smooth rather

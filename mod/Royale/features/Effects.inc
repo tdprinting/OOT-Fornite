@@ -404,6 +404,39 @@ double gHurtAt = -100.0, gHitMarkerAt = -100.0, gImpactSoundAt = -100.0;
 bool gHitMarkerKill = false;
 float gHurtAmount = 0.0f;
 
+// ---- feedback sounds: the game's own effects, one per weapon class ------------------------------------------------------------------
+// What a blow from `weapon` sounds like where it lands: a blade rings, an arrow or seed thunks in, a hammer pounds, a blast or a hook
+// lands as a body blow, magic crackles.
+u16 HitSfxFor(royale::ItemId weapon) {
+    using royale::ItemId;
+    switch (weapon) {
+        case ItemId::FairyBow: case ItemId::Slingshot: case ItemId::TripleSlingshot: case ItemId::FireArrows: case ItemId::IceArrows: case ItemId::LightArrows:
+            return NA_SE_IT_ARROW_STICK_CRE;
+        case ItemId::MegatonHammer: case ItemId::GiantsHammer: return NA_SE_IT_HAMMER_HIT;
+        case ItemId::Bombs: case ItemId::Bombchus: case ItemId::HomingBombchus: case ItemId::DekuNuts: case ItemId::ShockwaveGrenade:
+        case ItemId::Hookshot: case ItemId::Longshot: case ItemId::Boomerang:
+            return NA_SE_PL_BODY_HIT;
+        case ItemId::DinsFire: case ItemId::BoleroOfFire: case ItemId::NayrusLove: case ItemId::FaroresWind: return NA_SE_IT_SHIELD_REFLECT_MG;
+        default: return NA_SE_IT_SWORD_STRIKE;
+    }
+}
+royale::ItemId WeaponOfAttacker(uint16_t attacker);   // below HitFeedback
+// Per tick: the shield bar breaking (it had some, now none) and the hum of the storm wall when you stand near it.
+void DriveFeedbackSounds(const royale::HudState& h) {
+    static float lastShield = 0.0f;
+    const bool live = gSession.Joined() && InField() && gPlayState != nullptr && h.haveSelf && h.selfAlive &&
+                      (h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch);
+    if (!live) { lastShield = 0.0f; return; }
+    Player* pl = GET_PLAYER(gPlayState);
+    if (lastShield > 0.05f && h.inv.shield <= 0.01f) Audio_PlayActorSound2(&pl->actor, NA_SE_EV_ICE_BROKEN);
+    lastShield = h.inv.shield;
+    // The wall (Atmosphere.inc): within about four body lengths of it, either side, a low wind roars. Looped: re-asked every frame.
+    if (gWallAlpha > 0.5f && h.safeZone.radius > 0) {
+        const float d = std::hypot(pl->actor.world.pos.x - h.safeZone.center.x, pl->actor.world.pos.z - h.safeZone.center.z);
+        if (std::abs(d - h.safeZone.radius) < 350.0f) func_8002F974(&pl->actor, NA_SE_EV_WIND_TRAP - SFX_FLAG);
+    }
+}
+
 bool KnownPosition(uint16_t id, float* x, float* z) {
     if(gPlayState && InGame() && id==gSession.SelfId()) {const auto& p=GET_PLAYER(gPlayState)->actor.world.pos;*x=p.x;*z=p.z;return true;}
     if (gSession.Client() && royale::IsHelperId(id)) for (const auto& h:gSession.Client()->Helpers()) if (h.Id()==id && h.hp>0) { *x=h.x;*z=h.z;return true; }
@@ -519,6 +552,11 @@ void HitParticles(PlayState* play, HitKind kind, const Vec3f& at, float size, in
 }
 
 // Flash and particles for a blow of `hearts` on `id` (a player, a bot or a boss). `attacker` may be kNoPlayer16 (the storm, a fall): no spray then.
+royale::ItemId WeaponOfAttacker(uint16_t attacker) {
+    if (attacker == gSession.SelfId()) return gSession.Hud().weapon;
+    auto it = gState.find(attacker);
+    return it != gState.end() ? it->second.weapon : royale::ItemId::Count;
+}
 void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool self) {
     if (!DebugOn(kDbgHitFx) || gPlayState == nullptr) return;
     if (self && !gHitOnSelf) return;
@@ -557,10 +595,8 @@ void HitFeedback(uint16_t id, uint16_t attacker, float hearts, bool kill, bool s
     if (!self && actor && impactNow-gImpactSoundAt > .06 &&
         std::hypot(pos.x-GET_PLAYER(gPlayState)->actor.world.pos.x,pos.z-GET_PLAYER(gPlayState)->actor.world.pos.z)<1200.0f) {
         gImpactSoundAt=impactNow;
-        Audio_PlayActorSound2(actor, kind==HitKind::Metal ? NA_SE_IT_SHIELD_REFLECT_SW : NA_SE_IT_SWORD_STRIKE);
-        royale::ItemId weapon=royale::ItemId::Count;
-        if(attacker==gSession.SelfId()) weapon=gSession.Hud().weapon;
-        else {auto it=gState.find(attacker);if(it!=gState.end()) weapon=it->second.weapon;}
+        const royale::ItemId weapon=WeaponOfAttacker(attacker);
+        Audio_PlayActorSound2(actor, kind==HitKind::Metal ? NA_SE_IT_SHIELD_REFLECT_SW : HitSfxFor(weapon));
         if(weapon==royale::ItemId::BasicSword || weapon==royale::ItemId::KokiriSword || weapon==royale::ItemId::MasterSword || weapon==royale::ItemId::BiggoronSword || weapon==royale::ItemId::GildedSword)
             Audio_PlayActorSound2(actor,NA_SE_IT_SWORD_SWING_HARD);
     }

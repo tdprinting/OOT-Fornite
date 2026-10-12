@@ -1318,10 +1318,13 @@ class Match {
     const std::vector<AllyState>& Allies() const { return allies; }
     std::vector<AllyState>& MutableAllies() { return allies; }
     int AlliesOf(uint32_t player) const { int n = 0; for (const auto& a : allies) n += a.alive && a.owner == player; return n; }
+    // Off: only the four Hylian kinds (Kokiri, Zora, Goron, Gerudo) stand at the stations; Jones, Peter and Master Chief are developer-mode only.
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; }
     void SpawnAllies() {
         allies.clear();
         Rng rng(seed ^ 0x616C6C79ull);   // "ally"
-        for (int i = 0; i < kAllyCount; i++) {
+        const int kinds = noveltyAllies ? kAllyCount : static_cast<int>(AllyKind::Jones);
+        for (int i = 0; i < kinds; i++) {
             AllyState a;
             a.index = static_cast<uint8_t>(i);
             a.kind = static_cast<AllyKind>(i);
@@ -3577,6 +3580,7 @@ class Match {
     Replay replay;
     float replayNextAt = 0;
     std::vector<Vec2> allySpots;
+    bool noveltyAllies = true;
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;

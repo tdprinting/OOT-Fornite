@@ -1571,7 +1571,9 @@ void ReportEvents(const royale::HudState& hud) {
                         if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
                         HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
-                        if(!DebugOn(kDbgHitFx)) Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE,&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+                        // HitFeedback already rings the blow on a target in earshot; a far one (a long bow shot) gets the same sound here, flat.
+                        if(!DebugOn(kDbgHitFx) && (target == gActorOf.end() || std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)>=1200.0f))
+                            Audio_PlaySoundGeneral(HitSfxFor(hud.weapon),&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
 
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
@@ -1580,7 +1582,7 @@ void ReportEvents(const royale::HudState& hud) {
                         if (target != gActorOf.end()) {
                             if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
-                            if(!DebugOn(kDbgHitFx) && std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)<1200.0f) soundAt(e.id,NA_SE_IT_SWORD_STRIKE);
+                            // (the blow's sound comes from HitFeedback, by weapon class)
 
                         }
                     }
@@ -1732,6 +1734,7 @@ void ReportEvents(const royale::HudState& hud) {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
                 if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
                 if (mine && !me) {   // for the death and end screens (and their medals)
+                    if (!royale::IsBossId(e.id)) Audio_PlaySoundGeneral(NA_SE_SY_CORRECT_CHIME, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);   // kill confirmed
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;
                     const double now = ImGui::GetTime();
