@@ -1094,6 +1094,7 @@ void ApplyItemCvars(bool on) {
     // starts, so switching the enhancement on mid-scene left adult Link with a child's fist: only the handle showed. Patch them now.
     UpdatePatchHand();
     gRoyaleBraceletOnAdult = on ? 1 : 0;
+    gRoyaleBootsOnChild = on ? 1 : 0;   // the game has no child boot models, so Hover and Iron Boots were invisible on child Link (you and puppets)
 }
 // The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
 void SyncRealAmmo(const royale::HudState& hud) {
