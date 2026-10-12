@@ -33,6 +33,7 @@ struct AutoTest {
     std::string outPath, beatPath;
     std::vector<int> tour;        // scenes left to visit
     int tourScene = -1;
+    int tourLoads = 0;            // scenesLoaded when the warp to tourScene started
     int sub = 0;                  // per-step progress
     int scenesLoaded = 0, lastScene = -1;
 };
@@ -168,14 +169,18 @@ bool AutoRun(const AutoStep& s, float secs) {
             gAuto.sub = 1;
         }
         if (gAuto.tourScene >= 0) {
-            if (!AutoArrived(gAuto.tourScene)) {
+            // the game may send you elsewhere for your age (adult Link at Hyrule Castle lands outside Ganon's Castle): any scene loaded since the
+            // warp counts, and the log names where you ended up
+            const bool redirected = gAuto.scenesLoaded > gAuto.tourLoads && gPlayState != nullptr && gPlayState->sceneNum != gAuto.tourScene;
+            if (!AutoArrived(redirected ? gPlayState->sceneNum : gAuto.tourScene)) {
                 // a scene that never arrives is a failure of its own (timeout below names it)
                 return false;
             }
             static unsigned arrivedAt = 0;
             if (gAuto.sub == 1) { arrivedAt = gAuto.frames; gAuto.sub = 2; }
             if (gAuto.frames - arrivedAt < (s.verb == "tour" ? 60u : 20u)) return false;
-            AutoLog("  scene 0x%02X arrived (%d actors)", gAuto.tourScene, gPlayState->actorCtx.total);
+            if (redirected) AutoLog("  scene 0x%02X arrived as 0x%02X (%d actors)", gAuto.tourScene, gPlayState->sceneNum, gPlayState->actorCtx.total);
+            else AutoLog("  scene 0x%02X arrived (%d actors)", gAuto.tourScene, gPlayState->actorCtx.total);
             gAuto.tourScene = -1;
             gAuto.sub = 1;
         }
@@ -189,6 +194,7 @@ bool AutoRun(const AutoStep& s, float secs) {
         Crumb("autotest: warp to scene 0x%02X entrance 0x%03X", scene, entrance);
         if (!TravelTo(entrance)) { gAuto.tour.insert(gAuto.tour.begin(), scene); return false; }
         gAuto.tourScene = scene;
+        gAuto.tourLoads = gAuto.scenesLoaded;
         gAuto.stepStartFrame = gAuto.frames;   // each scene gets the full timeout
         return false;
     }
