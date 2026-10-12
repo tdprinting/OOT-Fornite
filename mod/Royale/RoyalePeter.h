@@ -87,13 +87,12 @@ void PeterOnSnapshot(AllyActor& a, const royale::net::AllyNet& n) {
 void PeterActionFx(AllyActor& a, float x, float z) {
     PeterAttack(a);
     float gy=a.actor->world.pos.y;FloorAt(x,z,&gy);
-    Vec3f at={x,gy+40.0f,z};
     switch(a.attackVariant) {
         case 1: SparkBurst(gPlayState,x,gy+55.0f,z,{255,255,245,255},26,5.0f);SparkBurst(gPlayState,x,gy+45.0f,z,{255,210,90,255},10,3.0f);break;
         case 2: AllyDust(gPlayState,x,gy,z,9,55.0f,110);SparkBurst(gPlayState,x,gy+40.0f,z,{255,235,200,255},12,4.0f);break;
         default: SparkBurst(gPlayState,x,gy+40.0f,z,{255,200,120,255},20,6.0f);AllyDust(gPlayState,x,gy,z,4,30.0f,70);break;
     }
-    Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT,&at,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+    SfxAt(NA_SE_IT_HAMMER_HIT,x,gy+40.0f,z);
 }
 
 constexpr float kPeterIdleBeforeCall=14.0f;   // seconds standing still before the phone can ring
