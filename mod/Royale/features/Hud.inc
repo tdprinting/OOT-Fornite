@@ -210,8 +210,15 @@ void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
         const char* name = royale::kPoiNames[p.name];
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name);
         const ImVec2 pos(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
-        dl->AddText(font, size, ImVec2(pos.x + 2.0f, pos.y + 2.0f), IM_COL32(10, 14, 8, alpha), name);
-        dl->AddText(font, size, pos, IM_COL32(255, 222, 110, alpha), name);
+        // A name never runs into the compass strip at the top centre (DrawCompass: 440 wide, down to 42, its markers under it): it fades out
+        // as it climbs towards it.
+        const float compassHalf = 220.0f * scale, compassBottom = 58.0f * scale;
+        int a = alpha;
+        if (pos.x < ds.x * 0.5f + compassHalf && pos.x + sz.x > ds.x * 0.5f - compassHalf)
+            a = static_cast<int>(alpha * std::clamp((pos.y - compassBottom) / (24.0f * scale), 0.0f, 1.0f));
+        if (a <= 0) continue;
+        dl->AddText(font, size, ImVec2(pos.x + 2.0f, pos.y + 2.0f), IM_COL32(10, 14, 8, a), name);
+        dl->AddText(font, size, pos, IM_COL32(255, 222, 110, a), name);
     }
 }
 
