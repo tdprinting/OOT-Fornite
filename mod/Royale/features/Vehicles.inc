@@ -835,6 +835,31 @@ void UpdateRideCamera(Player* player) {
     gRoyaleCamLift = gCamLiftNow;
 }
 
+// Extra camera shaping (patches/0020), eased like the ride lift. Gliding or falling: the look-at drops so the view tilts down at the island you are
+// heading for. Sat on the bus: a little higher and further back so Link and the bench are in shot. Weapon drawn (sword, hammer, bow, slingshot...):
+// a little higher and further back, so a bow sits over the shoulder. Only the drawn view moves; the camera's own state and guard are untouched.
+constexpr float kGlideCamDown = 120.0f, kBusCamLift = 25.0f, kBusCamBack = 70.0f, kFightCamLift = 14.0f, kFightCamBack = 45.0f;
+float gCamPitchNow = 0.0f, gCamBackNow = 0.0f, gCamFightLift = 0.0f;
+void UpdateActionCamera(Player* player) {
+    const bool seatedCart = gRide.seated && player->actor.draw == LocalRide_Draw;
+    float down = 0.0f, back = 0.0f, lift = 0.0f;
+    if (gSkydiving) {
+        if (gBusPhase == 1) lift = kBusCamLift, back = kBusCamBack;
+        else down = kGlideCamDown;
+    } else if (!seatedCart && player->heldItemAction >= PLAYER_IA_SWORD_MASTER && player->heldItemAction <= PLAYER_IA_SLINGSHOT) {
+        lift = kFightCamLift, back = kFightCamBack;
+    }
+    gCamPitchNow += (down - gCamPitchNow) * 0.08f;
+    gCamBackNow += (back - gCamBackNow) * 0.08f;
+    gCamFightLift += (lift - gCamFightLift) * 0.08f;
+    if (down == 0.0f && std::fabs(gCamPitchNow) < 0.05f) gCamPitchNow = 0.0f;
+    if (back == 0.0f && std::fabs(gCamBackNow) < 0.05f) gCamBackNow = 0.0f;
+    if (lift == 0.0f && std::fabs(gCamFightLift) < 0.05f) gCamFightLift = 0.0f;
+    gRoyaleCamPitchDown = gCamPitchNow;
+    gRoyaleCamBack = gCamBackNow;
+    gRoyaleCamLift = gCamLiftNow + gCamFightLift;
+}
+
 // On foot, a cart is solid: you are pushed out of it to its nearest side (as the rocks push you, ApplyRocks).
 void PushOutOfCarts(Player* player) {
     Vec3f& p = player->actor.world.pos;
