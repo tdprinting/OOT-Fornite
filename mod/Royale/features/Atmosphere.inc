@@ -35,7 +35,7 @@ void DrawStormWall(PlayState* play) {
     const float t = static_cast<float>(ImGui::GetTime());
     constexpr int kRows = 4;
     const float heights[kRows] = { gWallBase - 3000.0f, gWallBase + 250.0f, gWallBase + 2600.0f, gWallBase + 7500.0f };
-    const float alphas[kRows] = { 175.0f, 160.0f, 110.0f, 0.0f };
+    const float alphas[kRows] = { 120.0f, 100.0f, 60.0f, 0.0f };
     Vtx* v = static_cast<Vtx*>(FrameAlloc(play, static_cast<size_t>(segs) * 2 * kRows * sizeof(Vtx)));
     if (v == nullptr) return;
     auto put = [&](Vtx& o, float ang, int row) {
@@ -191,7 +191,7 @@ float SkyOvercast(float tint[3]) {
         case royale::Sky::Sandstorm: c = 0.8f * w; tint[0] = 196; tint[1] = 156; tint[2] = 100; break;
         default: break;
     }
-    if (gStormWeather > c) { c = gStormWeather * 0.9f; tint[0] = 80; tint[1] = 52; tint[2] = 120; }
+    if (gStormWeather > c) { c = gStormWeather * 0.7f; tint[0] = 96; tint[1] = 96; tint[2] = 120; }   // a dusky slate, not a violet wash
     return std::clamp(c, 0.0f, 1.0f);
 }
 
@@ -545,7 +545,7 @@ void DrawSky(PlayState* play) {
     // Palette: night, day, then the glow of sunrise and sunset on the horizon, then the weather greys it all.
     float zen[3], hor[3];
     const float nz[3] = { 5, 8, 30 }, nh[3] = { 22, 28, 66 }, dz[3] = { 62, 122, 224 }, dh[3] = { 168, 206, 242 };
-    const float glow[3] = { 255, 128, 62 }, glowZ[3] = { 96, 78, 150 };
+    const float glow[3] = { 255, 128, 62 }, glowZ[3] = { 70, 96, 168 };   // dusk zenith: deep blue, not lavender
     const float dim = 1.0f - 0.55f * ov * L.day;
     for (int i = 0; i < 3; i++) {
         zen[i] = mix(nz[i], dz[i], L.day); hor[i] = mix(nh[i], dh[i], L.day);
@@ -686,12 +686,12 @@ void DrawFogBanks(PlayState* play) {
         case royale::Sky::Sandstorm: kind(w, 0.75f, 214, 176, 118); break;
         default: break;
     }
-    kind(gStormWeather, 0.7f, 100, 64, 150);
+    kind(gStormWeather, 0.4f, 112, 98, 140);
     const float mist = L.morning ? std::clamp(1.0f - std::fabs(L.sunH - 0.05f) / 0.3f, 0.0f, 1.0f) * (gWeatherShown.season == royale::Season::Autumn ? 0.5f : 0.28f) : 0.0f;
     if (mist > dens) { dens = mist; col[0] = 218; col[1] = 222; col[2] = 232; }
     const bool island = OnIsland();
     const bool lake = gMapId == 1;
-    const float baseWater = (island ? 0.22f : (lake ? 0.14f : 0.0f)) * gFogAmount;   // sea mist and lake mist hang low all the time
+    const float baseWater = (island ? 0.1f : (lake ? 0.07f : 0.0f)) * gFogAmount;   // sea mist and lake mist hang low all the time
     dens = std::min(1.0f, dens * std::min(1.5f, std::max(0.3f, gWeatherDensity)) * gFogAmount);
     if (dens + baseWater < 0.04f) return;
     const float light = 0.35f + 0.65f * L.day;   // fog is lit by the sky: dim at night
@@ -714,7 +714,7 @@ void DrawFogBanks(PlayState* play) {
         const float drift = t * (8.0f + 0.12f * wl) * (0.6f + 0.8f * h3);
         const float x = wrap(h1 * kBox - eye.x + dxw * drift, kBox) - kBox * 0.5f, z = wrap(h2 * kBox - eye.z + dzw * drift, kBox) - kBox * 0.5f;
         const float d = std::hypot(x, z);
-        const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 150.0f) / 450.0f, 0.0f, 1.0f);
+        const float edge = std::clamp((2600.0f - d) / 1000.0f, 0.0f, 1.0f) * std::clamp((d - 500.0f) / 700.0f, 0.0f, 1.0f);   // none right round you
         if (edge <= 0.01f) continue;
         float gy = 0.0f;
         if (!RawFloorAt(eye.x + x, eye.z + z, &gy)) { if (!island) continue; gy = static_cast<float>(royale::fortnite::kWaterY); }
@@ -728,7 +728,7 @@ void DrawFogBanks(PlayState* play) {
         const float width = 520.0f + 520.0f * h3 + 300.0f * local;
         for (int k = 0; k < kLayers; k++) {
             const float up = static_cast<float>(k) / (kLayers - 1);
-            float c[4] = { col[0] * light * (0.82f + 0.18f * up), col[1] * light * (0.82f + 0.18f * up), col[2] * light * (0.82f + 0.18f * up), (40.0f + 60.0f * local) * edge * (1.0f - 0.35f * up) };
+            float c[4] = { col[0] * light * (0.82f + 0.18f * up), col[1] * light * (0.82f + 0.18f * up), col[2] * light * (0.82f + 0.18f * up), (16.0f + 30.0f * local) * edge * (1.0f - 0.35f * up) };
             const float rim[3] = { c[0], c[1], c[2] };
             fd.Add(x + ox, gy - eye.y + oy + 14.0f + k * 55.0f * (0.6f + 0.6f * local), z + oz, width * (1.0f - 0.2f * up), c, rim, 0.0f, i * 4 + k);
         }
@@ -1047,6 +1047,12 @@ void DriveRealWeather() {
         return;
     }
     PlayState* play = gPlayState;
+    // Our sky draws its own sun. The game's sun, its lens flare (a ring with a dark middle) and the white glare it fills the screen with as you
+    // face the sun would sit on top of it and wash the whole view out: off while our sky is up, handed back when it is not.
+    static bool sunHidden = false;
+    const bool ourSky = WorldFxOn(kRegSky, true) && DebugOn(kDbgSky);
+    if (ourSky && !play->envCtx.sunMoonDisabled) { play->envCtx.sunMoonDisabled = true; sunHidden = true; }
+    else if (!ourSky && sunHidden) { play->envCtx.sunMoonDisabled = false; sunHidden = false; }
     const float w = WeatherAmount();
     const royale::Sky sky = gWeatherShown.sky;
     const bool rainSky = sky == royale::Sky::Rain || sky == royale::Sky::Thunder;
@@ -1111,26 +1117,26 @@ void DriveRealWeather() {
         col[0] = static_cast<float>(r); col[1] = static_cast<float>(g); col[2] = static_cast<float>(b);
     };
     switch (sky) {
-        case royale::Sky::Fog: want(w, 900.0f, 3200.0f, 205, 212, 218); break;
-        case royale::Sky::Sandstorm: want(w, 930.0f, 4200.0f, 205, 165, 105); break;
-        case royale::Sky::Ash: want(w, 960.0f, 6000.0f, 70, 52, 48); break;
-        case royale::Sky::Thunder: want(w, 975.0f, 8000.0f, 60, 66, 84); break;
-        case royale::Sky::Rain: want(w, 985.0f, 10000.0f, 110, 118, 130); break;
-        case royale::Sky::Snow: want(w, 975.0f, 8000.0f, 220, 228, 240); break;
+        case royale::Sky::Fog: want(w, 960.0f, 6000.0f, 205, 212, 218); break;
+        case royale::Sky::Sandstorm: want(w, 960.0f, 6500.0f, 205, 165, 105); break;
+        case royale::Sky::Ash: want(w, 975.0f, 8000.0f, 70, 52, 48); break;
+        case royale::Sky::Thunder: want(w, 985.0f, 10000.0f, 60, 66, 84); break;
+        case royale::Sky::Rain: want(w, 990.0f, 11000.0f, 110, 118, 130); break;
+        case royale::Sky::Snow: want(w, 985.0f, 10000.0f, 220, 228, 240); break;
         default: break;
     }
-    want(gStormWeather, 940.0f, 5000.0f, 70, 40, 120);   // inside the storm: violet murk
+    want(gStormWeather, 970.0f, 8000.0f, 84, 70, 118);   // inside the storm: a light dusky murk
     const EnvLightSettings& base = play->envCtx.lightSettings;
     const float targetNear = amount > 0.0f ? std::min(0.0f, near - static_cast<float>(base.fogNear & 0x3FF)) : 0.0f;
     const float targetFar = amount > 0.0f ? std::min(0.0f, far - static_cast<float>(base.fogFar)) : 0.0f;
     if (amount > 0.0f || fogManaged) {
         if (!fogManaged) Trace("weather: fog on");
         auto toward = [](float cur, float target, float step) { return cur < target ? std::min(target, cur + step) : std::max(target, cur - step); };
-        fogNearAdj = toward(fogNearAdj, targetNear, 1.5f);
-        fogFarAdj = toward(fogFarAdj, targetFar, 220.0f);
-        for (int i = 0; i < 3; i++) {
-            const float target = amount > 0.0f ? (col[i] - static_cast<float>(base.fogColor[i])) * std::min(1.0f, amount * 1.2f) : 0.0f;
-            fogColAdj[i] = toward(fogColAdj[i], target, 4.0f);
+        fogNearAdj = toward(fogNearAdj, targetNear, 0.25f);   // slow: a few seconds to come and go, never a sudden swing
+        fogFarAdj = toward(fogFarAdj, targetFar, 40.0f);
+        for (int i = 0; i < 3; i++) {   // the fog leans toward the weather's colour, never all the way: no full-screen tint
+            const float target = amount > 0.0f ? (col[i] - static_cast<float>(base.fogColor[i])) * std::min(0.5f, amount * 0.6f) : 0.0f;
+            fogColAdj[i] = toward(fogColAdj[i], target, 0.6f);
         }
         play->envCtx.adjFogNear = static_cast<s16>(std::lround(fogNearAdj));
         play->envCtx.adjFogFar = static_cast<s16>(std::lround(fogFarAdj));
