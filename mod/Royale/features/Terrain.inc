@@ -1283,7 +1283,9 @@ void OnPlayerUpdate() {
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     gRoyaleNoAimView = 0;
     gRoyaleNoUseOnTakeOut = 0;
+    gRoyaleCamGuard = 0;
     if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
+    gRoyaleCamGuard = 1;   // in a match the drawn camera never sits inside or behind a trunk, wall or cliff (patches/0020)
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();

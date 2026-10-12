@@ -388,19 +388,19 @@ bool BuildSolidMesh(float x, float z, bool force) {
             auto local = [&](float lx, float lz, float* wx, float* wz) { *wx = sc.pc.x + (lx * std::cos(yaw) + lz * std::sin(yaw)) * sk; *wz = sc.pc.z + (-lx * std::sin(yaw) + lz * std::cos(yaw)) * sk; };
             switch (sc.pc.kind) {
                 case SceneryKind::Cliff:   // a slab 300 wide and 112 deep, 166 tall, a little narrower at the top (tools/scenery/build_scenery.py, build_cliff); you stand on its top from the high side
-                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 1);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 0);
                     break;
                 case SceneryKind::Crag: {   // three spires: the snowy tips are too narrow to stand on, so each is a wall
                     static const float spire[3][4] = { { 0.0f, 0.0f, 58.0f, 250.0f }, { 64.0f, 26.0f, 42.0f, 180.0f }, { -52.0f, -30.0f, 38.0f, 150.0f } };
                     for (const auto& sp : spire) {
                         float wx, wz;
                         local(sp[0], sp[1], &wx, &wz);
-                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 1);
+                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 0);
                     }
                     break;
                 }
                 case SceneryKind::Oak:   // the trunk only: the leaves are above your head
-                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 1);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 0);
                     break;
                 default: {   // a boulder: wide at the foot, a flat crown you can climb onto
                     const float r = royale::fortnite::SceneryRadius(sc.pc.kind, sk);
