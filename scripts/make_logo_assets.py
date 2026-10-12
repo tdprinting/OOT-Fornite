@@ -102,6 +102,11 @@ def android_icons(logo):
             icon = Image.new("RGBA", (px, px), (0, 0, 0, 0))
             icon.paste(base, (0, 0), mask)
             icon.save(os.path.join(out, name + ".webp"), "WEBP", quality=95, method=6)
+    # the loading screen's copy (Android, shown before the game starts): a plain picture, 512 wide
+    nodpi = os.path.join(RES, "drawable-nodpi")
+    os.makedirs(nodpi, exist_ok=True)
+    wide = logo.resize((512, max(1, round(logo.height * 512 / logo.width))), Image.LANCZOS)
+    wide.save(os.path.join(nodpi, "royale_logo.webp"), "WEBP", quality=92, method=6)
     values = os.path.join(RES, "values")
     os.makedirs(values, exist_ok=True)
     with open(os.path.join(values, "ic_launcher_background.xml"), "w") as f:

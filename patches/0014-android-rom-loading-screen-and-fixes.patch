@@ -142,7 +142,7 @@ diff --git a/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java b/Andr
 new file mode 100644
 --- /dev/null
 +++ b/Android/app/src/main/java/com/dishii/soh/LoadingOverlay.java
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,297 @@
 +package com.dishii.soh;
 +
 +import android.app.Activity;
@@ -158,6 +158,7 @@ new file mode 100644
 +import android.view.ViewGroup;
 +import android.widget.Button;
 +import android.widget.FrameLayout;
++import android.widget.ImageView;
 +import android.widget.LinearLayout;
 +import android.widget.ProgressBar;
 +import android.widget.TextView;
@@ -204,11 +205,20 @@ new file mode 100644
 +        int pad = dp(24);
 +        box.setPadding(pad, pad, pad, pad);
 +
-+        TextView title = text(26, Color.rgb(232, 200, 96));
-+        title.setTypeface(Typeface.DEFAULT_BOLD);
-+        title.setText("TDawgs Battle Royale");
-+        title.setGravity(Gravity.CENTER);
-+        box.addView(title);
++        // the TDawgs logo (res/drawable-nodpi/royale_logo, made by scripts/make_logo_assets.py); the plain title if the build has no logo
++        int logoRes = activity.getResources().getIdentifier("royale_logo", "drawable", activity.getPackageName());
++        if (logoRes != 0) {
++            ImageView logo = new ImageView(activity);
++            logo.setImageResource(logoRes);
++            logo.setAdjustViewBounds(true);
++            box.addView(logo, new LinearLayout.LayoutParams(dp(300), ViewGroup.LayoutParams.WRAP_CONTENT));
++        } else {
++            TextView title = text(26, Color.rgb(232, 200, 96));
++            title.setTypeface(Typeface.DEFAULT_BOLD);
++            title.setText("TDawgs Battle Royale");
++            title.setGravity(Gravity.CENTER);
++            box.addView(title);
++        }
 +
 +        stepText = text(20, Color.WHITE);
 +        stepText.setGravity(Gravity.CENTER);

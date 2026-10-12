@@ -579,6 +579,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
     const float bannerY = ds.y * 0.4f + (60.0f * scale - ds.y * 0.4f) * (1.0f - (1.0f - rise) * (1.0f - rise));
     const float bannerK = (1.45f - 0.45f * rise) * (0.7f + 0.3f * pop);
     DrawEndBanner(dl, font, scale, cx, bannerY, place, won, pop, bannerK);
+    DrawLogo(dl, 16.0f * scale + 70.0f * scale, 14.0f * scale, 140.0f * scale, static_cast<int>(230 * rise));   // the small logo, top left, once the banner has risen
     if (t < kEndPanelDelay) {
         UiTextCentred(dl, font, 26.0f * scale, cx, bannerY + 70.0f * scale, UiAlpha(won ? kUi.white : kUi.gold, pop), winnerLine, ds.x * 0.9f);
         gUiPad = {};
