@@ -1340,7 +1340,7 @@ class Match {
     }
     void ReleaseAlly(AllyState& a, bool fell) {
         a.owner = kNoPlayer;
-        if (fell) a.alive = false;
+        if (fell) { a.alive = false; a.fellAt = clock; }
         MatchEvent e{MatchEvent::Type::AllyChanged};
         e.a = a.index; e.b = kNoPlayer; e.item = fell ? 2 : 1;
         events.push_back(e);
