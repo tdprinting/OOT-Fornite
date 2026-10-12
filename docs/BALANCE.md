@@ -113,6 +113,19 @@ All 125 authored sites already held a chest (the `lootCount=84` cap in `game_ser
 
 Basic Sword deaths fall by a third (of about 31 deaths, 55% now, was 82%). The first kill stays near 40 s: most sword-only deaths are bots that land together and brawl in the first minute before looting (0 chests opened, no backup), which is bot behaviour, not loot count. Floor items beside the chests also replaced some chest opening (28 vs 34). Eight seeds, so a few seconds either way is noise.
 
+## Bots loot first (`royale_balance 8 normal 12 32`)
+
+A bot holding only the starting sword now ignores foes for its first 90 s (`kLootFirstSeconds`) unless hurt or the foe is within 90 units, sprints to loot more than 200 away, and discounts non-weapon floor items (chests still count). Same build, same seeds, before / after:
+
+| | Before | After |
+|---|---|---|
+| Match length | 346 s | 333 s |
+| First kill | 46 s | 45 s |
+| Alive at 1:00 / 3:00 (of 31) | 12.4 / 5.2 | 11.8 / 5.5 |
+| Weapon at death: Basic Sword | 20.1 | 17.6 |
+
+Targets missed (first kill under 35 s, Basic Sword under 20% of deaths): the change is inside seed noise (a few seconds, one or two deaths). Sword-only bots mostly die to armed bots hunting them, not to fights they start, so holding back their own aggression does not move the numbers. Next lever: how fast a sword-only bot reaches its first real weapon (find where the 17 deaths sit on the timeline), or make armed bots less eager to hunt sword-only ones early.
+
 ## One set of hit rules
 
 A boss's swing or charge and a hired helper's strike now go through `Match::Blow`, the same rules a player's weapon follows: rolling dodges it, a shield's own reduction comes off, and a raised shield facing it blocks most of the rest. Rolling also dodges marked blasts (not lightning). Breath, explosions and magic still ignore shields, as they do for players.

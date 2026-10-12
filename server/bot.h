@@ -87,6 +87,8 @@ class BotController {
     // A bot holding only the starting sword keeps looking for a real weapon, but not forever: after this long into the match, or once the
     // field has thinned, everyone fights with what they have (otherwise most bots flee each other all game and the match crawls).
     static constexpr float kGearGraceSeconds = 60.0f;
+    static constexpr float kLootFirstSeconds = 90.0f;      // sword-only bots loot before they engage, for this long into the match
+    static constexpr float kLootFirstCloseRange = 90.0f;  // ...unless the foe is this close
     static constexpr int kGearGraceAlive = 16;
     static bool NeedsGear(const Match& m, const PlayerState& p) {
         return GearFirst() && EffectiveDpsNow(p) < kMinFightDps && m.StateTime() < kGearGraceSeconds && m.Alive() > kGearGraceAlive;
@@ -1275,7 +1277,8 @@ class BotController {
             const float d = Distance(p.pos, s.pos);
             if (d > radius * (s.supply ? 2.4f : 1.0f) || !safe.Contains(s.pos)) return;
             if (nav && !nav->Connected(p.pos, s.pos, mem.upper ? mem.levelY : std::numeric_limits<float>::quiet_NaN())) return;   // a chest upstairs or on an island with no way up is not for the bots
-            const float value = LootValue(p, s, needGear) * (s.supply ? 2.2f : 1.0f);   // everybody wants the supply drop
+            float value = LootValue(p, s, needGear) * (s.supply ? 2.2f : 1.0f);
+            if (needGear && KindOf(s.item) != ItemKind::Weapon && !s.container) value *= 0.4f;   // sword only: make for a weapon (or a chest that may hold one), not trinkets   // everybody wants the supply drop
             if (value <= 0) return;
             const float climbCost = nav ? std::max(0.0f, nav->StandHeight(s.pos) - FeetAt(p.pos)) * 2.0f : 0;
             const float travelCost = d * (nav && nav->Swimming(s.pos) ? 2.2f : 1.0f) + climbCost;
@@ -1591,6 +1594,8 @@ class BotController {
             mem.perceiveAt = now + 0.12f + 0.04f * std::fmod(p.id * 0.6180339f, 1.0f);
         }
         if (foe && m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds() && now >= mem.alertUntil) foe = nullptr;   // nobody wants a fight yet
+        // A bot with only the starting sword keeps looting a while longer: it ignores a foe unless hurt or the foe is very close.
+        if (foe && m.State() == MatchState::InMatch && m.StateTime() < kLootFirstSeconds && NeedsGear(m, p) && now >= mem.alertUntil && Distance(p.pos, foe->pos) > kLootFirstCloseRange) foe = nullptr;
         if (foe) {
             if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
             if (mem.prevFoeAt >= 0 && now > mem.prevFoeAt) { // how it is moving, smoothed (for leading shots and judging its dodges)
@@ -1790,7 +1795,7 @@ class BotController {
                     else { mem.lootIdx = -1; mem.lootEvalAt = 0; ShowFind(m, p, mem, got); }
                 } else {
                     const LootSpawn& want = m.Loot()[static_cast<size_t>(idx)].spawn;
-                    if (want.supply || Distance(p.pos, where) > 650.0f) WantSprint(mem, tune, false);   // first to the supply drop, or a long way
+                    if (want.supply || Distance(p.pos, where) > 650.0f || (NeedsGear(m, p) && Distance(p.pos, where) > 200.0f)) WantSprint(mem, tune, false);   // first to the supply drop, or a long way
                     Steer(m, p, mem, where, dt);
                 }
                 return;
