@@ -61,6 +61,7 @@ struct AllyState {
     int16_t rot = 0;
     float health = 3.0f;
     bool alive = true;
+    float fellAt = -100.0f;             // match clock when it was struck down: clients get it with zero health for a moment so the fall plays
     uint32_t owner = 0xFFFFFFFFu;      // the player it works for, or kNoPlayer (0xFFFFFFFF) while it is free to hire
     float attackReadyAt = 0, healReadyAt = 0;
     float actUntil = 0;                // just attacked: shown as swinging or shooting until then

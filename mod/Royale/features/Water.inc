@@ -1214,8 +1214,10 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
         static rw::SwellGrid swellGrid;
         static std::vector<float> gridX, gridZ;
         bool gridReady = false;
-        float lastSurface = baseY;
-        for (int j = 0; j < V; j++)
+        for (int j = 0; j < V; j++) {
+            // dry points borrow their row's nearest water height (per row: carrying it over from the previous row's far end tilted the triangles at the shore)
+            float lastSurface = baseY;
+            for (int i = 0; i < V; i++) if (L.under[static_cast<size_t>(j) * V + i].have) { lastSurface = L.under[static_cast<size_t>(j) * V + i].surface; break; }
             for (int i = 0; i < V; i++) {
                 const size_t id = static_cast<size_t>(j) * V + i;
                 const WaterCell& c = L.under[id];
@@ -1237,6 +1239,7 @@ void DrawWaterSheet(PlayState* play, float t, float light) {
                 sps[id] = swellGrid.Sample(i, j);
                 if (l < 2 && (gWaterWakes || gWaterRipples)) pushRaw[id] = WaterDisplaceAt(wx, wz, &wakeFoam[id]) * kWaterPush;
             }
+        }
         for (int j = 0; j < V; j++)
             for (int i = 0; i < V; i++) {
                 const size_t id = static_cast<size_t>(j) * V + i;

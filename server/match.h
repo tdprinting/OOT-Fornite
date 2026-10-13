@@ -208,6 +208,7 @@ struct AttackResult {
     bool killed = false;
     bool dodged = false; // the target was rolling: the attack was spent but missed
     bool blocked = false; // the target took it on a raised shield
+    bool obstructed = false; // a hill, wall or tall prop was in the way: spent, and nobody hurt
     int extraHits = 0;    // a spin attack: everyone else it caught
 };
 
@@ -263,7 +264,7 @@ class Match {
     // Where the scattered chests may go (shared/placement.h): at camps, boulders, thickets, cliffs and the map's own scenery, on level ground. Without a
     // plan (the unit tests' bare matches) they fall back to random points on valid ground.
     void SetLootPlan(LootPlan plan) { lootPlan = std::make_shared<LootPlan>(std::move(plan)); }
-    void RegenerateLoot(int count, float chestFraction = 0.15f) {
+    void RegenerateLoot(int count, float chestFraction = 0.15f, int floorWeapons = 0) {
         loot.clear();
         // The scattered chests keep their distance from every building, climb and hideaway chest and from each other.
         std::vector<Vec2> taken = lootSpots;
@@ -274,6 +275,7 @@ class Match {
             for (const LootSpawn& l : GenerateLoot(seed, map, count, chestFraction, placement, &taken, map.radius * 0.11f)) loot.push_back({l, false});
         }
         for (const LootSpawn& l : GenerateSpotLoot(seed, lootSpots)) loot.push_back({l, false});
+        for (const LootSpawn& l : GenerateFloorWeapons(seed, lootSpots, floorWeapons, placement)) loot.push_back({l, false});   // after the chests: ScatteredLoot() counts from the end
         Rng siteRng(seed ^ 0x73697465ull); // "site"
         const size_t firstSite = loot.size();
         for (const ChestSite& s : chestSites) loot.push_back({SiteChest(siteRng, s.pos, s.bonus), false});
@@ -650,6 +652,22 @@ class Match {
         }
         events.push_back(MatchEvent{MatchEvent::Type::PadsChanged});
     }
+    // A bot standing on a launch pad is thrown `carry` units toward `toward` (a player's own game does this for them; bots move on flat ground, so the
+    // server carries them, like the Launch effect). False if it is not on a pad or there is no ground to land on.
+    bool BotUsePad(uint32_t id, Vec2 toward, float carry) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || !p->isBot || p->knocked || state != MatchState::InMatch) return false;
+        bool onPad = false;
+        for (const Vec2& pad : pads) onPad |= Distance(pad, p->pos) <= kLaunchPadRadius;
+        const float d = Distance(p->pos, toward);
+        if (!onPad || d < 1.0f) return false;
+        carry = (std::min)(carry, d);
+        for (float f : {1.0f, 0.6f, 0.3f}) {   // no ground at the full throw: a shorter hop
+            const Vec2 to = {p->pos.x + (toward.x - p->pos.x) / d * carry * f, p->pos.z + (toward.z - p->pos.z) / d * carry * f};
+            if (PadValid(to)) { Teleport(*p, to); return true; }
+        }
+        return false;
+    }
     // The Deku Launch Flower: plants a pad a step in front of the player. False (and the item stays) if there is no room or no ground there.
     bool PlacePad(uint32_t id) {
         PlayerState* p = Find(id);
@@ -809,6 +827,16 @@ class Match {
         events.push_back(blast);
     }
 
+    // Eye height of a player for who can hit whom: a bot's y is its height above the floor; a human sends their own height when the map has
+    // heights (else they stand on the grid's floor). 45 is about Link's chest.
+    float EyeY(const PlayerState& p) const {
+        if (!nav) return 45.0f;
+        return (p.isBot ? nav->FloorAt(p.pos) + p.y : (nav->HasHeights() ? p.y : nav->FloorAt(p.pos))) + 45.0f;
+    }
+    // Nothing on the nav grid (a hill, a wall, a tall prop) stands between them: the same test bots use to spot each other.
+    bool CanSee(const PlayerState& a, const PlayerState& t) const { return !nav || nav->SightClear(a.pos, EyeY(a), t.pos, EyeY(t)); }
+    bool CanSeeFrom(Vec2 from, float fromY, const PlayerState& t) const { return !nav || nav->SightClear(from, fromY, t.pos, EyeY(t)); }
+
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (const PlayerState* who = Find(attackerId); who ? !OnFoot(*who) : state != MatchState::InMatch) return r;   // nobody fights from the bus or the sky
@@ -840,6 +868,7 @@ class Match {
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (shockwave) ThrowShockwave(*a, t->pos, w.splashRadius);   // it rolls to their feet and goes off after the fuse, hit or miss
+        if (!shockwave && !CanSee(*a, *t)) { r.obstructed = true; return r; }   // it hits the wall or the hillside instead
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
@@ -858,7 +887,7 @@ class Match {
         if (style == AttackStyle::Spin) {   // the spin catches everyone else within reach too
             const float reach = w.range * 1.1f + kSpinReachBonus;
             for (auto& o : players) {
-                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil) continue;
+                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil || !CanSee(*a, o)) continue;
                 bool blocked = false;
                 const float amount = dealt(o, base, &blocked);
                 Damage(o.id, amount, attackerId, DamageKind::Normal);
@@ -883,7 +912,7 @@ class Match {
                     if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
                     if (w.splashRadius > 0 && !immune) {   // a shockwave stuns everyone it reaches, not only the one it was thrown at
                         for (auto& o : players) {
-                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune) continue;
+                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune || !CanSeeFrom(t->pos, EyeY(*t), o)) continue;
                             o.stunUntil = (std::max)(o.stunUntil, clock + seconds);
                             o.dirty = true;
                         }
@@ -903,7 +932,7 @@ class Match {
             const Vec2 centre = t->pos;
             for (auto& o : players) {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
-                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
+                if (Distance(o.pos, centre) <= w.splashRadius && CanSeeFrom(centre, EyeY(*t), o)) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
             }
             for (auto& v : vehicles) if (!v.wrecked && !v.gone && Distance({v.body.x, v.body.z}, centre) <= w.splashRadius + kCartHitRadius * 0.5f) DamageVehicle(v, base * 0.9f, attackerId);
         }
@@ -1070,7 +1099,11 @@ class Match {
             case ItemKind::Weapon: {
                 const bool upgrade = WeaponDps(s.item, s.rarity) > WeaponDps(p->weapon.item, p->weapon.rarity) * 1.05f;
                 if (IsStarter(p->weapon)) {                 // empty hand: it goes there if a slot is free (else swap out the selected slot first)
-                    if (!HotbarFree(*p) && !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    if (!HotbarFree(*p)) {   // full: only a stack the player named is swapped out. The starter in hand is no slot, so never guess a backup to drop.
+                        bool named = false;
+                        for (const Equipped& e : p->potions) named |= replaceItem != kHandSlot && static_cast<uint8_t>(e.item) == replaceItem && static_cast<uint8_t>(e.rarity) == replaceRarity;
+                        if (!named || !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    }
                     if (!IsStarter(p->weapon)) p->reserve.push_back(p->weapon);   // (freeing a stack can't change the hand; this is defensive)
                     p->weapon = {s.item, s.rarity};
                 } else if (HotbarFree(*p)) {               // a free slot: an upgrade goes in hand (the old one becomes a backup), else a backup
@@ -1137,12 +1170,25 @@ class Match {
         if (s.container) {
             p->chestsOpened++;
             SpillRupees(s.pos, index);
+            if (s.rarity >= Rarity::Rare && !s.special) SpillSecondItem(s, index);
         }
         loot[index].taken = true;
         MatchEvent e{MatchEvent::Type::LootTaken};
         e.a = id; e.index = index;
         events.push_back(e);
         return true;
+    }
+
+    // A Rare or better chest holds a second item, a tier down, on the floor beside it (A takes it).
+    void SpillSecondItem(const LootSpawn& chest, size_t index) {
+        Rng r(seed ^ 0x326E64ull ^ (static_cast<uint64_t>(index) * 0x9E3779B97F4A7C15ull));   // "2nd"
+        const Rarity tier = static_cast<Rarity>(static_cast<int>(chest.rarity) - 1);
+        ItemId item;
+        if (!PickItem(r, tier, &item)) return;
+        const float angle = static_cast<float>(r.Unit() * 6.2831853);
+        Vec2 to = {chest.pos.x + std::cos(angle) * 70.0f, chest.pos.z + std::sin(angle) * 70.0f};
+        if (Distance(to, map.center) > map.radius || (placement && !placement(to))) to = chest.pos;
+        AddLoot({to, item, tier, false, false});
     }
 
     // An opened chest spills a few green and blue rupees around it, to pick up (money for hiring helpers).
@@ -1306,10 +1352,13 @@ class Match {
     const std::vector<AllyState>& Allies() const { return allies; }
     std::vector<AllyState>& MutableAllies() { return allies; }
     int AlliesOf(uint32_t player) const { int n = 0; for (const auto& a : allies) n += a.alive && a.owner == player; return n; }
+    // Off: only the four Hylian kinds (Kokiri, Zora, Goron, Gerudo) stand at the stations; Jones, Peter and Master Chief are developer-mode only.
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; }
     void SpawnAllies() {
         allies.clear();
         Rng rng(seed ^ 0x616C6C79ull);   // "ally"
-        for (int i = 0; i < kAllyCount; i++) {
+        const int kinds = noveltyAllies ? kAllyCount : static_cast<int>(AllyKind::Jones);
+        for (int i = 0; i < kinds; i++) {
             AllyState a;
             a.index = static_cast<uint8_t>(i);
             a.kind = static_cast<AllyKind>(i);
@@ -1340,7 +1389,7 @@ class Match {
     }
     void ReleaseAlly(AllyState& a, bool fell) {
         a.owner = kNoPlayer;
-        if (fell) a.alive = false;
+        if (fell) { a.alive = false; a.fellAt = clock; }
         MatchEvent e{MatchEvent::Type::AllyChanged};
         e.a = a.index; e.b = kNoPlayer; e.item = fell ? 2 : 1;
         events.push_back(e);
@@ -3189,6 +3238,14 @@ class Match {
     void TickBus() {
         SeatPassengers(stateTime);
         if (stateTime >= BusCloseSec(bus)) for (auto& p : players) if (p.alive && p.aboard) LeaveBus(p.id, true);   // the bus is leaving the island
+        if (stateTime >= (bus.valid ? BusCloseSec(bus) : 0.0f) + kDropBotForceSec)
+            for (auto& p : players) {   // a bot that never lands (a glider drifting over water) must not hold the whole drop: set it down where it is
+                if (!p.alive || !p.isBot || !p.rodeBus || p.aboard || p.landedAt >= 0) continue;
+                if (p.jumpedAt < 0) p.jumpedAt = clock - kLandedGraceSec;
+                if (IsBusSeat(p.anim) || IsAirborne(p.anim)) { p.anim = static_cast<uint8_t>(Anim::Idle); p.y = 0; }
+                p.landedAt = clock;
+                p.dirty = true;
+            }
     }
     bool DropOver() const {
         if (stateTime >= DropMaxSec()) return true;
@@ -3565,6 +3622,7 @@ class Match {
     Replay replay;
     float replayNextAt = 0;
     std::vector<Vec2> allySpots;
+    bool noveltyAllies = true;
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;

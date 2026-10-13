@@ -22,6 +22,10 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
 float BotY(PlayState* play, float x, float z, float lift) {
     float y = 0;
     if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    // The server seats and drops bots at the bus's height above the floor; the bus is drawn at BusBaseY() + altitude. Blend the floor
+    // into that base with height so a bot leaving the bus is at the bus (at full altitude), and lands on the real floor.
+    const float k = std::min(1.0f, std::max(0.0f, lift / royale::kBusAltitude));
+    y += (std::max(0.0f, gMedianFloorY) - y) * k;   // BusBaseY(), declared later
     return y + lift;
 }
 
@@ -195,6 +199,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
 
 // ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
 
+void CrawlShuffle(Player* player, float speed, float t);   // Vehicles.inc
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
 
 // How a weapon is held decides which of Link's move sets it uses (one-handed sword, two-handed sword, hammer, bow...).
@@ -1042,6 +1047,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         player->skelAnime.playSpeed = std::clamp(m.speed / stride, 0.55f, 1.8f);
     }
     const bool finished = LinkAnimation_Update(play, &player->skelAnime);
+    if (want == static_cast<uint8_t>(Anim::Knocked) && s.alive) CrawlShuffle(player, m.speed, static_cast<float>(ImGui::GetTime()) + s.id);   // crawling
     if (finished && !m.seq.step[m.step].loop && m.step + 1 < m.seq.count) {
         StartStep(play, player, m, m.step + 1, 0.0f);
         // Feet back on the ground after a hop, a flip or a jump; the jump slash coming down.
