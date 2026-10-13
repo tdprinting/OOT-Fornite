@@ -852,8 +852,9 @@ void RestoreHealth() {
     gSaveContext.health = gSavedHealth > 0 ? gSavedHealth : gSavedCapacity;
 }
 
+// Notices sit in the bottom-right corner, over the Jump/Emote buttons in a match: 6 s each (the game's default is 10) so they do not pile up.
 void Say(const std::string& text) {
-    Notification::Emit({ .message = text });
+    Notification::Emit({ .message = text, .remainingTime = 6.0f });
 }
 
 // B attacks with the weapon the server says you hold (or drinks from the selected hotbar stack). Damage, range, cooldown and healing are

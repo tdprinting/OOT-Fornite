@@ -1,0 +1,58 @@
+diff --git a/soh/soh/Enhancements/mods.cpp b/soh/soh/Enhancements/mods.cpp
+--- a/soh/soh/Enhancements/mods.cpp
++++ b/soh/soh/Enhancements/mods.cpp
+@@ -500,6 +500,26 @@
+         [](int32_t sceneNum) { UpdateMirrorModeState(sceneNum); });
+ }
+ 
++// OOT Royale: the adult hand patches below put a one-word call over a two-word command (a texture set by hash), which left the hash word
++// behind to run as a bad command ("Unhandled OP code: 0x30" each time adult Link holding the Kokiri sword was drawn). Blank that word too.
++static void PatchHandCall(const char* path, const char* name, int index, Gfx call) {
++    const std::string tail = std::string(name) + "Tail";
++    ResourceMgr_UnpatchGfxByName(path, tail.c_str());
++    ResourceMgr_UnpatchGfxByName(path, name);
++    Gfx* dl = ResourceMgr_LoadGfxByName(path);
++    const uint8_t op = dl != nullptr ? (uint8_t)(dl[index].words.w0 >> 24) : 0;
++    const bool twoWords = op == G_SETTIMG_OTR_HASH || op == G_DL_OTR_HASH || op == G_VTX_OTR_HASH || op == G_MARKER || op == G_BRANCH_Z_OTR ||
++                          op == G_MTX_OTR;   // the commands the resource loader reads as two words
++    ResourceMgr_PatchGfxByName(path, name, index, call);
++    if (twoWords) {
++        ResourceMgr_PatchGfxByName(path, tail.c_str(), index + 1, gsDPNoOp());
++    }
++}
++static void UnpatchHandCall(const char* path, const char* name) {
++    ResourceMgr_UnpatchGfxByName(path, (std::string(name) + "Tail").c_str());
++    ResourceMgr_UnpatchGfxByName(path, name);
++}
++
+ void UpdatePatchHand() {
+     if ((CVarGetInteger(CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), 0)) && LINK_IS_CHILD) {
+         ResourceMgr_PatchGfxByName(gLinkAdultLeftHandHoldingHammerNearDL, "childHammer1", 92,
+@@ -539,19 +559,19 @@
+         ResourceMgr_UnpatchGfxByName(gLinkAdultHandHoldingBrokenGiantsKnifeDL, "childBrokenGiantsKnife2");
+     }
+     if ((CVarGetInteger(CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), 0)) && LINK_IS_ADULT) {
+-        ResourceMgr_PatchGfxByName(gLinkChildLeftFistAndKokiriSwordNearDL, "adultKokiriSword", 13,
++        PatchHandCall(gLinkChildLeftFistAndKokiriSwordNearDL, "adultKokiriSword", 13,
+                                    gsSPDisplayListOTRFilePath(gLinkAdultLeftHandClosedNearDL));
+-        ResourceMgr_PatchGfxByName(gLinkChildRightHandHoldingSlingshotNearDL, "adultSlingshot", 13,
++        PatchHandCall(gLinkChildRightHandHoldingSlingshotNearDL, "adultSlingshot", 13,
+                                    gsSPDisplayListOTRFilePath(gLinkAdultRightHandClosedNearDL));
+-        ResourceMgr_PatchGfxByName(gLinkChildLeftFistAndBoomerangNearDL, "adultBoomerang", 50,
++        PatchHandCall(gLinkChildLeftFistAndBoomerangNearDL, "adultBoomerang", 50,
+                                    gsSPDisplayListOTRFilePath(gLinkAdultLeftHandClosedNearDL));
+-        ResourceMgr_PatchGfxByName(gLinkChildRightFistAndDekuShieldNearDL, "adultDekuShield", 49,
++        PatchHandCall(gLinkChildRightFistAndDekuShieldNearDL, "adultDekuShield", 49,
+                                    gsSPDisplayListOTRFilePath(gLinkAdultRightHandClosedNearDL));
+     } else {
+-        ResourceMgr_UnpatchGfxByName(gLinkChildLeftFistAndKokiriSwordNearDL, "adultKokiriSword");
+-        ResourceMgr_UnpatchGfxByName(gLinkChildRightHandHoldingSlingshotNearDL, "adultSlingshot");
+-        ResourceMgr_UnpatchGfxByName(gLinkChildLeftFistAndBoomerangNearDL, "adultBoomerang");
+-        ResourceMgr_UnpatchGfxByName(gLinkChildRightFistAndDekuShieldNearDL, "adultDekuShield");
++        UnpatchHandCall(gLinkChildLeftFistAndKokiriSwordNearDL, "adultKokiriSword");
++        UnpatchHandCall(gLinkChildRightHandHoldingSlingshotNearDL, "adultSlingshot");
++        UnpatchHandCall(gLinkChildLeftFistAndBoomerangNearDL, "adultBoomerang");
++        UnpatchHandCall(gLinkChildRightFistAndDekuShieldNearDL, "adultDekuShield");
+     }
+     if (CVarGetInteger("gEnhancements.FixHammerHand", 0) && LINK_IS_ADULT) {
+         ResourceMgr_PatchGfxByName(gLinkAdultLeftHandHoldingHammerNearDL, "hammerHand1", 92,

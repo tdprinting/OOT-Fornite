@@ -417,10 +417,13 @@ void OnGameFrameUpdate() {
         gLastCountdownShown = -1;
     }
 
-    // Count down out loud so nobody has to keep the menu open.
+    // Count down out loud so nobody has to keep the menu open. Only while the big "MATCH STARTS IN" line is not on screen (the opening splash,
+    // or the menu over it), and briefly: each notice used to stay 10 s, so 5, 3, 2, 1 piled up over the Jump and Emote buttons.
     if (joined && hud.state == royale::MatchState::Countdown) {
         int left = static_cast<int>(std::ceil(hud.countdownLeft));
-        if (left != gLastCountdownShown && (left == 10 || left == 5 || (left >= 1 && left <= 3))) Say("Match starts in " + std::to_string(left));
+        const bool bigLineShown = !WarMenuOpen() && hud.countdownLeft <= royale::kCountdownSec - kSplashSeconds;
+        if (left != gLastCountdownShown && !bigLineShown && (left == 10 || left == 5 || (left >= 1 && left <= 3)))
+            Notification::Emit({ .message = "Match starts in " + std::to_string(left), .remainingTime = 4.0f });
         gLastCountdownShown = left;
     }
 
