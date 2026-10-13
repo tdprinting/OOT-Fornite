@@ -73,6 +73,12 @@ SCENARIOS["deep-12"] = ("ingame; hostbots:12; state:Countdown; shot:d-bus; check
                         "wait:12; shot:d-glide; state:InMatch; wait:20; shot:d-ground; check; wait:60; shot:d-60s; check; wait:60; shot:d-120s; check; "
                         "wait:60; shot:d-180s; check; prof:20; quit")
 
+# Hyrule Kingdom up close: water, shores, the town's ground and a house inside (tp:x,z,yaw puts Link there).
+SCENARIOS["look-8"] = ("ingame; host:8; wait:5; jump; wait:25; "
+                       "tp:0,1150,180; wait:4; shot:k-clock-town; check; tp:-2150,2350,-90; wait:4; shot:k-lake-shore; check; "
+                       "tp:-2950,2150,0; wait:4; shot:k-stilts; check; tp:-4700,4900,-135; wait:4; shot:k-docks-sea; check; "
+                       "tp:620,640,90; wait:4; shot:k-house; check; tp:350,-230,-90; wait:4; shot:k-river; check; quit")
+
 SUITES = {
     "smoke": ["boot", "solo-12", "match-12", "skin", "regular"],
     "maps": [f"solo-{i}" for i in MAPS],

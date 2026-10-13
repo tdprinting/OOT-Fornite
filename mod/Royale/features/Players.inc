@@ -19,6 +19,9 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
 // Where a bot is drawn. The server moves bots in x and z and sends their height above the scene's own floor: 0 on the ground, the top of a
 // climbing block or boulder they stand on, or how high they still are in the skydive. (The scene floor without our scenery, because the
 // scenery near you is solid and would otherwise be counted twice.)
+// On the authored maps a bot up on a floor, a ramp or a roof has its lift counted from the server's coarse 60-unit cell, so floor + lift can land
+// a little inside the planks (or float over them) and the camera of whoever spectates it ends up in the wood. Settle it onto the real
+// collision floor when one is close by; far above (skydiving) or with nothing near, the height stays as sent.
 float BotY(PlayState* play, float x, float z, float lift) {
     float y = 0;
     if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
@@ -26,7 +29,15 @@ float BotY(PlayState* play, float x, float z, float lift) {
     // into that base with height so a bot leaving the bus is at the bus (at full altitude), and lands on the real floor.
     const float k = std::min(1.0f, std::max(0.0f, lift / royale::kBusAltitude));
     y += (std::max(0.0f, gMedianFloorY) - y) * k;   // BusBaseY(), declared later
-    return y + lift;
+    y += lift;
+    if (lift > 30.0f && OnAuthoredTerrain()) {
+        CollisionPoly* poly = nullptr;
+        s32 bgId = BGCHECK_SCENE;
+        Vec3f from = { x, y + 60.0f, z };
+        const float hit = BgCheck_EntityRaycastFloor3(&play->colCtx, &poly, &bgId, &from);
+        if (hit > BGCHECK_Y_MIN + 1.0f && std::fabs(hit - y) < 70.0f) y = hit;
+    }
+    return y;
 }
 
 // How a puppet holds the weapon the server says it has. Player_SetModelGroup and Player_Draw read the *local* equipped sword,
