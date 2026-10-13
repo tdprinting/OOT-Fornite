@@ -25,6 +25,10 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
 float BotY(PlayState* play, float x, float z, float lift) {
     float y = 0;
     if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    // The server seats and drops bots at the bus's height above the floor; the bus is drawn at BusBaseY() + altitude. Blend the floor
+    // into that base with height so a bot leaving the bus is at the bus (at full altitude), and lands on the real floor.
+    const float k = std::min(1.0f, std::max(0.0f, lift / royale::kBusAltitude));
+    y += (std::max(0.0f, gMedianFloorY) - y) * k;   // BusBaseY(), declared later
     y += lift;
     if (lift > 30.0f && OnAuthoredTerrain()) {
         CollisionPoly* poly = nullptr;
@@ -206,6 +210,7 @@ void SpawnProjectileFrom(royale::ItemId weapon, float x, float y, float z, s16 y
 
 // ---- how other players move: the game's own animations, chained the way the game chains them -----------------------------------
 
+void CrawlShuffle(Player* player, float speed, float t);   // Vehicles.inc
 #define RA(n) ((LinkAnimationHeader*)&gPlayerAnim_link_##n)
 
 // How a weapon is held decides which of Link's move sets it uses (one-handed sword, two-handed sword, hammer, bow...).
@@ -246,7 +251,11 @@ void SprintDust(PlayState* play, Actor* actor, u32 frame) {
     const float back = actor->shape.rot.y * (3.14159265f / 32768.0f);
     at.x -= std::sin(back) * 12.0f;
     at.z -= std::cos(back) * 12.0f;
-    Actor_SpawnFloorDustRing(play, actor, &at, 8.0f, 1, 4.0f, 70, 15, true);
+    // A pale, neutral puff lifted off the floor: the game's floor dust ring is tinted by the room light and lay on the map's pale ground as orange smears.
+    at.y += 4.0f;
+    Vec3f vel = { Rand_CenteredFloat(1.0f), 0.5f + 0.5f * Rand_ZeroOne(), Rand_CenteredFloat(1.0f) }, accel = { 0.0f, 0.08f, 0.0f };
+    Color_RGBA8 prim = { 225, 218, 200, 200 }, env = { 150, 140, 120, 255 };
+    EffectSsDust_Spawn(play, 4, &at, &vel, &accel, &prim, &env, 60, 8, 12, 0);
 }
 // Actions are played once, from their first frame, each time one begins (see Puppet_Update).
 bool OneShotAnim(uint8_t anim) {
@@ -1049,6 +1058,7 @@ void Puppet_Update(Actor* actor, PlayState* play) {
         player->skelAnime.playSpeed = std::clamp(m.speed / stride, 0.55f, 1.8f);
     }
     const bool finished = LinkAnimation_Update(play, &player->skelAnime);
+    if (want == static_cast<uint8_t>(Anim::Knocked) && s.alive) CrawlShuffle(player, m.speed, static_cast<float>(ImGui::GetTime()) + s.id);   // crawling
     if (finished && !m.seq.step[m.step].loop && m.step + 1 < m.seq.count) {
         StartStep(play, player, m, m.step + 1, 0.0f);
         // Feet back on the ground after a hop, a flip or a jump; the jump slash coming down.

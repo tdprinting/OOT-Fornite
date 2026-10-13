@@ -176,27 +176,49 @@ void DrawWeather(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     if (t < gBoltFlashUntil) dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(225, 232, 255, static_cast<int>(std::min(1.0, (gBoltFlashUntil - t) / 0.35) * 150.0)));
 }
 
-// Town names hanging over each point of interest, big enough to read from the sky while you skydive.
+// Town names hanging over each point of interest, big enough to read from the sky while you skydive. On foot a name shows only for a place
+// near you that you are not already in ("Entering ..." says that), and only while nothing solid stands between the camera and it, fading in and out.
 void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     if (!gSession.Client() || !InField()) return;
     (void)h;
     Player* pl = GET_PLAYER(gPlayState);
-    const float reach = gSkydiving ? 14000.0f : 5000.0f;
-    for (const royale::Poi& p : gSession.Client()->Pois()) {
+    const float reach = gSkydiving ? 14000.0f : 3200.0f;
+    static float shown[64] = {};   // how visible each place's name is now, 0 to 1, eased so a name does not blink as trunks pass in front
+    Vec3f eye = gPlayState->view.eye;
+    const auto& pois = gSession.Client()->Pois();
+    for (size_t i = 0; i < pois.size(); i++) {
+        const royale::Poi& p = pois[i];
+        float& vis = shown[i & 63];
         const float dx = p.center.x - pl->actor.world.pos.x, dz = p.center.z - pl->actor.world.pos.z;
         const float d = std::sqrt(dx * dx + dz * dz);
-        if (d > reach) continue;
         float y = pl->actor.world.pos.y;
         FloorAt(p.center.x, p.center.z, &y);
+        bool want = d <= reach && (gSkydiving || d > p.radius * 0.6f);
+        if (want && !gSkydiving) {   // the way from the camera to the name must be open
+            Vec3f to = { p.center.x, y + 650.0f, p.center.z }, hit;
+            CollisionPoly* poly = nullptr;
+            s32 bgId = 0;
+            want = !BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &to, &hit, &poly, true, true, true, true, &bgId);
+        }
+        vis = std::clamp(vis + (want ? 0.08f : -0.08f), 0.0f, 1.0f);
+        if (vis <= 0.0f) continue;
         ImVec2 at;
         if (!WorldToScreen(p.center.x, y + 650.0f, p.center.z, &at)) continue;
-        const int alpha = static_cast<int>(255.0f * std::min(1.0f, (reach - d) / (reach * 0.4f)));
+        const int alpha = static_cast<int>(255.0f * vis * std::clamp((reach - d) / (reach * 0.4f), 0.0f, 1.0f));
+        if (alpha <= 0) continue;
         const float size = std::clamp(34.0f * scale * (2400.0f / (d + 1200.0f)), 15.0f * scale, 38.0f * scale);
         const char* name = royale::kPoiNames[p.name];
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name);
         const ImVec2 pos(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
-        dl->AddText(font, size, ImVec2(pos.x + 2.0f, pos.y + 2.0f), IM_COL32(10, 14, 8, alpha), name);
-        dl->AddText(font, size, pos, IM_COL32(255, 222, 110, alpha), name);
+        // A name never runs into the compass strip at the top centre (DrawCompass: 440 wide, down to 42, its markers under it): it fades out
+        // as it climbs towards it.
+        const float compassHalf = 220.0f * scale, compassBottom = 58.0f * scale;
+        int a = alpha;
+        if (pos.x < ds.x * 0.5f + compassHalf && pos.x + sz.x > ds.x * 0.5f - compassHalf)
+            a = static_cast<int>(alpha * std::clamp((pos.y - compassBottom) / (24.0f * scale), 0.0f, 1.0f));
+        if (a <= 0) continue;
+        dl->AddText(font, size, ImVec2(pos.x + 2.0f, pos.y + 2.0f), IM_COL32(10, 14, 8, a), name);
+        dl->AddText(font, size, pos, IM_COL32(255, 222, 110, a), name);
     }
 }
 
@@ -204,6 +226,16 @@ bool MapOption(const char* name, bool fallback = true) {
     char key[64];
     std::snprintf(key, sizeof(key), CVAR_SETTING("Royale.%s"), name);
     return CVarGetInteger(key, fallback ? 1 : 0) != 0;
+}
+// Developer mode (Settings > Updates, off by default): shows test maps, debug switches, Regular game, pets, Practice/Sandbox and the
+// Jones / Peter / Master Chief stations. Off, the War Table offers only the release game. Nothing is removed, only hidden.
+bool DevMode() { return CVarGetInteger(CVAR_SETTING("Royale.DevMode"), 0) != 0; }
+// Release battlefields: Moonfall Isle, with Hyrule Kingdom and Skyloft Isles as beta.
+bool ReleaseMap(int id) { return id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
+std::string MapLabel(int id) {
+    std::string s = royale::MapOf(id).name;
+    if (!DevMode() && (id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex)) s += " (beta)";
+    return s;
 }
 
 // The game's own overworld minimap for the scene (the light-blue map that sits in the corner in Ocarina of Time), read from the player's ROM
@@ -1015,7 +1047,60 @@ void FollowHandStack(const std::vector<PotionStack>& stacks) {
     gHandStack = -1;   // that stack is used up
 }
 bool gStackBPressed = false;       // B was pressed this frame with a stack in hand (taken off the controller so Link doesn't swing)
-double gStackBHold = -1.0;         // when C-Down went down: a tap picks the next stack, a long hold drops the weapon in hand
+double gStackBHold = -1.0;         // when C-Down went down: a tap picks the next hotbar slot, a long hold drops the selected one
+
+// The five-slot hotbar (royale::kHotbarSlots), Fortnite style: weapons (the one in hand and the backups) and potion stacks share it; the starter
+// sword is the fallback in hand and takes no slot, worn gear and the ability have their own places. The server keeps "in hand + backups" and the
+// bag; the slot order is kept here so a slot doesn't jump around when a backup weapon is swapped into hand.
+struct HotbarSlot { bool stack; royale::ItemId item; royale::Rarity rarity; int count; };
+std::vector<HotbarSlot> gHotbarOrder;
+bool IsStarterWeapon(royale::ItemId id, royale::Rarity r) { return id == royale::ItemId::BasicSword && r == royale::Rarity::Common; }
+const std::vector<HotbarSlot>& HotbarSlots(const royale::HudState& h) {
+    std::vector<HotbarSlot> now;
+    if (!IsStarterWeapon(h.weapon, h.weaponRarity)) now.push_back({ false, h.weapon, h.weaponRarity, 1 });
+    for (const auto& r : h.inv.reserve) {
+        const royale::ItemId id = static_cast<royale::ItemId>(r.item);
+        const royale::Rarity ra = static_cast<royale::Rarity>(r.rarity);
+        if (!IsStarterWeapon(id, ra)) now.push_back({ false, id, ra, 1 });
+    }
+    for (const PotionStack& st : PotionStacks(h)) now.push_back({ true, st.item, st.rarity, st.count });
+    std::vector<HotbarSlot> kept;
+    for (const HotbarSlot& old : gHotbarOrder) {   // keep what is still carried, where it was
+        for (size_t i = 0; i < now.size(); i++)
+            if (now[i].stack == old.stack && now[i].item == old.item && now[i].rarity == old.rarity) { kept.push_back(now[i]); now.erase(now.begin() + static_cast<long>(i)); break; }
+    }
+    for (const HotbarSlot& n : now) kept.push_back(n);   // new things go in the first free slots
+    if (kept.size() > static_cast<size_t>(royale::kHotbarSlots)) kept.resize(static_cast<size_t>(royale::kHotbarSlots));
+    gHotbarOrder = kept;
+    return gHotbarOrder;
+}
+// The selected slot: the stack in hand, else the weapon in hand (-1: only the starter sword).
+int HotbarSelected(const royale::HudState& h, const std::vector<HotbarSlot>& slots) {
+    for (size_t i = 0; i < slots.size(); i++) {
+        if (gHandStack >= 0 ? (slots[i].stack && slots[i].item == gHandItem && slots[i].rarity == gHandRarity)
+                            : (!slots[i].stack && slots[i].item == h.weapon && slots[i].rarity == h.weaponRarity)) return static_cast<int>(i);
+    }
+    return -1;
+}
+// Select slot i: a stack is taken in hand (B drinks), a weapon is swapped into hand by the server.
+void SelectHotbarSlot(const royale::HudState& h, const std::vector<HotbarSlot>& slots, int i) {
+    if (i < 0 || i >= static_cast<int>(slots.size())) return;
+    const HotbarSlot& sl = slots[static_cast<size_t>(i)];
+    if (sl.stack) {
+        const std::vector<PotionStack> stacks = PotionStacks(h);
+        for (size_t k = 0; k < stacks.size(); k++) if (stacks[k].item == sl.item && stacks[k].rarity == sl.rarity) TakeStackInHand(stacks, static_cast<int>(k));
+        return;
+    }
+    gHandStack = -1;
+    if (sl.item == h.weapon && sl.rarity == h.weaponRarity) return;   // already in hand
+    for (size_t k = 0; k < h.inv.reserve.size(); k++)
+        if (static_cast<royale::ItemId>(h.inv.reserve[k].item) == sl.item && static_cast<royale::Rarity>(h.inv.reserve[k].rarity) == sl.rarity) { gSession.SelectWeapon(static_cast<int>(k) + 1); return; }
+}
+// What a pickup with a full hotbar swaps out: the selected stack, or the weapon in hand.
+void HotbarReplaceTarget(uint8_t* item, uint8_t* rarity) {
+    *item = gHandStack >= 0 ? static_cast<uint8_t>(gHandItem) : royale::kHandSlot;
+    *rarity = gHandStack >= 0 ? static_cast<uint8_t>(gHandRarity) : 0;
+}
 
 // A round OoT item button (like the C buttons of the real game): drop shadow, panel fill, a coloured rim and a soft highlight.
 void HudRoundButton(ImDrawList* dl, ImVec2 c, float r, ImU32 rim, bool lit, float scale) {
@@ -1044,8 +1129,8 @@ ImVec2 HudTouchButton(ImVec2 ds, float scale, const royale::HudState& h, int ind
 }
 
 // The item bar, in Zelda's round buttons and Fortnite's order: bottom right, right to left. The weapon in hand is the big B button with its
-// ammo count and name above it, then two reserve weapons (D-pad Left/Right), the shield (C-Left), the potion bag (C-Down; the stack in hand
-// is drunk with B) and the ability (D-pad Up), then the rupee counter. Gear icons you wear are at the bottom left. On a touch screen tap a slot.
+// ammo count and name above it, then the worn shield, the five usable hotbar slots (weapons and potion stacks; D-pad Left/Right selects, B
+// uses, hold C-Down drops) and the ability on its own button (D-pad Up, or C-Up in the Battle Royale layout), then the rupee counter. Gear icons you wear are at the bottom left. On a touch screen tap a slot.
 void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     using royale::wartable::theme::Muted;
     using G = royale::controls::Glyph;
@@ -1103,32 +1188,9 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         }
     }
 
-    // Two reserve weapons, squares, with one D-pad Left/Right glyph centred above the pair.
-    const float sq = 54.0f * S, gap = 6.0f * S;
+    // The shield you wear: a round button, display only (Z raises it). It is an upgrade, not a hotbar slot.
+    const float r2 = 28.0f * S, gap = 6.0f * S;
     float x = wc.x - wr - gap;
-    const float pairRight = x;
-    bool anyReserve = false;
-    for (int i = 0; i < royale::kMaxReserveWeapons; i++) {
-        const ImVec2 a(x - sq, bottom - sq), b(x, bottom);
-        const bool filled = i < static_cast<int>(h.inv.reserve.size());
-        HudFrame(dl, a, b, S);
-        if (filled) {
-            const auto& r = h.inv.reserve[static_cast<size_t>(i)];
-            const royale::ItemId id = static_cast<royale::ItemId>(r.item);
-            const ImU32 col = RarityU32(static_cast<royale::Rarity>(r.rarity));
-            DrawItemIcon(dl, id, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - 2 * S), sq * 0.7f, col);
-            rarityBar(a, b, col);
-            if (const int n = ammoOf(id); n >= 0) rightText(b.x - 5 * S, a.y + 3 * S, 12.0f * S, n > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), std::to_string(n).c_str());
-            if (hitRect(a, b)) gSession.SelectWeapon(i + 1);
-            anyReserve = true;
-        } else rarityBar(a, b, grey);
-        x = a.x - gap;
-    }
-    if (anyReserve) DrawPadGlyph(dl, font, ImVec2((x + gap + pairRight) * 0.5f, bottom - sq - 10.0f * S), 7.0f * S, pr.swap);
-
-    // The shield: a round C-Left button.
-    const float r2 = 28.0f * S;
-    x -= 2 * S;
     {
         const ImVec2 c(x - r2, bottom - r2);
         const ImU32 col = h.hasShield ? RarityU32(h.shieldRarity) : grey;
@@ -1136,35 +1198,41 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
         if (h.hasShield) {
             DrawItemIcon(dl, h.shield, c, r2 * 1.3f, col);
             rarityArc(c, r2, col);
-            DrawPadGlyph(dl, font, ImVec2(c.x - r2 * 0.72f, c.y + r2 * 0.72f), 7.0f * S, pr.shield);
+            if (pr.shield != G::None) DrawPadGlyph(dl, font, ImVec2(c.x - r2 * 0.72f, c.y + r2 * 0.72f), 7.0f * S, pr.shield);
         }
         x = c.x - r2 - gap;
     }
 
-    // The potion bag: stacks of one kind and tier; the stack in hand is lit and shows B. The C-Down glyph is centred above the row.
+    // The five usable slots (royale::kHotbarSlots), right to left in pickup order: weapons and potion stacks alike. The selected one is lit and
+    // shows B; D-pad Left/Right (glyph above the row) moves the selection, holding C-Down drops it. Tap a slot to select it, tap again to drink.
     {
-        const float ps = 44.0f * S, pgap = 5.0f * S, rowRight = x;
-        for (int i = 0; i < royale::kPotionSlots; i++) {
+        const std::vector<HotbarSlot>& slots = HotbarSlots(h);
+        const int sel = HotbarSelected(h, slots);
+        const float ps = 50.0f * S, pgap = 5.0f * S, rowRight = x;
+        for (int i = 0; i < royale::kHotbarSlots; i++) {
             const ImVec2 a(x - ps, bottom - ps), b(x, bottom);
-            const bool filled = i < static_cast<int>(stacks.size());
-            HudFrame(dl, a, b, S, gHandStack == i);
+            const bool filled = i < static_cast<int>(slots.size());
+            HudFrame(dl, a, b, S, sel == i);
             if (filled) {
-                const PotionStack& st = stacks[static_cast<size_t>(i)];
-                const ImU32 col = RarityU32(st.rarity);
-                DrawItemIcon(dl, st.item, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f + 1 * S), ps * 0.72f, col);
+                const HotbarSlot& sl = slots[static_cast<size_t>(i)];
+                const ImU32 col = RarityU32(sl.rarity);
+                DrawItemIcon(dl, sl.item, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f + 1 * S), ps * 0.72f, col);
                 rarityBar(a, b, col);
-                const std::string cnt = "x" + std::to_string(st.count);
-                rightText(b.x - 4 * S, a.y + 3 * S, 12.0f * S, ink, cnt.c_str());
-                if (gHandStack == i) DrawPadGlyph(dl, font, ImVec2(a.x + 8 * S, a.y + 8 * S), 6.5f * S, pr.weapon);
+                if (sl.stack) {
+                    const std::string cnt = "x" + std::to_string(sl.count);
+                    rightText(b.x - 4 * S, a.y + 3 * S, 12.0f * S, ink, cnt.c_str());
+                } else if (const int n = ammoOf(sl.item); n >= 0) {
+                    rightText(b.x - 4 * S, a.y + 3 * S, 12.0f * S, n > 0 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 90, 90, 255), std::to_string(n).c_str());
+                }
+                if (sel == i) DrawPadGlyph(dl, font, ImVec2(a.x + 8 * S, a.y + 8 * S), 6.5f * S, pr.weapon);
+                if (hitRect(a, b)) {
+                    if (sel == i && sl.stack) gSession.UseStack(static_cast<uint8_t>(sl.item), static_cast<uint8_t>(sl.rarity));
+                    else SelectHotbarSlot(h, slots, i);
+                }
             } else rarityBar(a, b, grey);
-            if (hitRect(a, b) && filled) {   // tap a stack to take it in hand, tap it again to drink
-                const PotionStack& st = stacks[static_cast<size_t>(i)];
-                if (gHandStack == i) gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
-                else TakeStackInHand(stacks, i);
-            }
             x = a.x - pgap;
         }
-        if (!stacks.empty()) DrawPadGlyph(dl, font, ImVec2((x + pgap + rowRight) * 0.5f, bottom - ps - 10.0f * S), 7.0f * S, G::CDown);
+        if (!slots.empty()) DrawPadGlyph(dl, font, ImVec2((x + pgap + rowRight) * 0.5f, bottom - ps - 10.0f * S), 7.0f * S, pr.swap);
     }
 
     // The ability: a round D-pad Up button with a pie cooldown.

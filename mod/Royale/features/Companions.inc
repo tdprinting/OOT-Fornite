@@ -568,8 +568,7 @@ void AllyStrikeFx(AllyActor& a, float x, float z) {
             FloorAt(x, z, &gy);
             SparkBurst(gPlayState, x, gy + 40.0f, z, { 255, 200, 120, 255 }, 20, 6.0f);
             AllyDust(gPlayState, x, gy, z, 4, 30.0f, 70);
-            Vec3f at = { x, gy + 40.0f, z };
-            Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+            SfxAt(NA_SE_IT_HAMMER_HIT, x, gy + 40.0f, z);
             break;
         }
     }

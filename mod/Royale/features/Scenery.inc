@@ -135,24 +135,14 @@ void SmashPropInFront(Player* player, const royale::WeaponStats& w) {
     float y = player->actor.world.pos.y;
     FloorAt(props[best].pos.x, props[best].pos.z, &y);
     SparkBurst(gPlayState, props[best].pos.x, y + 20.0f, props[best].pos.z, props[best].kind == royale::PropKind::Bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
-    Vec3f at = { props[best].pos.x, y + 20.0f, props[best].pos.z };
-    Audio_PlaySoundGeneral(props[best].kind == royale::PropKind::Bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    SfxAt(props[best].kind == royale::PropKind::Bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, props[best].pos.x, y + 20.0f, props[best].pos.z);
     Actor_Kill(it->second.actor);   // Prop_Destroy tells the server it was broken
 }
 
 // Hold the player on top of a climbing block (landing on it, walking along it) and out of its sides. Runs every frame in the player's update, after
 // the game has settled Link on the scene's own floor.
-// Drinking: which bottle Link takes out (the potion the server will most likely pick: the first that heals, or the first shield potion),
-// how long it takes, and its sounds (Link's gulp and the hearts refilling).
+// Drinking from a hotbar slot: how long it takes, and its sounds (Link's gulp and the hearts refilling).
 constexpr float kDrinkSeconds = 1.5f;
-royale::ItemId BottleToDrink(const royale::HudState& hud, bool shield) {
-    for (const auto& pot : hud.inv.potions) {
-        const royale::ItemId id = static_cast<royale::ItemId>(pot.item);
-        const royale::PotionDef d = royale::PotionOf(id);
-        if (shield ? d.shield > 0 : (!d.revive && d.heal > 0)) return id;
-    }
-    return shield ? royale::ItemId::BluePotion : royale::ItemId::RedPotion;
-}
 void DrinkSounds(Player* player) {
     Player_PlaySfx(&player->actor, static_cast<u16>(NA_SE_VO_LI_DRINK + player->ageProperties->unk_92));
     Audio_PlaySoundGeneral(NA_SE_SY_HP_RECOVER, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
@@ -389,19 +379,19 @@ bool BuildSolidMesh(float x, float z, bool force) {
             auto local = [&](float lx, float lz, float* wx, float* wz) { *wx = sc.pc.x + (lx * std::cos(yaw) + lz * std::sin(yaw)) * sk; *wz = sc.pc.z + (-lx * std::sin(yaw) + lz * std::cos(yaw)) * sk; };
             switch (sc.pc.kind) {
                 case SceneryKind::Cliff:   // a slab 300 wide and 112 deep, 166 tall, a little narrower at the top (tools/scenery/build_scenery.py, build_cliff); you stand on its top from the high side
-                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 1);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 40.0f, base + 160.0f * sk - 14.0f * sk, 146.0f * sk, 54.0f * sk, 118.0f * sk, 38.0f * sk, 10, 0.0f, yaw, 0, 0);
                     break;
                 case SceneryKind::Crag: {   // three spires: the snowy tips are too narrow to stand on, so each is a wall
                     static const float spire[3][4] = { { 0.0f, 0.0f, 58.0f, 250.0f }, { 64.0f, 26.0f, 42.0f, 180.0f }, { -52.0f, -30.0f, 38.0f, 150.0f } };
                     for (const auto& sp : spire) {
                         float wx, wz;
                         local(sp[0], sp[1], &wx, &wz);
-                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 1);
+                        b.Stone(wx, wz, base - 40.0f, base + sp[3] * 0.7f * sk, sp[2] * sk, sp[2] * sk, sp[2] * 0.45f * sk, sp[2] * 0.45f * sk, 6, 0.0f, yaw, 0, 0);
                     }
                     break;
                 }
                 case SceneryKind::Oak:   // the trunk only: the leaves are above your head
-                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 1);
+                    b.Stone(sc.pc.x, sc.pc.z, base - 30.0f, base + 110.0f * sk, 24.0f * sk, 24.0f * sk, 14.0f * sk, 14.0f * sk, 6, 0.0f, 0.0f, 0, 0);
                     break;
                 default: {   // a boulder: wide at the foot, a flat crown you can climb onto
                     const float r = royale::fortnite::SceneryRadius(sc.pc.kind, sk);

@@ -86,7 +86,7 @@ void WarDraw(GameState* state) {
         p.Text(36,113,"ADVENTURER",12,wt::theme::Ink,true);
         const float reveal=gWar.reduced?1:std::min(1.0f,(SDL_GetTicks()-gWar.mapChangedAt)/180.0f);
         p.Image(WarMapPixels(Ui().mapId),{177+(1-reveal)*8,112,257,153},6,4,0xFFFFFF00|static_cast<uint32_t>(255*reveal));
-        p.Text(212,282,royale::MapOf(Ui().mapId).name,11,wt::theme::Ink,true,190);
+        p.Text(212,282,MapLabel(Ui().mapId),11,wt::theme::Ink,true,190);
         p.Text(40,288,Ui().name,11,0x9EDCFFFF,false,112);
     } else if(gWar.page==WarPage::Death) {
         p.Panel({40,103,560,204});
@@ -215,8 +215,8 @@ void WarDraw(GameState* state) {
             p.Wrap(38,150,"Drop into Hyrule, gather gear, stay inside the safe zone and be the last survivor.",154,12,wt::theme::Muted,8);
             p.Text(244,121,"BATTLE ROYALE CONTROLS",15,wt::theme::Ink,true);
             const bool classic=CVarGetInteger(ROYALE_CVAR("ControlScheme"),0)==1;
-            const char* lines[]={"A   Open, take, hire, talk. With nothing else to do it JUMPS","B   Attack with the weapon in hand","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Up   Ability     C-Right   Emote","Stick click   Sprint     Z   Lock on / dive     R   Shield / exit cart"};
-            const char* classicLines[]={"A   Open, take, hire, talk","B   Attack with the weapon in hand","C-Up   JUMP     D-pad Up   Ability","D-pad L / R   Next / last weapon     D-pad Down   Heal","C-Left   Shield potion     C-Right   Emote     Stick click   Sprint"};
+            const char* lines[]={"A   Open, take, hire, talk. With nothing else to do it JUMPS","B   Use the hotbar slot: attack, or drink a potion","D-pad L / R   Next / last of 5 slots     Hold C-Down   Drop it","C-Up or D-pad Up   Ability     C-Right   Emote","Stick click   Sprint     Z   Lock on / dive     R   Shield / exit cart"};
+            const char* classicLines[]={"A   Open, take, hire, talk","B   Use the hotbar slot: attack, or drink a potion","C-Up   JUMP     D-pad Up   Ability","D-pad L / R   Next / last of 5 slots     Hold C-Down   Drop it","C-Right   Emote     Stick click   Sprint"};
             p.Text(244,143,classic?"CLASSIC LAYOUT":"BATTLE ROYALE LAYOUT",10,wt::theme::Gold);
             for(int i=0;i<5;++i)p.Text(244,163+i*17,classic?classicLines[i]:lines[i],10,wt::theme::Ink,false,346);
             p.Text(244,252,"Change it in Settings > Comfort > Options. Menus: L / R pages, A select, B back.",9,wt::theme::Muted,false,346);

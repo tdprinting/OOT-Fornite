@@ -168,8 +168,7 @@ std::vector<PendingCoo> gBabyCoos;
 
 void BabyCooNow(Actor* a, u16 sfx, float pitch, float volume) {
     if (a == nullptr || volume < 0.01f) return;
-    f32 freq = pitch, vol = volume;
-    Audio_PlaySoundGeneral(sfx, &a->projectedPos, 4, &freq, &vol, &gSfxDefaultReverb);
+    SfxOn(a, sfx, pitch, volume);   // the engine keeps the pitch/volume pointers: stack values played at random pitch
 }
 
 // The real Avriella. Her recordings (assets/avriella/sounds, shared/avriella_sounds.h) are sorted by how they sound: laughs, babbling, little "hi"

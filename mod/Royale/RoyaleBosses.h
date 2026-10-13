@@ -81,8 +81,7 @@ Gfx gLizalfosTexDl[] = { gsSPTexture(0x0A00, 0x0A00, 0, G_TX_RENDERTILE, G_ON), 
 
 void BossSound(const BossActor& b, u16 sfx) { if (b.actor != nullptr) Audio_PlayActorSound2(b.actor, sfx); }
 void SoundAt(float x, float y, float z, u16 sfx) {
-    Vec3f at = { x, y, z };
-    Audio_PlaySoundGeneral(sfx, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+    SfxAt(sfx, x, y, z);
 }
 
 void SparkBurst(PlayState* play, float x, float y, float z, Color_RGBA8 prim, int count, float speed) {

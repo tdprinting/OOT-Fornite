@@ -176,10 +176,39 @@ void NoteChanges(const royale::HudState& hud) {
     s.overflow = gGfxPool.overflowLast;
 }
 
+// Frame time for the trace: the gap between game frames, average and worst over each 5 s window, with the players alive. See docs/PLAYTEST.md.
+struct FrameWindow {
+    bool open = false;
+    std::chrono::steady_clock::time_point start, last;
+    double sum = 0, worst = 0;
+    int n = 0;
+};
+FrameWindow gFrameWin;
+
+void FrameTimeSample() {
+    const auto now = std::chrono::steady_clock::now();
+    FrameWindow& w = gFrameWin;
+    if (!w.open) { w.open = true; w.start = now; w.last = now; return; }
+    const double ms = std::chrono::duration<double, std::milli>(now - w.last).count();
+    w.last = now;
+    w.sum += ms;
+    w.n++;
+    if (ms > w.worst) w.worst = ms;
+    if (now - w.start < std::chrono::seconds(5)) return;
+    const royale::HudState hud = gSession.Hud();
+    std::ofstream out = OpenTrace();
+    if (out && w.n > 0) out << "frame ms: avg " << w.sum / w.n << " worst " << w.worst << " (" << w.n << " frames in 5 s) alive " << hud.alive << "\n";
+    w.start = now;
+    w.sum = 0;
+    w.worst = 0;
+    w.n = 0;
+}
+
 void CrashContextFrame() {
 #ifdef __ANDROID__
     if (gGameThreadId == 0) gGameThreadId = static_cast<long>(syscall(SYS_gettid));
 #endif
+    FrameTimeSample();
     static unsigned frames = 0;
     const bool traceNow = gCtxTraceIn >= 0 && gCtxTraceIn-- == 0;
     if (frames++ % 5 != 0 && !traceNow) return;   // four times a second at the game's 20 Hz

@@ -4,6 +4,8 @@ Runs the real game (the PC/Linux build of the fork with the mod) with no screen,
 line or two: PASS, FAIL (a step timed out), CRASH (signal plus the top of the call stack with file:line) or HANG (no frame for 2 minutes, with
 every thread's stack on disk). It catches crashes, asserts, failed resource loads and engine error logs before a build reaches the phone.
 
+It runs on request only and is not part of the normal build: the driver (`features/AutoTest.inc`) is compiled only into PC builds (`#ifndef __ANDROID__`), so the Android game and CI never contain it.
+
 It is not the Android build: GPU driver and Android-only code (`#ifdef __ANDROID__`: updater, crash handler, touch) are not exercised, and
 the software renderer is slow, so it says nothing about frame rate on the Odin.
 
@@ -40,12 +42,14 @@ CRASH match-12          212s steps 2/7    log errors 3  SIGSEGV in #2 DynaPoly_E
 Full output per scenario sits in its run folder: `game-output.txt` (game + gdb, all thread stacks), `autotest-result.txt` (steps and the mod
 state block at each `check` and at a failure), `royale-trace.txt`, `logs/`. `last-results.json` there holds every result as JSON.
 
+Reading `royale-trace.txt` frame times: a line `frame ms: avg A worst W (N frames in 5 s) alive K` is written every 5 s of play. A is the average and W the worst gap between game frames in that window (the Odin number to compare: about 50 ms = 20 Hz, a spike of hundreds of ms = a hitch, also when a menu paused the game); K is the players alive at the end of the window.
+
 ## Step scripts
 
 The in-game driver is `mod/Royale/features/AutoTest.inc`; it does nothing unless `ROYALE_AUTOTEST` is set. Steps, separated by `;`:
 `ingame`, `wait:<sec>`, `cvar:<name>=<int>`, `skin:<n>`, `host:<map>` (solo test), `hostbots:<map>` (lobby + Start, bots fill it),
 `state:<Lobby|Countdown|Drop|InMatch|Ending>`, `jump` (off the bus, then glider), `leave`, `regular` (normal quest, regular-game features),
-`warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`. Times are game time (20 frames a second), so a slow renderer still plays
+`boots:<0|1|2>` (kokiri, iron, hover on Link), `tp:<x>,<z>[,<deg>]` (put Link on the ground there), `warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`. Times are game time (20 frames a second), so a slow renderer still plays
 the same amount of game. Add a scenario for a new feature in `SCENARIOS` in `tools/playtest/run.py`.
 
 ## Workflow for agents

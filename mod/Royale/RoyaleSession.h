@@ -165,6 +165,7 @@ class RoyaleSession {
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
         if (teamMode != TeamMode::Solo) server->SetTeamMode(teamMode);
         server->SetMajorBoss(majorBoss);
+        server->SetNoveltyAllies(noveltyAllies);
         server->SetWeatherOptions(weatherOptions);
         if (soloTest) {
             server->SetSoloTest(true);
@@ -243,6 +244,7 @@ class RoyaleSession {
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void HireAlly(int index) { if (client) client->HireAlly(index); }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; if (server) server->SetNoveltyAllies(on); }
     void SetWeatherOptions(const WeatherOptions& o) { weatherOptions = o; if (server) server->SetWeatherOptions(o); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
@@ -273,11 +275,12 @@ class RoyaleSession {
     // Lobby only.
     void SetReady(bool ready) { if (Joined()) client->SetReady(ready); }
     void ReportAttack(uint16_t target, bool hit, uint8_t style = 0) { if (Joined()) client->ReportAttack(target, hit, style); }
-    void RequestPickup(uint32_t lootIndex, bool force = false) { if (Joined()) client->RequestPickup(lootIndex, force); }
+    void RequestPickup(uint32_t lootIndex, bool force = false, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) { if (Joined()) client->RequestPickup(lootIndex, force, replaceItem, replaceRarity); }
     void RequestUsePotion() { if (Joined()) client->RequestUsePotion(); }
     void UseAbility() { if (Joined()) client->UseAbility(); }
     void UseStack(uint8_t item, uint8_t rarity) { if (Joined()) client->UseStack(item, rarity); }
     void DropWeapon() { if (Joined()) client->DropWeapon(); }
+    void DropSlot(uint8_t item, uint8_t rarity) { if (Joined()) client->DropSlot(item, rarity); }
     void UseShield() { if (Joined()) client->UseShield(); }
     void SelectWeapon(int slot) { if (Joined()) client->SelectWeapon(slot); }
     // Carts: get in, get out, change seats, and (driving) report where the cart is each tick.
@@ -528,6 +531,7 @@ class RoyaleSession {
     bool solo = false;
     bool isSandbox = false;
     bool majorBoss = true;
+    bool noveltyAllies = false;   // the War Table sets it from Developer mode
     WeatherOptions weatherOptions;
     float autoStart = kLobbyAutoStartSec;
     Mode mode = Mode::Idle;

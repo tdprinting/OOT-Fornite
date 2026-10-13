@@ -197,10 +197,14 @@ extern s32 gRoyaleNoUseOnTakeOut;   // 1 = taking an item out never uses it too 
 extern s32 gRoyaleNoAimView;    // 1 = bow, slingshot, boomerang and hookshot ready and fire in place, never the first-person aiming view (patches/0019)
 extern EffectSsInfo sEffectSsInfo;   // the game's particle table (z_effect_soft_sprite.c): explosions and fire give off light
 extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patches/0020); raised while you ride a cart
+extern f32 gRoyaleCamPitchDown;  // how far the main camera's look-at is lowered, tilting the view down (patches/0020); glide camera
+extern f32 gRoyaleCamBack;       // how far the main camera's eye is moved back from the look-at (patches/0020); bus seat and drawn-weapon cameras
+extern s32 gRoyaleCamGuard;  // nonzero: the main camera's drawn eye is pulled in front of solid ground between it and Link (patches/0020)
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 void UpdatePatchHand(void);   // the game's EquipmentAlwaysVisible hand-model patches (soh/Enhancements/mods.cpp): re-run when the match turns the enhancement on or off
 extern s32 gRoyaleBraceletOnAdult;   // 1 = adult Link also wears the Goron's Bracelet as bronze plates (patches/0028)
+extern s32 gRoyaleBootsOnChild;      // 1 = child Link also wears iron or hover boots (the adult boot models; patches/0032)
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.
@@ -300,4 +304,7 @@ void WarDraw(GameState* state);
 #include "features/Lighting.inc"
 #include "features/EngineBridge.inc"
 #include "features/CrashContext.inc"
+// Headless playtest driver: PC playtest builds only, never in the Android game.
+#ifndef __ANDROID__
 #include "features/AutoTest.inc"
+#endif

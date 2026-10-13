@@ -1,0 +1,26 @@
+diff --git a/soh/src/code/z_player_lib.c b/soh/src/code/z_player_lib.c
+index 8416447..2b3add1 100644
+--- a/soh/src/code/z_player_lib.c
++++ b/soh/src/code/z_player_lib.c
+@@ -1028,6 +1028,8 @@ Color_RGB8 sGauntletColors[] = {
+ 
+ // OOT Royale: 1 = adult Link also wears the Goron's Bracelet (bronze plates on his forearms), set by the mod during a match
+ s32 gRoyaleBraceletOnAdult = 0;
++// OOT Royale: 1 = child Link also wears the iron or hover boots he has on (the adult boot models, on his feet), set by the mod during a match
++s32 gRoyaleBootsOnChild = 0;
+ Color_RGB8 sRoyaleBraceletColor = { 190, 120, 50 };
+ 
+ Gfx* sBootDListGroups[][2] = {
+@@ -1136,6 +1138,12 @@ void Player_DrawImpl(PlayState* play, void** skeleton, Vec3s* jointTable, s32 dL
+             if (Player_GetStrength() > PLAYER_STR_NONE) {
+                 gSPDisplayList(POLY_OPA_DISP++, gLinkChildGoronBraceletDL);
+             }
++            if (gRoyaleBootsOnChild && boots >= PLAYER_BOOTS_IRON && boots <= PLAYER_BOOTS_HOVER) {
++                Gfx** bootDLists = sBootDListGroups[boots - 1];
++
++                gSPDisplayList(POLY_OPA_DISP++, bootDLists[0]);
++                gSPDisplayList(POLY_OPA_DISP++, bootDLists[1]);
++            }
+         }
+     }
+ 

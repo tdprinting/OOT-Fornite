@@ -16,6 +16,8 @@
 //   regular                 leave any session and play the save as the normal quest (the regular game's water, sky, companions)
 //   warp:<scene hex>        travel to the scene's first entrance and wait until it is loaded
 //   tour:<overworld|dungeons|all>   warp through each scene of the list in turn, 3 seconds in each
+//   boots:<0|1|2>           dress Link in kokiri, iron or hover boots whatever he holds (shot them to check patch 0032)
+//   tp:<x>,<z>[,<deg>]      put Link on the ground at x,z facing <deg> (0 = +z, 90 = +x); for shots of one place
 //   check                   assert Link exists in a loaded scene and log the mod state block
 //   shot:<name>             ask the runner for a screenshot (<name>.png in the run folder) and wait until it is taken
 //   prof:<sec>              ask the runner to sample the game's CPU use with perf for <sec> wall seconds; logs the frame rate meanwhile
@@ -34,6 +36,7 @@ struct AutoTest {
     std::string outPath, beatPath;
     std::vector<int> tour;        // scenes left to visit
     int tourScene = -1;
+    int tourLoads = 0;            // scenesLoaded when the warp to tourScene started
     int sub = 0;                  // per-step progress
     int scenesLoaded = 0, lastScene = -1;
 };
@@ -133,7 +136,8 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "cvar") {
         const size_t eq = s.arg.find('=');
         if (eq != std::string::npos) CVarSetInteger(s.arg.substr(0, eq).c_str(), std::atoi(s.arg.c_str() + eq + 1));
-        gDebugLoaded = false; Ui().loaded = false; Ui(); RefreshRegularSettings();
+        gDebugLoaded = false;   // (a Royale.Debug switch is read again)
+        Ui().loaded = false; Ui(); RefreshRegularSettings();
         return true;
     }
     if (s.verb == "skin") {
@@ -153,6 +157,18 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "jump") {
         if (gAuto.stepFrames % 10 == 0) gBusJumpPressed = true;
         return !hud.aboard && hud.state != royale::MatchState::Countdown && (gAuto.stepFrames > 40 || !gSkydiving);
+    }
+    if (s.verb == "boots") { gAutoBoots = std::clamp(std::atoi(s.arg.c_str()), 0, 2); return true; }
+    if (s.verb == "tp") {
+        float x = 0, z = 0, deg = 0;
+        if (std::sscanf(s.arg.c_str(), "%f,%f,%f", &x, &z, &deg) < 2 || gPlayState == nullptr) return true;
+        float y = 0;
+        if (!RawFloorAt(x, z, &y)) { AutoLog("  tp %s: no floor", s.arg.c_str()); return true; }
+        Player* p = GET_PLAYER(gPlayState);
+        p->actor.world.pos = { x, y + 2.0f, z };
+        p->actor.home.pos = p->actor.prevPos = p->actor.world.pos;
+        p->actor.shape.rot.y = p->actor.world.rot.y = static_cast<s16>(deg * (32768.0f / 180.0f));
+        return true;
     }
     if (s.verb == "leave") { gSession.Leave(); return true; }
     if (s.verb == "tp") {   // tp:x,z[,yaw degrees]: put Link on the floor there, facing yaw (screenshots of one place)
@@ -182,14 +198,18 @@ bool AutoRun(const AutoStep& s, float secs) {
             gAuto.sub = 1;
         }
         if (gAuto.tourScene >= 0) {
-            if (!AutoArrived(gAuto.tourScene)) {
+            // the game may send you elsewhere for your age (adult Link at Hyrule Castle lands outside Ganon's Castle): any scene loaded since the
+            // warp counts, and the log names where you ended up
+            const bool redirected = gAuto.scenesLoaded > gAuto.tourLoads && gPlayState != nullptr && gPlayState->sceneNum != gAuto.tourScene;
+            if (!AutoArrived(redirected ? gPlayState->sceneNum : gAuto.tourScene)) {
                 // a scene that never arrives is a failure of its own (timeout below names it)
                 return false;
             }
             static unsigned arrivedAt = 0;
             if (gAuto.sub == 1) { arrivedAt = gAuto.frames; gAuto.sub = 2; }
             if (gAuto.frames - arrivedAt < (s.verb == "tour" ? 60u : 20u)) return false;
-            AutoLog("  scene 0x%02X arrived (%d actors)", gAuto.tourScene, gPlayState->actorCtx.total);
+            if (redirected) AutoLog("  scene 0x%02X arrived as 0x%02X (%d actors)", gAuto.tourScene, gPlayState->sceneNum, gPlayState->actorCtx.total);
+            else AutoLog("  scene 0x%02X arrived (%d actors)", gAuto.tourScene, gPlayState->actorCtx.total);
             gAuto.tourScene = -1;
             gAuto.sub = 1;
         }
@@ -203,6 +223,7 @@ bool AutoRun(const AutoStep& s, float secs) {
         Crumb("autotest: warp to scene 0x%02X entrance 0x%03X", scene, entrance);
         if (!TravelTo(entrance)) { gAuto.tour.insert(gAuto.tour.begin(), scene); return false; }
         gAuto.tourScene = scene;
+        gAuto.tourLoads = gAuto.scenesLoaded;
         gAuto.stepStartFrame = gAuto.frames;   // each scene gets the full timeout
         return false;
     }
@@ -213,6 +234,27 @@ bool AutoRun(const AutoStep& s, float secs) {
                 gPlayState->actorCtx.total, link->actor.world.pos.x, link->actor.world.pos.y, link->actor.world.pos.z, link->actor.floorHeight);
         if (link->actor.floorHeight <= BGCHECK_Y_MIN + 1.0f && !gSkydiving && !hud.aboard)
             AutoLog("  WARN no floor under Link (void or missing collision)");
+        {   // where the drawn camera is; in a match it must not sit inside the ground or behind a solid face from Link (patches/0020)
+            Vec3f eye = gPlayState->view.eye;
+            Vec3f at = gPlayState->view.lookAt;
+            Vec3f hit;
+            Vec3f top = { eye.x, eye.y + 3000.0f, eye.z };
+            CollisionPoly floorPoly;
+            CollisionPoly* poly = nullptr;
+            s32 bgId = 0;
+            const f32 ground = BgCheck_AnyRaycastFloor2(&gPlayState->colCtx, &floorPoly, &bgId, &top);
+            const bool blocked = BgCheck_CameraLineTest1(&gPlayState->colCtx, &at, &eye, &hit, &poly, 1, 1, 1, 1, &bgId);
+            // Ground above the eye is an overhang (a ledge, a sign, an arch) when its underside faces the eye; inside a hill there is none.
+            bool underside = false;
+            if (ground > eye.y + 2.0f) {
+                Vec3f up = { eye.x, ground - 1.0f, eye.z };
+                underside = BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &up, &hit, &poly, 1, 1, 1, 1, &bgId);
+            }
+            AutoLog("  camera eye (%.0f, %.0f, %.0f) at (%.0f, %.0f, %.0f) ground under eye %.0f%s%s", eye.x, eye.y, eye.z, at.x, at.y, at.z, ground,
+                    underside ? " (under an overhang)" : "", blocked ? " (solid between Link and eye)" : "");
+            if (gRoyaleCamGuard && ground > eye.y + 2.0f && ground < eye.y + 2900.0f && !underside) AutoLog("  WARN camera inside the ground");
+            else if (gRoyaleCamGuard && blocked) AutoLog("  WARN camera behind a solid face");
+        }
         AutoState("state at check");
         return true;
     }

@@ -92,6 +92,16 @@ void PoseSeq(Player* player, const AnimSeq& seq, float t) {
     j[0].x = rootX;
     j[0].z = rootZ;
 }
+// A knocked-down player has no crawl clip in the game, so the flat pose is worked along: the body heaves and the shoulders sway while they really move.
+void CrawlShuffle(Player* player, float speed, float t) {
+    const float amt = std::clamp(speed / 2.0f, 0.0f, 1.0f);
+    if (amt <= 0.05f || player->actor.scale.y <= 0.0f) return;
+    Vec3s* j = player->skelAnime.jointTable;
+    const float ph = t * 5.0f;
+    j[0].y = static_cast<s16>(j[0].y + std::fabs(std::sin(ph)) * 55.0f * amt / player->actor.scale.y);
+    j[1].x = static_cast<s16>(j[1].x + std::sin(ph) * 0x600 * amt);
+    j[1].z = static_cast<s16>(j[1].z + std::cos(ph) * 0x300 * amt);
+}
 // Poses Link for the emote at this moment.
 void PoseEmote(Player* player) {
     const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
@@ -110,7 +120,10 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
-    else if (gSelfKnocked) PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+    else if (gSelfKnocked) {
+        PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+        CrawlShuffle(player, player->actor.speedXZ, static_cast<float>(ImGui::GetTime()));
+    }
     else PoseLocalLinkClips(player, gSprinting, gSkydiving);   // our jump, landing and sprint (LinkAnims.inc)
     DrawLocalDressed(player, play, !emote && !gSelfKnocked);
     DrawVictoryCrown(play,player,gSession.Hud().selfId);
@@ -835,6 +848,31 @@ void UpdateRideCamera(Player* player) {
     gRoyaleCamLift = gCamLiftNow;
 }
 
+// Extra camera shaping (patches/0020), eased like the ride lift. Gliding or falling: the look-at drops so the view tilts down at the island you are
+// heading for. Sat on the bus: a little higher and further back so Link and the bench are in shot. Weapon drawn (sword, hammer, bow, slingshot...):
+// a little higher and further back, so a bow sits over the shoulder. Only the drawn view moves; the camera's own state and guard are untouched.
+constexpr float kGlideCamDown = 120.0f, kBusCamLift = 25.0f, kBusCamBack = 70.0f, kFightCamLift = 14.0f, kFightCamBack = 45.0f;
+float gCamPitchNow = 0.0f, gCamBackNow = 0.0f, gCamFightLift = 0.0f;
+void UpdateActionCamera(Player* player) {
+    const bool seatedCart = gRide.seated && player->actor.draw == LocalRide_Draw;
+    float down = 0.0f, back = 0.0f, lift = 0.0f;
+    if (gSkydiving) {
+        if (gBusPhase == 1) lift = kBusCamLift, back = kBusCamBack;
+        else down = kGlideCamDown;
+    } else if (!seatedCart && player->heldItemAction >= PLAYER_IA_SWORD_MASTER && player->heldItemAction <= PLAYER_IA_SLINGSHOT) {
+        lift = kFightCamLift, back = kFightCamBack;
+    }
+    gCamPitchNow += (down - gCamPitchNow) * 0.08f;
+    gCamBackNow += (back - gCamBackNow) * 0.08f;
+    gCamFightLift += (lift - gCamFightLift) * 0.08f;
+    if (down == 0.0f && std::fabs(gCamPitchNow) < 0.05f) gCamPitchNow = 0.0f;
+    if (back == 0.0f && std::fabs(gCamBackNow) < 0.05f) gCamBackNow = 0.0f;
+    if (lift == 0.0f && std::fabs(gCamFightLift) < 0.05f) gCamFightLift = 0.0f;
+    gRoyaleCamPitchDown = gCamPitchNow;
+    gRoyaleCamBack = gCamBackNow;
+    gRoyaleCamLift = gCamLiftNow + gCamFightLift;
+}
+
 // On foot, a cart is solid: you are pushed out of it to its nearest side (as the rocks push you, ApplyRocks).
 void PushOutOfCarts(Player* player) {
     Vec3f& p = player->actor.world.pos;
@@ -1076,7 +1114,7 @@ void DrawControlPrompts(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, co
         std::string label;
         const size_t loot = NearestLootIndex();
         int cart; royale::Seat seat;
-        if (loot != kNoLoot) { auto it = gLoot.find(loot); label = it != gLoot.end() && it->second.chest ? "Open" : "Take"; }
+        if (loot != kNoLoot) {}   // the find's own panel (EndMatch.inc) already says what A does here; a second chip only crowded it
         else if (const int ally = NearbyFreeAlly(); ally >= 0) label = std::string("Hire the ") + royale::kAllyDefs[ally].name + " (" + std::to_string(royale::kAllyDefs[ally].price) + ")";
         else if (NearbyCartSeat(&cart, &seat)) label = seat == royale::Seat::Driver ? "Drive" : "Ride along";
         else if (TalkTargetNear()) label = "Talk";

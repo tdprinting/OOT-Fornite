@@ -134,7 +134,7 @@ void DrawConvergenceStructures(PlayState* play) {
 // reach per batch (landmarks are drawn from far away, foliage only near). The texture is a 128-wide tile: gDPLoadTextureBlock is limited to 4095 texels
 // (64 x 64 at 16 bits), the tile load is not, and its coordinates are S10.5 so one repeat is 4096.
 //
-// The outsides of stone, wood, roofs, thatch, cobbles, plaster and bark are also drawn lit, with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
+// The outsides of stone, rock, roofs, cobbles and plaster are also drawn lit (wood, thatch and bark grain stay baked, see below), with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
 // each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
 // shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
 // batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
@@ -262,7 +262,9 @@ void DrawAuthoredStructures(PlayState* play) {
     for (auto& v : visible) v.clear();
     for (size_t i = 0; i < kBatchCount; ++i) {
         const auto& batch = T::kBatches[i];
-        const int pass = relief ? static_cast<int>(batch.surface) : 0;
+        // Grain classes (3 wood, 5 thatch, 8 bark) stay baked: the engine projects surface maps onto the face's dominant axis, so a grain turns
+        // 90 degrees from one wall or trunk facet to the next and reads as big rippling stripes over the painted texture.
+        const int pass = relief && batch.surface != 3 && batch.surface != 5 && batch.surface != 8 ? static_cast<int>(batch.surface) : 0;
         if (pass > T::kSurfaceClasses || !inReach(batch)) continue;   // (a class past the last is never drawn with relief on, as before)
         visible[pass].push_back(static_cast<uint32_t>(i));
     }
@@ -525,16 +527,28 @@ void ApplyRocks(Player* player) {
     }
 }
 
+// Nothing solid (a wall, a hill, a house) between Link's chest and theirs: the game's side of the server's height-grid sight test.
+static bool ClearShotTo(const Player* player, const Actor* target) {
+    if (gPlayState == nullptr || target == nullptr) return true;
+    Vec3f from = { player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z };
+    Vec3f to = { target->world.pos.x, target->world.pos.y + 40.0f, target->world.pos.z }, hit;
+    CollisionPoly* poly = nullptr; s32 bgId = 0;
+    return !BgCheck_EntityLineTest1(&gPlayState->colCtx, &from, &to, &hit, &poly, true, true, false, true, &bgId);
+}
+
 // What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
+// A shot (`ranged`) aims: a 30 degree cone where Link faces, nobody behind him. Players must have a clear line from Link either way.
 // Returns 0 with *outDist left at 1e9 when there is none.
-static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
+static constexpr int kMeleeHalfCone = 0x2000;   // 45 degrees each side (binary angle)
+static constexpr int kRangedHalfCone = 0x0AAB;  // 15 degrees each side
+static uint16_t PickStrikeTarget(Player* player, float range, float* outDist, bool ranged = false) {
     uint16_t best = 0;
     float bestDist = 1e9f;
     // Z-targeting something (a player, a mini boss, a major boss) is choosing it: the blow goes to that one while it is in reach, whichever way the
     // sticks point (the game turns Link to face it, so the usual cone is not needed).
     if (const Actor* locked = player->focusActor) {
         uint16_t id = 0; float tx = 0, tz = 0, edge = 0;
-        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive) { tx = st->second.x; tz = st->second.z; } else id = 0; }
+        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive && ClearShotTo(player, locked)) { tx = st->second.x; tz = st->second.z; } else id = 0; }
         else if (auto b = gBossOf.find(locked); b != gBossOf.end() && b->second <= 0xFFFFu) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
@@ -554,11 +568,13 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
         float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
         float d = std::sqrt(dx * dx + dz * dz);
         if (d > range * 1.05f) continue;
-        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        // A swing: a 90 degree cone in front of Link, or anyone right on top of him. A shot: the narrow cone only.
         s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
         s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
-        if (d < bestDist) { bestDist = d; best = id; }
+        const int offAbs = std::abs(static_cast<int>(off));
+        if (ranged ? offAbs > kRangedHalfCone : (offAbs > kMeleeHalfCone && d > 60.0f)) continue;
+        if (d >= bestDist || !ClearShotTo(player, actor)) continue;   // behind a wall or over a hill: not this one
+        bestDist = d; best = id;
     }
     // The mini bosses are big: they count from their edge, not their middle.
     if (gSession.Client()) {
@@ -631,7 +647,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             for (const Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next) if (a->id == ACTOR_ARMS_HOOK) out = true;
         if (out && !sHookOut && hud.weapon == royale::ItemId::Hookshot && LiveAndAlive(hud) && InField()) {
             float dist = 1e9f;
-            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist);
+            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist, true);
             if (dist < 1e8f) gSession.ReportAttack(target, true);
         }
         sHookOut = out;
@@ -679,41 +695,33 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    if (in.press.button & BTN_DDOWN) {
-        if (hud.potions > 0) { gSession.RequestUsePotion(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, false)); DrinkSounds(player); }
-        else Say("No potions");
-    }
-
-    // C-Left: drink a shield potion (the bar under your hearts).
-    if (in.press.button & BTN_CLEFT) {
-        bool has = false;
-        for (const auto& pot : hud.inv.potions) has |= royale::PotionOf(static_cast<royale::ItemId>(pot.item)).shield > 0;
-        if (!has) Say("No shield potion");
-        else if (hud.inv.shield >= royale::kMaxShield - 0.05f) Say("Your shield is full");
-        else { gSession.UseShield(); StartAction(royale::Anim::Drink, kDrinkSeconds, BottleToDrink(hud, true)); DrinkSounds(player); }
-    }
-
-    // C-Down: a tap takes the next consumable stack in hand (B then drinks one; the last tap puts the weapon back); holding it drops the weapon in hand
-    // on the ground so somebody else can take it. A stack in hand is also dropped by switching weapons.
+    // The five-slot hotbar (see HotbarSlots in Hud.inc): potions and shield potions are hotbar slots like weapons, drunk with B once selected.
+    // C-Down: a tap selects the next slot (like D-pad Right); holding it drops the selected slot (a whole potion stack, or the weapon in hand).
     {
         const std::vector<PotionStack> stacks = PotionStacks(hud);
         FollowHandStack(stacks);
+        const std::vector<HotbarSlot>& slots = HotbarSlots(hud);
         const double now = ImGui::GetTime();
         if (in.press.button & BTN_CDOWN) gStackBHold = now;
         if (gStackBHold >= 0.0) {
             if (in.cur.button & BTN_CDOWN) {
                 if (now - gStackBHold > 0.6) {
                     gStackBHold = -1.0;
-                    if (hud.weapon == royale::ItemId::BasicSword && hud.weaponRarity == royale::Rarity::Common) Say("Your starting sword stays with you");
+                    if (gHandStack >= 0) {
+                        gSession.DropSlot(static_cast<uint8_t>(gHandItem), static_cast<uint8_t>(gHandRarity));
+                        gHandStack = -1;
+                        Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                    } else if (IsStarterWeapon(hud.weapon, hud.weaponRarity)) Say("Your starting sword stays with you");
                     else { gSession.DropWeapon(); Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
                 }
             } else {
                 gStackBHold = -1.0;
-                if (stacks.empty()) Say("Nothing in your bag");
+                if (slots.empty()) Say("Your hotbar is empty: open chests to fill it");
                 else {
-                    TakeStackInHand(stacks, gHandStack + 1);   // past the last stack: the weapon again
+                    const int cur = HotbarSelected(hud, slots), n = static_cast<int>(slots.size());
+                    SelectHotbarSlot(hud, slots, cur < 0 ? 0 : (cur + 1) % n);
                     Audio_PlaySoundGeneral(NA_SE_SY_CURSOR, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
-                    if (gHandStack >= 0 && royale::PotionOf(stacks[static_cast<size_t>(gHandStack)].item).revive) Say("A Fairy revives you by itself when you would fall");
+                    if (gHandStack >= 0 && royale::PotionOf(gHandItem).revive) Say("A Fairy revives you by itself when you would fall");
                 }
             }
         }
@@ -741,7 +749,11 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     // While a text box is up, A belongs to it.
     if ((in.press.button & BTN_A) && !MessageBoxUp()) {
         const size_t target = NearestLootIndex();
-        if (target != kNoLoot) gSession.RequestPickup(static_cast<uint32_t>(target), true);
+        if (target != kNoLoot) {   // with the hotbar full, the selected slot is swapped out for it
+            uint8_t ri = 0, rr = 0;
+            HotbarReplaceTarget(&ri, &rr);
+            gSession.RequestPickup(static_cast<uint32_t>(target), true, ri, rr);
+        }
         else {   // nothing to open or take: maybe somebody to hire
             const int ally = NearbyFreeAlly();
             if (ally >= 0) {
@@ -754,21 +766,16 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
         }
     }
 
-    // D-pad Right: your next weapon; D-pad Left: back to the one before (like the bumpers on a hotbar). With spares B and C, the hand goes A, B, C, A...
+    // D-pad Right / Left: the next / previous hotbar slot (weapons and potion stacks alike), wrapping round, like the bumpers on Fortnite's hotbar.
     if (in.press.button & (BTN_DLEFT | BTN_DRIGHT)) {
-        const int spares = static_cast<int>(hud.inv.reserve.size());
-        gHandStack = -1;
-        if (spares == 0) {
-            Say("No other weapon: open chests to find more");
-        } else if (in.press.button & BTN_DRIGHT) {
-            gNextWeaponSlot = gNextWeaponSlot > spares ? 1 : gNextWeaponSlot;
-            gSession.SelectWeapon(gNextWeaponSlot);
-            gLastWeaponSlot = gNextWeaponSlot;
-            gNextWeaponSlot = gNextWeaponSlot >= spares ? 1 : gNextWeaponSlot + 1;
-        } else {   // back: swap again with the slot we last swapped, which puts the earlier weapon back in hand
-            const int back = gLastWeaponSlot >= 1 && gLastWeaponSlot <= spares ? gLastWeaponSlot : spares;
-            gSession.SelectWeapon(back);
-            gNextWeaponSlot = back;
+        const std::vector<HotbarSlot>& slots = HotbarSlots(hud);
+        const int n = static_cast<int>(slots.size());
+        if (n == 0) {
+            Say("Your hotbar is empty: open chests to fill it");
+        } else {
+            const int cur = HotbarSelected(hud, slots), dir = (in.press.button & BTN_DRIGHT) ? 1 : -1;
+            SelectHotbarSlot(hud, slots, cur < 0 ? (dir > 0 ? 0 : n - 1) : (cur + dir + n) % n);
+            if (gHandStack >= 0 && royale::PotionOf(gHandItem).revive) Say("A Fairy revives you by itself when you would fall");
         }
     }
 
@@ -801,7 +808,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
     float bestDist = 1e9f;
-    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist);
+    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist, w.ranged);
     // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
     s16 aim = player->actor.shape.rot.y;
     if (bestDist < 1e8f) {
@@ -887,6 +894,9 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
     if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    // The rush of air while falling and gliding. FLYING_AIR is a looping sound: it has to be kept going every frame (the bus exit and glider
+    // used to start it, and WIND_TRAP, once with the plain id, which gave a stuck or cut-off whoosh). Free fall is higher and louder than the glider.
+    if (gBusPhase != 1) func_800F436C(&gSfxDefaultPos, NA_SE_EV_FLYING_AIR - SFX_FLAG, gBusPhase == 2 ? 1.15f : 0.8f);
     if (UpdateBusRide(player, hud)) return;                                   // sat on the Moonfall Bus, or falling from it (BattleBus.inc)
     const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
@@ -1109,6 +1119,7 @@ void ApplyItemCvars(bool on) {
     UpdatePatchHand();
     UndoAdultHandPatches();
     gRoyaleBraceletOnAdult = on ? 1 : 0;
+    gRoyaleBootsOnChild = on ? 1 : 0;   // the game has no child boot models, so Hover and Iron Boots were invisible on child Link (you and puppets)
 }
 // The game's use of an item checks its ammo and (for the elemental arrows) magic, so give it the server's counts; the server stays the authority.
 void SyncRealAmmo(const royale::HudState& hud) {
@@ -1135,6 +1146,7 @@ struct LocalDress {
     royale::ItemId weapon = royale::ItemId::BasicSword;
 };
 LocalDress gLocalDress;
+int gAutoBoots = -1;   // playtest (AutoTest `boots:<n>`): the boots Link is dressed in whatever the HUD says; -1 = off
 bool gLocalMaskSaved = false;
 u8 gSavedLocalMask = PLAYER_MASK_NONE;
 bool LocalDressOn() { return gLocalDress.on; }
@@ -1149,7 +1161,7 @@ void SyncLocalDress(Player* player, const royale::HudState& hud) {
     gLocalDress.on = dressOn;
     gSelfInvulnLeft = hud.invulnLeft;
     if (!gLocalDress.on) return;
-    gLocalDress.boots = PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
+    gLocalDress.boots = gAutoBoots >= 0 ? static_cast<s8>(gAutoBoots) : PlayerBootsFor(WornGear(hud, royale::GearSlot::Boots));
     gLocalDress.mask = PlayerMaskFor(WornGear(hud, royale::GearSlot::Mask));
     player->currentMask = gLocalDress.mask;
     gLocalDress.weapon = hud.weapon;
@@ -1298,7 +1310,9 @@ void OnPlayerUpdate() {
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     gRoyaleNoAimView = 0;
     gRoyaleNoUseOnTakeOut = 0;
-    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
+    gRoyaleCamGuard = 0;
+    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; gRoyaleCamPitchDown = gRoyaleCamBack = 0.0f; gCamPitchNow = gCamBackNow = gCamFightLift = 0.0f; return; }
+    gRoyaleCamGuard = 1;   // in a match the drawn camera never sits inside or behind a trunk, wall or cliff (patches/0020)
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
@@ -1390,6 +1404,7 @@ void OnPlayerUpdate() {
     UpdateSquad(player, hud);
     UpdateLocalRide(player, hud);
     UpdateRideCamera(player);
+    UpdateActionCamera(player);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
@@ -1580,7 +1595,9 @@ void ReportEvents(const royale::HudState& hud) {
                         if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
                         HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
-                        if(!DebugOn(kDbgHitFx)) Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE,&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+                        // HitFeedback already rings the blow on a target in earshot; a far one (a long bow shot) gets the same sound here, flat.
+                        if(!DebugOn(kDbgHitFx) && (target == gActorOf.end() || std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)>=1200.0f))
+                            Audio_PlaySoundGeneral(HitSfxFor(hud.weapon),&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
 
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
@@ -1589,7 +1606,7 @@ void ReportEvents(const royale::HudState& hud) {
                         if (target != gActorOf.end()) {
                             if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
-                            if(!DebugOn(kDbgHitFx) && std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)<1200.0f) soundAt(e.id,NA_SE_IT_SWORD_STRIKE);
+                            // (the blow's sound comes from HitFeedback, by weapon class)
 
                         }
                     }
@@ -1613,8 +1630,7 @@ void ReportEvents(const royale::HudState& hud) {
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
                         StartAction(royale::Anim::ItemGet, 0.9f);   // everyone else sees you hold it up
-                        Vec3f at = { l.x, py + 30.0f, l.z };
-                        Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(NA_SE_EV_TBOX_OPEN, l.x, py + 30.0f, l.z);
                     }
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     if (itemId == royale::ItemId::HeartContainer) Audio_PlayFanfare(NA_BGM_HEART_GET);
@@ -1643,8 +1659,7 @@ void ReportEvents(const royale::HudState& hud) {
                     if (std::hypot(pr.pos.x - me->actor.world.pos.x, pr.pos.z - me->actor.world.pos.z) < kPuppetHearing && FloorAt(pr.pos.x, pr.pos.z, &py)) {
                         const bool bush = pr.kind == royale::PropKind::Bush;
                         SparkBurst(gPlayState, pr.pos.x, py + 20.0f, pr.pos.z, bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
-                        Vec3f at = { pr.pos.x, py + 20.0f, pr.pos.z };
-                        Audio_PlaySoundGeneral(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, pr.pos.x, py + 20.0f, pr.pos.z);
                     }
                 }
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
@@ -1739,8 +1754,9 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
+                if (mine && !me && !royale::IsBossId(e.id) && hud.selfAlive && !hud.selfKnocked) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives a standing eliminator a heart and shield (none to one who is down)
                 if (mine && !me) {   // for the death and end screens (and their medals)
+                    if (!royale::IsBossId(e.id)) Audio_PlaySoundGeneral(NA_SE_SY_CORRECT_CHIME, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);   // kill confirmed
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;
                     const double now = ImGui::GetTime();
