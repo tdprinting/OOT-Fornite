@@ -527,16 +527,28 @@ void ApplyRocks(Player* player) {
     }
 }
 
+// Nothing solid (a wall, a hill, a house) between Link's chest and theirs: the game's side of the server's height-grid sight test.
+static bool ClearShotTo(const Player* player, const Actor* target) {
+    if (gPlayState == nullptr || target == nullptr) return true;
+    Vec3f from = { player->actor.world.pos.x, player->actor.world.pos.y + 40.0f, player->actor.world.pos.z };
+    Vec3f to = { target->world.pos.x, target->world.pos.y + 40.0f, target->world.pos.z }, hit;
+    CollisionPoly* poly = nullptr; s32 bgId = 0;
+    return !BgCheck_EntityLineTest1(&gPlayState->colCtx, &from, &to, &hit, &poly, true, true, false, true, &bgId);
+}
+
 // What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
+// A shot (`ranged`) aims: a 30 degree cone where Link faces, nobody behind him. Players must have a clear line from Link either way.
 // Returns 0 with *outDist left at 1e9 when there is none.
-static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
+static constexpr int kMeleeHalfCone = 0x2000;   // 45 degrees each side (binary angle)
+static constexpr int kRangedHalfCone = 0x0AAB;  // 15 degrees each side
+static uint16_t PickStrikeTarget(Player* player, float range, float* outDist, bool ranged = false) {
     uint16_t best = 0;
     float bestDist = 1e9f;
     // Z-targeting something (a player, a mini boss, a major boss) is choosing it: the blow goes to that one while it is in reach, whichever way the
     // sticks point (the game turns Link to face it, so the usual cone is not needed).
     if (const Actor* locked = player->focusActor) {
         uint16_t id = 0; float tx = 0, tz = 0, edge = 0;
-        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive) { tx = st->second.x; tz = st->second.z; } else id = 0; }
+        if (auto p = gPuppetOf.find(locked); p != gPuppetOf.end()) { id = p->second; auto st = gState.find(id); if (st != gState.end() && st->second.alive && ClearShotTo(player, locked)) { tx = st->second.x; tz = st->second.z; } else id = 0; }
         else if (auto b = gBossOf.find(locked); b != gBossOf.end() && b->second <= 0xFFFFu) {
             id = static_cast<uint16_t>(b->second); edge = royale::kBossBodyRadius;
             if (!KnownPosition(id, &tx, &tz)) id = 0;
@@ -556,11 +568,13 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist) {
         float dx = st->second.x - player->actor.world.pos.x, dz = st->second.z - player->actor.world.pos.z;
         float d = std::sqrt(dx * dx + dz * dz);
         if (d > range * 1.05f) continue;
-        // Within a 90 degree cone in front of Link (binary angle 0x2000 = 45 degrees).
+        // A swing: a 90 degree cone in front of Link, or anyone right on top of him. A shot: the narrow cone only.
         s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
         s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
-        if (std::abs(static_cast<int>(off)) > 0x2000 && d > 60.0f) continue;
-        if (d < bestDist) { bestDist = d; best = id; }
+        const int offAbs = std::abs(static_cast<int>(off));
+        if (ranged ? offAbs > kRangedHalfCone : (offAbs > kMeleeHalfCone && d > 60.0f)) continue;
+        if (d >= bestDist || !ClearShotTo(player, actor)) continue;   // behind a wall or over a hill: not this one
+        bestDist = d; best = id;
     }
     // The mini bosses are big: they count from their edge, not their middle.
     if (gSession.Client()) {
@@ -633,7 +647,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
             for (const Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ITEMACTION].head; a != nullptr; a = a->next) if (a->id == ACTOR_ARMS_HOOK) out = true;
         if (out && !sHookOut && hud.weapon == royale::ItemId::Hookshot && LiveAndAlive(hud) && InField()) {
             float dist = 1e9f;
-            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist);
+            const uint16_t target = PickStrikeTarget(player, royale::WeaponOf(hud.weapon).range, &dist, true);
             if (dist < 1e8f) gSession.ReportAttack(target, true);
         }
         sHookOut = out;
@@ -794,7 +808,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
     gAttackCooldown = std::max(1, static_cast<int>(std::ceil(w.cooldown * royale::kTickHz)));
 
     float bestDist = 1e9f;
-    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist);
+    const uint16_t best = PickStrikeTarget(player, w.range, &bestDist, w.ranged);
     // Show the swing or the shot: face what you are hitting, strike the pose, and loose the arrow or throw the bomb.
     s16 aim = player->actor.shape.rot.y;
     if (bestDist < 1e8f) {
@@ -1079,6 +1093,20 @@ u8 RealItemFor(royale::ItemId w) {
 const char* const kItemCvars[5] = { CVAR_ENHANCEMENT("EquipmentAlwaysVisible"), CVAR_ENHANCEMENT("BowSlingshotAmmoFix"), CVAR_CHEAT("TimelessEquipment"), CVAR_ENHANCEMENT("PersistentMasks"), CVAR_ENHANCEMENT("AdultMasks") };
 int gSavedItemCvars[5] = {};
 bool gItemCvarsOn = false;
+// The game's EquipmentAlwaysVisible patch for adult Link (UpdatePatchHand) writes a call to the adult hand over one fixed command of four child
+// hand-and-item lists. In this port's resources those commands are not that call but the texture loads of the models (G_SETTIMG_OTR_HASH), so the
+// patch cut the load in two and left its 64-bit hash behind as a stray command: the renderer logged "Unhandled OP code 0x30 / 0xA9" thousands of
+// times a second and the models drew with the wrong textures. Take the four patches back out (the child's own fist stays on the item); run after
+// every UpdatePatchHand, which the game also does on each scene start.
+void UndoAdultHandPatches() {
+    static const struct { const char* path; const char* name; } kPatches[] = {
+        { "__OTR__objects/object_link_child/gLinkChildLeftFistAndKokiriSwordNearDL", "adultKokiriSword" },
+        { "__OTR__objects/object_link_child/gLinkChildRightHandHoldingSlingshotNearDL", "adultSlingshot" },
+        { "__OTR__objects/object_link_child/gLinkChildLeftFistAndBoomerangNearDL", "adultBoomerang" },
+        { "__OTR__objects/object_link_child/gLinkChildRightFistAndDekuShieldNearDL", "adultDekuShield" },
+    };
+    for (const auto& p : kPatches) ResourceMgr_UnpatchGfxByName(p.path, p.name);
+}
 void ApplyItemCvars(bool on) {
     if (on == gItemCvarsOn) return;
     gItemCvarsOn = on;
@@ -1089,6 +1117,7 @@ void ApplyItemCvars(bool on) {
     // The game only swaps the child's hand-and-item models onto the adult hand (Kokiri sword, Deku shield, slingshot, boomerang) when a scene
     // starts, so switching the enhancement on mid-scene left adult Link with a child's fist: only the handle showed. Patch them now.
     UpdatePatchHand();
+    UndoAdultHandPatches();
     gRoyaleBraceletOnAdult = on ? 1 : 0;
     gRoyaleBootsOnChild = on ? 1 : 0;   // the game has no child boot models, so Hover and Iron Boots were invisible on child Link (you and puppets)
 }
@@ -1565,7 +1594,9 @@ void ReportEvents(const royale::HudState& hud) {
                         if (!DebugOn(kDbgHitFx) && target != gActorOf.end()) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 14);
                         HitFeedback(e.id, e.other, e.amount, e.health <= 0.001f, false);
                         if (target != gActorOf.end() && e.health > 0.001f) gFlinchFrames[e.id] = 8;   // they reel from it
-                        if(!DebugOn(kDbgHitFx)) Audio_PlaySoundGeneral(NA_SE_IT_SWORD_STRIKE,&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+                        // HitFeedback already rings the blow on a target in earshot; a far one (a long bow shot) gets the same sound here, flat.
+                        if(!DebugOn(kDbgHitFx) && (target == gActorOf.end() || std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)>=1200.0f))
+                            Audio_PlaySoundGeneral(HitSfxFor(hud.weapon),&gSfxDefaultPos,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
 
                     } else {
                         // two others fighting nearby: you can see the slash and hear the blow
@@ -1574,7 +1605,7 @@ void ReportEvents(const royale::HudState& hud) {
                         if (target != gActorOf.end()) {
                             if (!DebugOn(kDbgHitFx)) Actor_SetColorFilter(target->second, 0x4000, 0xFF, 0, 8);
                             if (e.health > 0.001f) gFlinchFrames[e.id] = 8;
-                            if(!DebugOn(kDbgHitFx) && std::hypot(tx-me->actor.world.pos.x,tz-me->actor.world.pos.z)<1200.0f) soundAt(e.id,NA_SE_IT_SWORD_STRIKE);
+                            // (the blow's sound comes from HitFeedback, by weapon class)
 
                         }
                     }
@@ -1722,8 +1753,9 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
+                if (mine && !me && !royale::IsBossId(e.id) && hud.selfAlive && !hud.selfKnocked) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives a standing eliminator a heart and shield (none to one who is down)
                 if (mine && !me) {   // for the death and end screens (and their medals)
+                    if (!royale::IsBossId(e.id)) Audio_PlaySoundGeneral(NA_SE_SY_CORRECT_CHIME, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);   // kill confirmed
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;
                     const double now = ImGui::GetTime();

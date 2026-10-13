@@ -127,6 +127,7 @@ UiState& Ui() {
         gSession.SetWeatherOptions({ static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange) });
         gSession.SelectMap(ui.mapId);
         gSession.SetMajorBoss(ui.majorBoss);
+        gSession.SetNoveltyAllies(DevMode());
         gSession.SetPlayerLimit(ui.playerLimit);
         gSession.SetTeamMode(static_cast<royale::TeamMode>(ui.teamMode));
         gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0.0f);

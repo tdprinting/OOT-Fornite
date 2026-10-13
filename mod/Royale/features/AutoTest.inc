@@ -18,6 +18,7 @@
 //   tour:<overworld|dungeons|all>   warp through each scene of the list in turn, 3 seconds in each
 //   check                   assert Link exists in a loaded scene and log the mod state block
 //   shot:<name>             ask the runner for a screenshot (<name>.png in the run folder) and wait until it is taken
+//   prof:<sec>              ask the runner to sample the game's CPU use with perf for <sec> wall seconds; logs the frame rate meanwhile
 //   quit                    write PASS and exit with code 0
 // Exit codes: 0 pass, 3 a step failed or timed out. A crash or hang is caught by the runner (gdb), not here.
 
@@ -133,7 +134,7 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "cvar") {
         const size_t eq = s.arg.find('=');
         if (eq != std::string::npos) CVarSetInteger(s.arg.substr(0, eq).c_str(), std::atoi(s.arg.c_str() + eq + 1));
-        Ui().loaded = false; Ui(); RefreshRegularSettings();
+        gDebugLoaded = false; Ui().loaded = false; Ui(); RefreshRegularSettings();
         return true;
     }
     if (s.verb == "skin") {
@@ -238,13 +239,27 @@ bool AutoRun(const AutoStep& s, float secs) {
         }
         return true;
     }
+    if (s.verb == "prof") {
+        static unsigned startFrames = 0;
+        static double startTime = 0;
+        const std::string req = gAuto.beatPath.substr(0, gAuto.beatPath.find_last_of("/\\") + 1) + "prof-request.txt";
+        if (gAuto.sub == 0) {
+            std::ofstream(req, std::ios::trunc) << s.arg << "\n";
+            startFrames = gAuto.frames; startTime = AutoNow(); gAuto.sub = 1;
+            return false;
+        }
+        if (std::filesystem::exists(req) && AutoNow() - startTime < std::atof(s.arg.c_str()) + 90) return false;
+        const double wall = AutoNow() - startTime;
+        AutoLog("  prof: %u game updates in %.1f s = %.1f per second (full speed is 20)", gAuto.frames - startFrames, wall, (gAuto.frames - startFrames) / std::max(wall, 0.1));
+        return true;
+    }
     if (s.verb == "quit") AutoFinish(true, "all steps done");
     AutoFinish(false, ("unknown step " + s.verb).c_str());
     return true;
 }
 
 float AutoTimeout(const AutoStep& s) {
-    if (s.verb == "wait") return 1e9f;
+    if (s.verb == "wait" || s.verb == "prof") return 1e9f;
     if (s.verb == "ingame") return 180;
     if (s.verb == "state") return 600;
     if (s.verb == "host" || s.verb == "hostbots") return 300;

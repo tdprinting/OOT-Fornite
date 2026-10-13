@@ -17,7 +17,7 @@ Time to lose all 7 hearts while standing outside the safe zone on a big map (sma
 
 | Phase | Before (hearts/s) | Time to die | Now (hearts/s) | Time to die | Shrink time before → now |
 |---|---|---|---|---|---|
-| 1 | 0.5 | 14 s | 0.2 | 35 s | 55 → 65 s |
+| 1 | 0.5 | 14 s | 0.2 | 35 s | 55 → 65 s (hold 55 → 40 s) |
 | 2 | 1.0 | 7 s | 0.4 | 17.5 s | 45 → 55 s |
 | 3 | 1.5 | 4.7 s | 0.7 | 10 s | 40 → 45 s |
 | 4 | 2.0 | 3.5 s | 1.0 | 7 s | 35 → 38 s |
@@ -52,18 +52,25 @@ Hits to take a full 7 hearts with no shield, Common / Legendary. Time is the fas
 | Weapon | Before | Now | Fastest kill now |
 |---|---|---|---|
 | Deku Stick | 14 / 8 | 17 / 10 | 11.2 s |
-| Basic Sword | 13 / 8 | 15 / 9 | 9.1 s |
-| Kokiri Sword | 9 / 5 | 11 / 6 | 6.0 s |
+| Basic Sword | 15 / 9 | 13 / 8 | 7.2 s (0.55 x 0.65 s → 0.65 x 0.6 s) |
+| Kokiri Sword | 11 / 6 | 10 / 6 | 5.4 s (0.8 → 0.9) |
 | Master Sword | 5 / 3 | 6 / 4 | 3.0 s |
 | Biggoron's Sword | 4 / 2 | 5 / 3 | 4.4 s |
 | Megaton Hammer | 3 / 2 | 4 / 2 | 3.9 s |
 | Giant's Hammer | 3 / 2 | 3 / 2 | 3.4 s (base 3.2 → 2.8) |
-| Slingshot | 14 / 8 | 17 / 10 | 12.8 s |
-| Fairy Bow | 7 / 4 | 9 / 5 | 8.0 s |
+| Slingshot | 17 / 10 | 13 / 8 | 9.6 s (0.5 → 0.65) |
+| Fairy Bow | 9 / 5 | 7 / 4 | 6.0 s (1.0 → 1.3) |
 | Bombs | 4 / 3 | 5 / 3 | 8.0 s |
 | Bombchus | 5 / 3 | 6 / 4 | 12.5 s |
 | Fire Arrows (plus burn) | 8 / 5 | 10 / 6 | 10.8 s |
 | Light Arrows | 4 / 3 | 6 / 3 | 9.0 s (base 1.8 → 1.6) |
+
+Rows with a change in brackets are from the line-of-sight pass (2026-10): their Before is the previous Now. Other rows are unchanged.
+Triple Slingshot: 0.45 → 0.55 a pellet, so it stays ahead of the stronger Slingshot. Deku Nuts: stun 2.0 s → 1.5 s (x rarity: 2.6 s at Legendary) and cooldown 3.0 → 3.5 s, so even a Legendary nut leaves a 0.9 s gap (was 0.4 s at Rare: near stun-lock).
+
+### Line of sight
+
+Every player hit needs a clear line (`Match::CanSee`, the nav grid's `SightClear`, the same test bots use): a hill, wall or tall prop between attacker and target spends the shot and hurts nobody (`AttackResult::obstructed`). Spin-attack extras need a line from the attacker; bomb splash and a stun splash need one from the blast. In the game, shots aim through a 30 degree cone (swings keep 90 degrees) and skip players behind collision (`BgCheck_EntityLineTest1` in `Terrain.inc` `PickStrikeTarget`).
 
 ## Bosses and hazards
 
@@ -78,6 +85,33 @@ Every boss hit is 75% of what it was: a Stalfos swing goes from 0.8 to 0.6 heart
 | Match length | 349 s | 404 s |
 | Alive at 1:00 / 3:00 (of 23) | 20.6 / 12.9 | 20.1 / 12.4 |
 | Storm eliminations per match | 4.2 | 3.5 |
+
+## Moonfall, 32 players (`royale_balance 8 normal 12 32`), line-of-sight pass
+
+| | Before | Now |
+|---|---|---|
+| Match length | 305 s | 301 s |
+| First kill | 42 s | 47 s |
+| Alive at 1:00 / 3:00 (of 31) | 14.5 / 4.0 | 11.2 / 4.2 |
+| Storm eliminations per match | 1.6 | 1.5 |
+| Boss eliminations per match | 1.0 | 1.1 |
+| Weapon at death: Basic Sword | 23.8 | 25.1 |
+
+Eight seeds, so a point or two either way is noise (the same numbers with only the Triple Slingshot changed gave 331 s and 11.9 alive at 1:00). The starting sword buff is what costs the early survivors: the plan's 0.7 x 0.55 s gave 11.1 alive at 1:00, the old sword 15.6 with everything else changed; 0.65 x 0.6 s is the middle. The 20+ at 1:00 target was already missed before this pass (bots still die holding the starting sword: more loot on Moonfall is the next lever).
+
+## Moonfall loot density (`royale_balance 8 normal 12 32`)
+
+All 125 authored sites already held a chest (the `lootCount=84` cap in `game_server.h` never reached Moonfall, since the authored maps pass 0 scattered chests; the line is removed). What changed: a Rare or better chest spills a second item (one tier down) on the floor beside it, and 190 Common/Uncommon/Rare weapons lie on the floor beside the chest sites (`GenerateFloorWeapons`, `shared/loot.h`; about 1.5 per site, A to take).
+
+| | Before | Now |
+|---|---|---|
+| Match length | 346 s | 318 s |
+| First kill | 36 s | 39 s |
+| Alive at 1:00 / 3:00 (of 31) | 11.2 / 4.9 | 11.0 / 3.9 |
+| Chests opened per match | 34 | 28 |
+| Weapon at death: Basic Sword | 25.6 | 17.0 |
+
+Basic Sword deaths fall by a third (of about 31 deaths, 55% now, was 82%). The first kill stays near 40 s: most sword-only deaths are bots that land together and brawl in the first minute before looting (0 chests opened, no backup), which is bot behaviour, not loot count. Floor items beside the chests also replaced some chest opening (28 vs 34). Eight seeds, so a few seconds either way is noise.
 
 ## One set of hit rules
 

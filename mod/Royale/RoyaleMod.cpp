@@ -304,4 +304,7 @@ void WarDraw(GameState* state);
 #include "features/Lighting.inc"
 #include "features/EngineBridge.inc"
 #include "features/CrashContext.inc"
+// Headless playtest driver: PC playtest builds only, never in the Android game.
+#ifndef __ANDROID__
 #include "features/AutoTest.inc"
+#endif

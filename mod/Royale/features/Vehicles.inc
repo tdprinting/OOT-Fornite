@@ -92,6 +92,16 @@ void PoseSeq(Player* player, const AnimSeq& seq, float t) {
     j[0].x = rootX;
     j[0].z = rootZ;
 }
+// A knocked-down player has no crawl clip in the game, so the flat pose is worked along: the body heaves and the shoulders sway while they really move.
+void CrawlShuffle(Player* player, float speed, float t) {
+    const float amt = std::clamp(speed / 2.0f, 0.0f, 1.0f);
+    if (amt <= 0.05f || player->actor.scale.y <= 0.0f) return;
+    Vec3s* j = player->skelAnime.jointTable;
+    const float ph = t * 5.0f;
+    j[0].y = static_cast<s16>(j[0].y + std::fabs(std::sin(ph)) * 55.0f * amt / player->actor.scale.y);
+    j[1].x = static_cast<s16>(j[1].x + std::sin(ph) * 0x600 * amt);
+    j[1].z = static_cast<s16>(j[1].z + std::cos(ph) * 0x300 * amt);
+}
 // Poses Link for the emote at this moment.
 void PoseEmote(Player* player) {
     const float t = static_cast<float>(ImGui::GetTime() - gEmote.startAt);
@@ -110,7 +120,10 @@ void LocalLink_Draw(Actor* actor, PlayState* play) {
     if (player != GET_PLAYER(play)) { Player_Draw(actor, play); return; }
     const bool emote = gEmote.id >= 0 && gEmote.player == player;
     if (emote) PoseEmote(player);
-    else if (gSelfKnocked) PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+    else if (gSelfKnocked) {
+        PoseSeq(player, SeqFor(static_cast<uint8_t>(royale::Anim::Knocked), royale::ItemId::BasicSword, 0, royale::ItemId::DinsFire, player), 9.0f);
+        CrawlShuffle(player, player->actor.speedXZ, static_cast<float>(ImGui::GetTime()));
+    }
     else PoseLocalLinkClips(player, gSprinting, gSkydiving);   // our jump, landing and sprint (LinkAnims.inc)
     DrawLocalDressed(player, play, !emote && !gSelfKnocked);
     DrawVictoryCrown(play,player,gSession.Hud().selfId);

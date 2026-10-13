@@ -126,6 +126,30 @@ inline std::vector<LootSpawn> GenerateSpotLoot(uint64_t seed, const std::vector<
     return out;
 }
 
+// Weapons lying on the ground beside `count` of the chest spots (spread evenly through the list; more than the spots wraps round for a second one), so a landing near a chest has something to grab at once.
+// Mostly Common, some Uncommon and Rare; `valid` keeps the offset on ground that can be walked at (else the weapon lies on the spot itself).
+inline std::vector<LootSpawn> GenerateFloorWeapons(uint64_t seed, const std::vector<Vec2>& spots, int count, const PlacementFn& valid = nullptr) {
+    Rng rng(seed ^ 0x666C6F6Full); // "floo"
+    std::vector<LootSpawn> out;
+    if (spots.empty() || count <= 0) return out;
+    for (int n = 0; n < count; n++) {
+        const Vec2 spot = spots[static_cast<size_t>(n) * spots.size() / static_cast<size_t>(count) % spots.size()];
+        const int roll = static_cast<int>(rng.Below(100));
+        Rarity tier = roll < 25 ? Rarity::Common : roll < 75 ? Rarity::Uncommon : Rarity::Rare;
+        ItemId pool[kPoolItemCount];
+        int eligible = 0;
+        for (int i = 0; i < kPoolItemCount; i++)
+            if (kItems[i].kind == ItemKind::Weapon && tier >= kItems[i].minRarity && tier <= kItems[i].maxRarity) pool[eligible++] = kItems[i].id;
+        if (eligible == 0) continue;
+        const ItemId item = pool[rng.Below(static_cast<uint32_t>(eligible))];
+        const float angle = static_cast<float>(rng.Unit() * 6.283185307179586);
+        Vec2 at = {spot.x + std::cos(angle) * 85.0f, spot.z + std::sin(angle) * 85.0f};
+        if (valid && !valid(at)) at = spot;
+        out.push_back({at, item, tier, false, false});
+    }
+    return out;
+}
+
 // Chests on climbs and in hideaways: always on the good tiers, better the harder they are to get to. `bonus` is ChestSite::bonus.
 inline LootSpawn SiteChest(Rng& rng, Vec2 at, int bonus) {
     Rarity tier = RollRarity(rng, true);

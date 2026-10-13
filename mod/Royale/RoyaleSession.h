@@ -165,6 +165,7 @@ class RoyaleSession {
         if (playerLimit != kMaxPlayers) server->SetPlayerLimit(playerLimit);
         if (teamMode != TeamMode::Solo) server->SetTeamMode(teamMode);
         server->SetMajorBoss(majorBoss);
+        server->SetNoveltyAllies(noveltyAllies);
         server->SetWeatherOptions(weatherOptions);
         if (soloTest) {
             server->SetSoloTest(true);
@@ -243,6 +244,7 @@ class RoyaleSession {
     bool SelectMap(int id) { selectedMap = ClampMap(id); return server ? server->SelectMap(selectedMap) : false; }
     void HireAlly(int index) { if (client) client->HireAlly(index); }
     void SetMajorBoss(bool on) { majorBoss = on; if (server) server->SetMajorBoss(on); }
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; if (server) server->SetNoveltyAllies(on); }
     void SetWeatherOptions(const WeatherOptions& o) { weatherOptions = o; if (server) server->SetWeatherOptions(o); }
     void SetBotDifficulty(BotDifficulty d) { botDifficulty = d; if (server) server->SetBotDifficulty(d); }
 
@@ -529,6 +531,7 @@ class RoyaleSession {
     bool solo = false;
     bool isSandbox = false;
     bool majorBoss = true;
+    bool noveltyAllies = false;   // the War Table sets it from Developer mode
     WeatherOptions weatherOptions;
     float autoStart = kLobbyAutoStartSec;
     Mode mode = Mode::Idle;
