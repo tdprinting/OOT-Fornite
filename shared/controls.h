@@ -23,7 +23,7 @@ inline bool JumpPressed(Scheme s, uint16_t pressed, bool aHasTarget, bool touchJ
     return (pressed & kA) != 0 && !aHasTarget;
 }
 
-// Ability. Classic: D-pad Up. Battle Royale: D-pad Up or C-Up (C-Up is free because the jump moved to A).
+// Ability: its own dedicated button, never a hotbar slot. Classic: D-pad Up. Battle Royale: D-pad Up or C-Up (C-Up is free because the jump moved to A).
 inline bool AbilityPressed(Scheme s, uint16_t pressed) {
     return (pressed & (s == Scheme::Classic ? kDUp : static_cast<uint16_t>(kDUp | kCUp))) != 0;
 }
@@ -31,8 +31,10 @@ inline bool AbilityPressed(Scheme s, uint16_t pressed) {
 // The prompt for each action as the hotbar shows it.
 enum class Glyph : uint8_t { None, A, B, Z, R, Start, CUp, CDown, CLeft, CRight, DUp, DDown, DLeft, DRight, DLeftRight };
 struct Prompt { Glyph weapon, swap, shield, potion, ability, emote, jump, interact; };
+// The hotbar (kHotbarSlots usable slots: weapons and potion stacks): D-pad Left/Right (or a C-Down tap) picks the slot, B uses it, holding C-Down
+// drops it. The shield is worn (Z raises it), not drunk from a button, and potions are hotbar slots, so neither has a prompt of its own.
 inline Prompt PromptsFor(Scheme s) {
-    Prompt p{Glyph::B, Glyph::DLeftRight, Glyph::CLeft, Glyph::DDown, Glyph::DUp, Glyph::CRight, Glyph::A, Glyph::A};
+    Prompt p{Glyph::B, Glyph::DLeftRight, Glyph::None, Glyph::CDown, Glyph::DUp, Glyph::CRight, Glyph::A, Glyph::A};
     if (s == Scheme::Classic) p.jump = Glyph::CUp;
     return p;
 }

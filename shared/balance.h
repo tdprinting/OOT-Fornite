@@ -52,6 +52,7 @@ constexpr float kAutoGlideHeight = 600.0f;   // the glider opens by itself this 
 constexpr float kBusExitPush = 1.0f;         // seconds a jumper keeps the bus's speed, so a jump carries you on ahead of it
 constexpr float kLandedGraceSec = 2.0f;      // protection ends this long after touching down
 constexpr float kDropExtraSec = 25.0f;       // the drop ends at the latest this long after the bus leaves the island
+constexpr float kDropBotForceSec = 10.0f;   // a bot still in the air this long after the bus leaves is put down on the ground (the drop would stall on it)
 constexpr float kLandedDeadlineSec = 8.0f;   // anyone still not down this long into the match loses the protection anyway
 constexpr float kBusHornCooldown = 1.5f;     // one honk per player this often
 
@@ -71,14 +72,16 @@ constexpr float kSprintMinStamina = 0.15f;  // too winded to start below this
 constexpr float kMaxHealth = 7.0f; // hearts everyone starts a match with (Heart Containers and Pieces still add up to kMaxHealthCap)
 constexpr float kRareChestHeartPieceChance = 0.10f; // a Rare chest holds a Piece of Heart instead of its roll this often
 constexpr int kChestRupeesMin = 2, kChestRupeesMax = 3; // rupees (green or blue) that spill out of an opened chest
-constexpr int kPotionSlots = 5;   // the bag holds this many kinds of consumable; each kind stacks (see PotionStackMax in items.h), like Fortnite's med kits and shield potions
+constexpr int kHotbarSlots = 5;   // usable slots, Fortnite style: weapons and consumable stacks share them (the starter sword, worn gear and the ability take none)
+constexpr int kPotionSlots = kHotbarSlots;   // most consumable kinds carried; each kind stacks in one slot (see PotionStackMax in items.h)
 constexpr int kMaxPotions = 30;   // most single potions carried in all (kPotionSlots stacks of up to six)
 constexpr int kWalletMax = 1000;  // the most rupees you can carry
 constexpr float kLobbyAutoStartSec = 120.0f; // the lobby starts the match by itself after this long (the host can turn it off)
 constexpr float kLobbyStartGraceSec = 30.0f; // if the host's game hasn't started it by then, the server does
 constexpr float kMaxShield = 3.0f;   // the shield bar under the hearts, in hearts' worth of damage it soaks up (shown as 0 to 100)
 constexpr int kMinPlayers = 2;        // the host's player-count slider runs from kMinPlayers to kMaxPlayers
-constexpr int kMaxReserveWeapons = 2; // backup weapons carried besides the one in hand (the weapon part of the hotbar)
+constexpr int kMaxReserveWeapons = kHotbarSlots - 1; // backup weapons besides the one in hand (all five slots weapons at most; see kHotbarSlots)
+constexpr uint8_t kHandSlot = 0xFF;  // names the weapon in hand where a hotbar slot is given as a potion stack's item id (PickupRequest, DropItemRequest)
 // Share of a player's items that is left on the ground when they are eliminated (money and ammo drop 60%).
 constexpr float kDeathDropShare = 0.5f;
 
@@ -144,7 +147,7 @@ constexpr int kStormPhaseCount = 6;
 constexpr std::array<StormPhaseDef, kStormPhaseCount> kStormPhases = {{
     // Time to lose all 7 starting hearts standing outside (big map): 35 s, 17 s, 10 s, 7 s, 4.7 s, 3.5 s. Early storm is a nudge you can
     // run out of; late storm still kills, but a potion buys you real time. The shrinks are a little slower than before so there is time to run.
-    {55, 65, 0.60f, 0.2f},
+    {40, 65, 0.60f, 0.2f},   // the drop already takes 60 to 85 s: a short first hold
     {45, 55, 0.38f, 0.4f},
     {35, 45, 0.22f, 0.7f},
     {28, 38, 0.12f, 1.0f},

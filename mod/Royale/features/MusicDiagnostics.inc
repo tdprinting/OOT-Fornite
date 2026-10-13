@@ -856,7 +856,7 @@ void Say(const std::string& text) {
     Notification::Emit({ .message = text });
 }
 
-// B attacks with the weapon the server says you hold; D-pad Down drinks a potion. Damage, range, cooldown and healing are
+// B attacks with the weapon the server says you hold (or drinks from the selected hotbar stack). Damage, range, cooldown and healing are
 // decided by the server, so this only chooses a target: the nearest living player in front of Link and within weapon range.
 int gCurrentPoi = -1;        // which point of interest the player is standing in, -1 for none
 
@@ -872,9 +872,7 @@ void NoticePoi(Player* player, const royale::HudState& hud) {
     gCurrentPoi = now;
 }
 
-int gNextWeaponSlot = 1;
-int gLastWeaponSlot = 0;     // the reserve slot last swapped in (D-pad Left swaps it back)
-int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you     // which backup slot D-pad Left swaps in next
+int gJumpAssistFrames = 0;   // frames left in which a jump pulls you onto a ledge in front of you
 
 // A swing that finds no player cuts the bush or breaks the rock in front of Link (a boulder needs something heavy or explosive).
 

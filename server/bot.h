@@ -375,6 +375,8 @@ class BotController {
         Vec2 pathGoal = {};
         float repathAt = 0, lastSearchAt = -100;
         float bossAvoidUntil = 0;           // keeping clear of a mini boss that was in its way
+        float padHeadUntil = 0;             // gives up on the pad it is walking to at this time
+        float padReadyAt = 0;               // a launch pad was used (or found useless) until then
         bool leaving = false;               // set out early for the circle the zone will close to (leaveTo), on foot or in a cart
         Circle leaveTo = {};
         bool pathFailed = false;
@@ -1212,7 +1214,7 @@ class BotController {
             case ItemKind::Weapon: {
                 const float mine = EffectiveDps(p.weapon), v = EffectiveDps({s.item, s.rarity});
                 if (v > mine * 1.1f) return (v - mine) * 1.2f * (needGear ? 2.0f : 1.0f);
-                return static_cast<int>(p.reserve.size()) < kMaxReserveWeapons ? 0.25f + v * 0.1f : 0.0f; // a spare for the hotbar
+                return Match::HotbarFree(p) ? 0.25f + v * 0.1f : 0.0f; // a spare in a free hotbar slot (weapons and potions share kHotbarSlots)
             }
             case ItemKind::Shield: {
                 const float v = ShieldReduction(s.item, s.rarity);
@@ -1221,7 +1223,7 @@ class BotController {
                 return v > mine + 0.02f ? (v - mine) * 4.0f : 0.0f;
             }
             case ItemKind::Consumable: {
-                if (PotionOf(s.item).revive) return HasFairy(p) ? 0.0f : 1.3f;
+                if (PotionOf(s.item).revive) return HasFairy(p) || !Match::PotionRoom(p, s.item, s.rarity) ? 0.0f : 1.3f;
                 if (PotionOf(s.item).shield > 0) return p.armor < PotionOf(s.item).shieldCap - 0.3f && Match::PotionRoom(p, s.item, s.rarity) ? 0.55f : 0.0f;
                 if (!Match::PotionRoom(p, s.item, s.rarity)) return 0.0f;
                 const float need = 1.0f + (p.maxHealth - p.health) * 0.3f;
@@ -1685,6 +1687,7 @@ class BotController {
         if (s.outsideZone) {
             ROYALE_BOT_BRANCH(kBrStorm);
             WantSprint(mem, tune, true);
+            if (UseLaunchPad(m, p, mem, zoneGoal, dt)) { if (engaged) TryAttack(m, p, mem, *foe, dist); return; }
             Steer(m, p, mem, zoneGoal, dt);
             if (engaged) TryAttack(m, p, mem, *foe, dist);
             return;
@@ -1989,6 +1992,24 @@ class BotController {
 
     // On foot: is a cart worth it? A long way to go (out of the storm, or a bot that likes driving with nothing better to do) or a fight to get
     // away from. Then walk to the nearest free seat and climb in. Returns true while it is busy with that.
+    // A long way to go and a Deku launch pad close by that is not behind it: run to the pad and take the throw (server-side for bots, see Match::BotUsePad).
+    bool UseLaunchPad(Match& m, PlayerState& p, Memory& mem, Vec2 goal, float dt) {
+        const float now = m.Clock();
+        if (now < mem.padReadyAt || Distance(p.pos, goal) < 2200.0f) return false;
+        if (m.BotUsePad(p.id, goal, 900.0f)) { mem.padReadyAt = now + 12.0f; mem.padHeadUntil = 0; return true; }
+        const Vec2* best = nullptr;
+        float bestD = 450.0f;
+        for (const Vec2& pad : m.Pads()) {
+            const float d = Distance(p.pos, pad);
+            if (d < bestD && Distance(pad, goal) < Distance(p.pos, goal) - 150.0f) { best = &pad; bestD = d; }
+        }
+        if (!best) { mem.padHeadUntil = 0; return false; }
+        if (mem.padHeadUntil <= 0) mem.padHeadUntil = now + 15.0f;
+        if (now > mem.padHeadUntil) { mem.padReadyAt = now + 30.0f; mem.padHeadUntil = 0; return false; }   // cannot get there: forget it for a while
+        Steer(m, p, mem, *best, dt);
+        return true;
+    }
+
     bool GoForCart(Match& m, PlayerState& p, Memory& mem, const Situation& s, const PlayerState* foe, float dist, const Circle& soon, float dt, const Tuning& tune) {
         const float now = m.Clock();
         if (m.Vehicles().empty() || m.State() != MatchState::InMatch) return false;

@@ -79,12 +79,12 @@ The loot pool holds 83 items, 82 of them from Ocarina of Time and the Shockwave 
 
 | Kind | How you use it | Slots |
 |---|---|---|
-| Weapon | B attacks with it. Damage, range and speed come from the item and its tier. Some add an effect: Deku Nuts stun, Fire Arrows burn, Ice Arrows freeze, Light Arrows ignore shields, Bombs and Bombchus hurt everyone near the target | 1 (a new one swaps the old, which drops) |
+| Weapon | B attacks with it. Damage, range and speed come from the item and its tier. Some add an effect: Deku Nuts stun, Fire Arrows burn, Ice Arrows freeze, Light Arrows ignore shields, Bombs and Bombchus hurt everyone near the target | Hotbar: weapons and consumable stacks share 5 usable slots (the starter sword takes none); with all 5 full a new one swaps with the selected slot, which drops |
 | Shield | Absorbs a share of damage | 1 |
-| Consumable | Potions and bottled things in the bag. D-pad Down drinks the best-fitting one. The Fairy is never drunk: it revives you once if you would die | 3 |
+| Consumable | Potions and bottled things. Each kind and tier stacks in one hotbar slot; select it (D-pad Left/Right) and B drinks one. The Fairy is never drunk: it revives you once if you would die | Hotbar (shared, see Weapon) |
 | Instant | Used on pickup: Recovery Hearts, Pieces of Heart (four make a container), Heart Containers (+1 max hearts, up to 10), Magic Jar (shortens your ability's recharge) | none |
-| Ability | D-pad Up uses it, then it recharges. Din's Fire, Nayru's Love, Hookshot, Farore's Wind (mark a spot, then jump back), the 12 songs, the Lens of Truth and more | 1 |
-| Gear | Passive. Tunics, boots, gauntlets, masks, scales, bags and charms; one per slot, stacking across slots (resistances, speed, damage dealt) | 7 |
+| Ability | Its own button: D-pad Up (or C-Up in the Battle Royale layout) uses it, then it recharges. Din's Fire, Nayru's Love, Hookshot, Farore's Wind (mark a spot, then jump back), the 12 songs, the Lens of Truth and more | 1 |
+| Gear | Passive upgrades, worn and drawn on Link (never a hotbar slot; a new one for the same slot replaces it and the old drops). Tunics, boots, gauntlets, masks, scales, bags and charms; one per slot, stacking across slots (resistances, speed, damage dealt) | 7 |
 
 Rarity scales every number: weapon damage, healing, ability strength and duration, gear bonuses.
 
@@ -469,8 +469,8 @@ hole punching (Milestone 6), per-peer rate limiting, and lag compensation.
     on the real floor with a raycast. Names use the engine's name tag system.
   - Enemies are not allowed to spawn during a match, and existing ones are removed at countdown.
 - **Gameplay in the game (written and compiled, not yet played):**
-  - Loot actors for the loot near you, using the game's rupee model in the tier's color with a rarity-colored name label, grabbed by
-    walking over them (the server checks range).
+  - Loot actors for the loot near you, using the game's rupee model in the tier's color with a rarity-colored name label, taken with
+    A (walking over them only takes rupees and ammo; the server checks range).
   - B attacks with the server-side weapon at the nearest player in a cone in front of you; D-pad Down drinks a potion; hits flash red.
   - Other players hold the weapon the server says they have (swords, hammer, bow, slingshot, boomerang) and can be Z-targeted.
   - An always-on HUD: alive count, storm phase and timer, a pointer to the safe zone, weapon, shield and potions, plus banners for

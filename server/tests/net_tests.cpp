@@ -91,7 +91,8 @@ static void MessagesRoundTrip() {
     { Input a, b; a.seq = 65535; a.epoch = 3; a.x = -1.5f; a.y = 2; a.z = 3.25f; a.rot = -1234; a.anim = 9; a.scene = 0x43;
       CHECK(RoundTrips(a, b) && b.seq == 65535 && b.epoch == 3 && b.x == -1.5f && b.z == 3.25f && b.rot == -1234 && b.anim == 9 && b.scene == 0x43); }
     { AttackReport a, b; a.target = 12; a.hit = true; CHECK(RoundTrips(a, b) && b.target == 12 && b.hit); }
-    { PickupRequest a, b; a.index = 123456; a.force = true; CHECK(RoundTrips(a, b) && b.index == 123456 && b.force); }
+    { PickupRequest a, b; a.index = 123456; a.force = true; a.replaceItem = 7; a.replaceRarity = 2; CHECK(RoundTrips(a, b) && b.index == 123456 && b.force && b.replaceItem == 7 && b.replaceRarity == 2); }
+    { PickupRequest a, b; CHECK(RoundTrips(a, b) && b.replaceItem == kHandSlot); }
     { UsePotionRequest a, b; CHECK(RoundTrips(a, b)); }
     { NpcHitRequest a, b; a.tenths = 7; CHECK(RoundTrips(a, b) && b.tenths == 7); }
     { Welcome a = SampleWelcome(), b; CHECK(RoundTrips(a, b));
@@ -146,11 +147,13 @@ static void MessagesRoundTrip() {
     { EvStrike bad, out; bad.style = static_cast<uint8_t>(StrikeStyle::Count); CHECK(!RoundTrips(bad, out)); }
     { UseShieldRequest a, b; CHECK(RoundTrips(a, b)); }
     { UseItemRequest a, b; a.item = static_cast<uint8_t>(ItemId::SmallShieldPotion); a.rarity = 2; CHECK(RoundTrips(a, b)); }
-    { DropItemRequest a, b; CHECK(RoundTrips(a, b)); }
+    { DropItemRequest a, b; CHECK(RoundTrips(a, b) && b.item == kHandSlot); }
+    { DropItemRequest a, b; a.item = static_cast<uint8_t>(ItemId::Fish); a.rarity = 1; CHECK(RoundTrips(a, b) && b.item == a.item && b.rarity == 1); }
     { EvInventory a, b; a.shield = 2.5f; CHECK(RoundTrips(a, b) && b.shield == 2.5f); }
     { EvInventory bad, out; bad.shield = 9.0f; CHECK(!RoundTrips(bad, out)); }
     { UseAbilityRequest a, b; CHECK(RoundTrips(a, b)); }
     { SelectWeaponRequest a, b; a.slot = 2; CHECK(RoundTrips(a, b) && b.slot == 2); }
+    { SelectWeaponRequest a, b; a.slot = kMaxReserveWeapons; CHECK(RoundTrips(a, b) && b.slot == kMaxReserveWeapons); }
     { SelectWeaponRequest bad; bad.slot = 9; SelectWeaponRequest out; CHECK(!RoundTrips(bad, out)); }
     { EvMapConfig a, b; a.props = {{{1, 2}, PropKind::Boulder, 123}, {{-3, 4}, PropKind::Bush, 65535}};
       CHECK(RoundTrips(a, b) && b.props.size() == 2 && b.props[0].kind == PropKind::Boulder && b.props[1].rot == 65535 && b.props[1].pos.x == -3); }
@@ -555,10 +558,10 @@ static void PickupAndPotionOverTheWire() {
     rig.Run(0.5f);
     CHECK(a.Loot().size() == 3 && b.Loot().size() == 3);
 
-    a.RequestPickup(static_cast<uint32_t>(farPotion));   // too far
-    a.RequestPickup(9999);                              // doesn't exist
-    a.RequestPickup(static_cast<uint32_t>(sword));
-    a.RequestPickup(static_cast<uint32_t>(potion));
+    a.RequestPickup(static_cast<uint32_t>(farPotion), true);   // too far
+    a.RequestPickup(9999, true);                              // doesn't exist
+    a.RequestPickup(static_cast<uint32_t>(sword), true);      // A pressed: items are only taken on purpose
+    a.RequestPickup(static_cast<uint32_t>(potion), true);
     rig.Run(0.5f);
     CHECK(rig.M().Find(1)->weapon.item == ItemId::MasterSword && rig.M().Find(1)->potions.size() == 1);
     CHECK(a.Loot()[sword].taken && b.Loot()[sword].taken && !b.Loot()[farPotion].taken);

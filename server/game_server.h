@@ -41,6 +41,8 @@ class GameServer {
     void SetBossCount(int n) { bossCount = n; sim.match.SetBossCount(IsAuthoredMap(mapId) && n > 0 ? 7 : n); }
     // The map's dragon arrives halfway through the storm timeline. Survives Reconfigure.
     void SetMajorBoss(bool on) { majorBoss = on; sim.match.SetMajorBoss(on); }
+    // Jones, Peter and Master Chief at the ally stations (developer mode). Survives Reconfigure.
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; sim.match.SetNoveltyAllies(on); }
     // The host's player-count slider: how many players the match has, bots included. Lobby only, and never fewer than the people here.
     // Smaller matches also get fewer towns and bosses, so the map isn't mostly empty. Everyone is told.
     bool SetPlayerLimit(int n) {
@@ -230,6 +232,7 @@ class GameServer {
         const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap || riftlandsMap || moonfallMap || skyloftMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
+        sim.match.SetNoveltyAllies(noveltyAllies || sandboxMap);
         sim.match.SetWeatherOptions(weatherOptions);
         sim.match.SetPlayerLimit(playerLimit);
         sim.match.SetTeamMode(teamMode);
@@ -582,7 +585,7 @@ class GameServer {
             case net::MsgType::PickupRequest: {
                 net::PickupRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.PickUp(c->playerId, m.index, m.force)) stats.rejectedActions++;
+                if (!sim.match.PickUp(c->playerId, m.index, m.force, m.replaceItem, m.replaceRarity)) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::PropSmashRequest: {
@@ -645,7 +648,7 @@ class GameServer {
             case net::MsgType::DropItemRequest: {
                 net::DropItemRequest m;
                 if (!net::Decode(data, m)) { stats.badPackets++; break; }
-                if (!sim.match.DropWeapon(c->playerId)) stats.rejectedActions++;
+                if (!sim.match.DropSlot(c->playerId, m.item, m.rarity)) stats.rejectedActions++;
                 break;
             }
             case net::MsgType::UseShieldRequest: {
@@ -1165,9 +1168,9 @@ class GameServer {
                 s.helpers.push_back(n);
             }
             for (const AllyState& a : sim.match.Allies()) {
-                if (!a.alive || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
+                if ((!a.alive && sim.match.Clock() - a.fellAt > net::kAllyFallSec) || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
                 // A free ally standing about doesn't change: like a parked cart it goes out now and then (the client keeps it in between).
-                const bool idle = !a.Hired() && !a.moving && sim.match.Clock() >= a.actUntil;
+                const bool idle = a.alive && !a.Hired() && !a.moving && sim.match.Clock() >= a.actUntil;
                 if (idle && (tick + a.index) % net::kIdleAllyEvery != 0) continue;
                 net::AllyNet n;
                 n.index = a.index; n.kind = static_cast<uint8_t>(a.kind);
@@ -1219,6 +1222,7 @@ class GameServer {
     WeatherOptions weatherOptions;
     int mapId = 0;
     bool majorBoss = true;
+    bool noveltyAllies = true;
     std::vector<Prop> props;
     std::vector<bool> broken;   // which props have been smashed, by prop index
     std::vector<Poi> pois;

@@ -202,6 +202,7 @@ void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 void UpdatePatchHand(void);   // the game's EquipmentAlwaysVisible hand-model patches (soh/Enhancements/mods.cpp): re-run when the match turns the enhancement on or off
 extern s32 gRoyaleBraceletOnAdult;   // 1 = adult Link also wears the Goron's Bracelet as bronze plates (patches/0028)
+extern s32 gRoyaleBootsOnChild;      // 1 = child Link also wears iron or hover boots (the adult boot models; patches/0032)
 }
 
 // The waiting room scene id lives in shared/map.h (no game headers there); make sure it still matches the engine.

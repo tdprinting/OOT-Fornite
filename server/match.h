@@ -208,6 +208,7 @@ struct AttackResult {
     bool killed = false;
     bool dodged = false; // the target was rolling: the attack was spent but missed
     bool blocked = false; // the target took it on a raised shield
+    bool obstructed = false; // a hill, wall or tall prop was in the way: spent, and nobody hurt
     int extraHits = 0;    // a spin attack: everyone else it caught
 };
 
@@ -650,6 +651,22 @@ class Match {
         }
         events.push_back(MatchEvent{MatchEvent::Type::PadsChanged});
     }
+    // A bot standing on a launch pad is thrown `carry` units toward `toward` (a player's own game does this for them; bots move on flat ground, so the
+    // server carries them, like the Launch effect). False if it is not on a pad or there is no ground to land on.
+    bool BotUsePad(uint32_t id, Vec2 toward, float carry) {
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || !p->isBot || p->knocked || state != MatchState::InMatch) return false;
+        bool onPad = false;
+        for (const Vec2& pad : pads) onPad |= Distance(pad, p->pos) <= kLaunchPadRadius;
+        const float d = Distance(p->pos, toward);
+        if (!onPad || d < 1.0f) return false;
+        carry = (std::min)(carry, d);
+        for (float f : {1.0f, 0.6f, 0.3f}) {   // no ground at the full throw: a shorter hop
+            const Vec2 to = {p->pos.x + (toward.x - p->pos.x) / d * carry * f, p->pos.z + (toward.z - p->pos.z) / d * carry * f};
+            if (PadValid(to)) { Teleport(*p, to); return true; }
+        }
+        return false;
+    }
     // The Deku Launch Flower: plants a pad a step in front of the player. False (and the item stays) if there is no room or no ground there.
     bool PlacePad(uint32_t id) {
         PlayerState* p = Find(id);
@@ -809,6 +826,16 @@ class Match {
         events.push_back(blast);
     }
 
+    // Eye height of a player for who can hit whom: a bot's y is its height above the floor; a human sends their own height when the map has
+    // heights (else they stand on the grid's floor). 45 is about Link's chest.
+    float EyeY(const PlayerState& p) const {
+        if (!nav) return 45.0f;
+        return (p.isBot ? nav->FloorAt(p.pos) + p.y : (nav->HasHeights() ? p.y : nav->FloorAt(p.pos))) + 45.0f;
+    }
+    // Nothing on the nav grid (a hill, a wall, a tall prop) stands between them: the same test bots use to spot each other.
+    bool CanSee(const PlayerState& a, const PlayerState& t) const { return !nav || nav->SightClear(a.pos, EyeY(a), t.pos, EyeY(t)); }
+    bool CanSeeFrom(Vec2 from, float fromY, const PlayerState& t) const { return !nav || nav->SightClear(from, fromY, t.pos, EyeY(t)); }
+
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (const PlayerState* who = Find(attackerId); who ? !OnFoot(*who) : state != MatchState::InMatch) return r;   // nobody fights from the bus or the sky
@@ -840,6 +867,7 @@ class Match {
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (shockwave) ThrowShockwave(*a, t->pos, w.splashRadius);   // it rolls to their feet and goes off after the fuse, hit or miss
+        if (!shockwave && !CanSee(*a, *t)) { r.obstructed = true; return r; }   // it hits the wall or the hillside instead
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
@@ -858,7 +886,7 @@ class Match {
         if (style == AttackStyle::Spin) {   // the spin catches everyone else within reach too
             const float reach = w.range * 1.1f + kSpinReachBonus;
             for (auto& o : players) {
-                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil) continue;
+                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil || !CanSee(*a, o)) continue;
                 bool blocked = false;
                 const float amount = dealt(o, base, &blocked);
                 Damage(o.id, amount, attackerId, DamageKind::Normal);
@@ -883,7 +911,7 @@ class Match {
                     if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
                     if (w.splashRadius > 0 && !immune) {   // a shockwave stuns everyone it reaches, not only the one it was thrown at
                         for (auto& o : players) {
-                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune) continue;
+                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune || !CanSeeFrom(t->pos, EyeY(*t), o)) continue;
                             o.stunUntil = (std::max)(o.stunUntil, clock + seconds);
                             o.dirty = true;
                         }
@@ -903,7 +931,7 @@ class Match {
             const Vec2 centre = t->pos;
             for (auto& o : players) {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
-                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
+                if (Distance(o.pos, centre) <= w.splashRadius && CanSeeFrom(centre, EyeY(*t), o)) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
             }
             for (auto& v : vehicles) if (!v.wrecked && !v.gone && Distance({v.body.x, v.body.z}, centre) <= w.splashRadius + kCartHitRadius * 0.5f) DamageVehicle(v, base * 0.9f, attackerId);
         }
@@ -966,25 +994,61 @@ class Match {
     // would do nothing (a heart at full health).
     // Would taking this be an improvement? Walking over loot only picks up what passes this; anything else needs the player to ask
     // (force), so a Common stick doesn't replace your Epic sword just because you walked past it.
-    // Is there room in the bag for one more of this? It joins the stack of its own kind and tier, or starts one in a free slot.
-    static bool PotionRoom(const PlayerState& p, ItemId item, Rarity rarity) {
-        int same = 0, stacks = 0;
-        std::vector<std::pair<ItemId, Rarity>> kinds;
-        for (const Equipped& e : p.potions) {
-            if (e.item == item && e.rarity == rarity) same++;
-            bool known = false;
-            for (const auto& k : kinds) known |= k.first == e.item && k.second == e.rarity;
-            if (!known) { kinds.push_back({e.item, e.rarity}); stacks++; }
+    // The hotbar: kHotbarSlots usable slots shared by the weapon in hand, the backup weapons and the potion stacks (one slot per kind and tier).
+    // The starter sword is the fallback in hand when nothing else is (Fortnite's pickaxe) and takes no slot; worn gear and the ability take none.
+    static int PotionStackCount(const PlayerState& p) {
+        int stacks = 0;
+        for (size_t i = 0; i < p.potions.size(); i++) {
+            bool seen = false;
+            for (size_t j = 0; j < i; j++) seen |= p.potions[j].item == p.potions[i].item && p.potions[j].rarity == p.potions[i].rarity;
+            if (!seen) stacks++;
         }
+        return stacks;
+    }
+    static int HotbarUsed(const PlayerState& p) { return (IsStarter(p.weapon) ? 0 : 1) + static_cast<int>(p.reserve.size()) + PotionStackCount(p); }
+    static bool HotbarFree(const PlayerState& p) { return HotbarUsed(p) < kHotbarSlots; }
+
+    // Is there room for one more of this? It joins the stack of its own kind and tier, or starts one in a free hotbar slot.
+    static bool PotionRoom(const PlayerState& p, ItemId item, Rarity rarity) {
+        int same = 0;
+        for (const Equipped& e : p.potions) if (e.item == item && e.rarity == rarity) same++;
         if (same > 0) return same < PotionStackMax(item);
-        return stacks < kPotionSlots;
+        return HotbarFree(p);
+    }
+
+    // Empties one hotbar slot to make room, dropping what was in it: the potion stack of `item`/`rarity`, or (kHandSlot, or a stack the
+    // player doesn't have) the weapon in hand, whose place a backup weapon or the starter sword takes. False if nothing could be freed.
+    bool FreeHotbarSlot(PlayerState& p, uint8_t item, uint8_t rarity) {
+        if (item != kHandSlot) {
+            bool any = false;
+            for (size_t i = 0; i < p.potions.size();) {
+                if (static_cast<uint8_t>(p.potions[i].item) == item && static_cast<uint8_t>(p.potions[i].rarity) == rarity) {
+                    DropEquipment(p, p.potions[i]);
+                    p.potions.erase(p.potions.begin() + static_cast<long>(i));
+                    any = true;
+                } else i++;
+            }
+            if (any) return true;
+        }
+        if (!IsStarter(p.weapon)) {
+            DropEquipment(p, p.weapon);
+            if (!p.reserve.empty()) { p.weapon = p.reserve.front(); p.reserve.erase(p.reserve.begin()); }
+            else p.weapon = {ItemId::BasicSword, Rarity::Common};
+            return true;
+        }
+        if (!p.reserve.empty()) { DropEquipment(p, p.reserve.back()); p.reserve.pop_back(); return true; }
+        if (!p.potions.empty()) {   // only potions: the last stack goes
+            const Equipped last = p.potions.back();
+            return FreeHotbarSlot(p, static_cast<uint8_t>(last.item), static_cast<uint8_t>(last.rarity));
+        }
+        return false;
     }
 
     static bool WorthTaking(const PlayerState& p, const LootSpawn& s) {
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
-                if (WeaponDps(s.item, s.rarity) > WeaponDps(p.weapon.item, p.weapon.rarity) * 1.05f) return true; // an upgrade
-                if (static_cast<int>(p.reserve.size()) >= kMaxReserveWeapons) return false;                  // no room for a spare
+                if (WeaponDps(s.item, s.rarity) > WeaponDps(p.weapon.item, p.weapon.rarity) * 1.05f && (HotbarFree(p) || !IsStarter(p.weapon))) return true; // an upgrade (full: it swaps with the weapon in hand)
+                if (!HotbarFree(p)) return false;                                                             // hotbar full: only on purpose (A swaps)
                 if (s.item == p.weapon.item && s.rarity == p.weapon.rarity) return false;
                 for (const Equipped& e : p.reserve) if (e.item == s.item && e.rarity == s.rarity) return false;
                 return true;                                                                                 // fills an empty hotbar slot
@@ -1009,13 +1073,18 @@ class Match {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (slot < 1 || slot > static_cast<int>(p->reserve.size()) || p->knocked) return false;
-        std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
+        if (IsStarter(p->weapon)) {   // the starter sword takes no slot: the backup simply comes into hand
+            p->weapon = p->reserve[static_cast<size_t>(slot - 1)];
+            p->reserve.erase(p->reserve.begin() + (slot - 1));
+        } else {
+            std::swap(p->weapon, p->reserve[static_cast<size_t>(slot - 1)]);
+        }
         p->attackReadyAt = (std::max)(p->attackReadyAt, clock + 0.35f);
         p->dirty = true;
         return true;
     }
 
-    bool PickUp(uint32_t id, size_t index, bool force = true) {
+    bool PickUp(uint32_t id, size_t index, bool force = true, uint8_t replaceItem = kHandSlot, uint8_t replaceRarity = 0) {
         PlayerState* p = Find(id);
         if (!p || !p->alive || p->aboard || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (index >= loot.size() || loot[index].taken || p->knocked) return false;
@@ -1023,19 +1092,29 @@ class Match {
         if (Distance(p->pos, s.pos) > kPickupRange * (s.container ? 2.0f : 1.5f)) return false; // chests are solid, so you open them from a step away
         if (s.container && !force) return false; // chests have to be opened on purpose
         if (!force && loot[index].droppedBy == id && clock - loot[index].droppedAt < kDropRegrabSeconds) return false; // left for somebody else
+        if (!force && KindOf(s.item) != ItemKind::Instant) return false; // walking over only takes money and ammo; items need A (Tee, 2026-10-12)
         if (!force && !WorthTaking(*p, s)) return false;
         switch (KindOf(s.item)) {
             case ItemKind::Weapon: {
                 const bool upgrade = WeaponDps(s.item, s.rarity) > WeaponDps(p->weapon.item, p->weapon.rarity) * 1.05f;
-                const bool room = static_cast<int>(p->reserve.size()) < kMaxReserveWeapons;
-                if (upgrade) {                       // the better weapon goes in hand; the old one becomes a backup if there is room
-                    if (room && !IsStarter(p->weapon)) p->reserve.push_back(p->weapon); else DropEquipment(*p, p->weapon);
+                if (IsStarter(p->weapon)) {                 // empty hand: it goes there if a slot is free (else swap out the selected slot first)
+                    if (!HotbarFree(*p)) {   // full: only a stack the player named is swapped out. The starter in hand is no slot, so never guess a backup to drop.
+                        bool named = false;
+                        for (const Equipped& e : p->potions) named |= replaceItem != kHandSlot && static_cast<uint8_t>(e.item) == replaceItem && static_cast<uint8_t>(e.rarity) == replaceRarity;
+                        if (!named || !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                    }
+                    if (!IsStarter(p->weapon)) p->reserve.push_back(p->weapon);   // (freeing a stack can't change the hand; this is defensive)
                     p->weapon = {s.item, s.rarity};
-                } else if (room) {                   // not better, but there is a free hotbar slot
-                    p->reserve.push_back({s.item, s.rarity});
-                } else {                             // hotbar full: replace the weapon in hand
-                    DropEquipment(*p, p->weapon);
-                    p->weapon = {s.item, s.rarity};
+                } else if (HotbarFree(*p)) {               // a free slot: an upgrade goes in hand (the old one becomes a backup), else a backup
+                    if (upgrade) { p->reserve.push_back(p->weapon); p->weapon = {s.item, s.rarity}; }
+                    else p->reserve.push_back({s.item, s.rarity});
+                } else {                                   // hotbar full: swap with the selected slot (Fortnite), the old item drops
+                    if (replaceItem == kHandSlot) { DropEquipment(*p, p->weapon); p->weapon = {s.item, s.rarity}; }
+                    else {
+                        if (!FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                        if (upgrade) { p->reserve.push_back(p->weapon); p->weapon = {s.item, s.rarity}; }
+                        else p->reserve.push_back({s.item, s.rarity});
+                    }
                 }
                 break;
             }
@@ -1045,7 +1124,11 @@ class Match {
                 p->hasShield = true;
                 break;
             case ItemKind::Consumable:
-                if (!PotionRoom(*p, s.item, s.rarity)) return false;
+                if (!PotionRoom(*p, s.item, s.rarity)) {   // a new kind with the hotbar full: swap it with the selected slot when asked on purpose
+                    bool stacked = false;
+                    for (const Equipped& e : p->potions) stacked |= e.item == s.item && e.rarity == s.rarity;
+                    if (!force || stacked || !FreeHotbarSlot(*p, replaceItem, replaceRarity)) return false;
+                }
                 p->potions.push_back({s.item, s.rarity});
                 break;
             case ItemKind::Instant:
@@ -1182,6 +1265,24 @@ class Match {
         return true;
     }
 
+    // Put a hotbar slot on the ground: a whole potion stack (item, rarity), or (kHandSlot) the weapon in hand, see DropWeapon.
+    bool DropSlot(uint32_t id, uint8_t item, uint8_t rarity) {
+        if (item == kHandSlot) return DropWeapon(id);
+        PlayerState* p = Find(id);
+        if (!p || !p->alive || p->knocked || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
+        const size_t before = p->potions.size();
+        for (size_t i = 0; i < p->potions.size();) {
+            if (static_cast<uint8_t>(p->potions[i].item) == item && static_cast<uint8_t>(p->potions[i].rarity) == rarity) {
+                DropEquipment(*p, p->potions[i]);
+                loot.back().droppedBy = id; loot.back().droppedAt = clock;
+                p->potions.erase(p->potions.begin() + static_cast<long>(i));
+            } else i++;
+        }
+        if (p->potions.size() == before) return false;
+        p->dirty = true;
+        return true;
+    }
+
     // Put the weapon in hand on the ground so somebody else can take it; a backup weapon (or the starter sword) takes its place.
     bool DropWeapon(uint32_t id) {
         PlayerState* p = Find(id);
@@ -1237,10 +1338,13 @@ class Match {
     const std::vector<AllyState>& Allies() const { return allies; }
     std::vector<AllyState>& MutableAllies() { return allies; }
     int AlliesOf(uint32_t player) const { int n = 0; for (const auto& a : allies) n += a.alive && a.owner == player; return n; }
+    // Off: only the four Hylian kinds (Kokiri, Zora, Goron, Gerudo) stand at the stations; Jones, Peter and Master Chief are developer-mode only.
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; }
     void SpawnAllies() {
         allies.clear();
         Rng rng(seed ^ 0x616C6C79ull);   // "ally"
-        for (int i = 0; i < kAllyCount; i++) {
+        const int kinds = noveltyAllies ? kAllyCount : static_cast<int>(AllyKind::Jones);
+        for (int i = 0; i < kinds; i++) {
             AllyState a;
             a.index = static_cast<uint8_t>(i);
             a.kind = static_cast<AllyKind>(i);
@@ -1271,7 +1375,7 @@ class Match {
     }
     void ReleaseAlly(AllyState& a, bool fell) {
         a.owner = kNoPlayer;
-        if (fell) a.alive = false;
+        if (fell) { a.alive = false; a.fellAt = clock; }
         MatchEvent e{MatchEvent::Type::AllyChanged};
         e.a = a.index; e.b = kNoPlayer; e.item = fell ? 2 : 1;
         events.push_back(e);
@@ -3120,6 +3224,14 @@ class Match {
     void TickBus() {
         SeatPassengers(stateTime);
         if (stateTime >= BusCloseSec(bus)) for (auto& p : players) if (p.alive && p.aboard) LeaveBus(p.id, true);   // the bus is leaving the island
+        if (stateTime >= (bus.valid ? BusCloseSec(bus) : 0.0f) + kDropBotForceSec)
+            for (auto& p : players) {   // a bot that never lands (a glider drifting over water) must not hold the whole drop: set it down where it is
+                if (!p.alive || !p.isBot || !p.rodeBus || p.aboard || p.landedAt >= 0) continue;
+                if (p.jumpedAt < 0) p.jumpedAt = clock - kLandedGraceSec;
+                if (IsBusSeat(p.anim) || IsAirborne(p.anim)) { p.anim = static_cast<uint8_t>(Anim::Idle); p.y = 0; }
+                p.landedAt = clock;
+                p.dirty = true;
+            }
     }
     bool DropOver() const {
         if (stateTime >= DropMaxSec()) return true;
@@ -3496,6 +3608,7 @@ class Match {
     Replay replay;
     float replayNextAt = 0;
     std::vector<Vec2> allySpots;
+    bool noveltyAllies = true;
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;
