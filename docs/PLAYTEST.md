@@ -42,6 +42,8 @@ CRASH match-12          212s steps 2/7    log errors 3  SIGSEGV in #2 DynaPoly_E
 Full output per scenario sits in its run folder: `game-output.txt` (game + gdb, all thread stacks), `autotest-result.txt` (steps and the mod
 state block at each `check` and at a failure), `royale-trace.txt`, `logs/`. `last-results.json` there holds every result as JSON.
 
+Reading `royale-trace.txt` frame times: a line `frame ms: avg A worst W (N frames in 5 s) alive K` is written every 5 s of play. A is the average and W the worst gap between game frames in that window (the Odin number to compare: about 50 ms = 20 Hz, a spike of hundreds of ms = a hitch, also when a menu paused the game); K is the players alive at the end of the window.
+
 ## Step scripts
 
 The in-game driver is `mod/Royale/features/AutoTest.inc`; it does nothing unless `ROYALE_AUTOTEST` is set. Steps, separated by `;`:
