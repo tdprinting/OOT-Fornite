@@ -207,8 +207,14 @@ bool AutoRun(const AutoStep& s, float secs) {
         }
         if (hud.state == royale::MatchState::Ending && gAuto.stepFrames % 100 == 0) gSession.RequestPlayAgain();   // a lost packet
         if (hud.state != royale::MatchState::Countdown) return false;
-        AutoLog("  rematch: countdown, Link alive %d, aboard %d, spectating %d", hud.selfAlive ? 1 : 0, hud.aboard ? 1 : 0, gSpectateTarget == kSpectateSelf ? 0 : 1);
-        if (!hud.selfAlive) AutoFinish(false, "rematch: Link is still out in the new countdown");
+        // the first countdown snapshots can still carry the last match's "out": give it 3 s of countdown to seat everyone
+        static unsigned countdownAt = 0;
+        if (gAuto.sub == 1) { countdownAt = gAuto.frames; gAuto.sub = 2; }
+        if ((!hud.selfAlive || !hud.aboard) && gAuto.frames - countdownAt < 60) return false;
+        AutoLog("  rematch: countdown after %.1f s, Link alive %d, aboard %d, spectating %d", (gAuto.frames - countdownAt) / 20.0f, hud.selfAlive ? 1 : 0,
+                hud.aboard ? 1 : 0, gSpectateTarget == kSpectateSelf ? 0 : 1);
+        if (!hud.selfAlive) AutoFinish(false, "rematch: Link is still out 3 s into the new countdown");
+        if (!hud.aboard) AutoFinish(false, "rematch: Link is not on the bus 3 s into the new countdown");
         if (gSpectateTarget != kSpectateSelf) AutoFinish(false, "rematch: the camera still follows a player from the last match");
         return true;
     }
