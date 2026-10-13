@@ -194,7 +194,7 @@ bool AutoRun(const AutoStep& s, float secs) {
         }
         // a Fairy in the bag or a teammate's revive can save a player once: the step hits again every frame until it holds
         for (uint32_t id : victims) { m.Damage(id, 999.0f, royale::kNoPlayer, royale::DamageKind::Storm, false); m.Damage(id, 999.0f, royale::kNoPlayer, royale::DamageKind::Storm, false); }
-        if (gAuto.sub == 0) { AutoLog("  %s: %zu players hit, %s stays", s.verb.c_str(), victims.size(), spared == self ? "Link" : "a bot"); gAuto.sub = 1; }
+        if (gAuto.sub == 0) { AutoLog("  %s: %zu players hit%s", s.verb.c_str(), victims.size(), s.verb == "die" ? "" : spared == self ? ", Link stays" : ", a bot stays"); gAuto.sub = 1; }
         return false;
     }
     if (s.verb == "rematch") {
