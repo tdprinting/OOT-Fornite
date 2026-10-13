@@ -1310,7 +1310,7 @@ void OnPlayerUpdate() {
     gRoyaleNoAimView = 0;
     gRoyaleNoUseOnTakeOut = 0;
     gRoyaleCamGuard = 0;
-    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
+    if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; gRoyaleCamPitchDown = gRoyaleCamBack = 0.0f; gCamPitchNow = gCamBackNow = gCamFightLift = 0.0f; return; }
     gRoyaleCamGuard = 1;   // in a match the drawn camera never sits inside or behind a trunk, wall or cliff (patches/0020)
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
@@ -1403,6 +1403,7 @@ void OnPlayerUpdate() {
     UpdateSquad(player, hud);
     UpdateLocalRide(player, hud);
     UpdateRideCamera(player);
+    UpdateActionCamera(player);
 
     // The server owns health once the match is on. Overwrite the local value every frame so enemies, falls and the
     // game's own damage can't change it, and let a server-side elimination kill Link.
