@@ -134,7 +134,7 @@ void DrawConvergenceStructures(PlayState* play) {
 // reach per batch (landmarks are drawn from far away, foliage only near). The texture is a 128-wide tile: gDPLoadTextureBlock is limited to 4095 texels
 // (64 x 64 at 16 bits), the tile load is not, and its coordinates are S10.5 so one repeat is 4096.
 //
-// The outsides of stone, wood, roofs, thatch, cobbles, plaster and bark are also drawn lit, with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
+// The outsides of stone, rock, roofs, cobbles and plaster are also drawn lit (wood, thatch and bark grain stay baked, see below), with the game's surface light system (docs/ITEM_SURFACE_MAPS.md):
 // each triangle carries its face normal, a fixed sun-and-sky light matching the baked light gives the base shading, and the normal and bump maps of
 // shared/kingdom_surface_maps.h add relief that catches that light. The sliders of Graphics > surface detail (normals, bumps) control it; at zero these
 // batches are drawn with their baked colours like everything else. Rooms stay baked, so their dim light is kept.
@@ -262,7 +262,9 @@ void DrawAuthoredStructures(PlayState* play) {
     for (auto& v : visible) v.clear();
     for (size_t i = 0; i < kBatchCount; ++i) {
         const auto& batch = T::kBatches[i];
-        const int pass = relief ? static_cast<int>(batch.surface) : 0;
+        // Grain classes (3 wood, 5 thatch, 8 bark) stay baked: the engine projects surface maps onto the face's dominant axis, so a grain turns
+        // 90 degrees from one wall or trunk facet to the next and reads as big rippling stripes over the painted texture.
+        const int pass = relief && batch.surface != 3 && batch.surface != 5 && batch.surface != 8 ? static_cast<int>(batch.surface) : 0;
         if (pass > T::kSurfaceClasses || !inReach(batch)) continue;   // (a class past the last is never drawn with relief on, as before)
         visible[pass].push_back(static_cast<uint32_t>(i));
     }
@@ -887,6 +889,9 @@ void UpdateSkydive(Player* player, const royale::HudState& hud) {
     if (!gSkydiving) return;
     const bool phaseOk = hud.state == royale::MatchState::Countdown || hud.state == royale::MatchState::Drop || hud.state == royale::MatchState::InMatch;
     if (!phaseOk || !InField() || (hud.haveSelf && !hud.selfAlive)) { gSkydiving = false; gSandboxGlide = false; return; }
+    // The rush of air while falling and gliding. FLYING_AIR is a looping sound: it has to be kept going every frame (the bus exit and glider
+    // used to start it, and WIND_TRAP, once with the plain id, which gave a stuck or cut-off whoosh). Free fall is higher and louder than the glider.
+    if (gBusPhase != 1) func_800F436C(&gSfxDefaultPos, NA_SE_EV_FLYING_AIR - SFX_FLAG, gBusPhase == 2 ? 1.15f : 0.8f);
     if (UpdateBusRide(player, hud)) return;                                   // sat on the Moonfall Bus, or falling from it (BattleBus.inc)
     const bool dropLike = hud.state == royale::MatchState::Drop || gSandboxGlide;   // gliding freely, as in the drop
     constexpr float dt = 1.0f / royale::kTickHz;
@@ -1298,7 +1303,9 @@ void OnPlayerUpdate() {
     gRoyaleRunSpeedScale = 1.0f;   // normal speed unless UpdateSprint below says otherwise
     gRoyaleNoAimView = 0;
     gRoyaleNoUseOnTakeOut = 0;
+    gRoyaleCamGuard = 0;
     if (!gSession.Joined() || !InGame()) { gCamLiftNow = 0.0f; gRoyaleCamLift = 0.0f; return; }
+    gRoyaleCamGuard = 1;   // in a match the drawn camera never sits inside or behind a trunk, wall or cliff (patches/0020)
     Player* player = GET_PLAYER(gPlayState);
     royale::GameClient* client = gSession.Client();
     royale::HudState hud = gSession.Hud();
@@ -1613,8 +1620,7 @@ void ReportEvents(const royale::HudState& hud) {
                     SparkBurst(gPlayState, l.x, py + 40.0f, l.z, RarityColor(got), 8 + 6 * static_cast<int>(got), 3.5f + 0.8f * static_cast<int>(got));
                     if (l.chest) {
                         StartAction(royale::Anim::ItemGet, 0.9f);   // everyone else sees you hold it up
-                        Vec3f at = { l.x, py + 30.0f, l.z };
-                        Audio_PlaySoundGeneral(NA_SE_EV_TBOX_OPEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(NA_SE_EV_TBOX_OPEN, l.x, py + 30.0f, l.z);
                     }
                     Audio_PlaySoundGeneral(NA_SE_SY_GET_ITEM, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
                     if (itemId == royale::ItemId::HeartContainer) Audio_PlayFanfare(NA_BGM_HEART_GET);
@@ -1643,8 +1649,7 @@ void ReportEvents(const royale::HudState& hud) {
                     if (std::hypot(pr.pos.x - me->actor.world.pos.x, pr.pos.z - me->actor.world.pos.z) < kPuppetHearing && FloorAt(pr.pos.x, pr.pos.z, &py)) {
                         const bool bush = pr.kind == royale::PropKind::Bush;
                         SparkBurst(gPlayState, pr.pos.x, py + 20.0f, pr.pos.z, bush ? Color_RGBA8{ 90, 220, 90, 255 } : Color_RGBA8{ 190, 190, 180, 255 }, 8, 3.0f);
-                        Vec3f at = { pr.pos.x, py + 20.0f, pr.pos.z };
-                        Audio_PlaySoundGeneral(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, &at, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);
+                        SfxAt(bush ? NA_SE_EV_PLANT_BROKEN : NA_SE_EV_ROCK_BROKEN, pr.pos.x, py + 20.0f, pr.pos.z);
                     }
                 }
                 if (e.id != hud.selfId || !InGame() || !gSession.Client()) break;
@@ -1739,7 +1744,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
+                if (mine && !me && !royale::IsBossId(e.id) && hud.selfAlive && !hud.selfKnocked) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives a standing eliminator a heart and shield (none to one who is down)
                 if (mine && !me) {   // for the death and end screens (and their medals)
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;

@@ -126,8 +126,7 @@ void ChiefActionFx(AllyActor& a, float x, float z, uint8_t weapon) {
         a.attackVariant=1;a.actAge=0;a.hasShot=false;
         float gy=a.actor->world.pos.y;FloorAt(x,z,&gy);
         SparkBurst(gPlayState,x,gy+50.0f,z,{180,230,255,255},10,4.0f);
-        Vec3f at={x,gy+50.0f,z};
-        Audio_PlaySoundGeneral(NA_SE_IT_HAMMER_HIT,&at,4,&gSfxDefaultFreqAndVolScale,&gSfxDefaultFreqAndVolScale,&gSfxDefaultReverb);
+        SfxAt(NA_SE_IT_HAMMER_HIT,x,gy+50.0f,z);
         return;
     }
     if(a.actAge>.5f) PlayJonesSound(2,a.x,a.z,weapon);

@@ -1,7 +1,7 @@
 {
- "collision_vertices": 11004,
- "collision_triangles": 18453,
- "high_vertices": 2814,
+ "collision_vertices": 11052,
+ "collision_triangles": 18517,
+ "high_vertices": 2862,
  "upper_nodes": 4125,
  "climb_walls": 384,
  "obstacles": 2448,
@@ -10,6 +10,6 @@
  "buildings": 50,
  "walkways": 53,
  "doors": 65,
- "draw_vertices": 206817,
+ "draw_vertices": 207729,
  "batches": 612
 }

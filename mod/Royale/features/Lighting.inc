@@ -736,8 +736,9 @@ void DrawShadowsAndLights(PlayState* play) {
     const float darkness = gShadowCfg.darkness / 100.0f;
     OPEN_DISPS(play->state.gfxCtx);
     gDPPipeSync(POLY_XLU_DISP++);
-    // The colour of shade in Ocarina of Time's painted look: a deep, cool indigo rather than black, so the grass under it still reads.
-    gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 26, 24, 58, 255);
+    // The colour of shade in Ocarina of Time's painted look: a dark, slightly cool grey rather than black, so the grass under it still reads.
+    // (A saturated indigo read as blue-purple streaks on the pale sand and paths.)
+    gDPSetPrimColor(POLY_XLU_DISP++, 0, 0, 22, 22, 30, 255);
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, PRIMITIVE, TEXEL0, 0, SHADE, 0, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     gSPTexture(POLY_XLU_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
     gDPSetTextureFilter(POLY_XLU_DISP++, G_TF_BILERP);

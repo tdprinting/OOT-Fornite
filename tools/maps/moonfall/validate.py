@@ -181,6 +181,20 @@ def main():
     for x, y0, z, size in floating:
         warns.append('floating solid %dx%dx%d at %d,%d,%d (%s)' % (size[0], size[1], size[2], x, y0, z, nearest_poi(x, z)))
 
+    # ---- 5b. walkways and bridges: something under every stretch, or the deck hangs in the air ------------------------------------------
+    for x0, z0, x1, z1, hw, wy0, wy1 in w.walkways:
+        if abs(wy1 - wy0) > 0.3 * math.hypot(x1 - x0, z1 - z0): continue      # a sloped plank reaches the ground by its slope
+        L = math.hypot(x1 - x0, z1 - z0); steps = max(1, int(L // 100)); worst = 0.0; wx = wz = 0.0
+        for k in range(1, steps):      # the two ends rest on whatever they join
+            t = k / steps; px, pz = x0 + (x1 - x0) * t, z0 + (z1 - z0) * t; py = wy0 + (wy1 - wy0) * t
+            g = ground(px, pz)
+            if g < WATER_Y: continue      # over water or a ravine: stone bridges span those on purpose
+            sup = [py - hy for hy, ny in M.hits(px, pz) if hy < py - 20]
+            gap = min([py - g] + sup)
+            if any(wl <= py - 60 and wh >= py - 20 for wl, wh in M.walls(px, pz, 100.0)): gap = 0      # a post or pier within reach
+            if gap > worst: worst, wx, wz = gap, px, pz
+        if worst > 150: warns.append('walkway over %d,%d hangs %d above what is under it (%s)' % (wx, wz, worst, nearest_poi(wx, wz)))
+
     # ---- 6. slopes the bots would stand on but Link slides off -----------------------------------------------------------------------
     steep = defaultdict(int)
     for k, (a_, b_, c_, s) in enumerate(M.tris):

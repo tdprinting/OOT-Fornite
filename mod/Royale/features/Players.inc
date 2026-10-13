@@ -22,6 +22,10 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
 float BotY(PlayState* play, float x, float z, float lift) {
     float y = 0;
     if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    // The server seats and drops bots at the bus's height above the floor; the bus is drawn at BusBaseY() + altitude. Blend the floor
+    // into that base with height so a bot leaving the bus is at the bus (at full altitude), and lands on the real floor.
+    const float k = std::min(1.0f, std::max(0.0f, lift / royale::kBusAltitude));
+    y += (std::max(0.0f, gMedianFloorY) - y) * k;   // BusBaseY(), declared later
     return y + lift;
 }
 
@@ -235,7 +239,11 @@ void SprintDust(PlayState* play, Actor* actor, u32 frame) {
     const float back = actor->shape.rot.y * (3.14159265f / 32768.0f);
     at.x -= std::sin(back) * 12.0f;
     at.z -= std::cos(back) * 12.0f;
-    Actor_SpawnFloorDustRing(play, actor, &at, 8.0f, 1, 4.0f, 70, 15, true);
+    // A pale, neutral puff lifted off the floor: the game's floor dust ring is tinted by the room light and lay on the map's pale ground as orange smears.
+    at.y += 4.0f;
+    Vec3f vel = { Rand_CenteredFloat(1.0f), 0.5f + 0.5f * Rand_ZeroOne(), Rand_CenteredFloat(1.0f) }, accel = { 0.0f, 0.08f, 0.0f };
+    Color_RGBA8 prim = { 225, 218, 200, 200 }, env = { 150, 140, 120, 255 };
+    EffectSsDust_Spawn(play, 4, &at, &vel, &accel, &prim, &env, 60, 8, 12, 0);
 }
 // Actions are played once, from their first frame, each time one begins (see Puppet_Update).
 bool OneShotAnim(uint8_t anim) {

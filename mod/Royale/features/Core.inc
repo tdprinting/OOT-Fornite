@@ -984,3 +984,33 @@ bool MeasureField(royale::Circle* out) {
     return true;
 }
 
+
+// ---- one-shot sounds at a place in the world -------------------------------------------------------------------------------------------------
+// Audio_PlaySoundGeneral keeps the pointers it is given (position, pitch, volume) and reads them for as long as the sound plays, and it wants the
+// position relative to the camera (as actor->projectedPos), not in world units. A Vec3f or f32 on the stack, or a world position, gave sounds that
+// crackled, jumped left and right, played at the wrong pitch or came from far away. SfxAt copies all three into a ring of slots that outlive the
+// sound and projects the place through the camera first.
+void SfxAt(u16 sfx, float x, float y, float z, float pitch = 1.0f, float volume = 1.0f) {
+    if (gPlayState == nullptr) return;
+    struct Slot { Vec3f pos; f32 pitch, volume; };
+    static Slot slots[48];
+    static int next = 0;
+    Slot& s = slots[next];
+    next = (next + 1) % 48;
+    Vec3f world = { x, y, z };
+    f32 w = 1.0f;
+    SkinMatrix_Vec3fMtxFMultXYZW(&gPlayState->viewProjectionMtxF, &world, &s.pos, &w);
+    s.pitch = pitch;
+    s.volume = volume;
+    Audio_PlaySoundGeneral(sfx, &s.pos, 4, &s.pitch, &s.volume, &gSfxDefaultReverb);
+}
+// The same for a sound that follows an actor (its projectedPos is kept up to date), with its own pitch and volume.
+void SfxOn(Actor* a, u16 sfx, float pitch, float volume) {
+    if (a == nullptr) return;
+    static f32 vals[48][2];
+    static int next = 0;
+    f32* v = vals[next];
+    next = (next + 1) % 48;
+    v[0] = pitch; v[1] = volume;
+    Audio_PlaySoundGeneral(sfx, &a->projectedPos, 4, &v[0], &v[1], &gSfxDefaultReverb);
+}
