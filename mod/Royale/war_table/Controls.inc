@@ -76,6 +76,7 @@ void WarSave() {
     gSession.SetTeamMode(static_cast<royale::TeamMode>(std::clamp(ui.teamMode,0,2)));
     gSession.SetAutoStart(ui.autoStart ? royale::kLobbyAutoStartSec : 0);
     gSession.SetMajorBoss(ui.majorBoss);
+    gSession.SetNoveltyAllies(DevMode());
     gSession.SetWeatherOptions({static_cast<uint8_t>(ui.weatherSeason), static_cast<uint8_t>(ui.weatherIntensity), static_cast<uint8_t>(ui.weatherChange)});
     gLocalTunic = SelectedTunic(ui);
     gSession.SetTunic(gLocalTunic);
@@ -176,7 +177,9 @@ void WarHost(bool solo, bool sandbox, int testMap = royale::kSandboxMapIndex) {
 }
 void WarMap(int direction) {
     if (gSession.Joined() && (!gSession.Hud().isHost || gSession.Hud().state != royale::MatchState::Lobby)) return;
-    Ui().mapId = wt::CycleMap(Ui().mapId, direction);
+    int id = Ui().mapId;
+    for (int n = 0; n < royale::kMapCount; ++n) { id = wt::CycleMap(id, direction); if (DevMode() || ReleaseMap(id)) break; }
+    Ui().mapId = DevMode() || ReleaseMap(id) ? id : royale::kMoonfallMapIndex;
     gWar.mapChangedAt = SDL_GetTicks();
     WarSave();
 }
@@ -468,7 +471,8 @@ void WarBuild() {
         WarAdd(455,{455,287,152,18},WarUpdateLabel(),WarUpdateHint(),[](int){WarUpdateAction();},WarUpdateEnabled());
         WarAdd(10,{450,119,162,47},"HOST GAME","Create a lobby on the selected battlefield",[](int){WarHost(false,false);},InGame()&&idle);
         WarAdd(11,{450,177,162,47},"JOIN GAME","Connect to a friend's lobby",[](int){WarShow(WarPage::Join);},InGame()&&idle);
-        WarAdd(12,{450,235,162,47},"PRACTICE","Test courses, equipment and solo exploration",[](int){WarShow(WarPage::Practice);},InGame()&&idle);
+        WarAdd(12,{450,235,162,47},"PRACTICE","Test courses, equipment and solo exploration",[](int){WarShow(WarPage::Practice);},InGame()&&idle&&DevMode());
+        if(idle&&!DevMode()&&!ReleaseMap(ui.mapId)){Ui().mapId=royale::kMoonfallMapIndex;WarSave();}
         WarAdd(13,{174,278,30,26},"<","Previous battlefield",[](int){WarMap(-1);});
         WarAdd(14,{406,278,30,26},">","Next battlefield",[](int){WarMap(1);});
         break;
@@ -487,30 +491,38 @@ void WarBuild() {
         WarRow(31,1,"ENTER TEST COURSE",royale::sandbox::kZones[gWar.zone].blurb,[](int){WarHost(true,true);},idle&&InGame());
         WarRow(34,2,"MINI BOSS ARENA","Flat ground, all twelve mini bosses, one encounter at a time",[](int){WarHost(true,true,royale::kMiniBossArenaIndex);},idle&&InGame());
         WarRow(35,3,"MAIN BOSS ARENA","A larger enclosed arena for the five main bosses",[](int){WarHost(true,true,royale::kMainBossArenaIndex);},idle&&InGame());
-        WarRow(32,4,std::string("Battlefield   ")+royale::MapOf(ui.mapId).name,"Left / right chooses a battlefield for exploration",[](int d){WarMap(d);},true,true);
+        WarRow(32,4,std::string("Battlefield   ")+MapLabel(ui.mapId),"Left / right chooses a battlefield for exploration",[](int d){WarMap(d);},true,true);
         WarRow(33,5,"EXPLORE BATTLEFIELD","Solo match with no bots. Loot, bosses and storm are active.",[](int){WarHost(true,false);},idle&&InGame());
         break;
     case WarPage::Character:
         WarRow(40,0,"Name   "+std::string(ui.name),"Edit your name for the next lobby",[](int){WarEdit(0);},idle);
         WarRow(41,1,std::string("Tunic   ")+(ui.skin<royale::kSkinCount?royale::kSkins[ui.skin].name:"Custom"),"Left / right changes your tunic",[](int d){Ui().skin=(Ui().skin+(d<0?-1:1)+royale::kSkinCount)%royale::kSkinCount;WarSave();},idle,true);
         WarRow(45,2,std::string("Model   ")+royale::kSkinModelNames[std::clamp(ui.model,0,royale::kSkinModelCount-1)],"Left / right changes your body: the game's own Link or a newer model (everyone sees it)",[](int d){Ui().model=(Ui().model+(d<0?-1:1)+royale::kSkinModelCount)%royale::kSkinModelCount;WarSave();},idle,true);
-        { int pet=MapOption("LiloPet",false)?PetKind()+1:0; const char* names[]={"None","Lilo","Avriella","Maya"};
+        if(DevMode()) { int pet=MapOption("LiloPet",false)?PetKind()+1:0; const char* names[]={"None","Lilo","Avriella","Maya"};
           WarRow(42,3,std::string("Companion   ")+names[std::clamp(pet,0,3)],"Your companion follows you in the world",[pet](int d){int n=(pet+(d<0?-1:1)+4)%4;CVarSetInteger(ROYALE_CVAR("LiloPet"),n!=0);CVarSetInteger(ROYALE_CVAR("PetKind"),std::max(0,n-1));WarSave();},true,true); }
-        WarRow(44,4,"PETS & PREVIEW","Enable pets and preview each companion",[](int){WarShow(WarPage::Settings);gWar.section=6;});
+        if(DevMode())WarRow(44,4,"PETS & PREVIEW","Enable pets and preview each companion",[](int){WarShow(WarPage::Settings);gWar.section=6;});
         WarRow(43,5,"RETURN","Back to the game",[](int){WarOpen();});
         break;
     case WarPage::Settings: {
         const char* sections[]={"Audio","Graphics","Comfort","Match rules","Shadows & lights","Updates","Pets & preview","World & weather","Water","Combat effects","Advanced","Display","Regular game"};
         static_assert(sizeof(sections)/sizeof(sections[0])==wt::kSettingsCount,"one name per settings section");
         gWar.optionPages=1;
-        const int menuPage=wt::SettingsPage(gWar.section);
+        // Release build: Audio, Display, Comfort (controls), Match rules, Updates. Developer mode adds every other section.
+        static constexpr int kReleaseOrder[]={0,11,2,3,5};
+        const bool dev=DevMode();
+        const int* order=dev?wt::kSettingsOrder:kReleaseOrder;
+        const int count=dev?wt::kSettingsCount:static_cast<int>(sizeof(kReleaseOrder)/sizeof(kReleaseOrder[0]));
+        const int pages=(count+wt::kSettingsPageSize-1)/wt::kSettingsPageSize;
+        int at=-1;for(int i=0;i<count;++i)if(order[i]==gWar.section)at=i;
+        if(at<0){gWar.section=order[0];gWar.optionPage=0;at=0;}
+        const int menuPage=at/wt::kSettingsPageSize;
         for(int row=0;row<wt::kSettingsPageSize;++row) {
-            const int index=menuPage*wt::kSettingsPageSize+row;if(index>=wt::kSettingsCount)break;
-            const int section=wt::kSettingsOrder[index];
+            const int index=menuPage*wt::kSettingsPageSize+row;if(index>=count)break;
+            const int section=order[index];
             WarAdd(50+section,{28,108.0f+row*29,184,25},sections[section],"Choose a settings category",[section](int){gWar.section=section;gWar.optionPage=0;});
         }
-        WarAdd(850,{28,280,88,26},"< BACK","Previous categories",[menuPage](int){gWar.section=wt::kSettingsOrder[std::max(0,menuPage-1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
-        WarAdd(851,{122,280,90,26},"MORE >",menuPage==0?"World, water, effects and updates":"Advanced switches",[menuPage](int){gWar.section=wt::kSettingsOrder[std::min(wt::kSettingsPages-1,menuPage+1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage+1<wt::kSettingsPages);
+        WarAdd(850,{28,280,88,26},"< BACK","Previous categories",[menuPage,order](int){gWar.section=order[std::max(0,menuPage-1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage>0);
+        WarAdd(851,{122,280,90,26},"MORE >",menuPage==0?"World, water, effects and updates":"Advanced switches",[menuPage,order,pages](int){gWar.section=order[std::min(pages-1,menuPage+1)*wt::kSettingsPageSize];gWar.optionPage=0;gWar.focus=4;},menuPage+1<pages);
         if(gWar.section==0) {
             WarOptionPager(2);
             if(gWar.optionPage==1) {
@@ -559,7 +571,7 @@ void WarBuild() {
             WarSetting(2,"Show bots on map",ROYALE_CVAR("MapBots"),1,0,1,1,"Show nearby bots on the minimap");
             WarSetting(3,"Hit flashes",ROYALE_CVAR("HitFlash"),1,0,1,1,"Flash feedback when attacks connect");
             WarSetting(4,"Blood effects",ROYALE_CVAR("HitBlood"),1,0,1,1,"Optional combat blood effects");
-            WarDebugToggle(5,kDbgMinimap);
+            if(DevMode())WarDebugToggle(5,kDbgMinimap);
             }
         } else if(gWar.section==3) {
             const bool can=idle||(h.isHost&&h.state==royale::MatchState::Lobby&&!gPendingStart);
@@ -647,13 +659,17 @@ void WarBuild() {
             WarRow(402,2,"INSTALL UPDATE","Open Android's installer",[](int){UpdaterCall("install");},state==kUpdNeedPermission||state==kUpdInstalling);
 #endif
             if(!gStartupLine.empty())WarRow(403,3,gStartupLine,"How long the game took to open, from startup-times.txt",[](int){},false);
+            WarRow(406,5,std::string("Developer mode   ")+(DevMode()?"On":"Off"),"Shows test maps, practice courses, debug switches, pets, Regular game and the novelty allies",[](int){
+                CVarSetInteger(ROYALE_CVAR("DevMode"),DevMode()?0:1);
+                if(!DevMode()&&!ReleaseMap(Ui().mapId))Ui().mapId=royale::kMoonfallMapIndex;
+                WarSave();Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();},true,true);
         }
         break; }
     case WarPage::Lobby:
         gWar.rosterOffset = std::clamp(gWar.rosterOffset,0,h.roster.empty()?0:static_cast<int>((h.roster.size()-1)/5)*5);
         if(joined) {
             WarRow(60,0,h.isHost?(gPendingStart?"PREPARING...":"START MATCH"):(h.selfReady?"READY - toggle":"READY UP"),h.isHost?"Travel to the battlefield and begin the countdown":"Tell the host you are ready",[h](int){if(h.isHost)gPendingStart=true;else gSession.SetReady(!h.selfReady);},h.isHost?wt::CanStart(joined,h.isHost,h.state==royale::MatchState::Lobby,InGame()&&h.haveSelf,gPendingStart):h.state==royale::MatchState::Lobby);
-            WarRow(61,1,std::string("Map   ")+royale::MapOf(h.mapId).name,"Host chooses the battlefield",[](int d){WarMap(d);},h.isHost&&h.state==royale::MatchState::Lobby&&!gPendingStart,true);
+            WarRow(61,1,std::string("Map   ")+MapLabel(h.mapId),"Host chooses the battlefield",[](int d){WarMap(d);},h.isHost&&h.state==royale::MatchState::Lobby&&!gPendingStart,true);
             WarRow(62,2,"MATCH RULES","Player count, bots, weather and automatic start",[](int){WarShow(WarPage::Settings);gWar.section=3;});
             WarRow(63,3,"EXPLORE LOBBY","Close the menu and walk around. Start brings it back.",[](int){WarHide();});
         }

@@ -888,8 +888,10 @@ def giant_tree(w, x, z, r, height, seed, platform=None, hut=False, far=True):
         by = y + height * rng.uniform(0.75, 0.95)
         w.solid([(x, y + height * 0.65, z), (x + math.cos(a + 1.6) * 24, y + height * 0.7, z + math.sin(a + 1.6) * 24), (x, y + height * 0.75, z), (bx, by, bz)],
                 [(0, 1, 3), (1, 2, 3), (2, 0, 3), (0, 2, 1)], 'bark', col='none')
-        w.sphere(bx, by + 50, bz, r * 2.2, r * 1.2, r * 2.2, 'leaves_dark', rings=4, segs=8, seed=seed + k, jitter=0.15, squash_bottom=0.5)
-    w.sphere(x, y + height + 60, z, r * 3.2, r * 1.7, r * 3.2, 'leaves', rings=5, segs=10, seed=seed + 9, jitter=0.12, squash_bottom=0.5)
+        w.sphere(bx, by + 50, bz, r * 2.9, r * 1.5, r * 2.9, 'leaves_dark', rings=4, segs=8, seed=seed + k, jitter=0.15, squash_bottom=0.5)
+    w.sphere(x, y + height + 60, z, r * 4.0, r * 2.0, r * 4.0, 'leaves', rings=5, segs=10, seed=seed + 9, jitter=0.12, squash_bottom=0.5)
+    # a low skirt so the branch crowns and the top crown overlap into one closed canopy (no sky between them)
+    w.sphere(x, y + height * 0.82, z, r * 3.6, r * 1.3, r * 3.6, 'leaves_dark', rings=4, segs=10, seed=seed + 10, jitter=0.1, squash_bottom=0.5)
     w.group = old; w.far = False
     if platform:
         py = y + platform
@@ -938,6 +940,12 @@ def deku_tree_village(w):
     ya = H(ax, az) - 20 + ap; yb = H(bx, bz) - 20 + bp
     beam(w, (ax + ar * 2.5, ya, az), (bx - br * 2.5, yb, bz), 100, 14, 'planks', surf='wood')
     chest(w, (ax + bx) / 2, (ya + yb) / 2, (az + bz) / 2, 'rope bridge')
+    # posts under the span every ~200 units so it never hangs in the air
+    sx, sz, ex, ez = ax + ar * 2.5, az, bx - br * 2.5, bz
+    nposts = int(math.hypot(ex - sx, ez - sz) // 200)
+    for k in range(1, nposts + 1):
+        t = k / (nposts + 1); px, pz = sx + (ex - sx) * t, sz + (ez - sz) * t; py = ya + (yb - ya) * t - 14
+        w.cylinder(px, pz, 14, H(px, pz) - 30, py + 2, 'timber', n=6)
 
 def deku_tree(w, x, z):
     y = H(x, z)

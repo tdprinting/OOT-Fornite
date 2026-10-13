@@ -181,6 +181,7 @@ extern "C" void Royale_NativeMenuDraw(GameState* state) {
 }
 
 extern "C" void Royale_NativeMenuBoot(GameState* state) {
+    gBootInput = &state->input[0]; gBootInputAt = SDL_GetTicks();
     Gfx_SetupFrame(state->gfxCtx, 8, 16, 36);
     const bool retry = state->input[0].press.button & BTN_A;
     const uint8_t* keys = SDL_GetKeyboardState(nullptr);

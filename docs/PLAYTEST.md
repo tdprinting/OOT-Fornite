@@ -4,6 +4,8 @@ Runs the real game (the PC/Linux build of the fork with the mod) with no screen,
 line or two: PASS, FAIL (a step timed out), CRASH (signal plus the top of the call stack with file:line) or HANG (no frame for 2 minutes, with
 every thread's stack on disk). It catches crashes, asserts, failed resource loads and engine error logs before a build reaches the phone.
 
+It runs on request only and is not part of the normal build: the driver (`features/AutoTest.inc`) is compiled only into PC builds (`#ifndef __ANDROID__`), so the Android game and CI never contain it.
+
 It is not the Android build: GPU driver and Android-only code (`#ifdef __ANDROID__`: updater, crash handler, touch) are not exercised, and
 the software renderer is slow, so it says nothing about frame rate on the Odin.
 

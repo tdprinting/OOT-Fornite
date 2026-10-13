@@ -173,6 +173,7 @@ void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
     auto quest = [&](int q) { gSaveContext.inventory.questItems |= gBitFlags[q]; };
     auto bottle = [&](int item) { if (bottles < 4) gSaveContext.inventory.items[SLOT_BOTTLE_1 + bottles++] = static_cast<u8>(item); };
     (void)tunics;
+    // The arrow item ids (0x38-0x3A) are past the end of gItemSlots[56], so their slots are written directly rather than through SLOT().
     switch (id) {
         case ItemId::DekuStick: put(ITEM_STICK); break;
         case ItemId::KokiriSword: case ItemId::BasicSword: equip(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_KOKIRI); break;
@@ -185,9 +186,9 @@ void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
         case ItemId::Bombs: put(ITEM_BOMB); break;
         case ItemId::Bombchus: case ItemId::HomingBombchus: put(ITEM_BOMBCHU); break;
         case ItemId::DekuNuts: put(ITEM_NUT); break;
-        case ItemId::FireArrows: put(ITEM_BOW_ARROW_FIRE); break;
-        case ItemId::IceArrows: put(ITEM_BOW_ARROW_ICE); break;
-        case ItemId::LightArrows: put(ITEM_BOW_ARROW_LIGHT); break;
+        case ItemId::FireArrows: gSaveContext.inventory.items[SLOT_ARROW_FIRE] = ITEM_BOW_ARROW_FIRE; break;
+        case ItemId::IceArrows: gSaveContext.inventory.items[SLOT_ARROW_ICE] = ITEM_BOW_ARROW_ICE; break;
+        case ItemId::LightArrows: gSaveContext.inventory.items[SLOT_ARROW_LIGHT] = ITEM_BOW_ARROW_LIGHT; break;
         case ItemId::DekuShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_DEKU); break;
         case ItemId::HylianShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_HYLIAN); break;
         case ItemId::MirrorShield: equip(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_MIRROR); break;
@@ -342,6 +343,7 @@ void OnGameFrameUpdate() {
     Feat("tornado"); if (DebugOn(kDbgTornado) && gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
     Feat("island scenery collision"); if (DebugOn(kDbgScenery) && joined && InField() && gPlayState != nullptr) ApplyScenery(GET_PLAYER(gPlayState));
     Feat("storm"); DriveStorm(hud);
+    Feat("feedback sounds"); DriveFeedbackSounds(hud);
     Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("game water"); UpdateGameWater();   // the game's own water hidden under ours (or put back)
     Feat("regular game weather"); DriveRegularWeather();
@@ -438,6 +440,7 @@ void OnGameFrameUpdate() {
 void OnSceneInit(int16_t) {
     Feat("scene init");
     Trace("scene: init");
+    UndoAdultHandPatches();   // (the game's scene-start hook just re-applied them)
     gOurTravel = false;
     ForgetDynamicLights();   // the scene's light table starts empty again
     ForgetShadows();
