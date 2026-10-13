@@ -1168,9 +1168,9 @@ class GameServer {
                 s.helpers.push_back(n);
             }
             for (const AllyState& a : sim.match.Allies()) {
-                if (!a.alive || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
+                if ((!a.alive && sim.match.Clock() - a.fellAt > net::kAllyFallSec) || (a.owner != c.playerId && Distance(self->pos, a.pos) > 4500.0f)) continue;
                 // A free ally standing about doesn't change: like a parked cart it goes out now and then (the client keeps it in between).
-                const bool idle = !a.Hired() && !a.moving && sim.match.Clock() >= a.actUntil;
+                const bool idle = a.alive && !a.Hired() && !a.moving && sim.match.Clock() >= a.actUntil;
                 if (idle && (tick + a.index) % net::kIdleAllyEvery != 0) continue;
                 net::AllyNet n;
                 n.index = a.index; n.kind = static_cast<uint8_t>(a.kind);

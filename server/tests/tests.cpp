@@ -313,6 +313,17 @@ static void DropEndsWhenAllLanded() {
     n.Start();
     while (n.State() != MatchState::InMatch) n.Tick(kDt);
     CHECK(n.Clock() > kCountdownSec + n.DropMaxSec() - 0.1f && n.Clock() < kCountdownSec + n.DropMaxSec() + 0.2f);
+    // A bot that never lands (no AI here, so every bot hangs in the air) is put down kDropBotForceSec after the bus leaves: the drop ends then, not 25 s later.
+    Match b(8, MapCircle(), 0);
+    b.AddHuman(1);
+    b.Start();
+    while (!b.BusDoorsOpen()) b.Tick(kDt);
+    CHECK(b.LeaveBus(1));
+    b.MarkLanded(1);
+    while (b.State() != MatchState::InMatch) b.Tick(kDt);
+    const float close = BusCloseSec(b.Bus());
+    CHECK(b.Clock() > kCountdownSec + close + kDropBotForceSec - 0.1f && b.Clock() < kCountdownSec + close + kDropBotForceSec + 0.2f);
+    for (const auto& p : b.Players()) CHECK(!p.isBot || (p.landedAt >= 0 && !p.aboard));
 }
 
 static void HornHasACooldown() {
@@ -878,6 +889,40 @@ static void GearChangesDamageDealtAndTaken() {
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Fire) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Explosion) < 0.6f);
     CHECK(hit(none, GearSlot::Mask, ItemId::GoronTunic, GearSlot::Tunic, DamageKind::Storm) == storm);
+}
+
+// The starter sword in hand with five backups: pressing A on loot (no stack named) must not throw away a backup nobody selected.
+static void StarterInHandFullBarKeepsBackups() {
+    Simulation sim = Duel(1, {1500, 0}, {0, 0});
+    Match& m = sim.match;
+    PlayerState* p = m.Find(1000);
+    p->weapon = {ItemId::BasicSword, Rarity::Common};
+    p->reserve.clear(); p->potions.clear();
+    const ItemId backups[] = {ItemId::KokiriSword, ItemId::Slingshot, ItemId::FairyBow, ItemId::Boomerang, ItemId::Bombs};
+    for (ItemId b : backups) p->reserve.push_back({b, Rarity::Common});
+    CHECK(Match::HotbarUsed(*p) == kHotbarSlots && !Match::HotbarFree(*p));
+    const size_t loot = m.AddLoot({{0, 10}, ItemId::MasterSword, Rarity::Epic, false});
+    CHECK(!m.PickUp(1000, loot, true, kHandSlot, 0));                                    // refused: the hand is no slot to swap
+    CHECK(!m.Loot()[loot].taken && p->reserve.size() == static_cast<size_t>(kHotbarSlots) && p->weapon.item == ItemId::BasicSword);
+    for (size_t i = 0; i < p->reserve.size(); i++) CHECK(p->reserve[i].item == backups[i]);
+    CHECK(!m.PickUp(1000, loot, true, static_cast<uint8_t>(ItemId::Bug), 0));          // a stack the player does not have: same
+    CHECK(p->reserve.size() == static_cast<size_t>(kHotbarSlots));
+}
+
+// A bot on a Deku launch pad is thrown toward where it is going; off a pad it stays put.
+static void BotsUseLaunchPads() {
+    Simulation sim = Duel(1, {1500, 0}, {0, 0});
+    Match& m = sim.match;
+    CHECK(!m.Pads().empty());
+    PlayerState* b = m.Find(1000);
+    const Vec2 pad = m.Pads()[0];
+    const Vec2 goal = {pad.x + 1500.0f, pad.z};
+    b->pos = {pad.x, pad.z + 500.0f};
+    CHECK(!m.BotUsePad(1000, goal, 900.0f) && !m.BotUsePad(1, goal, 900.0f));   // off the pad, and a human
+    b->pos = pad;
+    const float before = Distance(b->pos, goal);
+    const bool threw = m.BotUsePad(1000, goal, 900.0f);
+    CHECK(threw ? Distance(b->pos, goal) < before - 100.0f : Distance(b->pos, pad) < 1.0f);   // thrown closer, or no ground to land on
 }
 
 static void PickupRulesForEveryKind() {
@@ -5495,7 +5540,7 @@ int main() {
     CombatMath(); AttackRules(); NoAttacksDuringDrop(); PickUpRulesAndSwap(); PotionRules(); DeathDropsKit();
     BotFetchesUpgrade(); BotIgnoresDowngrade(); BotTakesShieldAndPotions(); BotHealsWhenHurt(); BotOutrunsStorm(); BotLeavesEarlyForTheNextCircle(); BotsFightToTheDeath(); BotsFaceTheirDirectionAndAnimate(); BotsKeepDistanceWithBow(); FullMatchWithBots();
     CatalogIsConsistent(); LootCoversEveryItemAndRespectsKindWeights(); GearScalesWithRarityAndStacks(); GearChangesDamageDealtAndTaken();
-    PickupRulesForEveryKind(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
+    PickupRulesForEveryKind(); StarterInHandFullBarKeepsBackups(); BotsUseLaunchPads(); FairyRevivesOnceAndIsNeverDrunk(); PotionVariants(); WeaponEffects(); AbilityBasics(); AbilitiesThatMovePlayers();
     OcarinasPlayRandomSongs(); EliminatedPlayersDropPartOfTheirKitAndKillsAreCredited(); MovementPlausibilityAllowsSpeedBuffs();
     PlacementValidatorKeepsLootAndSpawnsOnWalkableGround(); ValidatorThatRejectsEverythingStillTerminates(); StormPhaseInfo();
     BlowsFollowThePlayersRules(); ShieldBar(); ShockwaveGrenade(); ChickenTune(); PlayerLimitSlider(); MiniBosses(); ChuChuCombat(); BossesUseTheirOwnMoves(); BossesFindTheirWay(); MajorBossesFightTheirOwnWay(); CustomObjModels(); CustomMeshes(); GildedSwordSurfaceMaps(); IslandScenery(); IslandPuddles(); GroundPatches(); GroundFit(); BouldersAndFormations(); OutpostsAreDesigned(); TownsAreDifferentPlaces(); PointsOfInterest(); HyruleFieldHasPlacesOfItsOwn(); ScoringAndStandings(); HotbarAndChestsAndProps(); WalkingOverLootTakesOnlyMoneyAndAmmo(); NavPathsAroundWalls(); BotsWalkAroundWalls(); BotsUseAbilitiesWhenItCounts(); BotsFleeLosingFights(); HarderBotsKillFaster(); BotsPickUpFairiesAndHearts(); BotsAdvantageMath();
