@@ -90,7 +90,8 @@ UiPad gUiPad;
 
 void UiSfx(u16 sfx) { Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
 
-void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; }
+// a new match: nobody is dead yet, and the camera is back on your own Link (the end screen points it at the winner)
+void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; gSpectateTarget = kSpectateSelf; }
 
 // You are out. Called by the elimination event and by OnPlayerUpdate, whichever sees it first.
 void StartDeath(const royale::HudState& h) {

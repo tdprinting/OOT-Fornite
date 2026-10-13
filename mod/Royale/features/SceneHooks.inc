@@ -168,7 +168,13 @@ uint64_t gKitHash = 0;
 
 void GiveToSave(royale::ItemId id, int& bottles, int& tunics) {
     using royale::ItemId;
-    auto put = [&](int item) { gSaveContext.inventory.items[SLOT(item)] = static_cast<u8>(item); };
+    // Only item ids that have a slot: SLOT() reads gItemSlots[item], and a slot past the inventory would write into the rest of the save.
+    auto put = [&](int item) {
+        if (item < 0 || item >= static_cast<int>(ARRAY_COUNT(gItemSlots))) return;
+        const int slot = SLOT(item);
+        if (slot < 0 || slot >= static_cast<int>(ARRAY_COUNT(gSaveContext.inventory.items))) return;
+        gSaveContext.inventory.items[slot] = static_cast<u8>(item);
+    };
     auto equip = [&](int type, int value) { gSaveContext.inventory.equipment |= OWNED_EQUIP_FLAG(type, value); };
     auto quest = [&](int q) { gSaveContext.inventory.questItems |= gBitFlags[q]; };
     auto bottle = [&](int item) { if (bottles < 4) gSaveContext.inventory.items[SLOT_BOTTLE_1 + bottles++] = static_cast<u8>(item); };

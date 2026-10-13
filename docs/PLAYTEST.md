@@ -25,7 +25,7 @@ It lists any missing apt packages. Mod edits: re-run it; it copies only changed 
 ## Run
 
 ```sh
-python3 tools/playtest/run.py              # suite "smoke": boot, solo-12, match-12, skin, regular
+python3 tools/playtest/run.py              # suite "smoke": boot, solo-12, match-12, loop-12, skin, regular
 python3 tools/playtest/run.py maps         # a solo test on every map;  "matches": full matches with bots;  "scenes": scene tours
 python3 tools/playtest/run.py solo-8 match-13
 python3 tools/playtest/run.py --script "ingame; host:5; wait:30; check; quit"
@@ -49,7 +49,10 @@ Reading `royale-trace.txt` frame times: a line `frame ms: avg A worst W (N frame
 The in-game driver is `mod/Royale/features/AutoTest.inc`; it does nothing unless `ROYALE_AUTOTEST` is set. Steps, separated by `;`:
 `ingame`, `wait:<sec>`, `cvar:<name>=<int>`, `skin:<n>`, `host:<map>` (solo test), `hostbots:<map>` (lobby + Start, bots fill it),
 `state:<Lobby|Countdown|Drop|InMatch|Ending>`, `jump` (off the bus, then glider), `leave`, `regular` (normal quest, regular-game features),
-`boots:<0|1|2>` (kokiri, iron, hover on Link), `tp:<x>,<z>[,<deg>]` (put Link on the ground there), `warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`. Times are game time (20 frames a second), so a slow renderer still plays
+`boots:<0|1|2>` (kokiri, iron, hover on Link), `tp:<x>,<z>[,<deg>]` (put Link on the ground there), `warp:<scene hex>`, `tour:<overworld|dungeons|all>`, `check`, `quit`.
+Host-only match steps for the whole loop (`loop-12`): `endmatch` (knock out everyone but Link, or all but one bot when Link is out), `die` (knock Link
+out), `results` (fails unless the end screen is up with no menu over it), `rematch` (New match, then checks Link is back on the bus and the camera
+is his own). Times are game time (20 frames a second), so a slow renderer still plays
 the same amount of game. Add a scenario for a new feature in `SCENARIOS` in `tools/playtest/run.py`.
 
 ## Workflow for agents
