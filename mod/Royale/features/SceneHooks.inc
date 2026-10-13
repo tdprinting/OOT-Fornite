@@ -342,6 +342,7 @@ void OnGameFrameUpdate() {
     Feat("tornado"); if (DebugOn(kDbgTornado) && gTornadoOn && InField() && gPlayState != nullptr) UpdateTornado(GET_PLAYER(gPlayState)); else gTornado.active = false;
     Feat("island scenery collision"); if (DebugOn(kDbgScenery) && joined && InField() && gPlayState != nullptr) ApplyScenery(GET_PLAYER(gPlayState));
     Feat("storm"); DriveStorm(hud);
+    Feat("feedback sounds"); DriveFeedbackSounds(hud);
     Feat("weather"); if (DebugOn(kDbgWeather)) DriveRealWeather();   // also before the player's own update, so it never sees itself as airborne
     Feat("game water"); UpdateGameWater();   // the game's own water hidden under ours (or put back)
     Feat("regular game weather"); DriveRegularWeather();

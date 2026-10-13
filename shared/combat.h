@@ -33,19 +33,19 @@ constexpr WeaponStats WeaponOf(ItemId id) {
     using E = WeaponEffect;
     switch (id) {
         case ItemId::DekuStick:     return {0.5f, 80, 0.7f, false};
-        case ItemId::BasicSword:    return {0.55f, 90, 0.65f, false}; // the starting sword: a little better than a stick, well short of a real sword
-        case ItemId::KokiriSword:   return {0.8f, 90, 0.6f, false};
+        case ItemId::BasicSword:    return {0.65f, 90, 0.6f, false};   // the starting sword: a little better than a stick, well short of a real sword (about 7 s to kill)
+        case ItemId::KokiriSword:   return {0.9f, 90, 0.6f, false};   // stays a step up from the starting sword
         case ItemId::MasterSword:   return {1.5f, 100, 0.6f, false};
         case ItemId::BiggoronSword: return {2.0f, 120, 1.1f, false};
         case ItemId::GildedSword:   return {1.9f, 115, 0.7f, false}; // Majora's Mask's strongest sword: one-handed like the Master Sword, but a longer blade and a harder hit
         case ItemId::MegatonHammer: return {2.5f, 110, 1.3f, false};
-        case ItemId::Slingshot:     return {0.5f, 800, 0.8f, true};
+        case ItemId::Slingshot:     return {0.65f, 800, 0.8f, true};
         case ItemId::Boomerang:     return {0.6f, 500, 1.0f, true};
-        case ItemId::FairyBow:      return {1.0f, 1200, 1.0f, true};
+        case ItemId::FairyBow:      return {1.3f, 1200, 1.0f, true};   // shots need a clear line now, so each one counts for more
         case ItemId::Bombs:         return {1.8f, 600, 2.0f, true, E::None, 0, 0, 150};
         case ItemId::Bombchus:      return {1.5f, 900, 2.5f, true, E::None, 0, 0, 100};
-        case ItemId::DekuNuts:      return {0.3f, 450, 3.0f, true, E::Stun, 2.0f};
-        case ItemId::TripleSlingshot: return {0.45f, 800, 0.9f, true, E::None, 0, 0, 0, 3};
+        case ItemId::DekuNuts:      return {0.3f, 450, 3.5f, true, E::Stun, 1.5f};   // even a Legendary stun (2.6 s) leaves a gap before the next nut
+        case ItemId::TripleSlingshot: return {0.55f, 800, 0.9f, true, E::None, 0, 0, 0, 3};   // keeps ahead of the single Slingshot
         case ItemId::GiantsHammer:  return {2.8f, 150, 1.7f, false, E::None, 0, 0, 220};
         case ItemId::HomingBombchus: return {1.6f, 1000, 2.4f, true, E::None, 0, 0, 110, 1, true};
         case ItemId::FireArrows:    return {0.9f, 1200, 1.2f, true, E::Burn, 3.0f, 0.25f};

@@ -208,6 +208,7 @@ struct AttackResult {
     bool killed = false;
     bool dodged = false; // the target was rolling: the attack was spent but missed
     bool blocked = false; // the target took it on a raised shield
+    bool obstructed = false; // a hill, wall or tall prop was in the way: spent, and nobody hurt
     int extraHits = 0;    // a spin attack: everyone else it caught
 };
 
@@ -809,6 +810,16 @@ class Match {
         events.push_back(blast);
     }
 
+    // Eye height of a player for who can hit whom: a bot's y is its height above the floor; a human sends their own height when the map has
+    // heights (else they stand on the grid's floor). 45 is about Link's chest.
+    float EyeY(const PlayerState& p) const {
+        if (!nav) return 45.0f;
+        return (p.isBot ? nav->FloorAt(p.pos) + p.y : (nav->HasHeights() ? p.y : nav->FloorAt(p.pos))) + 45.0f;
+    }
+    // Nothing on the nav grid (a hill, a wall, a tall prop) stands between them: the same test bots use to spot each other.
+    bool CanSee(const PlayerState& a, const PlayerState& t) const { return !nav || nav->SightClear(a.pos, EyeY(a), t.pos, EyeY(t)); }
+    bool CanSeeFrom(Vec2 from, float fromY, const PlayerState& t) const { return !nav || nav->SightClear(from, fromY, t.pos, EyeY(t)); }
+
     AttackResult Attack(uint32_t attackerId, uint32_t targetId, bool hit = true, AttackStyle style = AttackStyle::Normal) {
         AttackResult r;
         if (const PlayerState* who = Find(attackerId); who ? !OnFoot(*who) : state != MatchState::InMatch) return r;   // nobody fights from the bus or the sky
@@ -840,6 +851,7 @@ class Match {
         r.ok = true;
         if (hadAmmo) SpendAmmo(*a, a->weapon.item);
         if (shockwave) ThrowShockwave(*a, t->pos, w.splashRadius);   // it rolls to their feet and goes off after the fuse, hit or miss
+        if (!shockwave && !CanSee(*a, *t)) { r.obstructed = true; return r; }   // it hits the wall or the hillside instead
         if (!hit) return r;
         if (clock < t->rollUntil && w.splashRadius <= 0) { r.dodged = true; return r; } // rolled out of the way (blasts are too wide to roll out of)
 
@@ -858,7 +870,7 @@ class Match {
         if (style == AttackStyle::Spin) {   // the spin catches everyone else within reach too
             const float reach = w.range * 1.1f + kSpinReachBonus;
             for (auto& o : players) {
-                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil) continue;
+                if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, a->pos) > reach || clock < o.rollUntil || clock < o.invulnUntil || !CanSee(*a, o)) continue;
                 bool blocked = false;
                 const float amount = dealt(o, base, &blocked);
                 Damage(o.id, amount, attackerId, DamageKind::Normal);
@@ -883,7 +895,7 @@ class Match {
                     if (!immune) { t->stunUntil = (std::max)(t->stunUntil, clock + seconds); t->dirty = true; }
                     if (w.splashRadius > 0 && !immune) {   // a shockwave stuns everyone it reaches, not only the one it was thrown at
                         for (auto& o : players) {
-                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune) continue;
+                            if (!o.alive || o.id == attackerId || o.id == targetId || Distance(o.pos, t->pos) > w.splashRadius || TotalsOf(o).stunImmune || !CanSeeFrom(t->pos, EyeY(*t), o)) continue;
                             o.stunUntil = (std::max)(o.stunUntil, clock + seconds);
                             o.dirty = true;
                         }
@@ -903,7 +915,7 @@ class Match {
             const Vec2 centre = t->pos;
             for (auto& o : players) {
                 if (!o.alive || o.id == attackerId || o.id == targetId) continue;
-                if (Distance(o.pos, centre) <= w.splashRadius) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
+                if (Distance(o.pos, centre) <= w.splashRadius && CanSeeFrom(centre, EyeY(*t), o)) Damage(o.id, base * 0.6f, attackerId, w.ranged ? DamageKind::Explosion : DamageKind::Normal);
             }
             for (auto& v : vehicles) if (!v.wrecked && !v.gone && Distance({v.body.x, v.body.z}, centre) <= w.splashRadius + kCartHitRadius * 0.5f) DamageVehicle(v, base * 0.9f, attackerId);
         }
@@ -1306,10 +1318,13 @@ class Match {
     const std::vector<AllyState>& Allies() const { return allies; }
     std::vector<AllyState>& MutableAllies() { return allies; }
     int AlliesOf(uint32_t player) const { int n = 0; for (const auto& a : allies) n += a.alive && a.owner == player; return n; }
+    // Off: only the four Hylian kinds (Kokiri, Zora, Goron, Gerudo) stand at the stations; Jones, Peter and Master Chief are developer-mode only.
+    void SetNoveltyAllies(bool on) { noveltyAllies = on; }
     void SpawnAllies() {
         allies.clear();
         Rng rng(seed ^ 0x616C6C79ull);   // "ally"
-        for (int i = 0; i < kAllyCount; i++) {
+        const int kinds = noveltyAllies ? kAllyCount : static_cast<int>(AllyKind::Jones);
+        for (int i = 0; i < kinds; i++) {
             AllyState a;
             a.index = static_cast<uint8_t>(i);
             a.kind = static_cast<AllyKind>(i);
@@ -3565,6 +3580,7 @@ class Match {
     Replay replay;
     float replayNextAt = 0;
     std::vector<Vec2> allySpots;
+    bool noveltyAllies = true;
     bool majorBoss = false;
     bool dragonSpawned = false;
     std::vector<ChestSite> chestSites;
