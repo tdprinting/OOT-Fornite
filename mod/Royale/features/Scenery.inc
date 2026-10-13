@@ -460,7 +460,10 @@ void Solid_Update(Actor* actor, PlayState* play) {
     const Player* player = GET_PLAYER(play);
     if (player == nullptr) return;
     const float x = player->actor.world.pos.x, z = player->actor.world.pos.z;
-    if (!OnAuthoredTerrain() && ++gSolidAge < 12 && std::hypot(x - gSolidCentre.x, z - gSolidCentre.z) < 150.0f) return;   // authored furniture is reconsidered every frame
+    // Authored furniture (the nearest pieces within 900 units) is reconsidered every few frames or after a few steps: sorting the map's few hundred
+    // colliders every frame cost more than it bought.
+    const float moved = std::hypot(x - gSolidCentre.x, z - gSolidCentre.z);
+    if (OnAuthoredTerrain() ? (++gSolidAge < 4 && moved < 40.0f) : (++gSolidAge < 12 && moved < 150.0f)) return;
     gSolidAge = 0;
     gSolidCentre = { x, z };
     if (BuildSolidMesh(x, z, false)) play->colCtx.dyna.bitFlag |= DYNAPOLY_INVALIDATE_LOOKUP;

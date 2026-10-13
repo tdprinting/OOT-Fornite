@@ -1,4 +1,5 @@
 #pragma once
+#include "box_index.h"
 #include "convergence_data.h"
 #include "poi.h"
 #include <algorithm>
@@ -42,9 +43,8 @@ inline bool ConvergenceDryGround(Vec2 p) {
     return 1/std::sqrt(1+sx*sx+sz*sz)>=.8f;
 }
 inline bool ConvergenceObstacleAt(Vec2 p, float margin = 22.0f) {
-    for (const auto& b : convergence::kObstacles)
-        if (p.x > b.x0-margin && p.x < b.x1+margin && p.z > b.z0-margin && p.z < b.z1+margin) return true;
-    return false;
+    static const BoxIndex<convergence::Obstacle> index(convergence::kObstacles);   // (built on first use; the same answer as testing every box)
+    return index.Any(p.x, p.z, margin);
 }
 inline PoiLayout GenerateConvergenceLayout(const PlacementFn& valid = nullptr) {
     PoiLayout out;

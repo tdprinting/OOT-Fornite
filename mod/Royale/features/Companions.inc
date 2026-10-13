@@ -235,9 +235,8 @@ void AllyDust(PlayState* play, float x, float y, float z, int count, float sprea
 // Whether the person an ally works for is dancing (doing an emote) or has just won the match: the ally dances along.
 bool AllyOwnerCelebrates(uint16_t owner) {
     if (owner == royale::net::kNoPlayer16) return false;
-    const auto& h = gSession.Hud();
-    if (h.winnerId == owner) return true;
-    if (owner == h.selfId) {
+    if (gSession.WinnerId() == owner) return true;   // (asked per ally per frame: the two fields alone, not the whole Hud())
+    if (owner == gSession.SelfId()) {
         if (gEmote.id >= 0) return true;
         Player* pl = gPlayState != nullptr ? GET_PLAYER(gPlayState) : nullptr;   // in the regular game they dance along to your ocarina too
         return InRegularGame() && pl != nullptr && (pl->stateFlags2 & PLAYER_STATE2_OCARINA_PLAYING) != 0;

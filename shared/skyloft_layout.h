@@ -1,4 +1,5 @@
 #pragma once
+#include "box_index.h"
 #include "skyloft_data.h"
 #include "poi.h"
 #include <algorithm>
@@ -21,12 +22,16 @@ inline float SkyloftWaterY(Vec2 p) {
 }
 // Inside a building's footprint (turned by its yaw)?
 inline bool SkyloftInBuilding(const skyloft::Building& b, Vec2 p, float grow = 0.0f) {
-    const float dx=p.x-b.x, dz=p.z-b.z, c=std::cos(b.yaw), s=std::sin(b.yaw);
+    const float dx=p.x-b.x, dz=p.z-b.z, reach=b.halfWidth+b.halfDepth+2.0f*grow;
+    if (std::fabs(dx)>reach || std::fabs(dz)>reach) return false;   // nowhere near it, whatever way it is turned: skip the sine and cosine
+    const float c=std::cos(b.yaw), s=std::sin(b.yaw);
     const float lx=dx*c+dz*s, lz=-dx*s+dz*c;
     return std::fabs(lx)<=b.halfWidth+grow && std::fabs(lz)<=b.halfDepth+grow;
 }
 // The height of a walkway (a deck, bridge, boardwalk or log ramp) at p, or false when p is not on one.
 inline bool SkyloftWalkwayAt(const skyloft::Walkway& w, Vec2 p, float* y) {
+    if (p.x<(std::min)(w.x0,w.x1)-w.halfWidth || p.x>(std::max)(w.x0,w.x1)+w.halfWidth ||
+        p.z<(std::min)(w.z0,w.z1)-w.halfWidth || p.z>(std::max)(w.z0,w.z1)+w.halfWidth) return false;   // nowhere near it
     const float dx=w.x1-w.x0, dz=w.z1-w.z0, len2=dx*dx+dz*dz;
     if (len2<1.0f) return false;
     const float t=((p.x-w.x0)*dx+(p.z-w.z0)*dz)/len2;
@@ -82,9 +87,8 @@ inline bool SkyloftDryGround(Vec2 p) {
     return 1/std::sqrt(1+sx*sx+sz*sz)>=.8f;
 }
 inline bool SkyloftObstacleAt(Vec2 p, float margin = 22.0f) {
-    for (const auto& b : skyloft::kObstacles)
-        if (p.x > b.x0-margin && p.x < b.x1+margin && p.z > b.z0-margin && p.z < b.z1+margin) return true;
-    return false;
+    static const BoxIndex<skyloft::Obstacle> index(skyloft::kObstacles);   // (built on first use; the same answer as testing every box)
+    return index.Any(p.x, p.z, margin);
 }
 // Shared host/server placement contract. Upper-room sites carry their own floor;
 // ordinary points use authored deck/floor heights before testing bare terrain.
