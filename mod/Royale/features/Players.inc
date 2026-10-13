@@ -22,6 +22,10 @@ float GroundY(PlayState* play, float x, float z, float fallback) {
 float BotY(PlayState* play, float x, float z, float lift) {
     float y = 0;
     if (!RawFloorAt(x, z, &y)) y = GroundY(play, x, z, lift);
+    // The server seats and drops bots at the bus's height above the floor; the bus is drawn at BusBaseY() + altitude. Blend the floor
+    // into that base with height so a bot leaving the bus is at the bus (at full altitude), and lands on the real floor.
+    const float k = std::min(1.0f, std::max(0.0f, lift / royale::kBusAltitude));
+    y += (std::max(0.0f, gMedianFloorY) - y) * k;   // BusBaseY(), declared later
     return y + lift;
 }
 

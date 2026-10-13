@@ -1729,7 +1729,7 @@ void ReportEvents(const royale::HudState& hud) {
                 break;
             case royale::ClientEvent::Type::Eliminated: {
                 const bool me = e.id == hud.selfId, mine = e.other == hud.selfId;
-                if (mine && !me && !royale::IsBossId(e.id)) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives the eliminator a heart and shield
+                if (mine && !me && !royale::IsBossId(e.id) && hud.selfAlive && !hud.selfKnocked) ShowGain("+ Siphon", IM_COL32(120, 255, 170, 255));   // the server gives a standing eliminator a heart and shield (none to one who is down)
                 if (mine && !me) {   // for the death and end screens (and their medals)
                     gMyStats.kills++;
                     if (!gMyStats.anyElim) gMyStats.firstStrike = true;
