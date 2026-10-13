@@ -270,6 +270,33 @@ class NavGrid {
             }
             regionSize.push_back(count);
         }
+        BuildOpenRegions();
+    }
+    // The same for the bosses' plain open ground (FindPath without climbing): cells joined side by side, as a diagonal step needs both sides
+    // open anyway. A search between two stretches is known to fail without running A* over the whole stretch it starts on.
+    void BuildOpenRegions() {
+        openRegion.assign(cells.size(), -1);
+        std::vector<int> stack;
+        int id = 0;
+        for (size_t s = 0; s < cells.size(); s++) {
+            if (cells[s] != kOpen || openRegion[s] >= 0) continue;
+            openRegion[s] = id;
+            stack.push_back(static_cast<int>(s));
+            while (!stack.empty()) {
+                const int a = stack.back();
+                stack.pop_back();
+                const int ax = a % w, az = a / w;
+                const int next[4][2] = {{ax + 1, az}, {ax - 1, az}, {ax, az + 1}, {ax, az - 1}};
+                for (const auto& n : next) {
+                    if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
+                    const int b = Index(n[0], n[1]);
+                    if (cells[b] != kOpen || openRegion[b] >= 0) continue;
+                    openRegion[b] = id;
+                    stack.push_back(b);
+                }
+            }
+            id++;
+        }
     }
     // Can a bot standing at a get to b? True when either is not on known ground, or when a is on a scrap of ground too small to say (a bot dropped
     // onto a stray ledge should not stop wanting everything). `aY` is a's height when it is up on a floor or a roof (otherwise NaN). A chest marked
@@ -526,6 +553,7 @@ class NavGrid {
         ToCellClamped(b, gx, gz);
         const int start = Index(sx, sz), goal = Index(gx, gz);
         if (start == goal) { path.push_back(b); return true; }
+        if (!climber && !openRegion.empty() && openRegion[start] >= 0 && openRegion[goal] >= 0 && openRegion[start] != openRegion[goal]) return false;   // no way across
 
         if (budget && (budget->searches <= 0 || budget->expansions <= 0)) { work.deferred = true; return false; }
         if (budget) --budget->searches;
@@ -685,6 +713,7 @@ class NavGrid {
     std::vector<float> floor, lift, cover;   // per cell: the scene's floor, what stands on it to be stood on, and how tall the tallest thing on it is
     std::vector<int> region;       // BuildRegions: the stretch of ground each cell is on (-1 for none)
     std::vector<int> regionSize;
+    std::vector<int> openRegion;   // BuildOpenRegions: the stretch of plain open ground each cell is on (-1 for none)
     std::vector<UpperNode> up;     // AddUpper
     std::unordered_map<int, std::vector<int>> upAt;   // ground cell -> the upper nodes inside it
     std::unordered_map<int, float> upperGoal;         // MarkUpper: cell -> the height of the chest up there

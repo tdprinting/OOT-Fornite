@@ -211,7 +211,9 @@ class BotController {
                 auto& route = allyMemory[a.index];
                 Vec2 aim = to;
                 if (nav && !nav->LineClear(a.pos, to, true)) {
-                    if (m.Clock() >= route.retryAt) {
+                    // The same goal (the safe zone, an owner standing still) keeps its path for two seconds; a moved goal, a used-up path or a lost waypoint at once.
+                    if (m.Clock() >= route.retryAt && (m.Clock() >= route.retryAt + 1.3f || route.next >= route.path.size() || Distance(to, route.goal) > NavGrid::kCell ||
+                                                       !nav->LineClear(a.pos, route.path[route.next], true))) {
                         route.retryAt = m.Clock() + 0.7f; route.goal = to; route.next = 0;
                         auto& context = m.Navigation();
                         if (!nav->FindPath(a.pos, to, route.path, true, &context.workspace, &context.budget)) {
@@ -219,8 +221,9 @@ class BotController {
                         }
                     }
                     while (route.next < route.path.size() && Distance(a.pos, route.path[route.next]) < 30) ++route.next;
+                    if (route.next + 1 < route.path.size() && nav->LineClear(a.pos, route.path[route.next + 1], true)) ++route.next;   // cut the corner once the next one is in sight
                     if (route.next < route.path.size()) aim = route.path[route.next];
-                }
+                } else if (nav) { route.path.clear(); route.next = 0; }   // a clear line: any later path is searched afresh from wherever it is then
                 const float ax = aim.x-a.pos.x, az = aim.z-a.pos.z;
                 if (Advance(m, a.pos, ax, az, (std::min)(step * speedScale, std::hypot(ax, az)))) a.moving = true;
                 a.rot = FaceAngle(a.pos, to);

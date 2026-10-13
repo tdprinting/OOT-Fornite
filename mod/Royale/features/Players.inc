@@ -762,6 +762,8 @@ struct PuppetMotion {
     Vec3f rideAt = { 0, 0, 0 };
     s16 rideYaw = 0;
     int dismount = 0;
+    uint32_t hangFrame = UINT32_MAX;   // HangingFromGlider's answer, worked out once a frame (update and draw both ask)
+    bool hang = false;
 };
 std::unordered_map<const Actor*, PuppetMotion> gMotion;
 // Carts (the section "carts: the Lon Lon Buggy" below).
@@ -820,6 +822,14 @@ void Puppet_Init(Actor* actor, PlayState* play) {
     // Other players can be Z-targeted like an enemy, which is how duels work.
     actor->flags |= ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_HOSTILE;
 
+    // The Player profile draws Link even when the camera can't see him. Up to a dozen players and sixteen bodies are full Links, so they are only
+    // drawn when in view: a long, wide view volume (as far as the fog lets anyone see, and the whole drop from the bus) so nobody pops in or out
+    // at the edge of the screen. They still update every frame, so their animation and sounds carry on unseen.
+    actor->flags &= ~ACTOR_FLAG_DRAW_CULLING_DISABLED;
+    actor->uncullZoneForward = 12000.0f;
+    actor->uncullZoneScale = 400.0f;
+    actor->uncullZoneDownward = 4000.0f;
+
 }
 
 // A small glow in the weapon's rarity colour around the hand that holds it: glints at the hand plus a faint halo, more of them the rarer it is,
@@ -842,8 +852,18 @@ void HeldGlow(PlayState* play, Player* player, royale::Rarity rarity, bool self)
 }
 
 bool HangingFromGlider(const royale::PuppetState* st, const Actor* actor, PlayState* play) {
-    return st != nullptr && st->alive && (gStateNow == royale::MatchState::Countdown || gStateNow == royale::MatchState::Drop) &&
-           actor->world.pos.y - GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f) > 120.0f;
+    if (st == nullptr || !st->alive || (gStateNow != royale::MatchState::Countdown && gStateNow != royale::MatchState::Drop)) return false;
+    // Everyone on the bus asks this twice a frame during the drop: measure the ground once a frame, and on the island maps from their
+    // height map rather than a long ray down through the scene.
+    auto m = gMotion.find(actor);
+    const uint32_t frame = static_cast<uint32_t>(play->gameplayFrames);
+    if (m != gMotion.end() && m->second.hangFrame == frame) return m->second.hang;
+    float ground = 0;
+    if (!OnIsland() || !RawFloorAt(actor->world.pos.x, actor->world.pos.z, &ground))
+        ground = GroundY(play, actor->world.pos.x, actor->world.pos.z, actor->world.pos.y - 1000.0f);
+    const bool hang = actor->world.pos.y - ground > 120.0f;
+    if (m != gMotion.end()) { m->second.hangFrame = frame; m->second.hang = hang; }
+    return hang;
 }
 
 // What is in someone's hand right now, as the game shows it: their weapon, except while they use something else the way Link does - the

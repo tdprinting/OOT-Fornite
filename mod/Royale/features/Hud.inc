@@ -191,14 +191,24 @@ void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
         float& vis = shown[i & 63];
         const float dx = p.center.x - pl->actor.world.pos.x, dz = p.center.z - pl->actor.world.pos.z;
         const float d = std::sqrt(dx * dx + dz * dz);
-        float y = pl->actor.world.pos.y;
-        FloorAt(p.center.x, p.center.z, &y);
         bool want = d <= reach && (gSkydiving || d > p.radius * 0.6f);
-        if (want && !gSkydiving) {   // the way from the camera to the name must be open
-            Vec3f to = { p.center.x, y + 650.0f, p.center.z }, hit;
-            CollisionPoly* poly = nullptr;
-            s32 bgId = 0;
-            want = !BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &to, &hit, &poly, true, true, true, true, &bgId);
+        if (!want && vis <= 0.0f) continue;   // out of reach and already faded: no floor or sight test for it
+        // The ground under a place doesn't move: measured once per place (FloorAt walks every climbing block), not every frame.
+        static float groundX[64], groundZ[64], groundY[64];
+        static bool groundKnown[64] = {};
+        const size_t slot = i & 63;
+        float y = pl->actor.world.pos.y;
+        if (groundKnown[slot] && groundX[slot] == p.center.x && groundZ[slot] == p.center.z) y = groundY[slot];
+        else if (FloorAt(p.center.x, p.center.z, &y)) { groundKnown[slot] = true; groundX[slot] = p.center.x; groundZ[slot] = p.center.z; groundY[slot] = y; }
+        if (want && !gSkydiving) {   // the way from the camera to the name must be open (looked at every other frame: the fade hides the gap)
+            static bool clear[64] = {};
+            if (((static_cast<size_t>(gPlayState->gameplayFrames) + i) & 1) == 0) {
+                Vec3f to = { p.center.x, y + 650.0f, p.center.z }, hit;
+                CollisionPoly* poly = nullptr;
+                s32 bgId = 0;
+                clear[slot] = !BgCheck_CameraLineTest1(&gPlayState->colCtx, &eye, &to, &hit, &poly, true, true, true, true, &bgId);
+            }
+            want = clear[slot];
         }
         vis = std::clamp(vis + (want ? 0.08f : -0.08f), 0.0f, 1.0f);
         if (vis <= 0.0f) continue;

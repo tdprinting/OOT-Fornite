@@ -367,6 +367,7 @@ class RoyaleSession {
     // the inventory...). The same values Hud() gives.
     MatchState State() const { return client ? client->State() : HudState{}.state; }
     uint16_t SelfId() const { return client ? client->PlayerId() : HudState{}.selfId; }
+    uint16_t WinnerId() const { return client ? static_cast<uint16_t>(client->Winner()) : HudState{}.winnerId; }
 
     HudState Hud() const {
         HudState h;

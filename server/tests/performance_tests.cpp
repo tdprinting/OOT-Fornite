@@ -1,6 +1,8 @@
 #include "sim.h"
 #include "frame_cache.h"
 #include "water_sim.h"
+#include "kingdom_layout.h"
+#include "moonfall_layout.h"
 #include <cstdio>
 #include <cstdlib>
 using namespace royale;
@@ -167,9 +169,40 @@ static void CacheAndRippleSleep() {
     field.Impulse(0,0,3,20); CHECK(!field.Sleeping());
     field.Clear(); CHECK(field.Sleeping());
 }
+// The bosses' searches (plain open ground) between two stretches of ground with no way across fail at once, without running A*.
+static void BossSearchAcrossAWallFailsAtOnce() {
+    NavGrid grid({{0,0}, 3000}, [](Vec2 p) { return std::fabs(p.x) > 90; });   // a wall from edge to edge
+    grid.BuildRegions();
+    NavGrid::SearchWorkspace work;
+    NavGrid::SearchBudget budget;
+    std::vector<Vec2> path;
+    CHECK(!grid.FindPath({-1500,0},{1500,0},path,false,&work,&budget));
+    CHECK(work.expanded == 0 && !work.deferred && budget.expansions == NavGrid::SearchBudget::kExpansions);
+    CHECK(grid.FindPath({-1500,0},{-1500,1500},path,false,&work,&budget));   // the same side still finds its way
+}
+
+// The bucketed obstacle lookup gives the same answer as testing every box, at every margin.
+template <class Box, size_t N> static int LinearObstacle(const Box (&boxes)[N], Vec2 p, float margin) {
+    for (const Box& b : boxes) if (p.x > b.x0-margin && p.x < b.x1+margin && p.z > b.z0-margin && p.z < b.z1+margin) return 1;
+    return 0;
+}
+static void ObstacleIndexMatchesEveryBox() {
+    uint32_t seed = 12345;
+    auto next = [&]() { seed = seed * 1664525u + 1013904223u; return static_cast<float>(seed >> 8) / 16777216.0f; };
+    int mismatches = 0;
+    for (int i = 0; i < 40000; i++) {
+        const Vec2 p = {(next() * 2.0f - 1.0f) * 8000.0f, (next() * 2.0f - 1.0f) * 8000.0f};
+        for (float margin : {0.0f, 22.0f, 64.0f, 100.0f}) {
+            mismatches += MoonfallObstacleAt(p, margin) != (LinearObstacle(moonfall::kObstacles, p, margin) == 1);
+            mismatches += KingdomObstacleAt(p, margin) != (LinearObstacle(kingdom::kObstacles, p, margin) == 1);
+        }
+    }
+    CHECK(mismatches == 0);
+}
 int main() {
     NavigationStorageAndBudget(); SearchBudgetFailsOverlongSearch(); ConnectedJudgesWalledPointsByTheirGround(); RouteOffAFloorStartsAtItsFoot(); TerrainTransitions(); BotsAbandonUnreachableLoot();
     AllyCannotStrikeThroughCover(); RevealedBotsStillRespectCover(); CacheAndRippleSleep();
+    BossSearchAcrossAWallFailsAtOnce(); ObstacleIndexMatchesEveryBox();
     std::printf("performance regressions: %d failures\n", failures);
     return failures ? 1 : 0;
 }

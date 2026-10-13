@@ -84,11 +84,11 @@ void Loot_Update(Actor* actor, PlayState* play) {
     Sparkle(play, actor->world.pos, la.rarity);
 
     Player* player = GET_PLAYER(play);
-    royale::HudState h = gSession.Hud();
-    if (player == nullptr || la.pickupCooldown > 0 || !LiveAndAlive(h)) return;
+    if (player == nullptr || la.pickupCooldown > 0) return;
     float dx = player->actor.world.pos.x - actor->world.pos.x, dz = player->actor.world.pos.z - actor->world.pos.z;
     float dy = player->actor.world.pos.y - la.baseY;
-    if (dx * dx + dz * dz <= kLootPickupRange * kLootPickupRange && std::fabs(dy) < 100.0f) {
+    // (Hud() builds the whole HUD state, so it is asked only for the one item underfoot, not for every item every frame.)
+    if (dx * dx + dz * dz <= kLootPickupRange * kLootPickupRange && std::fabs(dy) < 100.0f && LiveAndAlive(gSession.Hud())) {
         gSession.RequestPickup(static_cast<uint32_t>(idx->second), false); // walking over only takes rupees and ammo; anything else needs A
         la.pickupCooldown = royale::kTickHz; // ask again in a second if the server said no
     }
