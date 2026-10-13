@@ -123,7 +123,6 @@ class GameServer {
         }
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
-        if(riftlandsMap || moonfallMap || skyloftMap) lootCount=84; // redistribute the authored candidates without increasing chest density
         const uint64_t baseSeed = sim.match.Seed() + seedOffset;
         // Prefer a storm whose six circle centres are all on walkable ground; give up after 200 tries and take the last one.
         uint64_t seed = baseSeed;
@@ -321,7 +320,8 @@ class GameServer {
             sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
             sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
             if (plan) sim.match.SetLootPlan(*plan);
-            sim.match.RegenerateLoot(riftlandsMap || moonfallMap || skyloftMap ? 0 : lootCount); // the authored maps use their 84 authored candidates
+            const bool authoredMap = riftlandsMap || moonfallMap || skyloftMap;
+            sim.match.RegenerateLoot(authoredMap ? 0 : lootCount, 0.15f, moonfallMap ? 190 : 0); // the authored maps: a chest on every authored site; Moonfall also gets floor weapons beside them
         }
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
