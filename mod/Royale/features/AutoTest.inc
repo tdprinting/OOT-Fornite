@@ -16,6 +16,8 @@
 //   regular                 leave any session and play the save as the normal quest (the regular game's water, sky, companions)
 //   warp:<scene hex>        travel to the scene's first entrance and wait until it is loaded
 //   tour:<overworld|dungeons|all>   warp through each scene of the list in turn, 3 seconds in each
+//   boots:<0|1|2>           dress Link in kokiri, iron or hover boots whatever he holds (shot them to check patch 0032)
+//   tp:<x>,<z>[,<deg>]      put Link on the ground at x,z facing <deg> (0 = +z, 90 = +x); for shots of one place
 //   check                   assert Link exists in a loaded scene and log the mod state block
 //   shot:<name>             ask the runner for a screenshot (<name>.png in the run folder) and wait until it is taken
 //   prof:<sec>              ask the runner to sample the game's CPU use with perf for <sec> wall seconds; logs the frame rate meanwhile
@@ -134,7 +136,8 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "cvar") {
         const size_t eq = s.arg.find('=');
         if (eq != std::string::npos) CVarSetInteger(s.arg.substr(0, eq).c_str(), std::atoi(s.arg.c_str() + eq + 1));
-        gDebugLoaded = false; Ui().loaded = false; Ui(); RefreshRegularSettings();
+        gDebugLoaded = false;   // (a Royale.Debug switch is read again)
+        Ui().loaded = false; Ui(); RefreshRegularSettings();
         return true;
     }
     if (s.verb == "skin") {
@@ -154,6 +157,18 @@ bool AutoRun(const AutoStep& s, float secs) {
     if (s.verb == "jump") {
         if (gAuto.stepFrames % 10 == 0) gBusJumpPressed = true;
         return !hud.aboard && hud.state != royale::MatchState::Countdown && (gAuto.stepFrames > 40 || !gSkydiving);
+    }
+    if (s.verb == "boots") { gAutoBoots = std::clamp(std::atoi(s.arg.c_str()), 0, 2); return true; }
+    if (s.verb == "tp") {
+        float x = 0, z = 0, deg = 0;
+        if (std::sscanf(s.arg.c_str(), "%f,%f,%f", &x, &z, &deg) < 2 || gPlayState == nullptr) return true;
+        float y = 0;
+        if (!RawFloorAt(x, z, &y)) { AutoLog("  tp %s: no floor", s.arg.c_str()); return true; }
+        Player* p = GET_PLAYER(gPlayState);
+        p->actor.world.pos = { x, y + 2.0f, z };
+        p->actor.home.pos = p->actor.prevPos = p->actor.world.pos;
+        p->actor.shape.rot.y = p->actor.world.rot.y = static_cast<s16>(deg * (32768.0f / 180.0f));
+        return true;
     }
     if (s.verb == "leave") { gSession.Leave(); return true; }
     if (s.verb == "regular") {
