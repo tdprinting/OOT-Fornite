@@ -86,7 +86,7 @@ void WarDraw(GameState* state) {
         p.Text(36,113,"ADVENTURER",12,wt::theme::Ink,true);
         const float reveal=gWar.reduced?1:std::min(1.0f,(SDL_GetTicks()-gWar.mapChangedAt)/180.0f);
         p.Image(WarMapPixels(Ui().mapId),{177+(1-reveal)*8,112,257,153},6,4,0xFFFFFF00|static_cast<uint32_t>(255*reveal));
-        p.Text(212,282,royale::MapOf(Ui().mapId).name,11,wt::theme::Ink,true,190);
+        p.Text(212,282,MapLabel(Ui().mapId),11,wt::theme::Ink,true,190);
         p.Text(40,288,Ui().name,11,0x9EDCFFFF,false,112);
     } else if(gWar.page==WarPage::Death) {
         p.Panel({40,103,560,204});

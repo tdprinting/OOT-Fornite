@@ -28,6 +28,7 @@ constexpr uint16_t kProtocolVersion = 45; // 45: five-slot hotbar (weapons and p
 constexpr uint16_t kNoPlayer16 = 0xFFFF;
 constexpr uint32_t kParkedVehicleEvery = 5;   // a parked, empty cart is in every fifth snapshot only (clients keep it for kVehicleKeepSeconds)
 constexpr float kVehicleKeepSeconds = 0.6f;
+constexpr float kAllyFallSec = 2.0f;           // a fallen ally stays in snapshots (health 0) this long so the client can play its fall
 constexpr uint32_t kIdleAllyEvery = 4;        // a free ally standing still is in every fourth snapshot only (clients keep it for kAllyKeepSeconds)
 constexpr float kAllyKeepSeconds = 0.6f;
 constexpr size_t kMaxNameLen = 24;

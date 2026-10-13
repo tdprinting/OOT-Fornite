@@ -9,6 +9,7 @@
  "fails": [],
  "warnings": [
   "floating solid 188x110x164 at 564,385,-1519 (Lantern Bridge)",
+  "walkway over -4000,-4820 hangs 170 above what is under it (Snowhead Lodge)",
   "28 faces at Zora Cape are between walkable and wall (slope 0.55 to 0.88)",
   "24 faces at Kakariko Windmill are between walkable and wall (slope 0.55 to 0.88)",
   "19 faces at Moon Crater are between walkable and wall (slope 0.55 to 0.88)",
