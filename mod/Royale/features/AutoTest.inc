@@ -155,6 +155,19 @@ bool AutoRun(const AutoStep& s, float secs) {
         return !hud.aboard && hud.state != royale::MatchState::Countdown && (gAuto.stepFrames > 40 || !gSkydiving);
     }
     if (s.verb == "leave") { gSession.Leave(); return true; }
+    if (s.verb == "tp") {   // tp:x,z[,yaw degrees]: put Link on the floor there, facing yaw (screenshots of one place)
+        if (!InGame()) return false;
+        float x = 0, z = 0, yaw = 0;
+        std::sscanf(s.arg.c_str(), "%f,%f,%f", &x, &z, &yaw);
+        Player* link = GET_PLAYER(gPlayState);
+        float y = link->actor.world.pos.y;
+        if (!RawFloorAt(x, z, &y)) y = GroundY(gPlayState, x, z, y);
+        link->actor.world.pos = link->actor.prevPos = link->actor.home.pos = { x, y + 2.0f, z };
+        link->actor.velocity.y = 0.0f; link->actor.speedXZ = 0.0f;
+        link->actor.shape.rot.y = link->actor.world.rot.y = link->yaw = static_cast<s16>(yaw * (32768.0f / 180.0f));
+        AutoLog("  tp: (%.0f, %.0f, %.0f) yaw %.0f", x, y, z, yaw);
+        return true;
+    }
     if (s.verb == "regular") {
         if (gSession.GetMode() != royale::RoyaleSession::Mode::Idle) gSession.Leave();
         gSaveContext.ship.quest.id = QUEST_NORMAL;
