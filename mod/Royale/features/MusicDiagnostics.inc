@@ -759,12 +759,22 @@ int gActionFrames = 0;
 royale::Anim gActionAnim = royale::Anim::Idle;
 double gActionStart = 0;
 royale::ItemId gActionItem = royale::ItemId::Count;   // the bottle being drunk or the ability being used: what Link holds for it (LocalLink_Draw)
+float gActionSeconds = 0;
 void StartAction(royale::Anim pose, float seconds, royale::ItemId item = royale::ItemId::Count) {
     gActionAnim = pose;
     gActionFrames = std::max(1, static_cast<int>(seconds * royale::kTickHz));
     gActionStart = ImGui::GetTime();
     gActionItem = item;
+    gActionSeconds = seconds;
 }
+// A shield potion being drunk (the server lands it at the end, royale::DrinkSeconds): 0 to 1, or -1 when not drinking one.
+float ShieldDrinkProgress() {
+    if (gActionFrames <= 0 || gActionAnim != royale::Anim::Drink || royale::PotionOf(gActionItem).shield <= 0 || gActionSeconds <= 0) return -1.0f;
+    return std::clamp(static_cast<float>((ImGui::GetTime() - gActionStart) / gActionSeconds), 0.0f, 1.0f);
+}
+royale::ItemId ShieldDrinkItem() { return gActionItem; }
+// Switching weapon puts the potion away (the server cancels the drink too).
+void EndDrink() { if (gActionFrames > 0 && gActionAnim == royale::Anim::Drink) gActionFrames = 0; }
 royale::Anim PoseForWeapon(royale::ItemId weapon) {
     const royale::WeaponStats w = royale::WeaponOf(weapon);
     if (!w.ranged) return royale::Anim::Attack;

@@ -1459,7 +1459,12 @@ class BotController {
         for (const Equipped& e : p.potions) has |= PotionOf(e.item).shield > 0;
         if (!has) return false;
         const bool safe = !s.foe || s.dist > 260.0f;
-        if (safe && p.armor < kMaxShield * 0.55f) { const bool ok = m.UseShield(p.id); if (ok) ShowPose(m, Mem(p.id), Anim::Drink, 0.9f); return ok; }
+        if (p.drinking != ItemId::Count) return safe;   // mid-drink: keep at it while nobody is close (attacking would put it away)
+        if (safe && p.armor < kMaxShield * 0.55f) {
+            const bool ok = m.UseShield(p.id);
+            if (ok) ShowPose(m, Mem(p.id), Anim::Drink, (std::max)(0.9f, DrinkSeconds(p.drinking)));
+            return ok;
+        }
         return false;
     }
 

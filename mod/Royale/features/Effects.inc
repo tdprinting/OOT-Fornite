@@ -429,6 +429,7 @@ void DriveFeedbackSounds(const royale::HudState& h) {
     if (!live) { lastShield = 0.0f; return; }
     Player* pl = GET_PLAYER(gPlayState);
     if (lastShield > 0.05f && h.inv.shield <= 0.01f) Audio_PlayActorSound2(&pl->actor, NA_SE_EV_ICE_BROKEN);
+    else if (h.inv.shield > lastShield + 0.4f) Audio_PlaySoundGeneral(NA_SE_SY_GAUGE_UP, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb);   // a potion landed: the magic meter's fill
     lastShield = h.inv.shield;
     // The wall (Atmosphere.inc): within about four body lengths of it, either side, a low wind roars. Looped: re-asked every frame.
     if (gWallAlpha > 0.5f && h.safeZone.radius > 0) {

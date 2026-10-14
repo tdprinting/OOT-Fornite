@@ -1093,6 +1093,9 @@ int HotbarSelected(const royale::HudState& h, const std::vector<HotbarSlot>& slo
     return -1;
 }
 // Select slot i: a stack is taken in hand (B drinks), a weapon is swapped into hand by the server.
+void EndDrink();                 // MusicDiagnostics.inc (the local action pose)
+float ShieldDrinkProgress();
+royale::ItemId ShieldDrinkItem();
 void SelectHotbarSlot(const royale::HudState& h, const std::vector<HotbarSlot>& slots, int i) {
     if (i < 0 || i >= static_cast<int>(slots.size())) return;
     const HotbarSlot& sl = slots[static_cast<size_t>(i)];
@@ -1103,6 +1106,7 @@ void SelectHotbarSlot(const royale::HudState& h, const std::vector<HotbarSlot>& 
     }
     gHandStack = -1;
     if (sl.item == h.weapon && sl.rarity == h.weaponRarity) return;   // already in hand
+    EndDrink();
     for (size_t k = 0; k < h.inv.reserve.size(); k++)
         if (static_cast<royale::ItemId>(h.inv.reserve[k].item) == sl.item && static_cast<royale::Rarity>(h.inv.reserve[k].rarity) == sl.rarity) { gSession.SelectWeapon(static_cast<int>(k) + 1); return; }
 }
@@ -1156,6 +1160,19 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
     auto hitRound = [&](ImVec2 c, float r) { return tap && std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= r; };
     auto hitRect = [&](ImVec2 a, ImVec2 b) { return tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y; };
+    // Drinking a shield potion: a ring fills above Link in the shield bar's Hylian blue, like a bottle being emptied.
+    if (const float drink = ShieldDrinkProgress(); drink >= 0.0f && h.selfAlive) {
+        const ImVec2 c(ds.x * 0.5f, ds.y * 0.34f);   // above Link's head, clear of him and of the crosshair
+        const float r = 26.0f * S, a0 = -IM_PI * 0.5f;
+        dl->AddCircleFilled(c, r + 5.0f * S, IM_COL32(12, 20, 40, 170), 40);
+        dl->AddCircle(c, r, IM_COL32(85, 165, 245, 70), 40, 5.0f * S);
+        dl->PathArcTo(c, r, a0, a0 + IM_PI * 2.0f * drink, 40);
+        dl->PathStroke(IM_COL32(85, 165, 245, 255), ImDrawFlags_None, 5.0f * S);
+        const char* label = ShieldDrinkItem() == royale::ItemId::LargeShieldPotion ? "Large Shield Potion" : "Small Shield Potion";
+        const ImVec2 ts = font->CalcTextSizeA(15.0f * S, FLT_MAX, 0.0f, label);
+        dl->AddText(font, 15.0f * S, ImVec2(c.x - ts.x * 0.5f + 1.5f * S, c.y + r + 9.0f * S + 1.5f * S), IM_COL32(0, 0, 0, 220), label);
+        dl->AddText(font, 15.0f * S, ImVec2(c.x - ts.x * 0.5f, c.y + r + 9.0f * S), IM_COL32(200, 228, 255, 255), label);
+    }
     auto shadowed = [&](ImVec2 p, float size, ImU32 col, const char* t) {
         dl->AddText(font, size, ImVec2(p.x + 1.5f, p.y + 1.5f), IM_COL32(0, 0, 0, 230), t);
         dl->AddText(font, size, p, col, t);

@@ -45,6 +45,9 @@ struct PlayerState {
     bool alive = true;
     float health = kMaxHealth; // hearts
     float armor = 0;           // the shield bar: soaks up damage before health does (not the storm), 0 to kMaxShield
+    ItemId drinking = ItemId::Count;   // a shield potion being drunk (DrinkSeconds), ItemId::Count for none; it lands at drinkDoneAt
+    Rarity drinkRarity = Rarity::Common;
+    float drinkDoneAt = 0;
     float maxHealth = kMaxHealth;
     int heartPieces = 0;
     Vec2 pos = {};
@@ -367,6 +370,7 @@ class Match {
                 TickWeather();
                 TickBus();
                 for (auto& p : players) if (p.alive && clock < p.burnUntil) Damage(p.id, p.burnDps * dt, p.burnBy, DamageKind::Fire, false);   // early landers can already fight
+                TickDrinks();
                 TickKnocked(dt);   // so a player knocked during the Drop bleeds out or gets revived, and pings fade
                 ExpirePings();
                 if (DropOver()) Enter(MatchState::InMatch);
@@ -396,6 +400,7 @@ class Match {
                 TickHelpers(dt);
 #endif
                 TickVehicles(dt);
+                TickDrinks();
                 TickKnocked(dt);
                 ExpirePings();
                 if (!sandbox && (soloTest ? Alive() <= 0 : TeamsAlive() <= 1)) Enter(MatchState::Ending);
@@ -496,6 +501,7 @@ class Match {
     // Down but not out: lethal damage while a teammate still stands. The bleed-out bar starts full; `by` is credited if it runs out.
     void Knock(PlayerState& p, uint32_t by) {
         p.knocked = true;
+        CancelDrink(p);
         p.health = 0;
         p.knockHealth = kKnockHealth;
         p.armor = 0;
@@ -841,6 +847,7 @@ class Match {
         AttackResult r;
         if (const PlayerState* who = Find(attackerId); who ? !OnFoot(*who) : state != MatchState::InMatch) return r;   // nobody fights from the bus or the sky
         if (const PlayerState* knockedCheck = Find(attackerId); knockedCheck && knockedCheck->knocked) return r;   // down: no attacks at all
+        if (PlayerState* drinker = Find(attackerId)) CancelDrink(*drinker);   // swinging or shooting puts the potion away
         if (IsHelperId(targetId) || IsBossId(targetId) || IsVehicleId(targetId)) {   // a Shockwave Grenade at a boss, a cart or a helper
             const PlayerState* a = Find(attackerId);
             if (a && a->weapon.item == ItemId::ShockwaveGrenade) {
@@ -1080,6 +1087,7 @@ class Match {
         PlayerState* p = Find(id);
         if (!p || !p->alive || (state != MatchState::Drop && state != MatchState::InMatch)) return false;
         if (slot < 1 || slot > static_cast<int>(p->reserve.size()) || p->knocked) return false;
+        CancelDrink(*p);
         if (IsStarter(p->weapon)) {   // the starter sword takes no slot: the backup simply comes into hand
             p->weapon = p->reserve[static_cast<size_t>(slot - 1)];
             p->reserve.erase(p->reserve.begin() + (slot - 1));
@@ -1243,6 +1251,7 @@ class Match {
 
         const Equipped used = p->potions[best];
         const PotionDef d = PotionOf(used.item);
+        CancelDrink(*p);
         p->health = (std::min)(p->maxHealth, p->health + PotionHeal(used.item, used.rarity));
         if (d.cleanse) Cleanse(*p);
         if (d.damageTaken < 1.0f) {
@@ -1270,12 +1279,13 @@ class Match {
         const PotionDef d = PotionOf(item);
         if (d.revive) return false;
         if (d.shield > 0) {
-            if (p->armor >= d.shieldCap - 0.01f) return false;
-            p->armor = (std::min)(d.shieldCap, p->armor + d.shield);
+            if (p->armor >= d.shieldCap - 0.01f || p->drinking == item) return false;
+            return StartDrink(*p, item, rarity);   // the bar fills when the drink is done (TickDrinks); the potion stays in the bag till then
         } else {
             const bool afflicted = clock < p->burnUntil || clock < p->stunUntil || clock < p->frozenUntil;
             const bool heals = d.heal > 0 && p->maxHealth - p->health > 0.01f;
             if (!heals && !(d.cleanse && afflicted) && !(d.damageTaken < 1.0f)) return false;
+            CancelDrink(*p);   // drinking something else puts the shield potion away
             p->health = (std::min)(p->maxHealth, p->health + PotionHeal(item, rarity));
             if (d.cleanse) Cleanse(*p);
             if (d.damageTaken < 1.0f) { p->dmgTakenUntil = clock + d.seconds; p->dmgTakenMult = d.damageTaken; }
@@ -1332,11 +1342,41 @@ class Match {
             if (best < 0 || (fit > 0 && (bestFit < 0 || fit > bestFit)) || (fit < 0 && bestFit < 0 && fit > bestFit)) { best = static_cast<int>(i); bestFit = fit; }
         }
         if (best < 0) return false;
-        const PotionDef d = PotionOf(p->potions[static_cast<size_t>(best)].item);
-        p->armor = (std::min)(d.shieldCap, p->armor + d.shield);
-        p->potions.erase(p->potions.begin() + best);
-        p->dirty = true;
+        const Equipped pick = p->potions[static_cast<size_t>(best)];
+        if (p->drinking == pick.item && p->drinkRarity == pick.rarity) return false;   // already drinking that one
+        return StartDrink(*p, pick.item, pick.rarity);
+    }
+
+    // A shield potion takes DrinkSeconds to drink. Damage does not stop it; attacking, switching weapon, using another item or being knocked
+    // down does, and the potion stays in the bag. Starting another shield potion replaces the one being drunk.
+    bool StartDrink(PlayerState& p, ItemId item, Rarity rarity) {
+        p.drinking = item;
+        p.drinkRarity = rarity;
+        p.drinkDoneAt = clock + DrinkSeconds(item);
+        if (DrinkSeconds(item) <= 0) FinishDrink(p);
         return true;
+    }
+    static void CancelDrink(PlayerState& p) { p.drinking = ItemId::Count; }
+    // The drink is done: the potion is used up and the bar rises, if the potion is still in the bag and the bar still has room for it.
+    void FinishDrink(PlayerState& p) {
+        const ItemId item = p.drinking;
+        CancelDrink(p);
+        const PotionDef d = PotionOf(item);
+        if (!p.alive || p.knocked || d.shield <= 0 || p.armor >= d.shieldCap - 0.01f) return;
+        for (size_t i = 0; i < p.potions.size(); i++) {
+            if (p.potions[i].item != item || p.potions[i].rarity != p.drinkRarity) continue;
+            p.armor = (std::min)(d.shieldCap, p.armor + d.shield);
+            p.potions.erase(p.potions.begin() + static_cast<long>(i));
+            p.dirty = true;
+            return;
+        }
+    }
+    void TickDrinks() {
+        for (auto& p : players) {
+            if (p.drinking == ItemId::Count) continue;
+            if (!p.alive || p.knocked) CancelDrink(p);
+            else if (clock >= p.drinkDoneAt) FinishDrink(p);
+        }
     }
 
 
@@ -1741,6 +1781,7 @@ class Match {
         const ItemId item = p->ability.item;
         const float cost = AbilityMagic(item);
         if (MagicNow(*p) + 0.001f < cost) return false;   // not enough magic
+        CancelDrink(*p);   // a song or a spell puts the potion away
         bool startsCooldown = true;
         if (!RunAbility(*p, item, p->ability.rarity, &startsCooldown)) return false;
         if (startsCooldown) { p->abilityReadyAt = clock + AbilityOf(item).cooldown; AddMagic(*p, -cost); }

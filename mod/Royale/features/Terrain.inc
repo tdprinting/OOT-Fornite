@@ -737,7 +737,7 @@ void HandleCombatInput(Player* player, const royale::HudState& hud) {
                     Say("Your health is full");   // (the server refuses it too: no drink animation for nothing)
                 else {
                     gSession.UseStack(static_cast<uint8_t>(st.item), static_cast<uint8_t>(st.rarity));
-                    StartAction(royale::Anim::Drink, kDrinkSeconds, st.item);
+                    StartAction(royale::Anim::Drink, std::max(kDrinkSeconds, royale::DrinkSeconds(st.item)), st.item);   // a shield potion takes its full drink
                     DrinkSounds(player);
                     if (st.count <= 1) gHandStack = -1;
                 }
