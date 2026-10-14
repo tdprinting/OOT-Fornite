@@ -638,6 +638,9 @@ void OotWorker() {
 
 // Queue every song in the folder (called after a scan). Starts the worker the first time.
 void QueueOotSongs() {
+#ifdef __EMSCRIPTEN__
+    return;   // needs a worker thread, which the browser build does not have
+#endif
     if (!OotInstrumentsOn()) return;
     CaptureOotFonts();
     std::lock_guard<std::mutex> lock(gOot.mutex);

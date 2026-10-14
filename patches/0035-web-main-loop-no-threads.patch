@@ -1,0 +1,183 @@
+--- a/soh/soh/OTRGlobals.cpp
++++ b/soh/soh/OTRGlobals.cpp
+@@ -547,19 +547,7 @@
+ extern "C" int AudioPlayer_GetDesiredBuffered(void);
+ std::unordered_map<std::string, ExtensionEntry> ExtensionCache;
+ 
+-void OTRAudio_Thread() {
+-    while (audio.running) {
+-        {
+-            std::unique_lock<std::mutex> Lock(audio.mutex);
+-            while (!audio.processing && audio.running) {
+-                audio.cv_to_thread.wait(Lock);
+-            }
+-
+-            if (!audio.running) {
+-                break;
+-            }
+-        }
+-        std::unique_lock<std::mutex> Lock(audio.mutex);
++static void OTRAudio_Step() {
+ // AudioMgr_ThreadEntry(&gAudioMgr);
+ //  528 and 544 relate to 60 fps at 32 kHz 32000/60 = 533.333..
+ //  in an ideal world, one third of the calls should use num_samples=544 and two thirds num_samples=528
+@@ -576,22 +564,38 @@
+ #define AUDIO_FRAMES_PER_UPDATE (R_UPDATE_RATE > 0 ? R_UPDATE_RATE : 1)
+ #define NUM_AUDIO_CHANNELS 2
+ 
+-        int samples_left = AudioPlayer_Buffered();
+-        u32 num_audio_samples = samples_left < AudioPlayer_GetDesiredBuffered() ? SAMPLES_HIGH : SAMPLES_LOW;
++    int samples_left = AudioPlayer_Buffered();
++    u32 num_audio_samples = samples_left < AudioPlayer_GetDesiredBuffered() ? SAMPLES_HIGH : SAMPLES_LOW;
+ 
+-        // 3 is the maximum authentic frame divisor.
+-        s16 audio_buffer[SAMPLES_HIGH * NUM_AUDIO_CHANNELS * 3];
+-        for (int i = 0; i < AUDIO_FRAMES_PER_UPDATE; i++) {
+-            AudioMgr_CreateNextAudioBuffer(audio_buffer + i * (num_audio_samples * NUM_AUDIO_CHANNELS),
+-                                           num_audio_samples);
+-        }
++    // 3 is the maximum authentic frame divisor.
++    s16 audio_buffer[SAMPLES_HIGH * NUM_AUDIO_CHANNELS * 3];
++    for (int i = 0; i < AUDIO_FRAMES_PER_UPDATE; i++) {
++        AudioMgr_CreateNextAudioBuffer(audio_buffer + i * (num_audio_samples * NUM_AUDIO_CHANNELS),
++                                       num_audio_samples);
++    }
+ 
+-        if (gRoyaleAudioMix != nullptr) {
+-            gRoyaleAudioMix(audio_buffer, num_audio_samples * AUDIO_FRAMES_PER_UPDATE);
+-        }
++    if (gRoyaleAudioMix != nullptr) {
++        gRoyaleAudioMix(audio_buffer, num_audio_samples * AUDIO_FRAMES_PER_UPDATE);
++    }
+ 
+-        AudioPlayer_Play((u8*)audio_buffer,
+-                         num_audio_samples * (sizeof(int16_t) * NUM_AUDIO_CHANNELS * AUDIO_FRAMES_PER_UPDATE));
++    AudioPlayer_Play((u8*)audio_buffer,
++                     num_audio_samples * (sizeof(int16_t) * NUM_AUDIO_CHANNELS * AUDIO_FRAMES_PER_UPDATE));
++}
++
++void OTRAudio_Thread() {
++    while (audio.running) {
++        {
++            std::unique_lock<std::mutex> Lock(audio.mutex);
++            while (!audio.processing && audio.running) {
++                audio.cv_to_thread.wait(Lock);
++            }
++
++            if (!audio.running) {
++                break;
++            }
++        }
++        std::unique_lock<std::mutex> Lock(audio.mutex);
++        OTRAudio_Step();
+ 
+         audio.processing = false;
+         audio.cv_from_thread.notify_one();
+@@ -605,7 +609,9 @@
+ 
+     if (!audio.running) {
+         audio.running = true;
++#ifndef __EMSCRIPTEN__
+         audio.thread = std::thread(OTRAudio_Thread);
++#endif
+     }
+ }
+ 
+@@ -618,7 +624,9 @@
+     audio.cv_to_thread.notify_all();
+ 
+     // Wait until the audio thread quit
++#ifndef __EMSCRIPTEN__
+     audio.thread.join();
++#endif
+ }
+ 
+ extern "C" void VanillaItemTable_Init() {
+@@ -1474,12 +1482,14 @@
+ 
+ // C->C++ Bridge
+ extern "C" void Graph_ProcessGfxCommands(Gfx* commands) {
++#ifndef __EMSCRIPTEN__
+     {
+         std::unique_lock<std::mutex> Lock(audio.mutex);
+         audio.processing = true;
+     }
+ 
+     audio.cv_to_thread.notify_one();
++#endif
+     std::vector<std::unordered_map<Mtx*, MtxF>> mtx_replacements;
+     int target_fps = OTRGlobals::Instance->GetInterpolationFPS();
+     static int last_fps;
+@@ -1526,12 +1536,17 @@
+     last_fps = fps;
+     last_update_rate = R_UPDATE_RATE;
+ 
++#ifdef __EMSCRIPTEN__
++    // No threads on web: make this frame's audio here instead of on the audio thread.
++    OTRAudio_Step();
++#else
+     {
+         std::unique_lock<std::mutex> Lock(audio.mutex);
+         while (audio.processing) {
+             audio.cv_from_thread.wait(Lock);
+         }
+     }
++#endif
+ 
+     bool curAltAssets = CVarGetInteger(CVAR_SETTING("AltAssets"), 0);
+     if (prevAltAssets != curAltAssets) {
+--- a/soh/src/code/graph.c
++++ b/soh/src/code/graph.c
+@@ -513,10 +513,27 @@
+     exit(0);
+ }
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++
++static void Graph_WebFrame(void) {
++    if (WindowIsRunning()) {
++        RunFrame();
++    } else {
++        emscripten_cancel_main_loop();
++    }
++}
++#endif
++
+ void Graph_ThreadEntry(void* arg0) {
++#ifdef __EMSCRIPTEN__
++    // The browser owns the frame loop: RunFrame returns after each frame, so let it call us once per display frame.
++    emscripten_set_main_loop(Graph_WebFrame, 0, 1);
++#else
+     while (WindowIsRunning()) {
+         RunFrame();
+     }
++#endif
+ }
+ 
+ void* Graph_Alloc(GraphicsContext* gfxCtx, size_t size) {
+--- a/soh/src/code/z_kankyo.c
++++ b/soh/src/code/z_kankyo.c
+@@ -892,7 +892,7 @@
+ 
+     if ((((void)0, gSaveContext.gameMode) != GAMEMODE_NORMAL) &&
+         (((void)0, gSaveContext.gameMode) != GAMEMODE_END_CREDITS)) {
+-        func_800AA16C(play);
++        func_800AA16C();
+     }
+ 
+     if (pauseCtx->state == 0) {
+--- a/soh/soh/SaveManager.h
++++ b/soh/soh/SaveManager.h
+@@ -51,7 +51,11 @@
+ 
+ #define BS_THREAD_POOL_ENABLE_PRIORITY
+ #define BS_THREAD_POOL_ENABLE_PAUSE
++#ifdef __EMSCRIPTEN__
++#include "resource/WebThreadPool.hpp"
++#else
+ #include <BS_thread_pool.hpp>
++#endif
+ 
+ #include <nlohmann/json.hpp>
+ 
