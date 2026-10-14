@@ -44,7 +44,10 @@ jobs:
       - name: Configure (downloads and builds the libraries on a cold cache)
         run: cmake -S third_party/Shipwright-Android -B build -G "Visual Studio 17 2022" -A x64
       - name: Build the game and soh.otr
-        run: cmake --build build --config Release --target soh GenerateSohOtr --parallel
+        run: cmake --build build --config Release --target soh GenerateSohOtr --parallel 2>&1 | tee build.log
+      - name: Show the compile errors
+        if: failure()
+        run: grep -E "error [A-Z]+[0-9]+|fatal error|LNK[0-9]+|FAILED|CMake Error" build.log | sort -u | head -40 || true
       - name: Collect the files
         run: |
           mkdir -p dist
