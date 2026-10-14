@@ -732,6 +732,7 @@ void DrawOverlay() {
     DrawMinimap(dl, ds, scale, h);
     DrawMatchStats(dl, font, ds, scale, h, gMyStats.kills);
     DrawCompass(dl, font, ds, scale, h);
+    DrawStormBar(dl, font, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
     DrawPings(dl, font, ds, scale);

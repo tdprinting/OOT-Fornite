@@ -100,6 +100,8 @@ struct HudState {
     int stormPhase = 0;                  // 0-based; kStormPhaseCount once the storm has finished
     bool stormShrinking = false;
     float stormSecondsLeft = 0;          // until the hold ends / the shrink ends
+    float stormPhaseFrac = 0;            // 0 to 1 through the current hold or shrink
+    Circle nextZone;                     // where the current phase ends (the next safe zone); radius 0 once the storm has finished
     ItemId weapon = ItemId::BasicSword;   // what the local player holds (from the server)
     Rarity weaponRarity = Rarity::Common;
     bool hasShield = false;
@@ -389,6 +391,11 @@ class RoyaleSession {
             h.stormPhase = info.phase;
             h.stormShrinking = info.shrinking;
             h.stormSecondsLeft = info.secondsLeft;
+            if (info.phase < kStormPhaseCount && client->GetStorm()) {
+                h.nextZone = client->GetStorm()->PhaseEnd(info.phase);
+                const float len = info.shrinking ? kStormPhases[info.phase].closeSec : kStormPhases[info.phase].waitSec;
+                h.stormPhaseFrac = len > 0.0f ? std::clamp(1.0f - info.secondsLeft / len, 0.0f, 1.0f) : 1.0f;
+            }
         }
         h.roster.reserve(client->Roster().size());
         for (const auto& [id, info] : client->Roster()) {
