@@ -321,7 +321,7 @@ class GameServer {
             sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
             if (plan) sim.match.SetLootPlan(*plan);
             const bool authoredMap = riftlandsMap || moonfallMap || skyloftMap;
-            sim.match.RegenerateLoot(authoredMap ? 0 : lootCount, 0.15f, moonfallMap ? 190 : 0); // the authored maps: a chest on every authored site; Moonfall also gets floor weapons beside them
+            sim.match.RegenerateLoot(authoredMap ? 0 : lootCount, 0.15f, (moonfallMap || skyloftMap) ? 190 : 0); // the authored maps: a chest on every authored site; Moonfall and Skyloft also get floor weapons beside them
         }
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;

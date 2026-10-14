@@ -971,8 +971,16 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
     constexpr float cc = 40.0f;
     const Vec3f eye = play->view.eye;
     const bool island = OnIsland();
-    if (WaterSceneKey() != gCausticCellsMap || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsMap = WaterSceneKey(); }
     const int gi0 = static_cast<int>(std::lround(eye.x / cc)), gj0 = static_cast<int>(std::lround(eye.z / cc));
+    if (WaterSceneKey() != gCausticCellsMap) { gCausticCells.clear(); gCausticCellsMap = WaterSceneKey(); }
+    else if (gCausticCells.size() > 6000) {
+        // Forget only the cells far from the camera. Clearing them all made the next frame measure the whole 33 x 33 window again (two
+        // collision rays a cell): a hitch every time a swim or a glide had filled the cache.
+        for (auto it = gCausticCells.begin(); it != gCausticCells.end();) {
+            const int gi = static_cast<int>(it->first >> 32) - 100000, gj = static_cast<int>(it->first & 0xFFFFFFFFu) - 100000;
+            if (std::abs(gi - gi0) > NC || std::abs(gj - gj0) > NC) it = gCausticCells.erase(it); else ++it;
+        }
+    }
     const float cx = gi0 * cc, cz = gj0 * cc;
     static std::vector<WaterCell> cells;
     cells.assign(static_cast<size_t>(VC) * VC, WaterCell{ 0, 0, false });
