@@ -3,6 +3,27 @@
   var logEl = document.getElementById('log');
   function log(m) { logEl.textContent = m; }
   var DB = 'oot-royale-web', STORE = 'files';
+  var VER = 'x'; // this build's number, from version.txt (changes with every build, so cached files are never reused)
+
+  function fetchVersion() {
+    return fetch('version.txt', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : 'x'; })
+      .then(function (t) { return t.trim() || 'x'; }).catch(function () { return 'x'; });
+  }
+  // While playing, check now and then; if a newer build is up, offer a one-tap reload (oot.otr stays saved).
+  function watchForUpdates() {
+    setInterval(function () {
+      fetchVersion().then(function (v) {
+        if (v !== 'x' && v !== VER && !document.getElementById('upd')) {
+          var b = document.createElement('div');
+          b.id = 'upd';
+          b.textContent = 'New build ' + v + ' ready: tap to update';
+          b.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:9;background:#2a6;color:#fff;padding:10px 16px;border-radius:12px;font:600 15px system-ui';
+          b.onclick = function () { location.reload(); };
+          document.body.appendChild(b);
+        }
+      });
+    }, 120000);
+  }
 
   function db() {
     return new Promise(function (res, rej) {
@@ -35,18 +56,19 @@
   // The game binary is shipped gzipped (the host caps single files at 25 MB); unpack it in the browser.
   function loadWasm() {
     log('Loading game...');
-    return fetch('soh.wasm.gz').then(function (r) {
+    return fetch('soh.wasm.gz?v=' + VER).then(function (r) {
       if (!r.ok) throw new Error('missing soh.wasm.gz');
       return new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
     }).catch(function () {
-      return fetch('soh.wasm').then(function (r) { return r.arrayBuffer(); });
+      return fetch('soh.wasm?v=' + VER).then(function (r) { return r.arrayBuffer(); });
     });
   }
 
   function start(ootBytes) {
+    watchForUpdates();
     document.getElementById('boot').style.display = 'none';
     document.getElementById('pad').style.display = 'block';
-    Promise.all([fetch('soh.otr').then(function (r) { return r.arrayBuffer(); }), loadWasm()]).then(function (parts) {
+    Promise.all([fetch('soh.otr?v=' + VER).then(function (r) { return r.arrayBuffer(); }), loadWasm()]).then(function (parts) {
       var sohBytes = parts[0];
       var wasmUrl = URL.createObjectURL(new Blob([parts[1]], { type: 'application/wasm' }));
       var canvas = document.getElementById('canvas');
@@ -67,7 +89,7 @@
         }
       };
       var s = document.createElement('script');
-      s.src = 'soh.js';
+      s.src = 'soh.js?v=' + VER;
       document.body.appendChild(s);
     });
   }
@@ -81,7 +103,12 @@
     });
   });
 
-  idbGet('oot.otr').then(function (b) {
+  fetchVersion().then(function (v) {
+    VER = v;
+    document.getElementById('title').textContent = 'OOT Royale test build ' + v;
+    try { localStorage.setItem('seen-build', v); } catch (e) {}
+    return idbGet('oot.otr');
+  }).then(function (b) {
     if (b) {
       document.getElementById('pick').hidden = true;
       var go = document.getElementById('go');

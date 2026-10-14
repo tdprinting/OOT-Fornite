@@ -110,7 +110,7 @@ package() {
   gzip -9 -c "$BLD/soh/soh.wasm" >"$OUT/soh.wasm.gz"      # hosts cap single files at 25 MB; the page unpacks it
   cp "$REPO/third_party/Shipwright-Android/Android/app/src/main/assets/soh.otr" "$OUT/"
   printf '/*\n  Cache-Control: no-cache\n' >"$OUT/_headers"
-  git -C "$REPO" rev-parse --short HEAD >"$OUT/version.txt" 2>/dev/null || true
+  echo "${ROYALE_BUILD_NUMBER:-dev}-$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo local)" >"$OUT/version.txt"
   ls -la "$OUT"
 }
 

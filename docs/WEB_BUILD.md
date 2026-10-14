@@ -9,6 +9,9 @@ A WebAssembly build of the same game, for quick checks on a phone without the An
 
 The page ships no game data: `soh.otr` (our own assets, same file the Android app bundles) and the game binary only. `oot.otr` is never in git, CI or the host.
 
+## Auto-update
+`version.txt` (build number + commit) is fetched fresh on every open and added to every file URL, so a new build is never served from an old cache. While playing, the page checks every 2 minutes and shows "New build ... ready: tap to update"; the saved `oot.otr` survives the reload.
+
 ## How it is built
 `scripts/web_build.sh` (Emscripten 6.0.12, deps from git into `~/.cache/oot-web`). It copies the repo, applies `patches/`, links the mod, compiles to `soh.js` + `soh.wasm`, then writes `web-dist/` with the wasm gzipped (63 MB raw, about 19 MB gzipped; hosts cap single files at 25 MB; the page unpacks it).
 `.github/workflows/web-build.yml` runs it on the same pushes as the game build, caches ccache + deps, and publishes with wrangler when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets exist.
