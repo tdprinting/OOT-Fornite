@@ -61,7 +61,8 @@ build_deps() {
   cmake_install sdl2 -DSDL_TEST=OFF -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_OPENGLES=ON -DSDL_OPENGL=OFF \
     -DSDL_AUDIO=ON -DSDL_RENDER=OFF -DCMAKE_C_FLAGS="-fPIC"
   # Boost is header-only for us; link it through a private dir so /usr/include never reaches the compiler.
-  ln -sfn /usr/include/boost "$WORK/deps/boost-inc"
+  mkdir -p "$WORK/deps/boost-inc"
+  ln -sfn /usr/include/boost "$WORK/deps/boost-inc/boost"
   touch "$P/.done"
 }
 
