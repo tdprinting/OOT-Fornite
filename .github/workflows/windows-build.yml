@@ -26,6 +26,8 @@ jobs:
       run:
         shell: bash
     steps:
+      # The patches expect the files exactly as stored (LF); Windows git would otherwise rewrite line endings.
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - name: Fetch submodules (fork, its submodules, ENet)
         run: git submodule update --init --recursive --depth 1
