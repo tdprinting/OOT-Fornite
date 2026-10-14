@@ -1,5 +1,5 @@
 diff --git a/ZAPD/CrashHandler.cpp b/ZAPD/CrashHandler.cpp
-index 943ee41..e229f5f 100644
+index 943ee41..b518753 100644
 --- a/ZAPD/CrashHandler.cpp
 +++ b/ZAPD/CrashHandler.cpp
 @@ -1,7 +1,7 @@
@@ -11,3 +11,12 @@ index 943ee41..e229f5f 100644
  #define HAS_POSIX 1
  #else
  #define HAS_POSIX 0
+@@ -198,7 +198,7 @@ void CrashHandler_Init()
+ 	signal(SIGABRT, ErrorHandler);
+ #elif defined(_MSC_VER)
+ 	SetUnhandledExceptionFilter(seh_filter);
+-#elif !defined(__ANDROID__)
++#elif !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+ 	HANDLE_WARNING(WarningType::Always,
+ 	               "tried to set error handler, but this ZAPD build lacks support for one", "");
+ #endif
