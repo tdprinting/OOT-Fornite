@@ -146,6 +146,38 @@ uint32_t FloraHash(int a, int b, int salt) {
 }
 float Flora01(int a, int b, int salt) { return static_cast<float>(FloraHash(a, b, salt) & 0xFFFF) / 65535.0f; }
 
+// The maps built by hand in Blender (Moonfall, Skyloft, Hyrule Kingdom...) already have their trees, rocks, crates and barrels placed: the
+// Fortnite Map's grown scenery is kept to soft things there (grass, flowers, reeds, the odd fern), fewer of them, and never indoors or on a deck.
+// Inside a building (or just against its walls), or on a floor raised above the bare ground: a walkway, a bridge or a dock (RawFloorAt gives
+// those on the authored maps). Nothing grows or lies there.
+bool RaisedFloorAt(float x, float z, float y) {
+    if (!OnAuthoredTerrain()) return false;
+    const royale::Vec2 p{ x, z };
+    constexpr float kWall = 30.0f;
+    float bare;
+    switch (royale::fortnite::gTerrainMapId) {
+        case royale::kMoonfallMapIndex:
+            for (const auto& b : royale::moonfall::kBuildings) if (royale::MoonfallInBuilding(b, p, kWall)) return true;
+            bare = royale::MoonfallTerrainHeight(p); break;
+        case royale::kSkyloftMapIndex:
+            for (const auto& b : royale::skyloft::kBuildings) if (royale::SkyloftInBuilding(b, p, kWall)) return true;
+            bare = royale::SkyloftTerrainHeight(p); break;
+        case royale::kKingdomMapIndex:
+            for (const auto& b : royale::kingdom::kBuildings) if (royale::KingdomInBuilding(b, p, kWall)) return true;
+            bare = royale::KingdomTerrainHeight(p); break;
+        default: return false;
+    }
+    return y > bare + 6.0f;
+}
+// On the authored maps only flowers and reeds of the island's own scenery are grown, on the meadows, and fewer than on the Fortnite Map.
+bool GrownSceneryOk(const royale::fortnite::SceneryPiece& pc, int cx, int cz) {
+    if (!OnAuthoredTerrain()) return true;
+    using royale::fortnite::SceneryKind;
+    if (pc.kind == SceneryKind::Reeds) return true;
+    if (pc.kind != SceneryKind::FlowersWhite && pc.kind != SceneryKind::FlowersPink) return false;
+    return royale::fortnite::CoverAt(pc.x, pc.z) == royale::fortnite::Cover::Meadow && Flora01(cx, cz, 88) < 0.45f;
+}
+
 constexpr int kGroundSpotKind = 8;   // FloraSpotAt kinds from here are ground patches (below)
 struct FloraSpot { bool ok; float y; float sx = 0.0f, sz = 0.0f; };   // sx, sz: how the ground slopes (puddles lie along it)
 std::unordered_map<uint64_t, FloraSpot> gFloraSpots;
@@ -166,7 +198,7 @@ const FloraSpot* FloraSpotAt(int kind, int cx, int cz, float x, float z) {
     FloraSpot spot = { false, 0.0f };
     float y = 0, y2 = 0, y3 = 0;
     if (kind >= kGroundSpotKind) kind = kPatchRule[kind - kGroundSpotKind];
-    if (RawFloorAt(x, z, &y) && !WaterAt(x, z, y) && !OnExitFloor(x, z)) {
+    if (RawFloorAt(x, z, &y) && !WaterAt(x, z, y) && !OnExitFloor(x, z) && !RaisedFloorAt(x, z, y)) {
         spot.ok = true;
         spot.y = y;
         if (kind == 3) {   // puddles only lie on level, even ground: a gentle slope at most, and no bumps or edges across them
@@ -236,6 +268,7 @@ int FloraTheme() { return static_cast<int>(CurrentMap().theme); }
 struct TreeSpot { float x, y, z, scale, yaw; uint32_t variant; royale::MeshKind kind = royale::MeshKind::Tree; };
 bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
     if (InRegularGame()) return false;   // the regular game's scenes have their own trees: ours would stand in its roads and rooms, and are not solid there
+    if (OnAuthoredTerrain()) return false;   // every tree on the authored maps is in the map itself
     if (OnIsland()) {
         const float x = (static_cast<float>(cx) + 0.12f + 0.76f * Flora01(cx, cz, 23)) * kIslandTreeCell, z = (static_cast<float>(cz) + 0.12f + 0.76f * Flora01(cx, cz, 24)) * kIslandTreeCell;
         const royale::fortnite::Cover cover = royale::fortnite::CoverAt(x, z);
@@ -262,7 +295,7 @@ bool TreeIn(int cx, int cz, int season, TreeSpot* out) {
 // The small things on the ground between the towns (meshes.h, Decor): which of the map's six is in a cell, or -1 for none. The first two of
 // each map are the common ones; the rest turn up now and then, and each kind gathers in drifts (blocks of cells) rather than evenly.
 int DecorIn(int cx, int cz) {
-    if (Flora01(cx, cz, 81) > 0.34f * std::min(1.3f, gFoliage)) return -1;
+    if (Flora01(cx, cz, 81) > 0.34f * std::min(1.3f, gFoliage) * (OnAuthoredTerrain() ? 0.45f : 1.0f)) return -1;   // the authored maps have their own
     const float r = Flora01(cx / 3, cz / 3, 82) * 0.6f + Flora01(cx, cz, 83) * 0.4f;
     return r < 0.3f ? 0 : r < 0.55f ? 1 : r < 0.68f ? 2 : r < 0.8f ? 3 : r < 0.9f ? 4 : 5;
 }
@@ -333,7 +366,7 @@ void DrawFlora(PlayState* play) {
     const bool cull = vl > 1.0f && vl > vy * 0.5f;   // not when looking steeply down (the skydive): then all round is in view
     if (cull) { vx /= vl; vz /= vl; }
     auto inView = [&](float x, float z, float size) { return !cull || (x - eye.x) * vx + (z - eye.z) * vz > -size; };
-    const bool island = OnIsland();
+    const bool island = OnIsland(), authored = OnAuthoredTerrain();
 
     if (gFoliage > 0.01f) {
         // grass: patches (blocks of cells that are grassy) of tufts, leaning and swaying in the wind
@@ -349,8 +382,8 @@ void DrawFlora(PlayState* play) {
         const float grassy = theme == 4 ? 0.75f : theme == 2 ? 0.58f : 0.5f;           // and sparser, as is Kakariko's
         for (int cz = c0z; cz <= c1z && theme != 3; cz++)                               // none at all on Death Mountain
             for (int cx = c0x; cx <= c1x; cx++) {
-                if (Flora01(cx / 6, cz / 6, 41) < (island ? 0.3f : grassy)) continue;               // not a grassy patch
-                if (Flora01(cx, cz, 42) > 0.55f * std::min(1.2f, gFoliage) + 0.1f) continue;
+                if (Flora01(cx / 6, cz / 6, 41) < (authored ? 0.5f : island ? 0.3f : grassy)) continue;   // not a grassy patch (fewer on the authored maps)
+                if (Flora01(cx, cz, 42) > (0.55f * std::min(1.2f, gFoliage) + 0.1f) * (authored ? 0.75f : 1.0f)) continue;
                 const float x = (static_cast<float>(cx) + 0.15f + 0.7f * Flora01(cx, cz, 43)) * kGrassCell, z = (static_cast<float>(cz) + 0.15f + 0.7f * Flora01(cx, cz, 44)) * kGrassCell;
                 const float d = std::hypot(x - px, z - pz);
                 if (d > reach || !inView(x, z, 40.0f)) continue;
@@ -412,7 +445,7 @@ void DrawFlora(PlayState* play) {
                 if (k > 0.02f) DrawFloraMesh(play, m, x, spot->y - 1.0f, z, Flora01(cx, cz, 87) * 6.2831853f, 0, 0, k);
             }
         // the clutter of the people who live in the towns
-        if (gSession.Client()) {
+        if (gSession.Client() && !authored) {   // (the authored maps' towns have their carts, crates and barrels placed in the map)
             const float townReach = 2200.0f;
             static std::vector<ClutterPiece> pieces;
             const auto& pois = gSession.Client()->Pois();
@@ -684,7 +717,8 @@ void DrawGroundPatches(PlayState* play) {
                     for (const royale::Poi& poi : gSession.Client()->Pois())
                         if (std::hypot(poi.center.x - s.x, poi.center.z - s.z) < poi.radius * 0.8f) return 0;
             }
-            if (k == gp::Kind::Puddle && gp::Hash01(cx, cz, 7) < royale::fortnite::PuddleWetness(s.x, s.z)) s.onset = -0.3f;
+            // (On the authored maps the dirt is their roads and paths, not a bog: only dips in the meadows hold water all the time.)
+            if (k == gp::Kind::Puddle && !(OnAuthoredTerrain() && c == royale::fortnite::Cover::Dirt) && gp::Hash01(cx, cz, 7) < royale::fortnite::PuddleWetness(s.x, s.z)) s.onset = -0.3f;
         }
         return 1;
     };
@@ -901,7 +935,7 @@ void DrawIslandScenery(PlayState* play) {
         for (int cx = c0x; cx <= c1x; cx++) {
             if (std::hypot((static_cast<float>(cx) + 0.5f) * cellSize - px, (static_cast<float>(cz) + 0.5f) * cellSize - pz) > maxReach + cellSize) continue;
             royale::fortnite::SceneryPiece pc;
-            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc)) continue;
+            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc) || !GrownSceneryOk(pc, cx, cz)) continue;
             const float d = std::hypot(pc.x - px, pc.z - pz), reach = royale::fortnite::SceneryReach(pc.kind) * reachScale;
             if (d > reach) continue;
             const float size = 260.0f * pc.scale;
@@ -949,7 +983,7 @@ void ApplyScenery(Player* player) {
     for (int cz = static_cast<int>(std::floor((pz - 140.0f) / cell)); cz <= static_cast<int>(std::floor((pz + 140.0f) / cell)); cz++)
         for (int cx = static_cast<int>(std::floor((px - 140.0f) / cell)); cx <= static_cast<int>(std::floor((px + 140.0f) / cell)); cx++) {
             royale::fortnite::SceneryPiece pc;
-            if (!royale::fortnite::SceneryIn(cx, cz, std::min(1.3f, gFoliage), &pc)) continue;
+            if (!royale::fortnite::SceneryIn(cx, cz, std::min(1.3f, gFoliage), &pc) || !GrownSceneryOk(pc, cx, cz)) continue;
             const float r = royale::fortnite::SceneryRadius(pc.kind, pc.scale);
             if (r <= 0.0f) continue;
             const float ddx = px - pc.x, ddz = pz - pc.z, d = std::hypot(ddx, ddz);
