@@ -32,14 +32,28 @@
     });
   }
 
+  // The game binary is shipped gzipped (the host caps single files at 25 MB); unpack it in the browser.
+  function loadWasm() {
+    log('Loading game...');
+    return fetch('soh.wasm.gz').then(function (r) {
+      if (!r.ok) throw new Error('missing soh.wasm.gz');
+      return new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    }).catch(function () {
+      return fetch('soh.wasm').then(function (r) { return r.arrayBuffer(); });
+    });
+  }
+
   function start(ootBytes) {
     document.getElementById('boot').style.display = 'none';
     document.getElementById('pad').style.display = 'block';
-    fetch('soh.otr').then(function (r) { return r.arrayBuffer(); }).then(function (sohBytes) {
+    Promise.all([fetch('soh.otr').then(function (r) { return r.arrayBuffer(); }), loadWasm()]).then(function (parts) {
+      var sohBytes = parts[0];
+      var wasmUrl = URL.createObjectURL(new Blob([parts[1]], { type: 'application/wasm' }));
       var canvas = document.getElementById('canvas');
       window.Module = {
         canvas: canvas,
         noInitialRun: true,
+        locateFile: function (p) { return p.endsWith('.wasm') ? wasmUrl : p; },
         print: function (t) { console.log(t); },
         printErr: function (t) { console.warn(t); },
         preRun: [function () {

@@ -21,15 +21,16 @@
     b.addEventListener('touchcancel', function () { fire('keyup', k); });
     pad.appendChild(b);
   }
-  button('A', 'A', 24, 90, 76);
-  button('B', 'B', 110, 60);
-  button('Z', 'Z', 24, 190, 56);
-  button('R', 'R', 100, 160, 56);
-  button('Start', 'Start', 24, 270, 56);
-  button('C←', 'cl', 190, 100, 48);
-  button('C→', 'cr', 130, 230, 48);
-  button('C↑', 'cu', 190, 160, 48);
-  button('C↓', 'cd', 250, 100, 48);
+  // Right hand: A big, B beside it, shoulder/Start above, C diamond at the far corner.
+  button('A', 'A', 20, 40, 76);
+  button('B', 'B', 110, 24, 56);
+  button('Z', 'Z', 24, 130, 48);
+  button('R', 'R', 82, 130, 48);
+  button('Start', 'Start', 20, 190, 48);
+  button('C\u2191', 'cu', 150, 190, 40);
+  button('C\u2193', 'cd', 150, 110, 40);
+  button('C\u2190', 'cl', 190, 150, 40);
+  button('C\u2192', 'cr', 110, 150, 40);
 
   // Move stick: touch drag becomes the four arrow keys.
   var stick = document.createElement('div'); stick.id = 'stick';

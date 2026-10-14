@@ -12,6 +12,7 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 - [BUILDING.md](BUILDING.md): Building and running OOT Royale
 - [SKINS.md](SKINS.md): Player skins: new bodies for Link on the game's own animations, and how to add one
 - [PLAY.md](PLAY.md): How to get and install OOT Royale (no building needed)
+- [WEB_BUILD.md](WEB_BUILD.md): iPhone/browser test build: what it is, how it is built and published, limits
 - [CODE_MAP.md](CODE_MAP.md): Code map
 - [CLEANUP_PLAN.md](CLEANUP_PLAN.md): Cleanup plan: fewer tokens, easier navigation, zero gameplay change
 
