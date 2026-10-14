@@ -51,7 +51,7 @@ jobs:
       - name: Collect the files
         run: |
           mkdir -p dist
-          EXE=$(find build -name soh.exe | head -1)
+          EXE=$(find build third_party/Shipwright-Android -name soh.exe | head -1)
           echo "exe: $EXE"
           cp "$EXE" dist/
           OTR=$(find build third_party/Shipwright-Android/OTRExporter -name soh.otr 2>/dev/null | head -1)
