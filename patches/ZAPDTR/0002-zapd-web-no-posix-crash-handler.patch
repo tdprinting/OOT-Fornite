@@ -1,0 +1,13 @@
+diff --git a/ZAPD/CrashHandler.cpp b/ZAPD/CrashHandler.cpp
+index 943ee41..e229f5f 100644
+--- a/ZAPD/CrashHandler.cpp
++++ b/ZAPD/CrashHandler.cpp
+@@ -1,7 +1,7 @@
+ #include "CrashHandler.h"
+ #include "Utils/StringHelper.h"
+ 
+-#if __has_include(<unistd.h>) && !defined(__ANDROID__)
++#if __has_include(<unistd.h>) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+ #define HAS_POSIX 1
+ #else
+ #define HAS_POSIX 0

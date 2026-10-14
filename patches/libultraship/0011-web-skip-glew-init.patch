@@ -1,0 +1,13 @@
+diff --git a/src/graphic/Fast3D/gfx_opengl.cpp b/src/graphic/Fast3D/gfx_opengl.cpp
+index f372937..93591d7 100644
+--- a/src/graphic/Fast3D/gfx_opengl.cpp
++++ b/src/graphic/Fast3D/gfx_opengl.cpp
+@@ -711,7 +711,7 @@ static void gfx_opengl_draw_triangles(float buf_vbo[], size_t buf_vbo_len, size_
+ }
+ 
+ static void gfx_opengl_init() {
+-#ifndef __linux__
++#if !defined(__linux__) && !defined(__EMSCRIPTEN__)
+     glewInit();
+ #endif
+ 
