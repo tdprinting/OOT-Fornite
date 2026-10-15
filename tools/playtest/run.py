@@ -79,6 +79,11 @@ SCENARIOS["loop-12"] = ("ingame; hostbots:12; state:Drop; jump; state:InMatch; w
                         "rematch; check; state:Drop; jump; state:InMatch; wait:5; die; wait:6; shot:loop-death; check; endmatch; results; wait:4; "
                         "shot:loop-lost; rematch; check; leave; wait:5; check; quit")
 
+# Shield potions take time to drink: the bar stays put while Link drinks and fills when the drink is done.
+SCENARIOS["shield-12"] = "ingame; hostbots:12; state:Drop; jump; state:InMatch; wait:5; shieldpotion; check; quit"
+# The storm bar under the compass and the next circle on the minimap, once the match is on.
+SCENARIOS["storm-12"] = "ingame; hostbots:12; state:Drop; jump; state:InMatch; wait:8; shot:storm-bar; check; quit"
+
 # Hyrule Kingdom up close: water, shores, the town's ground and a house inside (tp:x,z,yaw puts Link there).
 SCENARIOS["look-8"] = ("ingame; host:8; wait:5; jump; wait:25; "
                        "tp:0,1150,180; wait:4; shot:k-clock-town; check; tp:-2150,2350,-90; wait:4; shot:k-lake-shore; check; "

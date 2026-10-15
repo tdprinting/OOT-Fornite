@@ -220,9 +220,9 @@ void DrawPoiLabels(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
         const char* name = royale::kPoiNames[p.name];
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, name);
         const ImVec2 pos(at.x - sz.x * 0.5f, at.y - sz.y * 0.5f);
-        // A name never runs into the compass strip at the top centre (DrawCompass: 440 wide, down to 42, its markers under it): it fades out
+        // A name never runs into the compass strip at the top centre (DrawCompass: 440 wide, down to 42, its markers under it, then DrawStormBar): it fades out
         // as it climbs towards it.
-        const float compassHalf = 220.0f * scale, compassBottom = 58.0f * scale;
+        const float compassHalf = 220.0f * scale, compassBottom = 92.0f * scale;   // and DrawStormBar's bar and words, down to 92
         int a = alpha;
         if (pos.x < ds.x * 0.5f + compassHalf && pos.x + sz.x > ds.x * 0.5f - compassHalf)
             a = static_cast<int>(alpha * std::clamp((pos.y - compassBottom) / (24.0f * scale), 0.0f, 1.0f));
@@ -380,7 +380,23 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
         const float thick = reach - zr + 4.0f * scale;
         dl->AddCircle(zc, zr + thick * 0.5f, IM_COL32(120, 50, 190, 120), 96, thick);
     }
-    dl->AddCircle(zc, zr, IM_COL32(255, 255, 255, 235), 96, 2.0f * scale);
+    const bool hasNext = h.nextZone.radius > 0.0f && (std::fabs(h.nextZone.radius - h.safeZone.radius) > 1.0f ||
+                                                       royale::Distance(h.nextZone.center, h.safeZone.center) > 1.0f);
+    // While a smaller circle is coming, the storm's edge is lilac and the next safe zone is the white ring, as in Fortnite.
+    dl->AddCircle(zc, zr, hasNext ? IM_COL32(205, 160, 255, 235) : IM_COL32(255, 255, 255, 235), 96, 2.0f * scale);
+    if (hasNext) {
+        const ImVec2 nc = toMap(h.nextZone.center.x, h.nextZone.center.z);
+        const float nr = h.nextZone.radius * k;
+        dl->AddCircle(nc, nr, IM_COL32(0, 0, 0, 150), 96, 3.5f * scale);
+        dl->AddCircle(nc, nr, IM_COL32(255, 255, 255, 245), 96, 2.0f * scale);
+        // Outside it: a dotted gold path from you to its nearest edge.
+        const float dx = nc.x - c.x, dy = nc.y - c.y, d = std::sqrt(dx * dx + dy * dy);
+        if (d > nr + 3.0f * scale) {
+            const float ux = dx / d, uy = dy / d, len = d - nr, step = 7.0f * scale;
+            for (float t = 6.0f * scale; t < len; t += step)
+                dl->AddCircleFilled(ImVec2(c.x + ux * t, c.y + uy * t), 1.6f * scale, IM_COL32(255, 222, 110, 230), 8);
+        }
+    }
 
     const double now = ImGui::GetTime();
     {   // supply drops and helpers to hire: a pulsing star, pinned to the rim when off the map
@@ -516,6 +532,30 @@ void DrawCompass(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roy
         dl->AddCircle(ImVec2(x, y1 + 12.0f * scale), 5.0f * scale, IM_COL32(0, 0, 0, 200), 16, 3.5f * scale);
         dl->AddCircle(ImVec2(x, y1 + 12.0f * scale), 5.0f * scale, col, 16, 2.0f * scale);
     }
+}
+
+// Under the compass: how far through the storm's hold or shrink we are, and how far you are from the next safe zone.
+// Gold while the storm holds, purple while it closes; the distance is red when you stand outside the next circle.
+void DrawStormBar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
+    if (!InField() || !h.selfAlive || h.state != royale::MatchState::InMatch || h.nextZone.radius <= 0.0f) return;
+    Player* pl = GET_PLAYER(gPlayState);
+    const float w = 260.0f * scale, bh = 7.0f * scale, x0 = (ds.x - w) * 0.5f, y0 = 66.0f * scale;
+    const ImU32 gold = HudColor(royale::wartable::theme::Gold), purple = IM_COL32(190, 110, 255, 255), red = IM_COL32(255, 90, 90, 255);
+    dl->AddRectFilled(ImVec2(x0 - 2.0f * scale, y0 - 2.0f * scale), ImVec2(x0 + w + 2.0f * scale, y0 + bh + 2.0f * scale), IM_COL32(6, 15, 36, 170), 4.0f * scale);
+    if (h.stormPhaseFrac > 0.0f)
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + w * h.stormPhaseFrac, y0 + bh), h.stormShrinking ? purple : gold, 3.0f * scale);
+    dl->AddRect(ImVec2(x0 - 2.0f * scale, y0 - 2.0f * scale), ImVec2(x0 + w + 2.0f * scale, y0 + bh + 2.0f * scale), IM_COL32(255, 222, 110, 140), 4.0f * scale, 0, 1.0f * scale);
+
+    const float d = royale::Distance({ pl->actor.world.pos.x, pl->actor.world.pos.z }, h.nextZone.center) - h.nextZone.radius;
+    const std::string left = std::string(h.stormShrinking ? "Storm closing " : "Storm closes in ") + ClockText(h.stormSecondsLeft);
+    const std::string right = d > 0.0f ? "Safe zone " + std::to_string(static_cast<int>(d / 40.0f)) + " m" : "In the next circle";   // 40 units = 1 m, as squads::kUnitsPerMetre
+    const float size = 14.0f * scale, ty = y0 + bh + 4.0f * scale;
+    auto text = [&](float x, ImU32 col, const std::string& t) {
+        dl->AddText(font, size, ImVec2(x + 1.5f, ty + 1.5f), IM_COL32(0, 0, 0, 230), t.c_str());
+        dl->AddText(font, size, ImVec2(x, ty), col, t.c_str());
+    };
+    text(x0, h.stormShrinking ? purple : HudColor(royale::wartable::theme::Ink), left);
+    text(x0 + w - font->CalcTextSizeA(size, FLT_MAX, 0.0f, right.c_str()).x, d > 0.0f ? red : IM_COL32(110, 230, 130, 255), right);
 }
 
 // Under the minimap: a framed row with the storm timer, players left and your eliminations, then what is affecting you, right-aligned.
@@ -1093,6 +1133,9 @@ int HotbarSelected(const royale::HudState& h, const std::vector<HotbarSlot>& slo
     return -1;
 }
 // Select slot i: a stack is taken in hand (B drinks), a weapon is swapped into hand by the server.
+void EndDrink();                 // MusicDiagnostics.inc (the local action pose)
+float ShieldDrinkProgress();
+royale::ItemId ShieldDrinkItem();
 void SelectHotbarSlot(const royale::HudState& h, const std::vector<HotbarSlot>& slots, int i) {
     if (i < 0 || i >= static_cast<int>(slots.size())) return;
     const HotbarSlot& sl = slots[static_cast<size_t>(i)];
@@ -1103,6 +1146,7 @@ void SelectHotbarSlot(const royale::HudState& h, const std::vector<HotbarSlot>& 
     }
     gHandStack = -1;
     if (sl.item == h.weapon && sl.rarity == h.weaponRarity) return;   // already in hand
+    EndDrink();
     for (size_t k = 0; k < h.inv.reserve.size(); k++)
         if (static_cast<royale::ItemId>(h.inv.reserve[k].item) == sl.item && static_cast<royale::Rarity>(h.inv.reserve[k].rarity) == sl.rarity) { gSession.SelectWeapon(static_cast<int>(k) + 1); return; }
 }
@@ -1156,6 +1200,19 @@ void DrawHotbar(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const roya
     const bool tap = ImGui::IsMouseClicked(0) && !io.WantCaptureMouse;
     auto hitRound = [&](ImVec2 c, float r) { return tap && std::hypot(io.MousePos.x - c.x, io.MousePos.y - c.y) <= r; };
     auto hitRect = [&](ImVec2 a, ImVec2 b) { return tap && io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y; };
+    // Drinking a shield potion: a ring fills above Link in the shield bar's Hylian blue, like a bottle being emptied.
+    if (const float drink = ShieldDrinkProgress(); drink >= 0.0f && h.selfAlive) {
+        const ImVec2 c(ds.x * 0.5f, ds.y * 0.34f);   // above Link's head, clear of him and of the crosshair
+        const float r = 26.0f * S, a0 = -IM_PI * 0.5f;
+        dl->AddCircleFilled(c, r + 5.0f * S, IM_COL32(12, 20, 40, 170), 40);
+        dl->AddCircle(c, r, IM_COL32(85, 165, 245, 70), 40, 5.0f * S);
+        dl->PathArcTo(c, r, a0, a0 + IM_PI * 2.0f * drink, 40);
+        dl->PathStroke(IM_COL32(85, 165, 245, 255), ImDrawFlags_None, 5.0f * S);
+        const char* label = ShieldDrinkItem() == royale::ItemId::LargeShieldPotion ? "Large Shield Potion" : "Small Shield Potion";
+        const ImVec2 ts = font->CalcTextSizeA(15.0f * S, FLT_MAX, 0.0f, label);
+        dl->AddText(font, 15.0f * S, ImVec2(c.x - ts.x * 0.5f + 1.5f * S, c.y + r + 9.0f * S + 1.5f * S), IM_COL32(0, 0, 0, 220), label);
+        dl->AddText(font, 15.0f * S, ImVec2(c.x - ts.x * 0.5f, c.y + r + 9.0f * S), IM_COL32(200, 228, 255, 255), label);
+    }
     auto shadowed = [&](ImVec2 p, float size, ImU32 col, const char* t) {
         dl->AddText(font, size, ImVec2(p.x + 1.5f, p.y + 1.5f), IM_COL32(0, 0, 0, 230), t);
         dl->AddText(font, size, p, col, t);
