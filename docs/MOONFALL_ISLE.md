@@ -1,6 +1,6 @@
 # Moonfall Isle
 
-The main and default Battle Royale map (map id 12). Other maps keep their ids and stay selectable in the map menu; Hyrule Kingdom is now the second choice. It is one island that mixes Ocarina of Time (the Temple of Time, Hyrule Castle, Kakariko, Lost Woods, Deku Tree), Majora's Mask (Clock Town, Snowhead, Great Bay, Ikana, Romani Ranch, the falling Moon) and Fortnite's structure (named places, a hot drop in the middle, bridges and roads between them, loot under roofs and on high ground).
+A release Battle Royale map (map id 12; Great Hyrule Kingdom, id 14, is now the default). Other maps keep their ids and stay selectable in the map menu. It is one island that mixes Ocarina of Time (the Temple of Time, Hyrule Castle, Kakariko, Lost Woods, Deku Tree), Majora's Mask (Clock Town, Snowhead, Great Bay, Ikana, Romani Ranch, the falling Moon) and Fortnite's structure (named places, a hot drop in the middle, bridges and roads between them, loot under roofs and on high ground).
 
 It plays in the Hyrule Field scene with swapped collision, like the other authored maps. Nothing is scattered over it: every tree, rock, house and prop is placed by the map's own builders.
 

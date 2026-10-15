@@ -55,7 +55,7 @@ static void HostCanStartAndBotsAppear() {
 
     CHECK(!guest.StartMatch());                       // only the host can start
     CHECK(host.StartMatch());
-    CHECK(PumpUntil({&host, &guest}, [&] { return host.Hud().state == MatchState::InMatch; }, 60)); // the countdown and the skydive are 28 s of match time
+    CHECK(PumpUntil({&host, &guest}, [&] { return host.Hud().state == MatchState::InMatch; }, 80)); // the countdown (kCountdownSec) and the drop
     CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().state == MatchState::InMatch; }, 20, kSlow));
     CHECK(PumpUntil({&host, &guest}, [&] { return guest.Hud().haveSelf && guest.Hud().alive > 1; }, 20, kSlow));
 

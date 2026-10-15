@@ -18,7 +18,8 @@ Every doc in `docs/`, by topic. Code layout: [`CODE_MAP.md`](CODE_MAP.md). Rules
 
 ## Maps
 - [MAPS.md](MAPS.md): Maps: what the ROM says
-- [MOONFALL_ISLE.md](MOONFALL_ISLE.md): Moonfall Isle (default map)
+- [GREAT_HYRULE_KINGDOM.md](GREAT_HYRULE_KINGDOM.md): Great Hyrule Kingdom (map 14, the default map)
+- [MOONFALL_ISLE.md](MOONFALL_ISLE.md): Moonfall Isle (map 12)
 - [SKYLOFT.md](SKYLOFT.md): Skyloft Isles (map 13, layout inspired by Skyward Sword's Skyloft)
 - [HYRULE_KINGDOM.md](HYRULE_KINGDOM.md): Hyrule Kingdom
 - [HYRULE_RIFTLANDS.md](HYRULE_RIFTLANDS.md): Hyrule Riftlands

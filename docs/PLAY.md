@@ -46,7 +46,7 @@ does nothing by itself. Nothing is added to the world until a lobby is open.
 4. **To join:** type the host's address and press **Join lobby**.
 5. You land in the lobby: a player list with the host marked, a **ready** button for everyone but the host, and (if you left the option on) you are taken to the Temple of Time to wait together.
 6. In the lobby the host can set the **number of players** with a slider from 2 to 32 (bots fill whatever the people don't; smaller matches also get fewer towns and mini bosses). A timer counts down from 2 minutes and the match **starts by itself** when it reaches zero (the host can turn that off with a checkbox). Everyone sees the countdown.
-8. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match** (or waits for the timer). Empty spots fill with bots up to 32 players. After a 10 second countdown everyone is moved to Hyrule Field automatically.
+8. The host picks **Bot difficulty** (Easy, Normal or Hard) and presses **Start match** (or waits for the timer). Empty spots fill with bots up to 32 players. Everyone is moved to the battlefield automatically and a 24 second countdown runs before the drop.
 
 You can play alone: press **Host a lobby**, then **Start match**, and you will face bots.
 
@@ -58,7 +58,7 @@ You can play alone: press **Host a lobby**, then **Start match**, and you will f
 
 ## How a match starts
 1. **Splash screen:** each match opens with a title card (Triforce, gold lettering, "Made by Tevin Dahl") for the first 5 seconds of the countdown while everyone is moved to Hyrule Field.
-2. **Hanging in the sky:** you spawn high above your spawn point and wait for the countdown to end.
+2. **Map intro:** on the authored islands (Moonfall Isle, Hyrule Kingdom, Riftlands, Skyloft, Great Hyrule Kingdom) the rest of the countdown is a short film of the map to the title theme: a high view of the whole island, four of its places with their names, then up to the bus, ending in your seat as the drop begins. **B** (or tapping **Skip**) skips it; turn it off in Settings > Comfort > **Map intro**. On other maps you wait on the bus.
 3. **The Moonfall Bus:** you start the match sat on the bus, a flying coach under the Majora's Mask Moon. It crosses the island on a straight line (dashed on the minimap, the little moon is the bus). Once it is over the island press **A** to jump, **C-Right** honks the horn. You free-fall, then **A** opens the glider (it opens by itself near the ground). The stick steers, hold **Z** to dive faster. Anyone still aboard when the bus leaves the island is pushed off. You can't be hurt on the bus, in the air or for 2 seconds after you land; the bots jump when they like, like you.
 
 ## Controls in a match

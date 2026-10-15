@@ -61,6 +61,12 @@ namespace royale { namespace skyloft {
 using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
 using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 } }
+#include "great_hyrule_kingdom_layout.h"
+#include "great_hyrule_kingdom_model.h"
+namespace royale { namespace great_hyrule_kingdom {
+using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
+using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
+} }
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
@@ -200,6 +206,9 @@ extern f32 gRoyaleCamLift;   // how far the main camera's view is lifted (patche
 extern f32 gRoyaleCamPitchDown;  // how far the main camera's look-at is lowered, tilting the view down (patches/0020); glide camera
 extern f32 gRoyaleCamBack;       // how far the main camera's eye is moved back from the look-at (patches/0020); bus seat and drawn-weapon cameras
 extern s32 gRoyaleCamGuard;  // nonzero: the main camera's drawn eye is pulled in front of solid ground between it and Link (patches/0020)
+extern s32 gRoyaleCamOverride;   // nonzero: the main camera draws gRoyaleCamEye/At/Fov instead of its own view (patches/0038); the map intro
+extern Vec3f gRoyaleCamEye, gRoyaleCamAt;
+extern f32 gRoyaleCamFov;
 void FrameInterpolation_RecordOpenChild(const void* a, int b);
 void FrameInterpolation_RecordCloseChild(void);
 void UpdatePatchHand(void);   // the game's EquipmentAlwaysVisible hand-model patches (soh/Enhancements/mods.cpp): re-run when the match turns the enhancement on or off
@@ -287,6 +296,7 @@ void WarDraw(GameState* state);
 #include "features/Squads.inc"
 #include "features/Vehicles.inc"
 #include "features/BattleBus.inc"
+#include "features/MapIntro.inc"
 #include "features/MusicDiagnostics.inc"
 #include "features/Scenery.inc"
 #include "features/Water.inc"

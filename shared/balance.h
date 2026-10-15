@@ -9,7 +9,7 @@ constexpr int kMaxPlayers = 32;
 constexpr int kTickHz = 20;
 
 // Match timing, shared so clients can show the same countdown the server runs.
-constexpr float kCountdownSec = 10.0f; // from Start to the drop
+constexpr float kCountdownSec = 24.0f; // from Start to the drop: 5 s of loading splash, then the map intro's fly-over (mod MapIntro.inc) on the bus
 // The drop has no fixed length any more: it lasts while the Moonfall Bus crosses the island and everybody comes down (see the bus block below).
 constexpr float kEndingSec = 10.0f;
 

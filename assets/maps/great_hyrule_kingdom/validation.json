@@ -1,0 +1,29 @@
+{
+ "loot": 158,
+ "buildings": 70,
+ "doors": 57,
+ "upper_nodes": 3937,
+ "climb_walls": 541,
+ "land_reached_percent": 99.9,
+ "floating": 0,
+ "fails": [],
+ "warnings": [
+  "28 faces at Zora's Domain are between walkable and wall (slope 0.55 to 0.88)",
+  "23 faces at Zora's River are between walkable and wall (slope 0.55 to 0.88)",
+  "23 faces at Snowpeak Summit are between walkable and wall (slope 0.55 to 0.88)",
+  "21 faces at Lanayru Spring are between walkable and wall (slope 0.55 to 0.88)",
+  "20 faces at Ordon Village are between walkable and wall (slope 0.55 to 0.88)",
+  "20 faces at Snowpeak Lodge are between walkable and wall (slope 0.55 to 0.88)",
+  "18 faces at Death Mountain Trail are between walkable and wall (slope 0.55 to 0.88)",
+  "16 faces at Death Mountain are between walkable and wall (slope 0.55 to 0.88)",
+  "15 faces at Kokiri Forest are between walkable and wall (slope 0.55 to 0.88)",
+  "15 faces at Great Hylia Bridge are between walkable and wall (slope 0.55 to 0.88)",
+  "15 faces at Goron City are between walkable and wall (slope 0.55 to 0.88)",
+  "14 faces at Castle Town are between walkable and wall (slope 0.55 to 0.88)",
+  "14 faces at Lon Lon Ranch are between walkable and wall (slope 0.55 to 0.88)",
+  "13 faces at Hylia Docks are between walkable and wall (slope 0.55 to 0.88)",
+  "13 faces at Desert Colossus are between walkable and wall (slope 0.55 to 0.88)",
+  "12 cells of land near 3537,-4195 (Kokiri Forest) cannot be walked to",
+  "10 cells of land near 2637,-4135 (Kokiri Forest) cannot be walked to"
+ ]
+}

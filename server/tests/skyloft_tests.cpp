@@ -31,7 +31,7 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
 int main() {
     CHECK(kSkyloftMapIndex==13 && kMapCount>kSkyloftMapIndex && IsPlayableMap(13) && IsIslandMap(13) && IsAuthoredMap(13));
     CHECK(std::string(MapOf(13).name)=="Skyloft Isles" && MapOf(13).scene==kHyruleFieldScene);
-    CHECK(std::string(kPoiNames[PoiNameBase(13)])=="Knight Academy" && PoiNameBase(13)==270 && PoiNameBase(13)+kNamesPerMap==kPoiNameTotal);
+    CHECK(std::string(kPoiNames[PoiNameBase(13)])=="Knight Academy" && PoiNameBase(13)==270 && PoiNameBase(13)+kNamesPerMap==PoiNameBase(kGreatHyruleKingdomMapIndex));
     CHECK(std::string(kPoiNames[PoiNameBase(13)+23])=="Ember Bridge");
     fortnite::UseTerrainForMap(13);
     CHECK(fortnite::gTerrainMapId==13 && fortnite::gHeightData==skyloft::kHeights && fortnite::gColourData==skyloft::kColours && fortnite::gCoverData==skyloft::kCover);

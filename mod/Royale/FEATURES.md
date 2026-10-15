@@ -21,6 +21,7 @@
 | Death, spectator, results and end screen | `EndMatch.inc` |
 | Local emotes/audio and Lon Lon Buggy | `Vehicles.inc` |
 | Moonfall Bus: seats, jump, free fall, horn, HUD, minimap, model draw | `BattleBus.inc` |
+| Map intro: the countdown's cinematic fly-over of an authored island (shots over its places, place-name cards, letterbox, title theme, B skips; camera override patch 0038; setting Comfort > Map intro) | `MapIntro.inc` |
 | Music folder, crash reports, instrument playback | `MusicDiagnostics.inc` |
 | Angry villagers and solid scenery | `Scenery.inc` |
 | Water simulation, textures, caustics and rendering; hiding the game's own water (`UpdateGameWater`) | `Water.inc` |
@@ -55,5 +56,6 @@ Actual asset relief: `shared/asset_relief.h` and `patches/libultraship/0006-sour
 The split reduces the amount of code an agent must read; it does not reduce compilation work or prove gameplay correctness. A later move to independent translation units requires explicit interfaces and separate validation.
 
 - Hyrule Riftlands map: `docs/HYRULE_RIFTLANDS.md`; authoring `tools/maps/riftlands/`; generated `shared/riftlands_*`; concept and prop specs `map-concepts/hyrule-riftlands/`.
-- Moonfall Isle map (the main map, ID 12): `docs/MOONFALL_ISLE.md`; authoring `tools/maps/moonfall/`; generated `shared/moonfall_*`.
+- Moonfall Isle map (ID 12): `docs/MOONFALL_ISLE.md`; authoring `tools/maps/moonfall/`; generated `shared/moonfall_*`.
 - Skyloft Isles map (ID 13): `docs/SKYLOFT.md`; authoring `tools/maps/skyloft/`; generated `shared/skyloft_*`.
+- Great Hyrule Kingdom map (the main map, ID 14): `docs/GREAT_HYRULE_KINGDOM.md`; authoring `tools/maps/great_hyrule_kingdom/`; generated `shared/great_hyrule_kingdom_data.h`/`_model.h`; hand-written `shared/great_hyrule_kingdom_layout.h`.

@@ -63,6 +63,8 @@ Farore's Wind), and Hyrule Field's large open map.
    jumps: free fall, the glider opens on A or by itself 600 units up, then the usual skydive. Whoever is still aboard when the bus leaves the
    island is pushed off. You cannot be hurt aboard, in the air, or for 2 s after landing; landed players can fight while others still fall.
    The drop ends when everyone has landed (or 25 s after the bus leaves). C-Right honks the horn.
+   On the authored islands the countdown (24 s) plays a skippable map intro after the loading splash: a camera fly-over of the island and
+   four of its places with OoT-style name cards and the title theme, ending in the bus seat as the drop begins (mod `MapIntro.inc`).
 3. **Looting**: weapons and items spawn as chests, pots and ground items at server-chosen points.
 4. **Storm**: 6 phases, closing from the whole map to a final circle (see 4.4).
 5. **End**: last Link standing, or last team. Victory fanfare (Item Get jingle). Return to lobby.

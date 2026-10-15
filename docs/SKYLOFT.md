@@ -2,7 +2,7 @@
 
 Battle Royale map id 13: one terraced island in the open sea, with islets round it joined by bridges. Layout inspired by Skyloft (Skyward
 Sword); every shape is the project's own low-poly OoT-style geometry, built with Moonfall's kit (nothing from any game rip is in the repo).
-Moonfall Isle stays the default; Skyloft Isles is picked in the map menu like the others.
+Great Hyrule Kingdom (map 14) is the default; Skyloft Isles is picked in the map menu like the others.
 
 It plays in the Hyrule Field scene with swapped collision, like Moonfall (`shared/fortnite_map.h`, map 13). Nothing is scattered over it:
 every house, bridge, tree and rock is placed by `tools/maps/skyloft/`.

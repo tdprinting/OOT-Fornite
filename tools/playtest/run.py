@@ -38,7 +38,7 @@ DEFAULT_RUNS = Path(os.environ.get("ROYALE_PLAYTEST_HOME", Path.home() / ".cache
 
 MAPS = {0: "Hyrule Field", 1: "Lake Hylia", 2: "Kakariko", 3: "Death Mountain Crater", 4: "Desert Colossus", 5: "Fortnite Map",
         6: "Sandbox", 7: "Hyrule Convergence", 8: "Hyrule Kingdom", 9: "Mini Boss Arena", 10: "Main Boss Arena", 11: "Hyrule Riftlands",
-        12: "Moonfall Isle", 13: "Skyloft Isles"}
+        12: "Moonfall Isle", 13: "Skyloft Isles", 14: "Great Hyrule Kingdom"}
 TEST_MAPS = {6, 9, 10}
 REG = "gSettings.Royale."
 

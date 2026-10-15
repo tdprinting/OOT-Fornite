@@ -126,7 +126,9 @@ bool EndScreenUp(const royale::HudState& h) {
 
 // Runs before the game reads the controller (from OnEmoteWheelInput). While the death card or the end screen is up the controller is theirs (Start
 // still opens the menu). Returns true when it took this frame's buttons.
+bool MapIntroInput(Input& in, const royale::HudState& hud);   // MapIntro.inc: while the map intro plays the pad is its own (B skips)
 bool MatchUiInput(Input& in, const royale::HudState& hud) {
+    if (MapIntroInput(in, hud)) return true;
     // From the moment you go down until you choose Spectate the pad is the death screen's, so a press can't make the hidden Link swing or roll.
     const bool card = gDeath.active && gDeath.card && IsLive(hud), end = EndScreenUp(hud);
     if (!card && !end) {
@@ -637,6 +639,8 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
+// The map intro (MapIntro.inc, later in the file): its cards and letterbox, drawn under the loading splash.
+bool DrawMapIntro(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 void DrawOverlay() {
     if (WarMenuOpen()) { DrawMenuLogo(); return; }
     DrawTitleLogo();
@@ -662,10 +666,11 @@ void DrawOverlay() {
 
     bool live = h.state == royale::MatchState::Drop || h.state == royale::MatchState::InMatch;
 
+    const bool intro = DrawMapIntro(dl, font, ds, scale, h);   // the fly-over of the map has the screen (and its own countdown)
     const bool splashing = h.state == royale::MatchState::Countdown && h.countdownLeft > royale::kCountdownSec - kSplashSeconds;
     if (splashing) {
         DrawSplash(dl, font, ds, scale, royale::kCountdownSec - h.countdownLeft);
-    } else if (h.state == royale::MatchState::Countdown) {
+    } else if (h.state == royale::MatchState::Countdown && !intro) {
         centered(ds.y * 0.16f, gold, 46 * scale, "MATCH STARTS IN " + std::to_string(static_cast<int>(std::ceil(h.countdownLeft))));
         if (!InField()) centered(ds.y * 0.16f + 56 * scale, white, 24 * scale, "Heading to " + std::string(CurrentMap().name) + "...");
     }

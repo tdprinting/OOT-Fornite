@@ -117,7 +117,7 @@ and `Damage()` ignores everything while the state is Drop (match.h:373). Bots do
 New flow:
 
 ```
-Lobby -> Countdown (10 s, aboard, bus climbing offshore)
+Lobby -> Countdown (kCountdownSec: 24 s since the map intro, aboard, bus climbing offshore)
       -> Drop     (the bus crosses the island; jump any time after the coast; forced off at the far end;
                    each player is protected until 2 s after landing)
       -> InMatch  (storm timer starts, as now)

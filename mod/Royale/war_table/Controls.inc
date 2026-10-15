@@ -179,7 +179,7 @@ void WarMap(int direction) {
     if (gSession.Joined() && (!gSession.Hud().isHost || gSession.Hud().state != royale::MatchState::Lobby)) return;
     int id = Ui().mapId;
     for (int n = 0; n < royale::kMapCount; ++n) { id = wt::CycleMap(id, direction); if (DevMode() || ReleaseMap(id)) break; }
-    Ui().mapId = DevMode() || ReleaseMap(id) ? id : royale::kMoonfallMapIndex;
+    Ui().mapId = DevMode() || ReleaseMap(id) ? id : royale::kDefaultMapIndex;
     gWar.mapChangedAt = SDL_GetTicks();
     WarSave();
 }
@@ -472,7 +472,7 @@ void WarBuild() {
         WarAdd(10,{450,119,162,47},"HOST GAME","Create a lobby on the selected battlefield",[](int){WarHost(false,false);},InGame()&&idle);
         WarAdd(11,{450,177,162,47},"JOIN GAME","Connect to a friend's lobby",[](int){WarShow(WarPage::Join);},InGame()&&idle);
         WarAdd(12,{450,235,162,47},"PRACTICE","Test courses, equipment and solo exploration",[](int){WarShow(WarPage::Practice);},InGame()&&idle&&DevMode());
-        if(idle&&!DevMode()&&!ReleaseMap(ui.mapId)){Ui().mapId=royale::kMoonfallMapIndex;WarSave();}
+        if(idle&&!DevMode()&&!ReleaseMap(ui.mapId)){Ui().mapId=royale::kDefaultMapIndex;WarSave();}
         WarAdd(13,{174,278,30,26},"<","Previous battlefield",[](int){WarMap(-1);});
         WarAdd(14,{406,278,30,26},">","Next battlefield",[](int){WarMap(1);});
         break;
@@ -565,6 +565,7 @@ void WarBuild() {
                 WarRow(413,3,"RESET CONTROLS","Back to the Battle Royale layout with prompts and the JUMP button on",[](int){
                     CVarSetInteger(ROYALE_CVAR("ControlScheme"),0);CVarSetInteger(ROYALE_CVAR("ButtonPrompts"),1);CVarSetInteger(ROYALE_CVAR("TouchJump"),1);
                     Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();gWar.notice="Controls reset to the Battle Royale layout.";});
+                WarSetting(4,"Map intro",ROYALE_CVAR("MapIntro"),1,0,1,1,"Fly over the island before the bus leaves (B skips it)");
             } else {
             WarSetting(0,"Reduced menu motion",ROYALE_CVAR("ReducedMotion"),0,0,1,1,"Remove slides and selection pulses");
             WarSetting(1,"Show players on map",ROYALE_CVAR("MapPlayers"),1,0,1,1,"Show nearby known players on the minimap");
@@ -661,7 +662,7 @@ void WarBuild() {
             if(!gStartupLine.empty())WarRow(403,3,gStartupLine,"How long the game took to open, from startup-times.txt",[](int){},false);
             WarRow(406,5,std::string("Developer mode   ")+(DevMode()?"On":"Off"),"Shows test maps, practice courses, debug switches, pets, Regular game and the novelty allies",[](int){
                 CVarSetInteger(ROYALE_CVAR("DevMode"),DevMode()?0:1);
-                if(!DevMode()&&!ReleaseMap(Ui().mapId))Ui().mapId=royale::kMoonfallMapIndex;
+                if(!DevMode()&&!ReleaseMap(Ui().mapId))Ui().mapId=royale::kDefaultMapIndex;
                 WarSave();Ship::Context::GetInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();},true,true);
         }
         break; }

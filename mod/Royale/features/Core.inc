@@ -760,6 +760,7 @@ bool OnConvergenceTerrain() { return OnIsland() && royale::fortnite::gTerrainMap
 bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kRiftlandsMapIndex; }
 bool OnMoonfallTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kMoonfallMapIndex; }
 bool OnSkyloftTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kSkyloftMapIndex; }
+bool OnGreatHyruleKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kGreatHyruleKingdomMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 // Where the floor raycasts start. A match's maps are open to the sky, so from high above; in the regular game's houses, grottos and dungeons, floors
@@ -797,6 +798,12 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         float lootY;
         if (outY) *outY = royale::SkyloftLootHeightAt({x,z},&lootY) ? lootY : royale::SkyloftGroundHeight({x,z});
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kGreatHyruleKingdomMapIndex) {
+        if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
+        float lootY;
+        if (outY) *outY = royale::GreatHyruleKingdomLootHeightAt({x,z},&lootY) ? lootY : royale::GreatHyruleKingdomGroundHeight({x,z});
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -921,6 +928,7 @@ bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kRiftlandsMapIndex) return royale::RiftlandsPlacementValid(p);
     if (gMapId == royale::kMoonfallMapIndex) return royale::MoonfallPlacementValid(p);
     if (gMapId == royale::kSkyloftMapIndex) return royale::SkyloftPlacementValid(p);
+    if (gMapId == royale::kGreatHyruleKingdomMapIndex) return royale::GreatHyruleKingdomPlacementValid(p);
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;
@@ -935,7 +943,7 @@ bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
     if (royale::IsTestMap(gMapId) || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : gMapId == royale::kSkyloftMapIndex ? 100.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : gMapId == royale::kSkyloftMapIndex ? 100.0f : gMapId == royale::kGreatHyruleKingdomMapIndex ? 260.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;
