@@ -298,10 +298,27 @@ void DrawAuthoredStructures(PlayState* play) {
             }
             gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
             gSPSetLights1(POLY_OPA_DISP++, rig->lights);
+            // Relief is per-pixel work (six map reads per pixel) and five extra values per vertex. Far off, a bump is smaller than a pixel, so
+            // batches past kReliefReach are drawn with the same sun and colours but no map: one plain lit pass, the same look at that size.
+            constexpr float kReliefReach = 2600.0f;
+            auto nearCamera = [&](const typename T::Batch& batch) {
+                const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z, reach = kReliefReach + batch.radius;
+                return dx * dx + dy * dy + dz * dz <= reach * reach;
+            };
+            for (int c = 1; c <= T::kSurfaceClasses; ++c) {
+                for (const uint32_t i : visible[c]) {   // the far ones first, while no map is set
+                    const auto& batch = T::kBatches[i];
+                    if (nearCamera(batch)) continue;
+                    if (!GfxHasRoom(play, 20)) break;
+                    loadTexture(batch.texture);
+                    gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
+                }
+            }
             for (int c = 1; c <= T::kSurfaceClasses; ++c) {
                 bool started = false;
                 for (const uint32_t i : visible[c]) {
                     const auto& batch = T::kBatches[i];
+                    if (!nearCamera(batch)) continue;
                     if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
                     loadTexture(batch.texture);
