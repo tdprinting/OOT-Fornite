@@ -29,6 +29,7 @@
   },
   "permissions": {
     "deny": [
+      "Read(./web-dist/**)",
       "Read(./shared/*_model.h)",
       "Read(./shared/*_data.h)",
       "Read(./shared/*_sounds.h)",

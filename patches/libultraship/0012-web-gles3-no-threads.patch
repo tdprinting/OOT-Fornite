@@ -1,0 +1,114 @@
+--- a/src/graphic/Fast3D/gfx_sdl2.cpp
++++ b/src/graphic/Fast3D/gfx_sdl2.cpp
+@@ -356,6 +356,12 @@
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++#endif
++
+ #ifdef _WIN32
+     // Use high-resolution timer by default on Windows 10 (so that NtSetTimerResolution (...) hacks are not needed)
+     timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+@@ -697,8 +703,13 @@
+         SDL_RenderSetVSync(renderer, vsync_enabled ? 1 : 0);
+     }
+ 
++#ifdef __EMSCRIPTEN__
++    // The browser paces frames (see Graph_ThreadEntry).
++    SDL_GL_SwapWindow(wnd);
++#else
+     sync_framerate_with_timer();
+     SDL_GL_SwapWindow(wnd);
++#endif
+ }
+ 
+ static void gfx_sdl_swap_buffers_end() {
+--- a/src/Context.cpp
++++ b/src/Context.cpp
+@@ -94,7 +94,9 @@
+ 
+     try {
+         // Setup Logging
++#ifndef __EMSCRIPTEN__
+         spdlog::init_thread_pool(8192, 1);
++#endif
+         std::vector<spdlog::sink_ptr> sinks;
+ 
+ #if (!defined(_WIN32)) || defined(_DEBUG)
+@@ -143,8 +145,12 @@
+ #endif
+         sinks.push_back(fileSink);
+ 
++#ifdef __EMSCRIPTEN__
++        mLogger = std::make_shared<spdlog::logger>(GetName(), sinks.begin(), sinks.end());
++#else
+         mLogger = std::make_shared<spdlog::async_logger>(GetName(), sinks.begin(), sinks.end(), spdlog::thread_pool(),
+                                                          spdlog::async_overflow_policy::block);
++#endif
+ #ifdef _DEBUG
+         GetLogger()->set_level(spdlog::level::trace);
+ #else
+--- a/src/resource/ResourceManager.h
++++ b/src/resource/ResourceManager.h
+@@ -15,7 +15,11 @@
+ 
+ #define BS_THREAD_POOL_ENABLE_PRIORITY
+ #define BS_THREAD_POOL_ENABLE_PAUSE
++#ifdef __EMSCRIPTEN__
++#include "resource/WebThreadPool.hpp"
++#else
+ #include <BS_thread_pool.hpp>
++#endif
+ 
+ namespace Ship {
+ struct File;
+--- /dev/null
++++ b/src/resource/WebThreadPool.hpp
+@@ -0,0 +1,43 @@
++#pragma once
++// Stand-in for BS::thread_pool on WebAssembly builds without pthreads: tasks run immediately on the caller.
++#include <cstdint>
++#include <future>
++#include <utility>
++#include <type_traits>
++
++namespace BS {
++using priority_t = std::int8_t;
++namespace pr {
++constexpr priority_t highest = 127;
++constexpr priority_t high = 64;
++constexpr priority_t normal = 0;
++constexpr priority_t low = -64;
++constexpr priority_t lowest = -128;
++} // namespace pr
++
++class thread_pool {
++  public:
++    explicit thread_pool(std::size_t = 0) {
++    }
++    void pause() {
++    }
++    void unpause() {
++    }
++    void wait() {
++    }
++    template <typename F> void detach_task(F&& task, priority_t = 0) {
++        std::forward<F>(task)();
++    }
++    template <typename F, typename R = std::invoke_result_t<std::decay_t<F>>>
++    std::future<R> submit_task(F&& task, priority_t = 0) {
++        std::promise<R> promise;
++        if constexpr (std::is_void_v<R>) {
++            std::forward<F>(task)();
++            promise.set_value();
++        } else {
++            promise.set_value(std::forward<F>(task)());
++        }
++        return promise.get_future();
++    }
++};
++} // namespace BS

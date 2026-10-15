@@ -45,6 +45,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - Checks: `check_mod_layout.py` feature packaging (`--baseline` proves byte-identical TU); `check_mod_compile.sh` compiles `RoyaleMod.cpp` against the fork; `check_surface_patch_stack.py` engine patch stack; `mod_source.py` expands the TU for checks.
 - Tests run by CI (`ci.yml`): `test_water_draw_buffers.py`, `test_item_surface_maps.py`, `test_item_surface_shaders.py`, `test_kingdom_authoring.py`, `test_moonfall_authoring.py`, `test_skyloft_authoring.py`, `test_riftlands_integration.py`. `game-build.yml`: `test_surface_renderer_state.py`. Manual: `test_war_table_matrix.py`, `test_playtest_equipment.py` (Windows).
 - Generators (`make_*.py`): each writes the header named in its docstring (see generated lists above).
+- `web_build.sh` browser (WebAssembly) test build into `web-dist/` (see docs/WEB_BUILD.md); `web/` is its page (`index.html`, `loader.js` oot.otr picker + gzip wasm loader, `touch.js` on-screen controls).
 - `github_brief.py` bounded PR/run summaries.
 
 ## tools/
@@ -59,6 +60,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 - `playtest/`: headless playtests of the real PC build (`build.sh`, `run.py` scenarios and suites, `sync_mod.py` incremental mod copy); docs/PLAYTEST.md.
 
 ## patches/ (applied in glob order by `scripts/apply_patches.sh`; letter suffixes keep the old sort order)
+- Web build only (all guarded by `__EMSCRIPTEN__`, no effect elsewhere): 0034 no -pthread, 0035 browser frame loop + inline audio + no thread pools; `libultraship/` 0011 skip GLEW, 0012 GLES3 context + thread stand-ins, `ZAPDTR/` 0002-0003.
 - Hooks: 0001 ShouldActorInit, 0002 cmake, 0009 hat limb, 0011 run speed, 0012 message table, 0013 custom collision, 0015 cloth limb, 0016 audio mix, 0023a custom sword, 0024 item material.
 - Android: 0005 network permissions, 0006 copy OTRs script, 0007 app/data folders, 0014 ROM loading screen, 0017 exit reason, 0018 updater, 0021 signing key/version code, 0028a menu touch passthrough.
 - Gameplay/engine: 0008 quest option, 0010 title logo, 0019 no first-person aim, 0020 camera lift, 0022 backdrop pass, 0023b no use on take-out, 0025b large collision vertex index, 0027 snow with fairies, 0028b bracelet on adult, 0029 engine limits, 0032 iron/hover boots on child Link, 0033 adult hand patches blank the hash word they leave.
