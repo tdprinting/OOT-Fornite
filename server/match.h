@@ -1027,7 +1027,7 @@ class Match {
     // Empties one hotbar slot to make room, dropping what was in it: the potion stack of `item`/`rarity`, or (kHandSlot, or a stack the
     // player doesn't have) the weapon in hand, whose place a backup weapon or the starter sword takes. False if nothing could be freed.
     bool FreeHotbarSlot(PlayerState& p, uint8_t item, uint8_t rarity) {
-        // What is put down is marked as this player's drop, like a C-Down drop, so the same A press can't pick it straight back up.
+        // Whatever is put down here is marked as dropped by this player, so the same walk-over can't take it straight back.
         auto drop = [&](const Equipped& e) {
             const size_t before = loot.size();
             DropEquipment(p, e);
