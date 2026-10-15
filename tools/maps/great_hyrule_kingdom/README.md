@@ -1,16 +1,34 @@
-# Great Hyrule Kingdom (Tee's fantasy landscape GLB)
+# Great Hyrule Kingdom (map 14, the default main map)
 
-Step 1 of the new main map, named "Great Hyrule Kingdom" by Tee. It is distinct from Hyrule Kingdom (map 8): use great_hyrule_kingdom / GreatHyruleKingdom in code and file names: the uploaded `fantasylandscape3dmodel.glb` cleaned and scaled to game units. Not yet in the game: no map
-index, buildings, places, water, bot navigation or engine data yet.
+Built from Tee's fantasy landscape model (`fantasylandscape3dmodel.glb`). Distinct from Hyrule Kingdom (map 8): use
+`great_hyrule_kingdom` / `GreatHyruleKingdom` in code and file names. Game-side notes: `docs/GREAT_HYRULE_KINGDOM.md`.
 
-`clean.py` (run with Blender's `bpy`, e.g. `PYTHONPATH=<bpy dir> python3 tools/maps/great_hyrule_kingdom/clean.py`; the input path is set at the top):
+## Rebuild
 
-- welds duplicate vertices and drops floating islands under 60 faces;
-- decimates to 25% (381k to 95k triangles);
-- scales to game units: 14830 wide (x), 15550 deep (z), up to 1393 high (y), centred on the origin;
-- bakes a 256 x 256 height grid and colour grid (the base colour texture at each cell's face) for the next steps.
+1. `clean.py` (Blender's `bpy`): welds, drops floating bits, decimates, scales the model to game units and bakes `height.npy` and
+   `colour.npy` into `/mnt/project-files/landscape-map/` (not committed).
+2. `python3 -I prepare_landscape.py` (from this folder, numpy only): removes the trees fused into the model's surface (a morphological
+   opening), and writes `landscape/ground.npy`, `colour.npy`, `trees.npy`, `biome.npy` (committed, small).
+3. `python3 tools/maps/great_hyrule_kingdom/export.py`: writes `shared/great_hyrule_kingdom_data.h` and `_model.h`.
+4. `python3 tools/maps/great_hyrule_kingdom/validate.py` (CI runs it as `scripts/test_great_hyrule_kingdom_authoring.py`): must say 0 failures.
+5. Previews: `python3 tools/maps/great_hyrule_kingdom/blender_build.py --renders overview,top,castle_town` (needs `bpy`).
 
-Output files (not committed, kept in the project folder): `landscape-map/landscape_clean.glb`, `.blend`, `height.npy`, `colour.npy`,
-`meta.json`, `preview_top_shaded.png`.
+## Files
 
-Known: 20% of the grid has no ground (sea and the model's cut edges); 80% of cells hit the mesh.
+- `layout.py`: the 24 places, roads, river, pools, mountains, the Death Mountain pass, pads, ally and cart stations, the lobby.
+- `terrain.py`: the ground. The cleaned landscape, the shore shelf, the added mountains (after the shelf, so Death Mountain rises out of
+  the sea), pads, the pass, the stepped river (one water box per step, levees off the channel) and the pool dishes. `simplify()` lays
+  nearly-flat 4 x 4 and 2 x 2 blocks of ground exactly flat so the exporter can merge them: the game keeps a collision vertex number in
+  13 bits for two corners of a triangle (patches/0025), and the map must stay near 11,500 collision vertices.
+- `pois.py`: every place, built from `kit.py` (Skyloft's kit, sized from adult Link). Zero build: cover comes from walls, ruins, rocks,
+  hedges, trees, upper floors and roof terraces.
+- `textures.py`: the Kingdom set plus Skyloft's extras, kept at 256 x 256 (Tee's texture rule).
+- `export.py`, `validate.py`, `routes.py`, `world.py`, `blender_build.py`: as for Skyloft Isles.
+
+## Budgets (last export)
+
+| | |
+|---|---|
+| Collision vertices | 11,444 (3,254 in the high range) |
+| Drawn vertices | 329,871 in 735 batches |
+| Chests | 158 |

@@ -1,0 +1,35 @@
+diff --git a/soh/src/code/z_camera.c b/soh/src/code/z_camera.c
+--- a/soh/src/code/z_camera.c
++++ b/soh/src/code/z_camera.c
+@@ -7521,6 +7521,13 @@
+ // look-at along the view line; both 0 normally (glide camera, drawn-weapon camera).
+ f32 gRoyaleCamPitchDown = 0.0f;
+ f32 gRoyaleCamBack = 0.0f;
++// OOT Royale: the map intro's camera (mod/Royale/features/MapIntro.inc). While gRoyaleCamOverride is nonzero the main camera's drawn view is
++// the mod's own eye, look-at and field of view (degrees); the lift, tilt, pull-back and guard above are not applied. The camera's own state keeps
++// following Link underneath, so the view is the game's again the frame the override ends.
++s32 gRoyaleCamOverride = 0;
++Vec3f gRoyaleCamEye = { 0.0f, 0.0f, 0.0f };
++Vec3f gRoyaleCamAt = { 0.0f, 0.0f, 1.0f };
++f32 gRoyaleCamFov = 60.0f;
+ 
+ Vec3s Camera_Update(Camera* camera) {
+     Vec3f viewAt;
+@@ -7768,6 +7775,17 @@
+         viewEye.y += gRoyaleCamLift;
+         viewAt.y += gRoyaleCamLift;
+     }
++    // OOT Royale: the map intro flies its own camera (see gRoyaleCamOverride). Only the drawn view changes: eyeAtAngle (the stick's frame of
++    // reference) and the camera's state stay the game's.
++    if (camera->thisIdx == MAIN_CAM && gRoyaleCamOverride) {
++        VecSph overrideAngle;
++        viewEye = gRoyaleCamEye;
++        viewAt = gRoyaleCamAt;
++        OLib_Vec3fDiffToVecSphGeo(&overrideAngle, &viewEye, &viewAt);
++        Camera_CalcUpFromPitchYawRoll(&viewUp, overrideAngle.pitch, overrideAngle.yaw, 0);
++        View_SetScale(&camera->play->view, 1.0f);
++        camera->play->view.fovy = CLAMP(gRoyaleCamFov, 20.0f, 100.0f);
++    }
+     func_800AA358(&camera->play->view, &viewEye, &viewAt, &viewUp);
+     camera->camDir.x = eyeAtAngle.pitch;
+     camera->camDir.y = eyeAtAngle.yaw;

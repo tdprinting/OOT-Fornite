@@ -187,6 +187,18 @@ struct MoonfallTables {
     static constexpr auto kSurfaceSize = royale::moonfall::kSurfaceSize;
     static constexpr auto kSurfaceClasses = royale::moonfall::kSurfaceClasses;
 };
+struct GreatHyruleKingdomTables {   // 256 x 256 textures (the others are 128): see loadTexture below
+    using Batch = royale::great_hyrule_kingdom::Batch;
+    static constexpr auto& kBatches = royale::great_hyrule_kingdom::kBatches;
+    static constexpr auto& kDrawVertices = royale::great_hyrule_kingdom::kDrawVertices;
+    static constexpr auto& kTextures = royale::great_hyrule_kingdom::kTextures;
+    static constexpr auto& kSurfaceNormal = royale::great_hyrule_kingdom::kSurfaceNormal;
+    static constexpr auto& kSurfaceBump = royale::great_hyrule_kingdom::kSurfaceBump;
+    static constexpr auto& kSurfaceUnits = royale::great_hyrule_kingdom::kSurfaceUnits;
+    static constexpr auto kTextureSize = royale::great_hyrule_kingdom::kTextureSize;
+    static constexpr auto kSurfaceSize = royale::great_hyrule_kingdom::kSurfaceSize;
+    static constexpr auto kSurfaceClasses = royale::great_hyrule_kingdom::kSurfaceClasses;
+};
 template <typename T>
 void DrawAuthoredStructures(PlayState* play) {
     struct BatchCache {
@@ -241,10 +253,15 @@ void DrawAuthoredStructures(PlayState* play) {
     gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
     int loaded = -1;
+    // The exporters write 4096 texture units per repeat whatever the texture's size (128 texels in S10.5). A 256 texture wraps at 2^8 texels and
+    // takes shift 15 (the coordinates times two), so one repeat is still the whole image.
+    static_assert(T::kTextureSize == 128 || T::kTextureSize == 256, "authored textures are 128 or 256 square");
+    static_assert(sizeof(T::kTextures[0]) == static_cast<size_t>(T::kTextureSize) * T::kTextureSize * 2, "RGBA16 texture bytes");
+    constexpr int kMask = T::kTextureSize == 256 ? 8 : 7, kShift = T::kTextureSize == 256 ? 15 : 0;
     auto loadTexture = [&](int texture) {
         if (loaded == texture) return;
         gDPLoadTextureTile(POLY_OPA_DISP++, T::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, T::kTextureSize, T::kTextureSize, 0, 0, T::kTextureSize - 1, T::kTextureSize - 1, 0,
-            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 7, 7, G_TX_NOLOD, G_TX_NOLOD);
+            G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, kMask, kMask, kShift, kShift);
         loaded = texture;
     };
     // a chunk is 1853 x 1926 units across: test its far corner, not its middle
@@ -386,6 +403,7 @@ void FortniteTerrain_Draw(Actor*, PlayState* play) {
     if (OnRiftlandsTerrain()) DrawAuthoredStructures<RiftlandsTables>(play);
     if (OnMoonfallTerrain()) DrawAuthoredStructures<MoonfallTables>(play);
     if (OnSkyloftTerrain()) DrawAuthoredStructures<SkyloftTables>(play);
+    if (OnGreatHyruleKingdomTerrain()) DrawAuthoredStructures<GreatHyruleKingdomTables>(play);
 }
 
 int FortniteActorId() {

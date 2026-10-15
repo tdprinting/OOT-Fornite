@@ -1519,8 +1519,8 @@ static void CountdownElapsedTracksState() {
     CHECK(rig.RunUntil([&] { return a.State() == MatchState::Countdown; }));
     rig.Run(4.0f);
     CHECK(a.State() == MatchState::Countdown);
-    CHECK(a.StateElapsed() > 3.0f && a.StateElapsed() < kCountdownSec);   // about 4 s into a 10 s countdown
-    CHECK(rig.RunUntil([&] { return a.State() == MatchState::Drop; }, 15));
+    CHECK(a.StateElapsed() > 3.0f && a.StateElapsed() < kCountdownSec);   // about 4 s into the countdown
+    CHECK(rig.RunUntil([&] { return a.State() == MatchState::Drop; }, kCountdownSec + 5.0f));
     CHECK(a.StateElapsed() < 1.0f);                                        // reset on the state change
 }
 
@@ -1728,7 +1728,7 @@ static void BusOverTheWire() {
     bool heard = false;
     CHECK(rig.RunUntil([&] { for (auto& e : b.DrainEvents()) heard |= e.type == ClientEvent::Type::BusHorn && e.id == a.PlayerId(); return heard; }, 2));
     // Trying to jump before the doors open does nothing.
-    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Drop; }, 12));
+    CHECK(rig.RunUntil([&] { return rig.M().State() == MatchState::Drop; }, kCountdownSec + 2.0f));
     sit(static_cast<uint8_t>(Anim::Freefall));
     rig.Run(0.2f);
     CHECK(rig.M().Find(a.PlayerId())->aboard && !rig.M().BusDoorsOpen());

@@ -383,6 +383,7 @@ void OnGameFrameUpdate() {
     { static unsigned frames = 0; if (++frames % 100 == 0) ForgetOldHats(); }
     Feat("projectiles"); ReconcileProjectileActor();
     Feat("storm alerts"); DriveStormAlerts(hud);
+    Feat("map intro"); UpdateMapIntro(hud, joined);   // the countdown's fly-over of the map (MapIntro.inc)
     gStateNow = hud.state;
     Feat("sealed exits"); SealExits(hud);
     Feat("minimap switch"); if (DebugOn(kDbgMinimap)) DriveMinimapSwitch(joined && IsLive(hud) && InGame() && InField());

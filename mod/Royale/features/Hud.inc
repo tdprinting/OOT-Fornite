@@ -240,8 +240,8 @@ bool MapOption(const char* name, bool fallback = true) {
 // Developer mode (Settings > Updates, off by default): shows test maps, debug switches, Regular game, pets, Practice/Sandbox and the
 // Jones / Peter / Master Chief stations. Off, the War Table offers only the release game. Nothing is removed, only hidden.
 bool DevMode() { return CVarGetInteger(CVAR_SETTING("Royale.DevMode"), 0) != 0; }
-// Release battlefields: Moonfall Isle, with Hyrule Kingdom and Skyloft Isles as beta.
-bool ReleaseMap(int id) { return id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
+// Release battlefields: Great Hyrule Kingdom (the main map) and Moonfall Isle, with Hyrule Kingdom and Skyloft Isles as beta.
+bool ReleaseMap(int id) { return id == royale::kGreatHyruleKingdomMapIndex || id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
 std::string MapLabel(int id) {
     std::string s = royale::MapOf(id).name;
     if (!DevMode() && (id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex)) s += " (beta)";

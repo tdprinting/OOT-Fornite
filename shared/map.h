@@ -86,7 +86,9 @@ inline const char* const kPoiNames[] = {
     // Moonfall Isle: the main map; its 24 landmark names follow Riftlands' (PoiNameBase).
     "Hyrule Castle", "Clock Town", "Temple of Time", "Snowhead Lodge", "Spirit Colossus", "Goron Forge", "Kakariko Windmill", "Ikana Graveyard", "Romani Ranch", "Great Bay Stilts", "Deku Tree Village", "Lost Woods", "Astral Observatory", "Zora Cape", "Castle Falls", "Moonfall Span", "Milk Road", "Fairy Fountain", "Termina Bridge", "Lantern Bridge", "Moon Crater", "Frozen Pond", "Spirit Oasis", "Fisherman's Hut",
     // Skyloft Isles: its 24 landmark names follow Moonfall's (PoiNameBase).
-    "Knight Academy", "Bazaar", "Goddess Statue", "Sparring Hall", "Waterfall Cave", "Lumpy Pumpkin", "Light Tower", "Pumpkin Fields", "Westwind Homes", "Hollow Graveyard", "Loftwing Roost", "Ember Rock", "Statue Plaza", "Academy Bridge", "Goddess Stair", "Beedle's Perch", "Pumpkin Bridge", "West Diving Deck", "South Diving Deck", "Waterfall Pool", "Windmill Hill", "East Span", "Fledge's Cove", "Ember Bridge"
+    "Knight Academy", "Bazaar", "Goddess Statue", "Sparring Hall", "Waterfall Cave", "Lumpy Pumpkin", "Light Tower", "Pumpkin Fields", "Westwind Homes", "Hollow Graveyard", "Loftwing Roost", "Ember Rock", "Statue Plaza", "Academy Bridge", "Goddess Stair", "Beedle's Perch", "Pumpkin Bridge", "West Diving Deck", "South Diving Deck", "Waterfall Pool", "Windmill Hill", "East Span", "Fledge's Cove", "Ember Bridge",
+    // Great Hyrule Kingdom: the main map; its 24 place names follow Skyloft's (PoiNameBase), in the order of great_hyrule_kingdom::kRegions.
+    "Castle Town", "Hyrule Castle", "Lake Hylia", "Hylia Docks", "Ordon Village", "Lon Lon Ranch", "Kokiri Forest", "Lost Woods", "Great Hylia Bridge", "Zora's River", "Zora's Domain", "Kakariko Village", "Kakariko Graveyard", "Hyrule Field Ruins", "Gerudo Fortress", "Haunted Wasteland", "Desert Colossus", "Temple of Time", "Snowpeak Lodge", "Snowpeak Summit", "Lanayru Spring", "Goron City", "Death Mountain", "Death Mountain Trail"
 };
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
@@ -137,6 +139,9 @@ constexpr MapDef kMaps[] = {
     // Skyloft Isles is authored in Blender (tools/maps/skyloft): one terraced island in the open sea, layout inspired by Skyward Sword's Skyloft.
     {"Skyloft Isles", "The island in the sea: the Knight Academy on its high lobe, the Bazaar tent, the Goddess Statue, the Light Tower, pumpkin fields, cliff homes, the Waterfall Cave and islets joined by bridges", 0x51, {{0,0},6500}, 6600, Theme::Water,
      {BossKind::Tide, BossKind::Stone}, BossKind::DragonWater},
+    // Great Hyrule Kingdom is authored in Blender (tools/maps/great_hyrule_kingdom): one kingdom on a real landscape, Castle Town in the middle.
+    {"Great Hyrule Kingdom", "The main map: Castle Town and Hyrule Castle on the central plateau, Lake Hylia, Kokiri Forest and the Lost Woods, Zora's River, Kakariko, the Gerudo desert, Snowpeak and Death Mountain", 0x51, {{0,0},6500}, 6600, Theme::Meadow,
+     {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
@@ -210,27 +215,31 @@ constexpr int kKingdomMapIndex = 8;      // Hyrule Kingdom: its own number, so n
 constexpr int kRiftlandsMapIndex = 11;
 constexpr int kMoonfallMapIndex = 12;
 constexpr int kSkyloftMapIndex = 13;
+constexpr int kGreatHyruleKingdomMapIndex = 14;
+constexpr int kDefaultMapIndex = kGreatHyruleKingdomMapIndex;   // the main map: the lobby's default and the menus' fallback
 constexpr int kMiniBossArenaIndex = 9;
 constexpr int kMainBossArenaIndex = 10;
 constexpr bool IsBossArena(int id) { return id==kMiniBossArenaIndex || id==kMainBossArenaIndex; }
 constexpr bool IsTestMap(int id) { return id==kSandboxMapIndex || IsBossArena(id); }
-constexpr int PoiNameBase(int id) { return id==kSkyloftMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+2*kNamesPerMap:id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
+constexpr int PoiNameBase(int id) { return id==kGreatHyruleKingdomMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+3*kNamesPerMap:id==kSkyloftMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+2*kNamesPerMap:id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
 constexpr int PoiNameCount(int id) { return IsBossArena(id)?3:kNamesPerMap; }
 constexpr int kPlayableMapCount = kMapCount - 3;
 constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && !IsTestMap(id); }
-constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex; }
+constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex; }
 // The maps built by hand in Blender: their ground, collision, buildings and loot sites come from shared/<name>_data.h, and nothing is scattered over them.
-constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex; }
+constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
 static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7 && kKingdomMapIndex == 8, "preserve network map IDs");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount*kNamesPerMap-2*(kNamesPerMap-3), "regular maps have 24 names; boss arenas have 3");
-static_assert(PoiNameBase(kSkyloftMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
+static_assert(PoiNameBase(kGreatHyruleKingdomMapIndex)+kNamesPerMap==sizeof(kPoiNames)/sizeof(kPoiNames[0]),"the last map's names end the list");
+static_assert(PoiNameBase(kGreatHyruleKingdomMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
+static_assert(kGreatHyruleKingdomMapIndex==kMapCount-1 && !IsTestMap(kGreatHyruleKingdomMapIndex) && IsPlayableMap(kDefaultMapIndex),"map 14 is appended, playable and the default");
 constexpr int kPoiNameTotal = sizeof(kPoiNames)/sizeof(kPoiNames[0]);
 
 constexpr int ClampMap(int id) { return id >= 0 && id < kMapCount ? id : 0; }
 constexpr const MapDef& MapOf(int id) { return kMaps[ClampMap(id)]; }
 
-// Hyrule Field is the default map and the one the older constants name.
+// Hyrule Field is the one the older constants name (the default map is kDefaultMapIndex).
 constexpr int kHyruleFieldScene = 0x51;
 // The waiting room is the Temple of Time (SCENE_TEMPLE_OF_TIME). Players wait there for the host to start; the match itself
 // is always played on the chosen map. RoyaleMod.cpp static_asserts that this matches the engine's scene id.
