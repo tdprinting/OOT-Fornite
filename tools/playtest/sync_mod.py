@@ -21,7 +21,7 @@ pairs[root / "third_party/Shipwright-Android/libultraship/src/graphic/Fast3D/ass
 for d, s in pairs.items():
     if not d.exists() or not filecmp.cmp(s, d, shallow=False):
         d.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(s, d)
+        shutil.copy(s, d)   # a fresh mtime: copy2 kept the source time, older than an object built after the edit, so ninja skipped it
 existing = {f for f in dest.rglob("*") if f.is_file()}
 for stale in existing - set(pairs):
     stale.unlink()

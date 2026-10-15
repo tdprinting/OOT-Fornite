@@ -1,0 +1,24 @@
+diff --git a/ZAPD/CMakeLists.txt b/ZAPD/CMakeLists.txt
+index 940e1a4..df22b10 100644
+--- a/ZAPD/CMakeLists.txt
++++ b/ZAPD/CMakeLists.txt
+@@ -434,16 +434,16 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU|Clang|AppleClang")
+         -Wno-parentheses
+         -Wno-narrowing
+         $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-enum-enum-conversion>
+-		-pthread
++		$<$<NOT:$<STREQUAL:${CMAKE_SYSTEM_NAME},Emscripten>>:-pthread>
+ 	)
+ 
+     if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+         target_link_options(${PROJECT_NAME} PUBLIC
+-            -pthread
++            $<$<NOT:$<STREQUAL:${CMAKE_SYSTEM_NAME},Emscripten>>:-pthread>
+         )
+     else()
+         target_link_options(${PROJECT_NAME} PUBLIC
+-            -pthread
++            $<$<NOT:$<STREQUAL:${CMAKE_SYSTEM_NAME},Emscripten>>:-pthread>
+             -Wl,-export-dynamic
+         )
+     endif()

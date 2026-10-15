@@ -90,7 +90,8 @@ UiPad gUiPad;
 
 void UiSfx(u16 sfx) { Audio_PlaySoundGeneral(sfx, &gSfxDefaultPos, 4, &gSfxDefaultFreqAndVolScale, &gSfxDefaultFreqAndVolScale, &gSfxDefaultReverb); }
 
-void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; }
+// a new match: nobody is dead yet, and the camera is back on your own Link (the end screen points it at the winner)
+void ResetMatchUi() { gMyStats = {}; gDeath = {}; gEnd = {}; gUiPad = {}; gSpectateTarget = kSpectateSelf; }
 
 // You are out. Called by the elimination event and by OnPlayerUpdate, whichever sees it first.
 void StartDeath(const royale::HudState& h) {
@@ -579,6 +580,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
     const float bannerY = ds.y * 0.4f + (60.0f * scale - ds.y * 0.4f) * (1.0f - (1.0f - rise) * (1.0f - rise));
     const float bannerK = (1.45f - 0.45f * rise) * (0.7f + 0.3f * pop);
     DrawEndBanner(dl, font, scale, cx, bannerY, place, won, pop, bannerK);
+    DrawLogo(dl, 16.0f * scale + 70.0f * scale, 14.0f * scale, 140.0f * scale, static_cast<int>(230 * rise));   // the small logo, top left, once the banner has risen
     if (t < kEndPanelDelay) {
         UiTextCentred(dl, font, 26.0f * scale, cx, bannerY + 70.0f * scale, UiAlpha(won ? kUi.white : kUi.gold, pop), winnerLine, ds.x * 0.9f);
         gUiPad = {};
@@ -632,7 +634,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
 void DrawOverlay() {
-    if (WarMenuOpen()) return;
+    if (WarMenuOpen()) { DrawMenuLogo(); return; }
     DrawTitleLogo();
     DrawQuestLabel();
     if (!gSession.Joined()) return;

@@ -37,3 +37,14 @@ map out, so the scene loads once more before the drop if they are not in it yet 
 stay moving-object collision, because they can be lifted or smashed. The original scenes keep the old blocks.
 
 Also: the field's own rocks, bushes, chests and items are refused when the island scene loads, so nothing invisible from the old Hyrule Field can be touched.
+
+## Grown scenery on the hand-built maps
+
+The Fortnite Map grows its scenery from its ground texture (`fortnite_scenery.h`, `GroundWeather.inc`): cliff slabs, crags, boulders, oaks, hedges,
+trees, town clutter, grass, flowers, ferns and puddles. Moonfall, Skyloft and Hyrule Kingdom are built in Blender with their own trees, rocks,
+crates and barrels, so on those maps (`OnAuthoredTerrain`) only the soft things grow, and fewer of them:
+- no grown cliffs, crags, boulders, oaks, hedges or trees, and no town clutter (they had no collision there and stood in the authored props);
+- flowers only on meadows (not on the roads), less than half as many; reeds kept;
+- grass patches and ferns about half as many;
+- nothing inside or against a building, or on a deck, bridge or dock (`RaisedFloorAt`);
+- no puddles that stay all the time on the dirt roads.

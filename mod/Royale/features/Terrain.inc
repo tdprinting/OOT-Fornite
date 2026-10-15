@@ -298,10 +298,27 @@ void DrawAuthoredStructures(PlayState* play) {
             }
             gSPSetGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
             gSPSetLights1(POLY_OPA_DISP++, rig->lights);
+            // Relief is per-pixel work (six map reads per pixel) and five extra values per vertex. Far off, a bump is smaller than a pixel, so
+            // batches past kReliefReach are drawn with the same sun and colours but no map: one plain lit pass, the same look at that size.
+            constexpr float kReliefReach = 2600.0f;
+            auto nearCamera = [&](const typename T::Batch& batch) {
+                const float dx = batch.x - eye.x, dy = batch.y - eye.y, dz = batch.z - eye.z, reach = kReliefReach + batch.radius;
+                return dx * dx + dy * dy + dz * dz <= reach * reach;
+            };
+            for (int c = 1; c <= T::kSurfaceClasses; ++c) {
+                for (const uint32_t i : visible[c]) {   // the far ones first, while no map is set
+                    const auto& batch = T::kBatches[i];
+                    if (nearCamera(batch)) continue;
+                    if (!GfxHasRoom(play, 20)) break;
+                    loadTexture(batch.texture);
+                    gSPDisplayList(POLY_OPA_DISP++, batchList(i, true));
+                }
+            }
             for (int c = 1; c <= T::kSurfaceClasses; ++c) {
                 bool started = false;
                 for (const uint32_t i : visible[c]) {
                     const auto& batch = T::kBatches[i];
+                    if (!nearCamera(batch)) continue;
                     if (!GfxHasRoom(play, 20)) break;
                     if (!started) { gSPSurfaceMap(POLY_OPA_DISP++, reinterpret_cast<uintptr_t>(&rig->maps[c - 1])); started = true; }
                     loadTexture(batch.texture);
@@ -536,6 +553,12 @@ static bool ClearShotTo(const Player* player, const Actor* target) {
     return !BgCheck_EntityLineTest1(&gPlayState->colCtx, &from, &to, &hit, &poly, true, true, false, true, &bgId);
 }
 
+// The same test for a mini boss or a Bokoblin, by its id: through the actor that draws it (none drawn yet: let the server decide).
+static bool ClearShotToId(const Player* player, const std::unordered_map<const Actor*, uint32_t>& actors, uint32_t id) {
+    for (const auto& [actor, of] : actors) if (of == id) return ClearShotTo(player, actor);
+    return true;
+}
+
 // What a swing from Link would land on: the nearest other player or mini boss within reach and roughly in front of him.
 // A shot (`ranged`) aims: a 30 degree cone where Link faces, nobody behind him. Players must have a clear line from Link either way.
 // Returns 0 with *outDist left at 1e9 when there is none.
@@ -585,7 +608,8 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist, bo
             s16 toTarget = static_cast<s16>(std::atan2(dx, dz) * (32768.0f / 3.14159265f));
             s16 off = static_cast<s16>(toTarget - player->actor.shape.rot.y);
             if (std::abs(static_cast<int>(off)) > 0x2800 && d > 40.0f) continue;
-            if (d < bestDist) { bestDist = d; best = static_cast<uint16_t>(bn.Id()); }
+            if (d >= bestDist || !ClearShotToId(player, gBossOf, bn.Id())) continue;   // behind a wall: the server would refuse the blow
+            bestDist = d; best = static_cast<uint16_t>(bn.Id());
         }
     }
     if (gSession.Client()) for (const auto& h:gSession.Client()->Helpers()) {
@@ -595,7 +619,8 @@ static uint16_t PickStrikeTarget(Player* player, float range, float* outDist, bo
         if (d>range*1.05f) continue;
         const s16 off=static_cast<s16>(static_cast<s16>(std::atan2(dx,dz)*(32768.0f/3.14159265f))-player->actor.shape.rot.y);
         if (std::abs(static_cast<int>(off))>0x2000 && d>40.0f) continue;
-        if (d<bestDist) { bestDist=d;best=static_cast<uint16_t>(h.Id()); }
+        if (d>=bestDist || !ClearShotToId(player,gBokoblinOf,h.Id())) continue;
+        bestDist=d;best=static_cast<uint16_t>(h.Id());
     }
     // Carts: from their sides too (a cart is about a Link and a half wide and two long). People go first: a cart only counts when it is clearly nearer.
     for (const CartTarget& ct : CartTargets()) {

@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGO = os.path.join(ROOT, "assets", "logo.png")
 RES = os.path.join(ROOT, "assets", "generated", "res")
 HEADER = os.path.join(ROOT, "mod", "Royale", "logo_data.h")
-BACKGROUND = (246, 241, 229)  # the launcher icon's backdrop: warm off-white (the logo's lettering is black, so it needs a light backdrop)
+BACKGROUND = (14, 24, 52)  # the launcher icon's backdrop: the War Table's deep night blue (the TDawgs logo is bright and wide)
 
 
 def placeholder():
@@ -83,13 +83,13 @@ def android_icons(logo):
         os.makedirs(out, exist_ok=True)
         fg = px * 108 // 48          # the adaptive icon is 108dp, the visible part the middle 72dp
         # foreground: the logo inside the safe zone, transparent around it
-        layer = fit(logo, (round(fg * 0.64), round(fg * 0.64)))
+        layer = fit(logo, (round(fg * 0.66), round(fg * 0.66)))
         canvas = Image.new("RGBA", (fg, fg), (0, 0, 0, 0))
         canvas.alpha_composite(layer, ((fg - layer.width) // 2, (fg - layer.height) // 2))
         canvas.save(os.path.join(out, "ic_launcher_foreground.webp"), "WEBP", quality=95, method=6)
         # the old-style icons: the logo on the backdrop, as a rounded square and as a circle
         base = Image.new("RGBA", (px, px), BACKGROUND + (255,))
-        inner = fit(logo, (round(px * 0.82), round(px * 0.82)))
+        inner = fit(logo, (round(px * 0.92), round(px * 0.92)))
         base.alpha_composite(inner, ((px - inner.width) // 2, (px - inner.height) // 2))
         for name, shape in (("ic_launcher", "round_rect"), ("ic_launcher_round", "circle")):
             mask = Image.new("L", (px * 4, px * 4), 0)
@@ -102,10 +102,21 @@ def android_icons(logo):
             icon = Image.new("RGBA", (px, px), (0, 0, 0, 0))
             icon.paste(base, (0, 0), mask)
             icon.save(os.path.join(out, name + ".webp"), "WEBP", quality=95, method=6)
+    # the loading screen's copy (Android, shown before the game starts): a plain picture, 512 wide
+    nodpi = os.path.join(RES, "drawable-nodpi")
+    os.makedirs(nodpi, exist_ok=True)
+    wide = logo.resize((512, max(1, round(logo.height * 512 / logo.width))), Image.LANCZOS)
+    wide.save(os.path.join(nodpi, "royale_logo.webp"), "WEBP", quality=92, method=6)
     values = os.path.join(RES, "values")
     os.makedirs(values, exist_ok=True)
     with open(os.path.join(values, "ic_launcher_background.xml"), "w") as f:
         f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#%02X%02X%02X</color>\n</resources>\n' % BACKGROUND)
+    # The adaptive icon's background is the drawable of that name (the game's own green vector), which beats the colour above: replace it with a plain fill.
+    drawable = os.path.join(RES, "drawable")
+    os.makedirs(drawable, exist_ok=True)
+    with open(os.path.join(drawable, "ic_launcher_background.xml"), "w") as f:
+        f.write('<?xml version="1.0" encoding="utf-8"?>\n<vector xmlns:android="http://schemas.android.com/apk/res/android"\n    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">\n'
+                '    <path android:fillColor="#%02X%02X%02X" android:pathData="M0,0h108v108h-108z"/>\n</vector>\n' % BACKGROUND)
 
 
 def header(logo):

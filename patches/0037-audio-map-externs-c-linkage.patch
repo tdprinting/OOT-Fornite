@@ -1,0 +1,18 @@
+--- a/soh/include/z64audio.h
++++ b/soh/include/z64audio.h
+@@ -23,9 +23,15 @@
+ #define CALC_RESAMPLE_FREQ(sampleRate) ((float)sampleRate / (s32)gAudioContext.audioBufferParameters.frequency)
+ 
+ //#define MAX_SEQUENCES 0x800
++#ifdef __cplusplus
++extern "C" {
++#endif
+ extern size_t sequenceMapSize;
+ 
+ extern char* fontMap[256];
++#ifdef __cplusplus
++}
++#endif
+ 
+ #define MAX_AUTHENTIC_SEQID 110
+ 

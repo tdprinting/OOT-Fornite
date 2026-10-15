@@ -73,3 +73,6 @@ assets/npcs/peter/custom/
 
 # Player skins: the Blender dump is remade by tools/skins/build_skin.py from the source model
 assets/skins/*/*_dump.json
+
+# Browser test build output (made by scripts/web_build.sh)
+/web-dist/

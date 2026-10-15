@@ -26,8 +26,10 @@ extern "C" const unsigned char* Royale_TitleLogoRGBA(int* width, int* height, in
     if (rgba.empty()) return nullptr;
     *width = royale::kLogoW;
     *height = royale::kLogoH;
-    *destHeight = 172;   // in the title's 320 x 240 picture
-    *destWidth = static_cast<int>(172.0f * royale::kLogoW / royale::kLogoH + 0.5f);
+    // in the title's 320 x 240 picture: as large as fits in 300 x 172, keeping the logo's shape (the TDawgs logo is wide, the old one was square)
+    const float fit = std::min(300.0f / royale::kLogoW, 172.0f / royale::kLogoH);
+    *destWidth = static_cast<int>(royale::kLogoW * fit + 0.5f);
+    *destHeight = static_cast<int>(royale::kLogoH * fit + 0.5f);
     return rgba.data();
 }
 
@@ -67,12 +69,24 @@ float DrawLogo(ImDrawList* dl, float cx, float top, float width, int alpha = 255
     ImTextureID tex = LogoTexture(&sz);
     if (tex == nullptr || sz.x <= 0) return 0.0f;
     const float height = width * sz.y / sz.x;
-    if (plaque) {   // the logo has black lettering: on a dark screen it sits on a pale rounded plaque
+    if (plaque) {   // optional pale rounded plaque (the old logo had black lettering; the TDawgs logo is bright and outlined, so nobody asks for it now)
         const float pad = width * 0.04f;
         dl->AddRectFilled(ImVec2(cx - width * 0.5f - pad, top - pad), ImVec2(cx + width * 0.5f + pad, top + height + pad), IM_COL32(246, 241, 229, alpha * 235 / 255), pad * 1.6f);
     }
     dl->AddImage(tex, ImVec2(cx - width * 0.5f, top), ImVec2(cx + width * 0.5f, top + height), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
     return height;
+}
+
+// The main menu (the War Table): the logo in the header's left corner, mapped from the menu's 640 x 360 layout to the screen.
+void DrawMenuLogo() {
+    ImVec2 sz;
+    if (LogoTexture(&sz) == nullptr || sz.y <= 0) return;
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const float k = std::min(ds.x / 640.0f, ds.y / 360.0f);
+    const ImVec2 origin((ds.x - 640.0f * k) * 0.5f, (ds.y - 360.0f * k) * 0.5f);
+    const float boxW = 160.0f * k, boxH = 84.0f * k;
+    const float width = std::min(boxW, boxH * sz.x / sz.y);
+    DrawLogo(ImGui::GetForegroundDrawList(), origin.x + 18.0f * k + boxW * 0.5f, origin.y + 6.0f * k, width, 255);
 }
 
 // The game's title screen and file select screen (nothing of the game is running yet): our logo takes the place of the 3D title on the first, and
@@ -95,7 +109,7 @@ void DrawTitleLogo() {
         // nothing: the game's own title screen now draws the logo (patches/0010), fading in with its own fade
     } else {
         const float width = std::min(ds.x * 0.30f, ds.y * 0.30f * aspect);
-        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245, true);
+        DrawLogo(dl, ds.x * 0.5f, ds.y * 0.025f, width, 245);
     }
     // the build number, small, bottom right
     const std::string version = std::string("Version ") + ROYALE_BUILD_VERSION;
@@ -152,7 +166,7 @@ void DrawSplash(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, float seco
     if (LogoTexture(&logoSize) != nullptr) {   // the logo, floating gently
         const float bob = std::sin(t * 2.0f) * 3.0f * scale;
         const float width = std::min(pw * 0.55f, ph * 0.42f * logoSize.x / logoSize.y);
-        y += DrawLogo(dl, ds.x * 0.5f, y + bob, width, A(255), true) + 22 * scale;
+        y += DrawLogo(dl, ds.x * 0.5f, y + bob, width, A(255)) + 22 * scale;
     }
     auto centred = [&](float size, ImU32 col, const std::string& text, bool shadow = true) {
         const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());

@@ -276,7 +276,7 @@ void NearbySolidScenery(float x, float z, std::vector<std::pair<float, SolidScen
     for (int cz = static_cast<int>(std::floor((z - kSolidSceneryRadius) / cell)); cz <= static_cast<int>(std::floor((z + kSolidSceneryRadius) / cell)); cz++)
         for (int cx = static_cast<int>(std::floor((x - kSolidSceneryRadius) / cell)); cx <= static_cast<int>(std::floor((x + kSolidSceneryRadius) / cell)); cx++) {
             royale::fortnite::SceneryPiece pc;
-            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc) || !SceneryIsSolid(pc.kind)) continue;
+            if (!royale::fortnite::SceneryIn(cx, cz, dens, &pc) || !SceneryIsSolid(pc.kind) || !GrownSceneryOk(pc, cx, cz)) continue;
             const float d = std::hypot(pc.x - x, pc.z - z);
             if (d > kSolidSceneryRadius) continue;
             const FloraSpot* spot = FloraSpotAt(7, cx, cz, pc.x, pc.z);

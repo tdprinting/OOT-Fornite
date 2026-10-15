@@ -19,6 +19,10 @@
 //   boots:<0|1|2>           dress Link in kokiri, iron or hover boots whatever he holds (shot them to check patch 0032)
 //   tp:<x>,<z>[,<deg>]      put Link on the ground at x,z facing <deg> (0 = +z, 90 = +x); for shots of one place
 //   check                   assert Link exists in a loaded scene and log the mod state block
+//   endmatch                (host) knock out every other player, so the match ends; if Link is out, one bot is spared to win
+//   die                     (host) knock Link out: the death camera and death card
+//   rematch                 (host) press New match on the results and wait until everyone is back in the countdown
+//   results                 assert the end screen is up and no menu covers it: the match is over and a winner is named
 //   shot:<name>             ask the runner for a screenshot (<name>.png in the run folder) and wait until it is taken
 //   prof:<sec>              ask the runner to sample the game's CPU use with perf for <sec> wall seconds; logs the frame rate meanwhile
 //   quit                    write PASS and exit with code 0
@@ -171,17 +175,58 @@ bool AutoRun(const AutoStep& s, float secs) {
         return true;
     }
     if (s.verb == "leave") { gSession.Leave(); return true; }
-    if (s.verb == "tp") {   // tp:x,z[,yaw degrees]: put Link on the floor there, facing yaw (screenshots of one place)
-        if (!InGame()) return false;
-        float x = 0, z = 0, yaw = 0;
-        std::sscanf(s.arg.c_str(), "%f,%f,%f", &x, &z, &yaw);
-        Player* link = GET_PLAYER(gPlayState);
-        float y = link->actor.world.pos.y;
-        if (!RawFloorAt(x, z, &y)) y = GroundY(gPlayState, x, z, y);
-        link->actor.world.pos = link->actor.prevPos = link->actor.home.pos = { x, y + 2.0f, z };
-        link->actor.velocity.y = 0.0f; link->actor.speedXZ = 0.0f;
-        link->actor.shape.rot.y = link->actor.world.rot.y = link->yaw = static_cast<s16>(yaw * (32768.0f / 180.0f));
-        AutoLog("  tp: (%.0f, %.0f, %.0f) yaw %.0f", x, y, z, yaw);
+    if (s.verb == "endmatch" || s.verb == "die") {
+        royale::GameServer* server = gSession.Server();
+        if (server == nullptr) AutoFinish(false, (s.verb + ": only the host can end the match").c_str());
+        if (s.verb == "die" ? !hud.selfAlive : hud.state == royale::MatchState::Ending) return true;
+        if (hud.state != royale::MatchState::InMatch) return false;   // nobody can be hurt on the bus or in the drop
+        royale::Match& m = server->Sim().match;
+        const uint32_t self = gSession.SelfId();
+        bool selfAlive = false;
+        for (const auto& p : m.Players()) selfAlive = selfAlive || (p.id == self && p.alive);
+        std::vector<uint32_t> victims;
+        uint32_t spared = selfAlive ? self : royale::kNoPlayer;
+        for (const auto& p : m.Players()) {
+            if (!p.alive) continue;
+            if (s.verb == "die") { if (p.id == self) victims.push_back(p.id); continue; }
+            if (spared == royale::kNoPlayer && p.id != self) { spared = p.id; continue; }
+            if (p.id != spared) victims.push_back(p.id);
+        }
+        // a Fairy in the bag or a teammate's revive can save a player once: the step hits again every frame until it holds
+        for (uint32_t id : victims) { m.Damage(id, 999.0f, royale::kNoPlayer, royale::DamageKind::Storm, false); m.Damage(id, 999.0f, royale::kNoPlayer, royale::DamageKind::Storm, false); }
+        if (gAuto.sub == 0) { AutoLog("  %s: %zu players hit%s", s.verb.c_str(), victims.size(), s.verb == "die" ? "" : spared == self ? ", Link stays" : ", a bot stays"); gAuto.sub = 1; }
+        return false;
+    }
+    if (s.verb == "rematch") {
+        if (gAuto.sub == 0) {
+            if (hud.state != royale::MatchState::Ending) return false;
+            if (!hud.isHost) AutoFinish(false, "rematch: only the host can start a new match");
+            gSession.RequestPlayAgain();
+            gAuto.sub = 1;
+            return false;
+        }
+        if (hud.state == royale::MatchState::Ending && gAuto.stepFrames % 100 == 0) gSession.RequestPlayAgain();   // a lost packet
+        if (hud.state != royale::MatchState::Countdown) return false;
+        // the first countdown snapshots can still carry the last match's "out": give it 3 s of countdown to seat everyone
+        static unsigned countdownAt = 0;
+        if (gAuto.sub == 1) { countdownAt = gAuto.frames; gAuto.sub = 2; }
+        if ((!hud.selfAlive || !hud.aboard) && gAuto.frames - countdownAt < 60) return false;
+        AutoLog("  rematch: countdown after %.1f s, Link alive %d, aboard %d, spectating %d", (gAuto.frames - countdownAt) / 20.0f, hud.selfAlive ? 1 : 0,
+                hud.aboard ? 1 : 0, gSpectateTarget == kSpectateSelf ? 0 : 1);
+        if (!hud.selfAlive) AutoFinish(false, "rematch: Link is still out 3 s into the new countdown");
+        if (!hud.aboard) AutoFinish(false, "rematch: Link is not on the bus 3 s into the new countdown");
+        if (gSpectateTarget != kSpectateSelf) AutoFinish(false, "rematch: the camera still follows a player from the last match");
+        return true;
+    }
+    if (s.verb == "results") {
+        if (hud.state != royale::MatchState::Ending) return false;
+        if (hud.winnerId == royale::net::kNoPlayer16) return false;   // EvResults has not arrived yet
+        // what a player sees is the end screen, not a menu over it (the winner and a player who died first alike)
+        if (!gEnd.open || WarMenuOpen()) {
+            if (secs > 20) AutoFinish(false, WarMenuOpen() ? "results: the War Table covers the end screen" : "results: the end screen never opened");
+            return false;
+        }
+        AutoLog("  results: winner %u (you are %u), %d alive, end screen up", hud.winnerId, hud.selfId, hud.alive);
         return true;
     }
     if (s.verb == "regular") {
@@ -290,6 +335,8 @@ float AutoTimeout(const AutoStep& s) {
     if (s.verb == "wait" || s.verb == "prof") return 1e9f;
     if (s.verb == "ingame") return 180;
     if (s.verb == "state") return 600;
+    if (s.verb == "endmatch" || s.verb == "die") return 120;
+    if (s.verb == "rematch" || s.verb == "results") return 90;
     if (s.verb == "host" || s.verb == "hostbots") return 300;
     if (s.verb == "warp" || s.verb == "tour") return 90;   // per scene
     return 60;

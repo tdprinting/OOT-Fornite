@@ -1,0 +1,68 @@
+name: Windows build
+
+# The PC (Windows, 64-bit) build of the game for testing on a computer. Same patches and mod as the Android build.
+# Download "royale-windows" from the run page, unzip, put your own oot.otr next to soh.exe, run soh.exe.
+# It never contains oot.otr or anything from the ROM. Built with Visual Studio; the fork's own CMake fetches
+# its libraries through vcpkg (first run is slow).
+on:
+  push:
+    branches: ["claude/**", "codex/**", "main"]
+    paths:
+      - "mod/**"
+      - "patches/**"
+      - "cmake/**"
+      - "shared/**"
+      - "scripts/**"
+      - "assets/**"
+      - ".github/workflows/windows-build.yml"
+      - ".gitmodules"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The patches expect the files exactly as stored (LF); Windows git would otherwise rewrite line endings.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Fetch submodules (fork, its submodules, ENet)
+        run: git submodule update --init --recursive --depth 1
+      - name: Apply patches and copy the mod into the fork
+        run: |
+          ./scripts/apply_patches.sh
+          ./scripts/link_mod.sh
+          echo "#define ROYALE_BUILD_VERSION \"0.${{ github.run_number }}\"" > mod/Royale/build_version.h
+      - name: Restore vcpkg libraries
+        uses: actions/cache@v4
+        with:
+          path: build/vcpkg
+          key: windows-vcpkg-${{ hashFiles('third_party/Shipwright-Android/CMakeLists.txt') }}
+      - name: Configure (downloads and builds the libraries on a cold cache)
+        run: cmake -S third_party/Shipwright-Android -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build the game and soh.otr
+        run: cmake --build build --config Release --target soh GenerateSohOtr --parallel 2>&1 | tee build.log
+      - name: Show the compile errors
+        if: failure()
+        run: grep -E "error [A-Z]+[0-9]+|fatal error|LNK[0-9]+|FAILED|CMake Error" build.log | sort -u | head -40 || true
+      - name: Collect the files
+        run: |
+          mkdir -p dist
+          EXE=$(find build third_party/Shipwright-Android -name soh.exe | head -1)
+          echo "exe: $EXE"
+          cp "$EXE" dist/
+          OTR=$(find build third_party/Shipwright-Android/OTRExporter -name soh.otr 2>/dev/null | head -1)
+          [ -n "$OTR" ] || OTR=third_party/Shipwright-Android/Android/app/src/main/assets/soh.otr
+          echo "soh.otr: $OTR"
+          cp "$OTR" dist/
+          for f in gamecontrollerdb.txt; do find build third_party/Shipwright-Android -maxdepth 3 -name "$f" -exec cp {} dist/ \; -quit; done
+          printf 'OOT Royale for Windows (test build %s)\r\n\r\n1. Copy your own oot.otr into this folder (it is never included).\r\n2. Run soh.exe.\r\n' "${{ github.run_number }}" > dist/README.txt
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: royale-windows
+          path: dist
+          retention-days: 14

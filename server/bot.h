@@ -151,6 +151,16 @@ class BotController {
                 lootBuckets[BucketKey(Bucket(at.x), Bucket(at.z))].push_back(i);
             }
         }
+        // Which loot each bot is heading for, and who is nearest of those after the same thing (ChooseLoot leaves it to them).
+        lootClaims.clear();
+        for (const auto& [id, mm] : memory) {
+            if (mm.lootIdx < 0 || static_cast<size_t>(mm.lootIdx) >= m.Loot().size()) continue;
+            const PlayerState* q = m.Find(id);
+            if (!q) continue;
+            const float d = Distance(q->pos, m.Loot()[static_cast<size_t>(mm.lootIdx)].spawn.pos);
+            auto [c, fresh] = lootClaims.try_emplace(mm.lootIdx, LootClaim{id, d});
+            if (!fresh && d < c->second.dist) c->second = {id, d};
+        }
         StepAllies(m, dt);
         auto& players = m.Players();
         const size_t count = players.size(), first = count ? botTurn++ % count : 0;
@@ -418,6 +428,7 @@ class BotController {
         // getting about like a player: the skydive, sprinting, climbing
         bool started = false;          // has been seen by Step (decides whether it starts in the sky)
         bool airborne = false;         // still skydiving
+        float landedAt = -1;           // m.Clock() when it touched down from the sky (-1: it never dropped)
         Vec2 landAt = {};              // where it is gliding to
         bool diving = false;
         bool onBus = false;            // sat on the Moonfall Bus, waiting for jumpT (seconds into the drop)
@@ -464,6 +475,8 @@ class BotController {
     bool frozen = false;   // the Sandbox test map: bots stand still (SetFrozen)
     std::shared_ptr<const NavGrid> nav;
     std::unordered_map<uint32_t, Memory> memory;
+    struct LootClaim { uint32_t id; float dist; };
+    std::unordered_map<int, LootClaim> lootClaims;   // loot index -> the nearest bot heading for it (refreshed every Step)
     int repathBudget = 0;
     size_t botTurn = 0;
     std::unordered_map<int64_t, std::vector<size_t>> lootBuckets, propBuckets;
@@ -754,6 +767,9 @@ class BotController {
         auto consider = [&](Vec2 c, float bonus) {
             const float d = Distance(from(c), c);
             if (d > reach || !zone.Contains(c) || !Standable(c)) return;
+            // Nobody lands with more than the starting sword: not beside a mini boss (bots that did stood pinned against it, or an island's
+            // edge, until it killed them).
+            for (const MiniBoss& b : m.Bosses()) if (b.alive && !IsDragonKind(b.kind) && Distance(b.pos, c) < 450.0f) return;
             int chests = 0;
             for (const LootEntry& l : loot) if (!l.taken && l.spawn.container && Distance(l.spawn.pos, c) < 450.0f) chests++;
             int crowd = 0;
@@ -864,6 +880,7 @@ class BotController {
         if (mem.lift <= ground) {   // touched down
             if (nav && !nav->Standable(p.pos)) { Vec2 snapped; if (nav->Snap(p.pos, &snapped, true)) p.pos = snapped; }
             mem.airborne = false;
+            mem.landedAt = m.Clock();
             mem.freefall = false;
             mem.exitAt = -1;
             mem.lift = nav ? LiftAt(p.pos) : 0.0f;
@@ -1273,6 +1290,14 @@ class BotController {
         const Circle safe = {soon.center, soon.radius * 0.95f};
         int best = -1;
         float bestScore = 0, currentScore = 0;
+        // A bot too weak to take on a mini boss keeps away from it (the boss branch in Act), so loot right beside one is not for it: going for it
+        // only had the bot walk up, turn away, and walk up again until the boss caught it.
+        const bool bossShy = !(p.health >= 2.4f && EffectiveDps(p.weapon) * TotalsOf(p).melee >= 1.8f);
+        auto guarded = [&](Vec2 at) {
+            if (!bossShy) return false;
+            for (const MiniBoss& b : m.Bosses()) if (b.alive && !IsDragonKind(b.kind) && Distance(b.pos, at) < 380.0f) return true;
+            return false;
+        };
         Nearby(lootBuckets, p.pos, radius * 2.4f, [&](size_t i) {
             if (loot[i].taken) return;
             const LootSpawn& s = loot[i].spawn;
@@ -1285,7 +1310,11 @@ class BotController {
             const float climbCost = nav ? std::max(0.0f, nav->StandHeight(s.pos) - FeetAt(p.pos)) * 2.0f : 0;
             const float travelCost = d * (nav && nav->Swimming(s.pos) ? 2.2f : 1.0f) + climbCost;
             if (!m.GetStorm().SafeZoneAt(m.StormTime() + travelCost / kRunSpeed + 3).Contains(s.pos)) return;
-            const float score = value * (0.6f + mem.greed) / (travelCost + 150.0f);
+            float score = value * (0.6f + mem.greed) / (travelCost + 150.0f);
+            // Another bot is clearly nearer and already on its way: look elsewhere rather than race it there (bots that landed together all
+            // ran for one chest, and the losers stood about with the starting sword when the fighting started). The supply drop is fought over.
+            if (auto c = lootClaims.find(static_cast<int>(i)); !s.supply && c != lootClaims.end() && c->second.id != p.id && c->second.dist + 60.0f < d) score *= 0.3f;
+            if (!s.supply && guarded(s.pos)) score *= 0.1f;
             if (static_cast<int>(i) == mem.lootIdx) currentScore = score;
             if (score > bestScore) { bestScore = score; best = static_cast<int>(i); }
         });
@@ -1595,7 +1624,10 @@ class BotController {
             foe = ChooseTarget(m, p, mem, sight, m.Revealing(p));
             mem.perceiveAt = now + 0.12f + 0.04f * std::fmod(p.id * 0.6180339f, 1.0f);
         }
-        if (foe && m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds() && now >= mem.alertUntil) foe = nullptr;   // nobody wants a fight yet
+        // Nobody wants a fight yet: for the first seconds of the match, and for the first seconds after its own landing. (Bots that jump early land
+        // while the drop is still on, before the match clock starts: they used to brawl there with the starting sword and nothing looted.)
+        const bool calm = (m.State() == MatchState::InMatch && m.StateTime() < CalmSeconds()) || (mem.landedAt >= 0 && now - mem.landedAt < CalmSeconds());
+        if (foe && calm && now >= mem.alertUntil) foe = nullptr;
         if (foe) {
             if (mem.target != foe->id) { mem.target = foe->id; mem.acquiredAt = now; mem.prevFoeAt = -1; mem.foeVel = {}; }
             if (mem.prevFoeAt >= 0 && now > mem.prevFoeAt) { // how it is moving, smoothed (for leading shots and judging its dodges)
@@ -1642,14 +1674,18 @@ class BotController {
         s.alive = m.Alive();
         s.zoneRadius = soon.radius;
         s.noFoeKnown = !foe && now - mem.lastSeenAt > 6.0f;
+        // While the bus still flies the storm clock has not started (the first hold begins with the match), so a bot that has landed loots where
+        // it is: it only counts as outside if it is off the first circle itself, and does not leave early for the next one yet. (With the clock
+        // stopped at 0 the hold looked short for the whole drop, and bots that landed on the rim ran inland with nothing looted.)
+        const bool dropping = m.State() == MatchState::Drop;
         Circle target = soon;
-        target.radius *= 0.9f;
+        if (!dropping) target.radius *= 0.9f;
         s.outsideZone = !target.Contains(p.pos);
         // While the zone holds, leave for the circle it will close to in good time: as soon as the run there (and a little for the way round)
         // would take as long as the hold has left, not only 15 s before it starts to close.
         Vec2 zoneGoal = soon.center;
         mem.leaving = false;
-        if (const auto info = m.GetStorm().InfoAt(m.StormTime()); !info.shrinking && info.phase < kStormPhaseCount) {
+        if (const auto info = m.GetStorm().InfoAt(m.StormTime()); !dropping && !info.shrinking && info.phase < kStormPhaseCount) {
             const Circle& next = m.GetStorm().PhaseEnd(info.phase);
             const float beyond = Distance(p.pos, next.center) - next.radius * 0.9f;
             if (beyond > 0 && beyond / kRunSpeed + 8.0f >= info.secondsLeft) { s.outsideZone = mem.leaving = true; mem.leaveTo = next; zoneGoal = TripGoal(p, next); }

@@ -1,0 +1,57 @@
+name: Web build
+
+# The browser (WebAssembly) test build of the game, for quick checks on a phone. Built next to every game build, from the
+# same patches and mod. It is published to Cloudflare Pages behind Cloudflare Access (only Tee's login) when the
+# CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets exist; without them it just builds and keeps the files as an artifact.
+# It never contains oot.otr or anything from the ROM: the page asks for oot.otr once on the device.
+on:
+  push:
+    branches: ["claude/**", "codex/**", "main"]
+    paths:
+      - "mod/**"
+      - "patches/**"
+      - "cmake/**"
+      - "shared/**"
+      - "scripts/**"
+      - "assets/**"
+      - "web/**"
+      - ".github/workflows/web-build.yml"
+      - ".gitmodules"
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      WEB_WORK: /home/runner/oot-web
+      WEB_OUT: ${{ github.workspace }}/web-dist
+      ROYALE_BUILD_NUMBER: ${{ github.run_number }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch submodules (fork, its submodules, ENet)
+        run: git submodule update --init --recursive --depth 1
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache libboost-dev
+      - name: Restore compiler cache and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            /home/runner/oot-web/deps
+            /home/runner/oot-web/emsdk
+          key: web-${{ hashFiles('scripts/web_build.sh') }}-${{ github.run_number }}
+          restore-keys: |
+            web-${{ hashFiles('scripts/web_build.sh') }}-
+      - name: Build
+        run: ccache -M 2G && ./scripts/web_build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist
+          retention-days: 7
+      - name: Publish to Cloudflare Pages
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: npx --yes wrangler@3 pages deploy web-dist --project-name oot-royale-web --branch main

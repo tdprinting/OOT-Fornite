@@ -392,8 +392,10 @@ void GatherShadowSources(PlayState* play, std::vector<ShadowSource>& out, float 
         const float y = ShadowFloorAt(play, a->world.pos.x, a->world.pos.z, a->world.pos.y + above);
         return y > kNoFloor ? y : a->world.pos.y;
     };
-    // Links: you, other players and bots, fallen bodies.
-    for (Actor* a = play->actorCtx.actorLists[ACTORCAT_PLAYER].head; a != nullptr; a = a->next) {
+    // Links: you, other players and bots, fallen bodies. Puppets and bodies are moved to the NPC list when they spawn (SceneHooks.inc), so
+    // both lists are walked; the loop below skips them.
+    for (int cat : { ACTORCAT_PLAYER, ACTORCAT_NPC })
+    for (Actor* a = play->actorCtx.actorLists[cat].head; a != nullptr; a = a->next) {
         const bool mine = a == &me->actor;
         if (!gShadowKinds[mine ? kShadowYou : kShadowPlayers].on || a->draw == nullptr) continue;
         if (!mine && a->draw != Puppet_Draw && a->draw != Corpse_Draw) continue;

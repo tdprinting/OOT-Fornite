@@ -2062,10 +2062,21 @@ class Match {
         Rng rng(seed ^ 0x647261676Full); // "drago"
         const Circle zone = storm.SafeZoneAt(stormTime);
         Vec2 at = zone.center;
-        for (int attempt = 0; attempt < 40; attempt++) {
+        bool placed = false;
+        for (int attempt = 0; attempt < 40 && !placed; attempt++) {
             const Vec2 c = RandomPointIn(rng, zone, placement, 0.7f);
             at = c;
-            if (!placement || placement(c)) break;
+            placed = !placement || placement(c);
+        }
+        // Forty misses (a safe zone that is mostly sea): it comes down where someone still alive is standing, nearest the centre, so the
+        // fight is always on land people can reach.
+        if (!placed) {
+            float best = 1e30f;
+            for (const auto& p : players) {
+                if (!p.alive || Distance(p.pos, zone.center) > zone.radius || (placement && !placement(p.pos))) continue;
+                const float d = Distance(p.pos, zone.center);
+                if (d < best) { best = d; at = p.pos; placed = true; }
+            }
         }
         MiniBoss d;
         d.id = kDragonId;

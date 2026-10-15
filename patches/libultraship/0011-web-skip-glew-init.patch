@@ -1,0 +1,11 @@
+--- a/src/graphic/Fast3D/gfx_opengl.cpp
++++ b/src/graphic/Fast3D/gfx_opengl.cpp
+@@ -746,7 +746,7 @@
+ 
+ static void gfx_opengl_init() {
+     gfx_shader_floats_hook = gfx_opengl_shader_floats;
+-#ifndef __linux__
++#if !defined(__linux__) && !defined(__EMSCRIPTEN__)
+     glewInit();
+ #endif
+ 

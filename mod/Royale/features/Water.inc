@@ -708,6 +708,14 @@ alignas(16) uint8_t gWaterStreakImage[kWaterTex * kWaterTex];                  /
 alignas(16) uint8_t gWaterBandTex[kWaterTexFrames][kWaterTex * kWaterTex];      // the rolling swell bands (travelling along s)
 alignas(16) uint8_t gWaterCloudImage[kWaterTex * kWaterTex];                   // the clouds the water mirrors
 alignas(16) uint8_t gWaterSplashAtlas[kWaterTex * kWaterTex];                  // droplet, bubble, spray puff and foam disc (2 x 2 cells)
+// The browser build has no threads, so the texture work runs inline there.
+template <typename F> void WaterRunAsync(F f) {
+#ifdef __EMSCRIPTEN__
+    f();
+#else
+    std::thread(f).detach();
+#endif
+}
 std::atomic<int> gWaterTexState{ 0 };   // 0 not made, 1 being made, 2 ready
 std::atomic<int> gWaterTexPending{ 0 };
 
@@ -716,23 +724,23 @@ bool WaterTexturesReady() {
     if (gWaterTexState.compare_exchange_strong(expect, 1)) {
         gWaterTexPending.store(3);
         auto done = [] { if (gWaterTexPending.fetch_sub(1) == 1) gWaterTexState.store(2, std::memory_order_release); };
-        std::thread([done] {
+        WaterRunAsync([done] {
             royale::water::MakeCaustics(&gWaterCausticTex[0][0], kWaterTex, kWaterTexFrames, 11, 4, 12, 0.75f, true, 0.0021f, 20);
             royale::water::MakeGlints(&gWaterGlintTex[0][0], kWaterTex, kWaterTexFrames, 23, 6, 14, 0.0021f, 20);
             done();
-        }).detach();
-        std::thread([done] {
+        });
+        WaterRunAsync([done] {
             royale::water::MakeSparkle(&gWaterSparkleTex[0][0], kWaterTex, kWaterTexFrames, 41, 130, 2.0f, 2);
             done();
-        }).detach();
-        std::thread([done] {
+        });
+        WaterRunAsync([done] {
             royale::water::MakeFoam(gWaterFoamImage, kWaterTex, 37, 10);
             royale::water::MakeStreaks(gWaterStreakImage, kWaterTex, 53, 2);
             royale::water::MakeSwellBands(&gWaterBandTex[0][0], kWaterTex, kWaterTexFrames);
             royale::water::MakeClouds(gWaterCloudImage, kWaterTex);
             royale::water::MakeSplashAtlas(gWaterSplashAtlas, kWaterTex);
             done();
-        }).detach();
+        });
     }
     return gWaterTexState.load(std::memory_order_acquire) == 2;
 }
@@ -971,8 +979,16 @@ void DrawWaterCaustics(PlayState* play, float t, float light, float sunAmt, floa
     constexpr float cc = 40.0f;
     const Vec3f eye = play->view.eye;
     const bool island = OnIsland();
-    if (WaterSceneKey() != gCausticCellsMap || gCausticCells.size() > 6000) { gCausticCells.clear(); gCausticCellsMap = WaterSceneKey(); }
     const int gi0 = static_cast<int>(std::lround(eye.x / cc)), gj0 = static_cast<int>(std::lround(eye.z / cc));
+    if (WaterSceneKey() != gCausticCellsMap) { gCausticCells.clear(); gCausticCellsMap = WaterSceneKey(); }
+    else if (gCausticCells.size() > 6000) {
+        // Forget only the cells far from the camera. Clearing them all made the next frame measure the whole 33 x 33 window again (two
+        // collision rays a cell): a hitch every time a swim or a glide had filled the cache.
+        for (auto it = gCausticCells.begin(); it != gCausticCells.end();) {
+            const int gi = static_cast<int>(it->first >> 32) - 100000, gj = static_cast<int>(it->first & 0xFFFFFFFFu) - 100000;
+            if (std::abs(gi - gi0) > NC || std::abs(gj - gj0) > NC) it = gCausticCells.erase(it); else ++it;
+        }
+    }
     const float cx = gi0 * cc, cz = gj0 * cc;
     static std::vector<WaterCell> cells;
     cells.assign(static_cast<size_t>(VC) * VC, WaterCell{ 0, 0, false });

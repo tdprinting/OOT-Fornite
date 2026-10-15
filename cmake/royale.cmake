@@ -12,5 +12,13 @@ target_include_directories(royale_net PUBLIC
     "${ROYALE_ROOT}/shared" "${ROYALE_ROOT}/server" "${ROYALE_ROOT}/client" "${ROYALE_ROOT}/mod/Royale"
     "${ROYALE_ROOT}/third_party/enet/include")
 target_link_libraries(royale_net PUBLIC enet)
+if(MSVC)
+    # Same static C runtime as the game, or the link fails (LNK2038)
+    set_target_properties(royale_net enet PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+if(WIN32)
+    # ENet's Windows sockets and timers
+    target_link_libraries(royale_net PUBLIC ws2_32 winmm)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE royale_net)
