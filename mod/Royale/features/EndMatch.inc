@@ -212,7 +212,9 @@ std::string UiThousands(int n) {
 // Steps 1 to 3: the moment you go down, the death card, and the spectating bar.
 void DrawDeathScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h) {
     Feat("death screen");
-    const bool spectatingEnd = h.state == royale::MatchState::Ending && (!gEnd.open || !EndScreenUp(h)) && h.haveSelf && !h.selfAlive;
+    // After the match: the spectate bar only once you chose to keep spectating. During the winner's celebration the end banner sits where the
+    // bar would (DrawEndScreen), and the camera is already on the winner.
+    const bool spectatingEnd = h.state == royale::MatchState::Ending && !gEnd.open && h.haveSelf && !h.selfAlive;
     if (!(gDeath.active && IsLive(h)) && !spectatingEnd) return;
     const double now = ImGui::GetTime(), t = now - gDeath.at;
     if (gDeath.active && gDeath.card && t < kDeathCardDelay) {
@@ -304,7 +306,9 @@ void DrawEndBanner(ImDrawList* dl, ImFont* font, float scale, float cx, float y,
     const std::string badge = place > 0 ? "#" + std::to_string(place) : "";
     const float tw = UiTextW(font, ts, words), bw = badge.empty() ? 0.0f : UiTextW(font, bs, badge);
     const float h = 66.0f * scale * k, skew = 16.0f * scale * k, tilt = 7.0f * scale * k;
-    const float w = tw + 70.0f * scale * k, x0 = cx - (w - bw * 0.45f) * 0.5f, x1 = x0 + w, top = y - h * 0.5f;
+    // a wide badge ("#32") would run into the words: the ribbon grows and the words move right by what it needs
+    const float gap = std::max(0.0f, bw * 0.385f - 27.0f * scale * k);
+    const float w = tw + 70.0f * scale * k + gap, x0 = cx - (w - bw * 0.45f) * 0.5f, x1 = x0 + w, top = y - h * 0.5f;
     // the ribbon, a little higher on the right, with a lighter top half
     const ImU32 dark = UiAlpha(won ? kUi.banner : kUi.bannerLoss, alpha), light = UiAlpha(won ? kUi.bannerLight : kUi.bannerLossLight, alpha);
     const ImVec2 a(x0 + skew, top + tilt), b(x1 + skew, top - tilt), c(x1 - skew, top + h - tilt), d(x0 - skew, top + h + tilt);
@@ -312,9 +316,9 @@ void DrawEndBanner(ImDrawList* dl, ImFont* font, float scale, float cx, float y,
     dl->AddQuadFilled(a, b, c, d, dark);
     dl->AddQuadFilled(a, b, ImVec2((b.x + c.x) * 0.5f, (b.y + c.y) * 0.5f), ImVec2((a.x + d.x) * 0.5f, (a.y + d.y) * 0.5f), light);
     dl->AddQuad(a, b, c, d, UiAlpha(IM_COL32(255, 255, 255, 120), alpha), 2.0f * scale);
-    UiTextOutlined(dl, font, ts, ImVec2(cx - tw * 0.5f + bw * 0.22f, y - ts * 0.55f), UiAlpha(kUi.white, alpha), words);
+    UiTextOutlined(dl, font, ts, ImVec2(cx - tw * 0.5f + bw * 0.22f + gap * 0.5f, y - ts * 0.55f), UiAlpha(kUi.white, alpha), words);
     if (!badge.empty()) UiTextOutlined(dl, font, bs, ImVec2(x0 - bw * 0.62f, y - bs * 0.62f), UiAlpha(kUi.gold, alpha), badge);
-    if (won) UiCrown(dl, cx + bw * 0.22f, top - 6.0f * scale * k, 18.0f * scale * k, UiAlpha(kUi.gold, alpha));
+    if (won) UiCrown(dl, cx + bw * 0.22f + gap * 0.5f, top - 6.0f * scale * k, 18.0f * scale * k, UiAlpha(kUi.gold, alpha));
 }
 
 // A medal: what it is for, and its tier (0 bronze, 1 silver, 2 gold).
@@ -729,6 +733,7 @@ void DrawOverlay() {
     DrawMinimap(dl, ds, scale, h);
     DrawMatchStats(dl, font, ds, scale, h, gMyStats.kills);
     DrawCompass(dl, font, ds, scale, h);
+    DrawStormBar(dl, font, ds, scale, h);
     DrawHotbar(dl, font, ds, scale, h);
     DrawEmotes(dl, font, ds, scale, h);
     DrawPings(dl, font, ds, scale);

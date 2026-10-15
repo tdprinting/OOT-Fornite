@@ -838,6 +838,8 @@ static void ShieldOverTheWire() {
     CHECK(a.Inventory().shield == 0);
     a.UseShield();
     rig.Run(0.5f);
+    CHECK(a.Inventory().shield == 0);                                                              // still drinking
+    rig.Run(DrinkSeconds(ItemId::LargeShieldPotion));
     CHECK(std::fabs(a.Inventory().shield - 2.0f) < 0.001f && a.Inventory().potions.empty());       // the owner sees the bar fill
     CHECK(b.Inventory().shield == 0);                                                              // and nobody else gets it
     const uint64_t rejected = rig.server.GetStats().rejectedActions;

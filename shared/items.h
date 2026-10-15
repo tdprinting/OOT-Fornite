@@ -290,6 +290,16 @@ constexpr PotionDef PotionOf(ItemId id) {
     }
 }
 
+// How long a potion takes to drink. Shield potions take time (the effect lands at the end, and attacking, switching weapon, using another
+// item or being knocked down cancels it, the potion kept); the healing potions act at once.
+constexpr float DrinkSeconds(ItemId id) {
+    switch (id) {
+        case ItemId::SmallShieldPotion: return 1.5f;
+        case ItemId::LargeShieldPotion: return 3.0f;
+        default: return 0.0f;
+    }
+}
+
 // How many of one kind fit in a single bag slot.
 constexpr int PotionStackMax(ItemId id) {
     switch (id) {

@@ -983,7 +983,9 @@ static void PickupRulesForEveryKind() {
         PlayerState* q = m.Find(1000);
         q->armor = 0;
         const size_t before = q->potions.size();
-        CHECK(m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common) && q->armor > 0.9f && q->potions.size() == before - 1);
+        CHECK(m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common) && q->armor == 0);       // it takes DrinkSeconds to drink
+        for (int i = 0; i < static_cast<int>(DrinkSeconds(ItemId::SmallShieldPotion) * kTickHz) + 2; i++) m.Tick(1.0f / kTickHz);
+        CHECK(q->armor > 0.9f && q->potions.size() == before - 1);
         CHECK(!m.UseStack(1000, ItemId::SmallShieldPotion, Rarity::Common));                  // none left
         q->weapon = {ItemId::MasterSword, Rarity::Epic};
         q->reserve.clear();
@@ -4325,22 +4327,53 @@ static void ShieldBar() {
     h->armor = 2.0f;
     m.Damage(1, 0.5f, kNoPlayer, DamageKind::Storm);
     CHECK(h->armor == 2.0f && std::fabs(h->health - 2.0f) < 0.001f);                       // the storm ignores the shield
-    // Potions: the small one only works while the bar is under half; the large one fills it.
+    // Potions take time to drink (DrinkSeconds): the bar fills when the drink is done. The small one only works while the bar is under half;
+    // the large one fills it.
+    auto drink = [&](ItemId item) { for (int i = 0; i < static_cast<int>(DrinkSeconds(item) * kTickHz) + 2; i++) m.Tick(1.0f / kTickHz); };
     h->armor = 0;
     h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}, {ItemId::SmallShieldPotion, Rarity::Common}};
-    CHECK(!m.UsePotion(1) || h->potions.size() == 2 || true);
-    CHECK(m.UseShield(1) && std::fabs(h->armor - 1.0f) < 0.001f);
-    CHECK(m.UseShield(1) && std::fabs(h->armor - 1.5f) < 0.001f);                          // capped at half
+    CHECK(m.UseShield(1) && h->armor == 0 && h->potions.size() == 2 && h->drinking == ItemId::SmallShieldPotion);   // nothing yet
+    CHECK(!m.UseShield(1));                                                                  // already drinking that one
+    drink(ItemId::SmallShieldPotion);
+    CHECK(std::fabs(h->armor - 1.0f) < 0.001f && h->potions.size() == 1 && h->drinking == ItemId::Count);
+    CHECK(m.UseShield(1));
+    drink(ItemId::SmallShieldPotion);
+    CHECK(std::fabs(h->armor - 1.5f) < 0.001f);                                              // capped at half
     h->potions.push_back({ItemId::SmallShieldPotion, Rarity::Common});
     CHECK(!m.UseShield(1) && h->potions.size() == 1);                                        // a small one can't push it past half
     h->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
-    CHECK(m.UseShield(1) && std::fabs(h->armor - 3.0f) < 0.001f && h->potions.empty());
+    CHECK(m.UseShield(1));
+    drink(ItemId::LargeShieldPotion);
+    CHECK(std::fabs(h->armor - 3.0f) < 0.001f && h->potions.empty());
     h->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
     CHECK(!m.UseShield(1));                                                                  // already full
     // With both in the bag and an empty bar, the large one is drunk first (it fits).
     h->armor = 0;
     h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}, {ItemId::LargeShieldPotion, Rarity::Epic}};
-    CHECK(m.UseShield(1) && std::fabs(h->armor - 2.0f) < 0.001f && h->potions.size() == 1 && h->potions[0].item == ItemId::SmallShieldPotion);
+    CHECK(m.UseShield(1));
+    drink(ItemId::LargeShieldPotion);
+    CHECK(std::fabs(h->armor - 2.0f) < 0.001f && h->potions.size() == 1 && h->potions[0].item == ItemId::SmallShieldPotion);
+    // Attacking or switching weapon puts the potion away and keeps it; a hit taken meanwhile does not.
+    h->armor = 0;
+    h->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
+    CHECK(m.UseShield(1));
+    m.Attack(1, 1000, false);
+    drink(ItemId::LargeShieldPotion);
+    CHECK(h->armor == 0 && h->potions.size() == 1 && h->drinking == ItemId::Count);
+    h->reserve = {{ItemId::FairyBow, Rarity::Rare}};
+    CHECK(m.UseShield(1) && m.SelectWeapon(1, 1));
+    drink(ItemId::LargeShieldPotion);
+    CHECK(h->armor == 0 && h->potions.size() == 1);
+    CHECK(m.UseShield(1));
+    m.Damage(1, 0.5f, 1000);
+    drink(ItemId::LargeShieldPotion);
+    CHECK(std::fabs(h->armor - 2.0f) < 0.001f && h->potions.empty());
+    // Dropping the stack mid-drink: nothing is drunk.
+    h->armor = 0;
+    h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}};
+    CHECK(m.UseShield(1) && m.DropSlot(1, static_cast<uint8_t>(ItemId::SmallShieldPotion), static_cast<uint8_t>(Rarity::Common)));
+    drink(ItemId::SmallShieldPotion);
+    CHECK(h->armor == 0);
     // Healing potions are not shield potions and the other way round.
     h->health = 1.0f;
     h->potions = {{ItemId::SmallShieldPotion, Rarity::Common}};
@@ -4358,7 +4391,7 @@ static void ShieldBar() {
     PlayerState* bot = botSim.match.Find(1000);
     bot->potions = {{ItemId::LargeShieldPotion, Rarity::Rare}};
     bot->armor = 0;
-    Run(botSim, 3.0f);
+    Run(botSim, 3.0f + DrinkSeconds(ItemId::LargeShieldPotion));
     CHECK(bot->armor > 1.9f && bot->potions.empty());
 }
 

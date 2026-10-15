@@ -23,6 +23,8 @@
 //   die                     (host) knock Link out: the death camera and death card
 //   rematch                 (host) press New match on the results and wait until everyone is back in the countdown
 //   results                 assert the end screen is up and no menu covers it: the match is over and a winner is named
+//   shieldpotion            (host) put a Large Shield Potion in the bag, take it in hand and press B: the bar must stay put while it is drunk
+//                           and rise when the drink is done (royale::DrinkSeconds), the potion used up
 //   shot:<name>             ask the runner for a screenshot (<name>.png in the run folder) and wait until it is taken
 //   prof:<sec>              ask the runner to sample the game's CPU use with perf for <sec> wall seconds; logs the frame rate meanwhile
 //   quit                    write PASS and exit with code 0
@@ -197,6 +199,48 @@ bool AutoRun(const AutoStep& s, float secs) {
         if (gAuto.sub == 0) { AutoLog("  %s: %zu players hit%s", s.verb.c_str(), victims.size(), s.verb == "die" ? "" : spared == self ? ", Link stays" : ", a bot stays"); gAuto.sub = 1; }
         return false;
     }
+    if (s.verb == "shieldpotion") {
+        static float before = 0;
+        static unsigned pressedAt = 0;
+        royale::GameServer* server = gSession.Server();
+        if (server == nullptr) AutoFinish(false, "shieldpotion: only the host can give the potion");
+        if (hud.state != royale::MatchState::InMatch || !hud.selfAlive) return false;
+        auto bagHas = [&] { for (const auto& e : hud.inv.potions) if (static_cast<royale::ItemId>(e.item) == royale::ItemId::LargeShieldPotion) return true; return false; };
+        if (gAuto.sub == 0) {
+            royale::PlayerState* me = server->Sim().match.Find(gSession.SelfId());
+            if (me == nullptr) return false;
+            me->armor = 0;
+            me->potions = {{royale::ItemId::LargeShieldPotion, royale::Rarity::Rare}};
+            me->dirty = true;
+            gAuto.sub = 1;
+            return false;
+        }
+        if (gAuto.sub == 1) {   // the bag update has arrived: take the stack in hand and press B, the way a player drinks it
+            if (!bagHas() || hud.inv.shield > 0.01f) return false;
+            const std::vector<PotionStack> stacks = PotionStacks(hud);
+            for (size_t k = 0; k < stacks.size(); k++) if (stacks[k].item == royale::ItemId::LargeShieldPotion) TakeStackInHand(stacks, static_cast<int>(k));
+            if (gHandStack < 0) return false;
+            gStackBPressed = true;
+            before = hud.inv.shield;
+            pressedAt = gAuto.frames;
+            gAuto.sub = 2;
+            return false;
+        }
+        const float drinkSecs = royale::DrinkSeconds(royale::ItemId::LargeShieldPotion);
+        const float since = (gAuto.frames - pressedAt) / 20.0f;
+        if (gAuto.sub == 2 && since >= drinkSecs * 0.5f) {
+            AutoLog("  shieldpotion: halfway, shield %.2f (was %.2f), drink ring %.2f", hud.inv.shield, before, ShieldDrinkProgress());
+            if (hud.inv.shield > before + 0.01f) AutoFinish(false, "shieldpotion: the shield rose before the drink was done");
+            if (ShieldDrinkProgress() < 0.0f) AutoFinish(false, "shieldpotion: no drink ring while drinking");
+            const std::string req = gAuto.beatPath.substr(0, gAuto.beatPath.find_last_of("/\\") + 1) + "shot-request.txt";
+            std::ofstream(req, std::ios::trunc) << "shield-drink\n";   // a picture of the ring mid-drink (the runner takes it on its own)
+            gAuto.sub = 3;
+        }
+        if (since < drinkSecs + 1.0f) return false;
+        AutoLog("  shieldpotion: done, shield %.2f, potion left %d", hud.inv.shield, bagHas() ? 1 : 0);
+        if (hud.inv.shield < before + 0.5f || bagHas()) AutoFinish(false, "shieldpotion: the drink never landed");
+        return true;
+    }
     if (s.verb == "rematch") {
         if (gAuto.sub == 0) {
             if (hud.state != royale::MatchState::Ending) return false;
@@ -337,6 +381,7 @@ float AutoTimeout(const AutoStep& s) {
     if (s.verb == "state") return 600;
     if (s.verb == "endmatch" || s.verb == "die") return 120;
     if (s.verb == "rematch" || s.verb == "results") return 90;
+    if (s.verb == "shieldpotion") return 120;
     if (s.verb == "host" || s.verb == "hostbots") return 300;
     if (s.verb == "warp" || s.verb == "tour") return 90;   // per scene
     return 60;
