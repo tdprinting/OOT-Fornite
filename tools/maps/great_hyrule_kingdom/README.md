@@ -1,9 +1,9 @@
-# Landscape map (Tee's fantasy landscape GLB)
+# Great Hyrule Kingdom (Tee's fantasy landscape GLB)
 
-Step 1 of the new main map: the uploaded `fantasylandscape3dmodel.glb` cleaned and scaled to game units. Not yet in the game: no map
+Step 1 of the new main map, named "Great Hyrule Kingdom" by Tee. It is distinct from Hyrule Kingdom (map 8): use great_hyrule_kingdom / GreatHyruleKingdom in code and file names: the uploaded `fantasylandscape3dmodel.glb` cleaned and scaled to game units. Not yet in the game: no map
 index, buildings, places, water, bot navigation or engine data yet.
 
-`clean.py` (run with Blender's `bpy`, e.g. `PYTHONPATH=<bpy dir> python3 tools/maps/landscape/clean.py`; the input path is set at the top):
+`clean.py` (run with Blender's `bpy`, e.g. `PYTHONPATH=<bpy dir> python3 tools/maps/great_hyrule_kingdom/clean.py`; the input path is set at the top):
 
 - welds duplicate vertices and drops floating islands under 60 faces;
 - decimates to 25% (381k to 95k triangles);
