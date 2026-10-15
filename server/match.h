@@ -1020,11 +1020,17 @@ class Match {
     // Empties one hotbar slot to make room, dropping what was in it: the potion stack of `item`/`rarity`, or (kHandSlot, or a stack the
     // player doesn't have) the weapon in hand, whose place a backup weapon or the starter sword takes. False if nothing could be freed.
     bool FreeHotbarSlot(PlayerState& p, uint8_t item, uint8_t rarity) {
+        // What is put down is marked as this player's drop, like a C-Down drop, so the same A press can't pick it straight back up.
+        auto drop = [&](const Equipped& e) {
+            const size_t before = loot.size();
+            DropEquipment(p, e);
+            if (loot.size() > before) { loot.back().droppedBy = p.id; loot.back().droppedAt = clock; }
+        };
         if (item != kHandSlot) {
             bool any = false;
             for (size_t i = 0; i < p.potions.size();) {
                 if (static_cast<uint8_t>(p.potions[i].item) == item && static_cast<uint8_t>(p.potions[i].rarity) == rarity) {
-                    DropEquipment(p, p.potions[i]);
+                    drop(p.potions[i]);
                     p.potions.erase(p.potions.begin() + static_cast<long>(i));
                     any = true;
                 } else i++;
@@ -1032,12 +1038,12 @@ class Match {
             if (any) return true;
         }
         if (!IsStarter(p.weapon)) {
-            DropEquipment(p, p.weapon);
+            drop(p.weapon);
             if (!p.reserve.empty()) { p.weapon = p.reserve.front(); p.reserve.erase(p.reserve.begin()); }
             else p.weapon = {ItemId::BasicSword, Rarity::Common};
             return true;
         }
-        if (!p.reserve.empty()) { DropEquipment(p, p.reserve.back()); p.reserve.pop_back(); return true; }
+        if (!p.reserve.empty()) { drop(p.reserve.back()); p.reserve.pop_back(); return true; }
         if (!p.potions.empty()) {   // only potions: the last stack goes
             const Equipped last = p.potions.back();
             return FreeHotbarSlot(p, static_cast<uint8_t>(last.item), static_cast<uint8_t>(last.rarity));
@@ -2056,10 +2062,21 @@ class Match {
         Rng rng(seed ^ 0x647261676Full); // "drago"
         const Circle zone = storm.SafeZoneAt(stormTime);
         Vec2 at = zone.center;
-        for (int attempt = 0; attempt < 40; attempt++) {
+        bool placed = false;
+        for (int attempt = 0; attempt < 40 && !placed; attempt++) {
             const Vec2 c = RandomPointIn(rng, zone, placement, 0.7f);
             at = c;
-            if (!placement || placement(c)) break;
+            placed = !placement || placement(c);
+        }
+        // Forty misses (a safe zone that is mostly sea): it comes down where someone still alive is standing, nearest the centre, so the
+        // fight is always on land people can reach.
+        if (!placed) {
+            float best = 1e30f;
+            for (const auto& p : players) {
+                if (!p.alive || Distance(p.pos, zone.center) > zone.radius || (placement && !placement(p.pos))) continue;
+                const float d = Distance(p.pos, zone.center);
+                if (d < best) { best = d; at = p.pos; placed = true; }
+            }
         }
         MiniBoss d;
         d.id = kDragonId;

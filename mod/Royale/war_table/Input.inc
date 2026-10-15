@@ -47,7 +47,10 @@ void WarGameUpdate() {
     }
     if (joined && wt::ShowDeathMenu(gDeath.active,gDeath.card,IsLive(h),ImGui::GetTime()-gDeath.at) &&
         (!gWar.open || gWar.page==WarPage::Pause)) { gUiPad={}; WarShow(WarPage::Death); }
-    if (gWar.page==WarPage::Death && (!joined || h.selfAlive || h.state==royale::MatchState::Ending)) WarOpen();
+    // At the end of the match the recap (end screen) takes over from the death page, the same as it does for the winner; Start still opens
+    // the War Table's results. (WarOpen here put a player who died on the menu's results page, over the end screen.)
+    if (gWar.page==WarPage::Death && joined && h.state==royale::MatchState::Ending) { if (gWar.open) WarHide(); }
+    else if (gWar.page==WarPage::Death && (!joined || h.selfAlive)) WarOpen();
     if(joined&&(h.state==royale::MatchState::Countdown||h.state==royale::MatchState::Drop)&&gWar.page==WarPage::Lobby)WarHide();
     if(joined&&h.state==royale::MatchState::InMatch&&gWar.page==WarPage::Lobby)WarHide();
     // The gameplay recap owns the initial end-of-match presentation. Start opens native results.

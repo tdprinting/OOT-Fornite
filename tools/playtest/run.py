@@ -73,6 +73,12 @@ SCENARIOS["deep-12"] = ("ingame; hostbots:12; state:Countdown; shot:d-bus; check
                         "wait:12; shot:d-glide; state:InMatch; wait:20; shot:d-ground; check; wait:60; shot:d-60s; check; wait:60; shot:d-120s; check; "
                         "wait:60; shot:d-180s; check; prof:20; quit")
 
+# The whole loop on Moonfall Isle: bus, jump, land, win, results, New match, die, results, New match again, Leave. endmatch and die are
+# host-only test steps that knock players out, so the loop runs in a few minutes instead of waiting out the storm.
+SCENARIOS["loop-12"] = ("ingame; hostbots:12; state:Drop; jump; state:InMatch; wait:15; check; endmatch; results; wait:10; shot:loop-win; check; "
+                        "rematch; check; state:Drop; jump; state:InMatch; wait:5; die; wait:6; shot:loop-death; check; endmatch; results; wait:4; "
+                        "shot:loop-lost; rematch; check; leave; wait:5; check; quit")
+
 # Hyrule Kingdom up close: water, shores, the town's ground and a house inside (tp:x,z,yaw puts Link there).
 SCENARIOS["look-8"] = ("ingame; host:8; wait:5; jump; wait:25; "
                        "tp:0,1150,180; wait:4; shot:k-clock-town; check; tp:-2150,2350,-90; wait:4; shot:k-lake-shore; check; "
@@ -80,7 +86,7 @@ SCENARIOS["look-8"] = ("ingame; host:8; wait:5; jump; wait:25; "
                        "tp:620,640,90; wait:4; shot:k-house; check; tp:350,-230,-90; wait:4; shot:k-river; check; quit")
 
 SUITES = {
-    "smoke": ["boot", "solo-12", "match-12", "skin", "regular"],
+    "smoke": ["boot", "solo-12", "match-12", "loop-12", "skin", "regular"],
     "maps": [f"solo-{i}" for i in MAPS],
     "matches": [f"match-{i}" for i in MAPS if i not in TEST_MAPS],
     "scenes": ["tour-overworld", "tour-dungeons"],
