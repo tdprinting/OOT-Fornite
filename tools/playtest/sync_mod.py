@@ -10,7 +10,7 @@ root, build = Path(sys.argv[1]), Path(sys.argv[2])
 mod = root / "mod" / "Royale"
 dest = root / "third_party" / "Shipwright-Android" / "soh" / "soh" / "Enhancements" / "Royale"
 pairs = {}
-for name in ("RoyaleMod.cpp", "RoyaleLobbyFish.h", "RoyaleWarTable.h", "RoyaleLobbyPets.h", "RoyaleBokoblins.h", "RoyaleJones.h",
+for name in ("RoyaleMod.cpp", "RoyaleThirdStormTables.cpp", "RoyaleLobbyFish.h", "RoyaleWarTable.h", "RoyaleLobbyPets.h", "RoyaleBokoblins.h", "RoyaleJones.h",
              "RoyalePeter.h", "RoyaleChief.h"):
     pairs[dest / name] = mod / name
 for sub in ("features", "war_table"):

@@ -31,6 +31,7 @@ One line per hand-written file or folder. Mod features: [`mod/Royale/FEATURES.md
 
 ## mod/Royale/ (game-facing; one translation unit `RoyaleMod.cpp`, features in `features/*.inc`)
 - `RoyaleSession.h` host/join layer without game code (transports, host server).
+- `RoyaleThirdStormTables.cpp` map 15's generated drawn and collision tables and their decoding, compiled apart from `RoyaleMod.cpp` (together they ran out of memory); the map's server test compiles it too.
 - `RoyaleBosses.h` boss state + shared draw helpers, then includes `bosses/`: `MiniBosses.inc` (with `RoyaleChuChu.h`), `Volvagia.inc` (dragon + custom model), `MajorBosses.inc` (Morpha, Phantom Ganon, Bongo, Twinrova), `BossActor.inc` (stand-in actor, reconcile, HP bars), `StrikeFx.inc` (strike warnings/blasts, body fx).
 - `RoyaleBokoblins.h` Bokoblin helpers (from `WorldObjects.inc`); `RoyaleJones.h` Jones NPC, `RoyaleChief.h` Master Chief NPC (from `Companions.inc`).
 - `RoyaleLobbyFish.h` lobby aquarium; `RoyaleLobbyPets.h` lobby pet play.

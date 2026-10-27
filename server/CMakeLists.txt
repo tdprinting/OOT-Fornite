@@ -75,6 +75,7 @@ foreach(t convergence_tests kingdom_tests riftlands_tests moonfall_tests skyloft
     endif()
     add_test(NAME royale_${t} COMMAND royale_${t})
 endforeach()
+target_sources(royale_hyrule_third_storm_tests PRIVATE ../mod/Royale/RoyaleThirdStormTables.cpp)   # the map's drawn and collision tables
 
 # Keep assert-based checks active in optimized local test builds too.
 foreach(t boss_arena_tests war_table_tests tests net_tests enet_tests session_tests music_tests fish_tests maya_tests lobby_pets_tests graphics_tests graphics_layers_tests shadow_tests water_tests convergence_tests kingdom_tests riftlands_tests moonfall_tests skyloft_tests great_hyrule_kingdom_tests hyrule_third_storm_tests)
