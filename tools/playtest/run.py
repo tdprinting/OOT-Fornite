@@ -128,12 +128,18 @@ def find_game(build: Path):
 
 
 def start_display():
+    # Under WSLg /tmp/.X11-unix is a read-only mount: listen on the abstract socket only (Linux; no file), seen in /proc/net/unix.
+    abstract = not os.access("/tmp/.X11-unix", os.W_OK)
+    def up(n):
+        if not abstract:
+            return Path(f"/tmp/.X11-unix/X{n}").exists()
+        return f"@/tmp/.X11-unix/X{n}" in Path("/proc/net/unix").read_text()
     for n in range(97, 110):
-        if not Path(f"/tmp/.X11-unix/X{n}").exists():
-            proc = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "960x540x24", "+extension", "GLX", "-nolisten", "tcp"],
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not up(n):
+            proc = subprocess.Popen(["Xvfb", f":{n}", "-screen", "0", "960x540x24", "+extension", "GLX", "-nolisten", "tcp"]
+                                    + (["-nolisten", "unix"] if abstract else []), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for _ in range(50):
-                if Path(f"/tmp/.X11-unix/X{n}").exists():
+                if up(n):
                     return proc, f":{n}"
                 time.sleep(0.1)
             proc.kill()
