@@ -15,10 +15,12 @@ mini boss: Death Mountain (Lava), Zora's Domain (Frost), Kokiri Forest (Moss), L
 - Authoring (`tools/maps/hyrule_third_storm/`): `blender_extract.py` (in Blender: one area's meshes, simplified, plus its chests, floor
   loot, drop spots, water and prop boxes), `export.py` (writes the headers and the debug report), `layout.py` (frames, places, bosses, draw
   ranges), `validate.py` (CI).
-- Generated (never edit): `shared/hyrule_third_storm_data.h`, `shared/hyrule_third_storm_model.h`. The big tables are base64 text in
-  16,000-character pieces: a compiler handles tens of MB of string literal, but ran out of memory on millions of numbers in braces.
-- Hand-written: `shared/hyrule_third_storm_ground.h` (decodes the walk grid, minimap and collision once; floor, water, flags),
-  `shared/hyrule_third_storm_draw.h` (decodes the drawn map), `shared/hyrule_third_storm_layout.h` (placement, loot, colliders, bosses).
+- Generated (never edit): `shared/hyrule_third_storm_data.h` (3 MB: walk grid, minimap, places, loot, water; included by every server
+  file through `fortnite_map.h`), `shared/hyrule_third_storm_collision.h` and `_model.h` (only the game and the map test include them). The
+  big tables are base64 text in 16,000-character pieces: a compiler handles tens of MB of string literal, but ran out of memory on
+  millions of numbers in braces. The walk grid is delta/varint coded, its flags run-length coded.
+- Hand-written: `shared/hyrule_third_storm_ground.h` (decodes the walk grid and minimap once; floor, water, flags),
+  `shared/hyrule_third_storm_draw.h` (decodes the drawn map and the collision; hooks the collision into `fortnite::BuildCollision`), `shared/hyrule_third_storm_layout.h` (placement, loot, colliders, bosses).
 - Game: `DrawHyruleThirdStorm` in `Terrain.inc`; hooks in `Core.inc`, `EngineBridge.inc` (surfaces, water boxes, far clip), `Water.inc`,
   `GroundWeather.inc`, `Scenery.inc`, `Hud.inc` (release map, minimap extent), `war_table/Painter.inc`; server `game_server.h`, `match.h`.
 - Engine: `patches/0040-royale-collision-plane-distance-32.patch` (below).
