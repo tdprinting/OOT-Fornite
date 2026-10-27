@@ -68,6 +68,8 @@ namespace royale { namespace great_hyrule_kingdom {
 using kingdom::kSurfaceSize; using kingdom::kSurfaceClasses; using kingdom::kSurfaceUnits;
 using kingdom::kSurfaceNormal; using kingdom::kSurfaceBump;
 } }
+#include "hyrule_third_storm_layout.h"
+#include "hyrule_third_storm_draw.h"
 #include "fortnite_puddles.h"
 #include "ground_patches.h"
 #include "lobby_fish.h"
@@ -314,6 +316,7 @@ void WarDraw(GameState* state);
 #include "features/Updater.inc"
 #include "features/Lighting.inc"
 #include "features/EngineBridge.inc"
+#include "features/MapDebug.inc"
 #include "features/CrashContext.inc"
 // Headless playtest driver: PC playtest builds only, never in the Android game.
 #ifndef __ANDROID__

@@ -88,7 +88,9 @@ inline const char* const kPoiNames[] = {
     // Skyloft Isles: its 24 landmark names follow Moonfall's (PoiNameBase).
     "Knight Academy", "Bazaar", "Goddess Statue", "Sparring Hall", "Waterfall Cave", "Lumpy Pumpkin", "Light Tower", "Pumpkin Fields", "Westwind Homes", "Hollow Graveyard", "Loftwing Roost", "Ember Rock", "Statue Plaza", "Academy Bridge", "Goddess Stair", "Beedle's Perch", "Pumpkin Bridge", "West Diving Deck", "South Diving Deck", "Waterfall Pool", "Windmill Hill", "East Span", "Fledge's Cove", "Ember Bridge",
     // Great Hyrule Kingdom: the main map; its 24 place names follow Skyloft's (PoiNameBase), in the order of great_hyrule_kingdom::kRegions.
-    "Castle Town", "Hyrule Castle", "Lake Hylia", "Hylia Docks", "Ordon Village", "Lon Lon Ranch", "Kokiri Forest", "Lost Woods", "Great Hylia Bridge", "Zora's River", "Zora's Domain", "Kakariko Village", "Kakariko Graveyard", "Hyrule Field Ruins", "Gerudo Fortress", "Haunted Wasteland", "Desert Colossus", "Temple of Time", "Snowpeak Lodge", "Snowpeak Summit", "Lanayru Spring", "Goron City", "Death Mountain", "Death Mountain Trail"
+    "Castle Town", "Hyrule Castle", "Lake Hylia", "Hylia Docks", "Ordon Village", "Lon Lon Ranch", "Kokiri Forest", "Lost Woods", "Great Hylia Bridge", "Zora's River", "Zora's Domain", "Kakariko Village", "Kakariko Graveyard", "Hyrule Field Ruins", "Gerudo Fortress", "Haunted Wasteland", "Desert Colossus", "Temple of Time", "Snowpeak Lodge", "Snowpeak Summit", "Lanayru Spring", "Goron City", "Death Mountain", "Death Mountain Trail",
+    // Hyrule Before the Third Storm: its 24 place names follow Great Hyrule Kingdom's (PoiNameBase), in the order of hyrule_third_storm::kRegions.
+    "Castle Town", "Kakariko Village", "Kakariko Graveyard", "Death Mountain", "Zora's Domain", "Kokiri Forest", "Lost Woods", "Lon Lon Ranch", "Lake Hylia", "Gerudo Valley", "Gerudo Fortress", "Desert Colossus", "Old Abbey", "Signal Ruin", "Southern Dairy Stop", "Ranch Crossroads", "Peahat Stones", "River Bridge Camp", "Orchard Shelter", "Lake Outlet Mill", "Gerudo Road Waystation", "Eastern Ford", "Forest Edge Lookout", "Desert Pass Refuge",
 };
 
 // The fallback circles are where the real floor is, measured from the ROM's own collision data with tools/rom-extractor.html (see docs/MAPS.md):
@@ -142,6 +144,10 @@ constexpr MapDef kMaps[] = {
     // Great Hyrule Kingdom is authored in Blender (tools/maps/great_hyrule_kingdom): one kingdom on a real landscape, Castle Town in the middle.
     {"Great Hyrule Kingdom", "The main map: Castle Town and Hyrule Castle on the central plateau, Lake Hylia, Kokiri Forest and the Lost Woods, Zora's River, Kakariko, the Gerudo desert, Snowpeak and Death Mountain", 0x51, {{0,0},6500}, 6600, Theme::Meadow,
      {BossKind::Stone, BossKind::Moss}, BossKind::DragonForest},
+    // Hyrule Before the Third Storm is authored in Blender (tools/maps/hyrule_third_storm): all of Hyrule at full size, 1.8 km across, the
+    // biggest map. The circle reaches the square's corners (45900 > 32400 x sqrt 2): the Graveyard and the Desert Colossus sit out there.
+    {"Hyrule Before the Third Storm", "The whole kingdom on the eve of the storm: Castle Town, Kakariko and its graveyard, Death Mountain, Zora's Domain, Kokiri Forest and the Lost Woods, Lon Lon Ranch, Lake Hylia, Gerudo Valley, the Fortress and the Desert Colossus, with Hyrule Field between", 0x51, {{0,0},45900}, 45900, Theme::Meadow,
+     {BossKind::Stone, BossKind::Lava}, BossKind::DragonForest},
 };
 // The signpost standing in the middle of every map (see RoyaleMod.cpp, the sign): what it says when you walk up to it.
 inline constexpr const char* kMapSignText = "If you read this, I love My Wife Cynthia and my 2 daughters Maya and Avriela!";
@@ -216,24 +222,25 @@ constexpr int kRiftlandsMapIndex = 11;
 constexpr int kMoonfallMapIndex = 12;
 constexpr int kSkyloftMapIndex = 13;
 constexpr int kGreatHyruleKingdomMapIndex = 14;
+constexpr int kHyruleThirdStormMapIndex = 15;   // Hyrule Before the Third Storm (appended: no other map's number changes)
 constexpr int kDefaultMapIndex = kGreatHyruleKingdomMapIndex;   // the main map: the lobby's default and the menus' fallback
 constexpr int kMiniBossArenaIndex = 9;
 constexpr int kMainBossArenaIndex = 10;
 constexpr bool IsBossArena(int id) { return id==kMiniBossArenaIndex || id==kMainBossArenaIndex; }
 constexpr bool IsTestMap(int id) { return id==kSandboxMapIndex || IsBossArena(id); }
-constexpr int PoiNameBase(int id) { return id==kGreatHyruleKingdomMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+3*kNamesPerMap:id==kSkyloftMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+2*kNamesPerMap:id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
+constexpr int PoiNameBase(int id) { return id==kHyruleThirdStormMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+4*kNamesPerMap:id==kGreatHyruleKingdomMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+3*kNamesPerMap:id==kSkyloftMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+2*kNamesPerMap:id==kMoonfallMapIndex?kMiniBossArenaIndex*kNamesPerMap+6+kNamesPerMap:id==kRiftlandsMapIndex?kMiniBossArenaIndex*kNamesPerMap+6:id==kMainBossArenaIndex?kMiniBossArenaIndex*kNamesPerMap+3:id*kNamesPerMap; }
 constexpr int PoiNameCount(int id) { return IsBossArena(id)?3:kNamesPerMap; }
 constexpr int kPlayableMapCount = kMapCount - 3;
 constexpr bool IsPlayableMap(int id) { return id >= 0 && id < kMapCount && !IsTestMap(id); }
-constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex; }
+constexpr bool IsIslandMap(int id) { return id == 5 || IsTestMap(id) || id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex || id == kHyruleThirdStormMapIndex; }
 // The maps built by hand in Blender: their ground, collision, buildings and loot sites come from shared/<name>_data.h, and nothing is scattered over them.
-constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex; }
+constexpr bool IsAuthoredMap(int id) { return id == kConvergenceMapIndex || id == kKingdomMapIndex || id == kRiftlandsMapIndex || id == kMoonfallMapIndex || id == kSkyloftMapIndex || id == kGreatHyruleKingdomMapIndex || id == kHyruleThirdStormMapIndex; }
 constexpr int kFortniteMapIndex = 5;   // the Fortnite Map's place in kMaps (shared/fortnite_map.h has the same number, and a test checks them)
 static_assert(kFortniteMapIndex == 5 && kSandboxMapIndex == 6 && kConvergenceMapIndex == 7 && kKingdomMapIndex == 8, "preserve network map IDs");
 static_assert(sizeof(kPoiNames) / sizeof(kPoiNames[0]) == kMapCount*kNamesPerMap-2*(kNamesPerMap-3), "regular maps have 24 names; boss arenas have 3");
-static_assert(PoiNameBase(kGreatHyruleKingdomMapIndex)+kNamesPerMap==sizeof(kPoiNames)/sizeof(kPoiNames[0]),"the last map's names end the list");
-static_assert(PoiNameBase(kGreatHyruleKingdomMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
-static_assert(kGreatHyruleKingdomMapIndex==kMapCount-1 && !IsTestMap(kGreatHyruleKingdomMapIndex) && IsPlayableMap(kDefaultMapIndex),"map 14 is appended, playable and the default");
+static_assert(PoiNameBase(kHyruleThirdStormMapIndex)+kNamesPerMap==sizeof(kPoiNames)/sizeof(kPoiNames[0]),"the last map's names end the list");
+static_assert(PoiNameBase(kHyruleThirdStormMapIndex)+kNamesPerMap<=65535,"POI names fit the 16-bit network field");
+static_assert(kHyruleThirdStormMapIndex==kMapCount-1 && !IsTestMap(kHyruleThirdStormMapIndex) && IsPlayableMap(kDefaultMapIndex),"map 15 is appended and playable; map 14 stays the default");
 constexpr int kPoiNameTotal = sizeof(kPoiNames)/sizeof(kPoiNames[0]);
 
 constexpr int ClampMap(int id) { return id >= 0 && id < kMapCount ? id : 0; }

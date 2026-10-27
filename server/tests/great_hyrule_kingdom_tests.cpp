@@ -29,10 +29,10 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
     return nearest;
 }
 int main() {
-    CHECK(kGreatHyruleKingdomMapIndex==14 && kMapCount==15 && IsPlayableMap(14) && IsIslandMap(14) && IsAuthoredMap(14) && !IsTestMap(14));
+    CHECK(kGreatHyruleKingdomMapIndex==14 && kMapCount==16 && IsPlayableMap(14) && IsIslandMap(14) && IsAuthoredMap(14) && !IsTestMap(14));
     CHECK(kDefaultMapIndex==14 && kSkyloftMapIndex==13 && kMoonfallMapIndex==12 && kKingdomMapIndex==8);   // the main map; the older maps keep their numbers
     CHECK(std::string(MapOf(14).name)=="Great Hyrule Kingdom" && MapOf(14).scene==kHyruleFieldScene);
-    CHECK(std::string(kPoiNames[PoiNameBase(14)])=="Castle Town" && PoiNameBase(14)==294 && PoiNameBase(14)+kNamesPerMap==kPoiNameTotal);
+    CHECK(std::string(kPoiNames[PoiNameBase(14)])=="Castle Town" && PoiNameBase(14)==294 && PoiNameBase(14)+kNamesPerMap==PoiNameBase(15));
     CHECK(std::string(kPoiNames[PoiNameBase(14)+23])=="Death Mountain Trail");
     CHECK(std::string(kPoiNames[PoiNameBase(13)+23])=="Ember Bridge" && PoiNameBase(13)+kNamesPerMap==PoiNameBase(14));
     fortnite::UseTerrainForMap(14);

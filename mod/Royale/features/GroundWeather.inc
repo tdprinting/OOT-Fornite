@@ -165,6 +165,9 @@ bool RaisedFloorAt(float x, float z, float y) {
         case royale::kGreatHyruleKingdomMapIndex:
             for (const auto& b : royale::great_hyrule_kingdom::kBuildings) if (royale::GreatHyruleKingdomInBuilding(b, p, kWall)) return true;
             bare = royale::GreatHyruleKingdomTerrainHeight(p); break;
+        case royale::kHyruleThirdStormMapIndex:
+            for (const auto& b : royale::hyrule_third_storm::kBuildings) if (royale::HyruleThirdStormInBuilding(b, p, kWall)) return true;
+            bare = royale::HyruleThirdStormTerrainHeight(p); break;
         case royale::kKingdomMapIndex:
             for (const auto& b : royale::kingdom::kBuildings) if (royale::KingdomInBuilding(b, p, kWall)) return true;
             bare = royale::KingdomTerrainHeight(p); break;

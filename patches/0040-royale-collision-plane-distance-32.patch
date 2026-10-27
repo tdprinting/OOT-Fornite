@@ -1,0 +1,45 @@
+diff --git a/soh/include/z64bgcheck.h b/soh/include/z64bgcheck.h
+index 9eddbeb..517e4bc 100644
+--- a/soh/include/z64bgcheck.h
++++ b/soh/include/z64bgcheck.h
+@@ -54,8 +54,10 @@ typedef struct {
+     /* 0x08 */ Vec3s normal; // Unit normal vector
+                              // Value ranges from -0x7FFF to 0x7FFF, representing -1.0 to 1.0; 0x8000 is invalid
+ 
+-    /* 0x0E */ s16 dist; // Plane distance from origin along the normal
+-} CollisionPoly; // size = 0x18 (OOT Royale: 32-bit vertex numbers)
++    // OOT Royale: 32 bit (was s16). A tilted wall far from the origin has |dist| up to |x|+|z|, past 32767 on a world-wide map
++    // (Hyrule Before the Third Storm reaches +-32400 on both axes, so a corner wall needs about 45800).
++    s32 dist; // Plane distance from origin along the normal
++} CollisionPoly; // size = 0x1C (OOT Royale: 32-bit vertex numbers and plane distance)
+ 
+ typedef struct {
+     /* 0x00 */ u16 cameraSType;
+diff --git a/soh/soh/resource/importer/CollisionHeaderFactory.cpp b/soh/soh/resource/importer/CollisionHeaderFactory.cpp
+index a9c88bb..c633d4a 100644
+--- a/soh/soh/resource/importer/CollisionHeaderFactory.cpp
++++ b/soh/soh/resource/importer/CollisionHeaderFactory.cpp
+@@ -55,7 +55,7 @@ ResourceFactoryBinaryCollisionHeaderV0::ReadResource(std::shared_ptr<Ship::File>
+         polygon.normal.y = reader->ReadUInt16();
+         polygon.normal.z = reader->ReadUInt16();
+ 
+-        polygon.dist = reader->ReadUInt16();
++        polygon.dist = static_cast<int16_t>(reader->ReadUInt16());   // OOT Royale: the ROM's s16, sign-extended into the 32-bit field
+ 
+         collisionHeader->polygons.push_back(polygon);
+     }
+diff --git a/soh/soh/resource/type/CollisionHeader.h b/soh/soh/resource/type/CollisionHeader.h
+index 509c757..a8ada37 100644
+--- a/soh/soh/resource/type/CollisionHeader.h
++++ b/soh/soh/resource/type/CollisionHeader.h
+@@ -24,8 +24,8 @@ typedef struct {
+     /* 0x08 */ Vec3s normal; // Unit normal vector
+                              // Value ranges from -0x7FFF to 0x7FFF, representing -1.0 to 1.0; 0x8000 is invalid
+ 
+-    /* 0x0E */ s16 dist; // Plane distance from origin along the normal
+-} CollisionPoly;         // size = 0x18 (OOT Royale: 32-bit vertex numbers)
++    s32 dist; // OOT Royale: 32 bit, as in z64bgcheck.h. Plane distance from origin along the normal
++} CollisionPoly;         // size = 0x1C (OOT Royale: 32-bit vertex numbers and plane distance)
+ 
+ typedef struct {
+     /* 0x00 */ s16 xMin;

@@ -26,7 +26,7 @@ static float CollisionRay(const fortnite::Mesh& mesh,P3 from,P3 to) {
     return nearest;
 }
 int main() {
-    CHECK(kMapCount==15 && kPlayableMapCount==12 && IsPlayableMap(kConvergenceMapIndex));
+    CHECK(kMapCount==16 && kPlayableMapCount==13 && IsPlayableMap(kConvergenceMapIndex));
     CHECK(!IsPlayableMap(kSandboxMapIndex) && kSandboxMapIndex==6 && kFortniteMapIndex==5);
     fortnite::UseTerrainForMap(kConvergenceMapIndex);
     auto collision=fortnite::BuildCollision();

@@ -10,7 +10,8 @@ constexpr size_t kRiftlandsPoolCount = sizeof(royale::riftlands::kPools)/sizeof(
 constexpr size_t kMoonfallPoolCount = sizeof(royale::moonfall::kPools)/sizeof(royale::moonfall::kPools[0]);
 constexpr size_t kSkyloftPoolCount = sizeof(royale::skyloft::kPools)/sizeof(royale::skyloft::kPools[0]);
 constexpr size_t kGreatHyruleKingdomPoolCount = sizeof(royale::great_hyrule_kingdom::kPools)/sizeof(royale::great_hyrule_kingdom::kPools[0]);
-constexpr size_t kMaxPoolCount = std::max({kRiftlandsPoolCount, kMoonfallPoolCount, kSkyloftPoolCount, kGreatHyruleKingdomPoolCount});   // the most raised pools any map has
+constexpr size_t kHyruleThirdStormPoolCount = royale::hyrule_third_storm::kPoolCount;
+constexpr size_t kMaxPoolCount = std::max({kRiftlandsPoolCount, kMoonfallPoolCount, kSkyloftPoolCount, kGreatHyruleKingdomPoolCount, kHyruleThirdStormPoolCount});   // the most raised pools any map has
 WaterBox gFortniteWater[1+kMaxPoolCount];
 CollisionHeader gFortniteHeader;
 bool gFortniteBuilt = false;
@@ -86,6 +87,16 @@ CollisionHeader* FortniteHeader() {
             gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
         }
     }
+    if (fn::gTerrainMapId == royale::kHyruleThirdStormMapIndex) {
+        constexpr int n = sizeof(royale::hyrule_third_storm::kSurfaces) / sizeof(royale::hyrule_third_storm::kSurfaces[0]);
+        static_assert(n <= 16, "surface table");
+        for (int i = 0; i < n; i++) {
+            const auto& sf = royale::hyrule_third_storm::kSurfaces[i];
+            gFortniteSurface[i] = {};
+            gFortniteSurface[i].data[0] = sf.climb ? (4u << 21) : 0u;
+            gFortniteSurface[i].data[1] = static_cast<u32>(sf.sfx) | (sf.hook ? (1u << 17) : 0u);
+        }
+    }
     gFortniteCam[0] = {};
     gFortniteCam[0].cameraSType = CAM_SET_NORMAL0;
     gFortniteCam[0].numCameras = 0;
@@ -152,6 +163,16 @@ CollisionHeader* FortniteHeader() {
         }
         gFortniteWater[count++]=ocean;gFortniteHeader.numWaterBoxes=count;
     }
+    if(fn::gTerrainMapId == royale::kHyruleThirdStormMapIndex) {   // no sea: only its lakes, rivers and pools. (A box over the whole map
+        int count=0;                                                // would not fit: a water box's size is s16 and the map is 64800 across.)
+        for(const auto& pool:royale::hyrule_third_storm::kPools) {
+            auto& b=gFortniteWater[count++]; b={};
+            b.xMin=static_cast<s16>(pool.x0); b.zMin=static_cast<s16>(pool.z0);
+            b.xLength=static_cast<s16>(std::min(32767.0f,pool.x1-pool.x0)); b.zLength=static_cast<s16>(std::min(32767.0f,pool.z1-pool.z0));
+            b.ySurface=static_cast<s16>(pool.y); b.properties=0x3Fu<<13;
+        }
+        gFortniteHeader.numWaterBoxes=count;
+    }
     gFortniteHeader.waterBoxes = gFortniteWater;
     gFortniteBuilt = true;
     return &gFortniteHeader;
@@ -187,7 +208,9 @@ extern "C" s32 Royale_HideRooms(void) { return gFortniteScene && gPlayState != n
 // engine::kFarClipMax); 0, as on every map so far, keeps the scene's own value.
 float gMapFarClip = 0.0f;
 extern "C" f32 Royale_FarClip(s16 sceneFar) {
-    return std::max(static_cast<float>(sceneFar), std::min(gMapFarClip, royale::engine::kFarClipMax));
+    // Hyrule Before the Third Storm is 64800 units across: its far meshes are drawn out to kFarClip.
+    const float wanted = gFortniteScene && royale::fortnite::gTerrainMapId == royale::kHyruleThirdStormMapIndex ? royale::hyrule_third_storm::kFarClip : gMapFarClip;
+    return std::max(static_cast<float>(sceneFar), std::min(wanted, royale::engine::kFarClipMax));
 }
 
 namespace {

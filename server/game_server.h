@@ -10,6 +10,7 @@
 #include "../shared/moonfall_layout.h"
 #include "../shared/skyloft_layout.h"
 #include "../shared/great_hyrule_kingdom_layout.h"
+#include "../shared/hyrule_third_storm_layout.h"
 #include "../shared/island_anchors.h"
 #include "../shared/placement.h"
 #include <algorithm>
@@ -97,6 +98,7 @@ class GameServer {
         const bool moonfallMap = ClampMap(mapId) == kMoonfallMapIndex;
         const bool skyloftMap = ClampMap(mapId) == kSkyloftMapIndex;
         const bool greatHyruleMap = ClampMap(mapId) == kGreatHyruleKingdomMapIndex;
+        const bool thirdStormMap = ClampMap(mapId) == kHyruleThirdStormMapIndex;
         const bool kingdomMap = ClampMap(mapId) == kKingdomMapIndex;
         if (convergenceMap) {
             auto original = valid;
@@ -127,6 +129,11 @@ class GameServer {
             auto original = valid;
             valid = [original](Vec2 p) { return GreatHyruleKingdomPlacementValid(p) && (!original || original(p)); };
             if (!height) height = [](Vec2 p, float* y) { float s; *y = GreatHyruleKingdomLootHeightAt(p, &s) ? s : GreatHyruleKingdomGroundHeight(p); return true; };
+        }
+        if (thirdStormMap) {
+            auto original = valid;
+            valid = [original](Vec2 p) { return HyruleThirdStormPlacementValid(p) && (!original || original(p)); };
+            if (!height) height = [](Vec2 p, float* y) { float s; *y = HyruleThirdStormLootHeightAt(p, &s) ? s : HyruleThirdStormGroundHeight(p); return true; };
         }
         lastLootCount = lootCount;
         lootCount = static_cast<int>(static_cast<float>(lootCount) * (std::max)(1.0f, (std::min)(1.9f, (map.radius * map.radius) / (4800.0f * 4800.0f))));   // a huge map gets more chests, so they are still found
@@ -225,6 +232,17 @@ class GameServer {
                 }
             };
             plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
+        } else if (thirdStormMap) {
+            layout = GenerateHyruleThirdStormLayout(valid);   // the chests of the Blender markers (tools/maps/hyrule_third_storm); nothing is generated
+            props = layout.props;
+            const Ground ground(valid, height);
+            const AnchorExtraFn authored = [](const Circle& m, std::vector<LootAnchor>& anchors, std::vector<Circle>&) {
+                for (const auto& b : hyrule_third_storm::kBuildings) {
+                    const float dx = b.x - m.center.x, dz = b.z - m.center.z, d = (std::max)(1.0f, std::hypot(dx, dz));
+                    anchors.push_back({{b.x, b.z}, AnchorKind::Scenery, {dx / d, dz / d}, (std::max)(b.halfWidth, b.halfDepth) + 70.0f});
+                }
+            };
+            plan = std::make_shared<LootPlan>(MakeLootPlan(map, ground, props, {}, FindTerrainFeatures(map, ground), authored));
         } else {
             // Camps, scenery in clusters, formations, outposts, climbs, lookouts: each tied to the ground and to each other (shared/placement.h).
             AnchorExtraFn island;
@@ -243,11 +261,12 @@ class GameServer {
         if(moonfallMap) { std::vector<Vec2> stations; for(const auto& p:moonfall::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
         else if(skyloftMap) { std::vector<Vec2> stations; for(const auto& p:skyloft::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
         else if(greatHyruleMap) { std::vector<Vec2> stations; for(const auto& p:great_hyrule_kingdom::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
+        else if(thirdStormMap) { std::vector<Vec2> stations; for(const auto& p:hyrule_third_storm::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
         else if(riftlandsMap) { std::vector<Vec2> stations; for(const auto& p:riftlands::kAllyStations) stations.push_back({p.x,p.z}); sim.match.SetAllySpots(std::move(stations)); }
         else sim.match.SetAllySpots(GenerateAllySpots(seed, map, layout.pois, valid));
         // A small map cannot hold five mini bosses: about one for every 1700 units of radius squared.
         // The Fortnite Map's island is the biggest place and its towns have guards of their own: three more mini bosses (when there are any).
-        const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap || riftlandsMap || moonfallMap || skyloftMap || greatHyruleMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
+        const int bosses = sandboxMap ? 0 : (convergenceMap || kingdomMap || riftlandsMap || moonfallMap || skyloftMap || greatHyruleMap || thirdStormMap) && bossCount > 0 ? 7 : bossCount > 0 && ClampMap(mapId) == kFortniteMapIndex ? bossCount + 3 : bossCount;
         sim.match.SetBossCount((std::min)(bosses, (std::max)(1, static_cast<int>(map.radius * map.radius / (1700.0f * 1700.0f)))));
         sim.match.SetMajorBoss(majorBoss && !sandboxMap);
         sim.match.SetNoveltyAllies(noveltyAllies || sandboxMap);
@@ -330,6 +349,19 @@ class GameServer {
                 for (const auto& site : great_hyrule_kingdom::kLootSites)
                     if (site.y > GreatHyruleKingdomGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
             }
+            if (thirdStormMap) {   // no sea: its lakes, rivers and pools (one box each), floors above the ground, the climbable cliffs and ivy
+                for(const auto& pool:hyrule_third_storm::kPools) grid->AddWater(pool.y,30.0f,[pool](Vec2 p) { return p.x>=pool.x0 && p.x<=pool.x1 && p.z>=pool.z0 && p.z<=pool.z1 && HyruleThirdStormGroundHeight(p)<pool.y-15.0f; });
+                grid->SetClimbing(true);
+                std::vector<NavGrid::UpperNode> nodes;
+                for (const auto& n : hyrule_third_storm::kUpperNodes) nodes.push_back({static_cast<float>(n.x), static_cast<float>(n.z), static_cast<float>(n.y)});
+                grid->AddUpper(nodes);
+                for (const auto& cw : hyrule_third_storm::kClimbWalls) {
+                    const float nx = cw.nx / 100.0f, nz = cw.nz / 100.0f;
+                    grid->AddClimb({cw.x + nx * 50.0f, cw.z + nz * 50.0f}, static_cast<float>(cw.y0), {cw.x - nx * 45.0f, cw.z - nz * 45.0f}, static_cast<float>(cw.y1));
+                }
+                for (const auto& site : hyrule_third_storm::kLootSites)
+                    if (site.y > HyruleThirdStormGroundHeight({site.x, site.z}) + 90.0f) grid->MarkUpper({site.x, site.z}, site.y);
+            }
             grid->BuildRegions();
             sim.bots.SetNav(grid);
             sim.match.SetNav(grid);   // the bosses find their way around with it too
@@ -353,8 +385,8 @@ class GameServer {
             sim.match.SetVehicleCount(vehicleCount < 0 ? VehicleCountFor(map.radius) : vehicleCount);
             sim.match.SetVehicleSpots(VehicleSpots(layout.pois, map, seed));
             if (plan) sim.match.SetLootPlan(*plan);
-            const bool authoredMap = riftlandsMap || moonfallMap || skyloftMap || greatHyruleMap;
-            sim.match.RegenerateLoot(authoredMap ? 0 : lootCount, 0.15f, (moonfallMap || skyloftMap || greatHyruleMap) ? 190 : 0); // the authored maps: a chest on every authored site; Moonfall, Skyloft and Great Hyrule Kingdom also get floor weapons beside them
+            const bool authoredMap = riftlandsMap || moonfallMap || skyloftMap || greatHyruleMap || thirdStormMap;
+            sim.match.RegenerateLoot(authoredMap ? 0 : lootCount, 0.15f, (moonfallMap || skyloftMap || greatHyruleMap) ? 190 : thirdStormMap ? 320 : 0); // the authored maps: a chest on every authored site; Moonfall, Skyloft and Great Hyrule Kingdom also get floor weapons beside them
         }
         for (uint32_t id : humans) sim.match.AddHuman(id);
         mapCircle = map;
@@ -363,6 +395,7 @@ class GameServer {
         if(moonfallMap) { std::vector<Vec2> carts; for(const auto& p:moonfall::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
         else if(skyloftMap) { std::vector<Vec2> carts; for(const auto& p:skyloft::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
         else if(greatHyruleMap) { std::vector<Vec2> carts; for(const auto& p:great_hyrule_kingdom::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
+        else if(thirdStormMap) { std::vector<Vec2> carts; for(const auto& p:hyrule_third_storm::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
         else if(riftlandsMap) { std::vector<Vec2> carts; for(const auto& p:riftlands::kCartStations) carts.push_back({p.x,p.z}); sim.match.SetVehicleSpots(std::move(carts)); }
         cfg.mapId = static_cast<uint8_t>(mapId);
         cfg.map = map;

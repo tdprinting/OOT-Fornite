@@ -64,6 +64,8 @@ jobs:
         run: python3 scripts/test_skyloft_authoring.py
       - name: Validate Great Hyrule Kingdom map (scale, doors, chests, reachability)
         run: python3 scripts/test_great_hyrule_kingdom_authoring.py
+      - name: Validate Hyrule Before the Third Storm map (places, chests on floors, water, collision, drawing)
+        run: python3 scripts/test_hyrule_third_storm_authoring.py
       - name: Validate water draw allocation bounds
         run: python3 scripts/test_water_draw_buffers.py
       - name: Build and test with UBSan

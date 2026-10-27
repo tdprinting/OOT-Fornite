@@ -134,12 +134,14 @@ bool AHasTarget() { return MessageBoxUp() || NearestLootIndex() != kNoLoot || Ne
 
 // The wheel's controller side. Runs before the game reads the controller each frame, so while the wheel is up the stick and buttons
 // choose an emote instead of moving Link.
+bool MapDebugInput(Input& in);   // MapDebug.inc: with the map debug view on, L + D-pad teleports between places and problem spots
 void OnEmoteWheelInput() {
     if (WarMenuOpen()) return;
     if (gPlayState == nullptr || !gSession.Joined() || !InGame()) { if (gWheel.open) CloseEmoteWheel(); return; }
     Input& in = gPlayState->state.input[0];
     const royale::HudState hud = gSession.Hud();
     if (MatchUiInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // the death card or the end screen has the controller
+    if (MapDebugInput(in)) { if (gWheel.open) CloseEmoteWheel(); return; }
     if (SquadInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // knocked down: the controller only crawls and pings
     if (CartInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }   // riding: the controller drives the cart
     if (BusInput(in, hud)) { if (gWheel.open) CloseEmoteWheel(); return; }    // on the Moonfall Bus or falling from it: A jumps, C-Right honks

@@ -14,6 +14,7 @@
 #include "../shared/moonfall_data.h"
 #include "../shared/skyloft_data.h"
 #include "../shared/great_hyrule_kingdom_data.h"
+#include "../shared/hyrule_third_storm_data.h"
 #include "../shared/placement.h"
 #include "../shared/props.h"
 #include "../shared/replay.h"
@@ -1891,6 +1892,10 @@ class Match {
             }
             if (mapId == kGreatHyruleKingdomMapIndex) {
                 for (const auto& region : great_hyrule_kingdom::kBossSites)
+                    if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
+            }
+            if (mapId == kHyruleThirdStormMapIndex) {
+                for (const auto& region : hyrule_third_storm::kBossSites)
                     if (region.boss >= 0 && Distance(at,{region.x,region.z}) < 1.0f) b.kind = static_cast<BossKind>(region.boss);
             }
             b.home = b.pos = at;

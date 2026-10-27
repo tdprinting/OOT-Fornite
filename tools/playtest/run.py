@@ -38,7 +38,8 @@ DEFAULT_RUNS = Path(os.environ.get("ROYALE_PLAYTEST_HOME", Path.home() / ".cache
 
 MAPS = {0: "Hyrule Field", 1: "Lake Hylia", 2: "Kakariko", 3: "Death Mountain Crater", 4: "Desert Colossus", 5: "Fortnite Map",
         6: "Sandbox", 7: "Hyrule Convergence", 8: "Hyrule Kingdom", 9: "Mini Boss Arena", 10: "Main Boss Arena", 11: "Hyrule Riftlands",
-        12: "Moonfall Isle", 13: "Skyloft Isles", 14: "Great Hyrule Kingdom"}
+        12: "Moonfall Isle", 13: "Skyloft Isles", 14: "Great Hyrule Kingdom",
+        15: "Hyrule Before the Third Storm"}
 TEST_MAPS = {6, 9, 10}
 REG = "gSettings.Royale."
 
@@ -65,7 +66,7 @@ for _id in MAPS:
 # Performance: game updates per second (20 is full speed) and where the game thread's time goes, sampled with perf.
 SCENARIOS["perf-lobby"] = "ingame; wait:5; prof:15; quit"
 SCENARIOS["perf-regular"] = "ingame; regular; warp:57; wait:10; prof:15; quit"
-for _id in (8, 12, 13):
+for _id in (8, 12, 13, 15):
     SCENARIOS[f"perf-{_id}"] = f"ingame; hostbots:{_id}; state:Drop; jump; state:InMatch; wait:10; prof:20; quit"
 
 # One main map in depth (Moonfall Isle): a whole bot match with screenshots and state checks every minute of game time.
@@ -89,6 +90,22 @@ SCENARIOS["look-8"] = ("ingame; host:8; wait:5; jump; wait:25; "
                        "tp:0,1150,180; wait:4; shot:k-clock-town; check; tp:-2150,2350,-90; wait:4; shot:k-lake-shore; check; "
                        "tp:-2950,2150,0; wait:4; shot:k-stilts; check; tp:-4700,4900,-135; wait:4; shot:k-docks-sea; check; "
                        "tp:620,640,90; wait:4; shot:k-house; check; tp:350,-230,-90; wait:4; shot:k-river; check; quit")
+
+# Hyrule Before the Third Storm: every one of its 24 places with the map debug view on (collision over the map, the floor numbers, the
+# exporter's problem spots), a screenshot and a state check at each; the places are read from the generated data.
+def _third_storm_places():
+    import re
+    data = Path(__file__).resolve().parents[2] / "shared" / "hyrule_third_storm_data.h"
+    try:
+        text = data.read_text(encoding="utf-8")
+        body = text[text.index("kRegions[] = {"):]
+        body = body[:body.index("};")]
+        return re.findall(r'\{"([^"]*)",(-?[\d.]+),(-?[\d.]+),(-?\d+)\}', body)
+    except (OSError, ValueError):
+        return []
+_tour = "".join(f"tp:{float(x):.0f},{float(z):.0f},0; wait:4; shot:ts-{k:02d}; check; " for k, (_, x, z, _) in enumerate(_third_storm_places()))
+SCENARIOS["tour-15"] = f"ingame; cvar:{REG}Debug.MapDebug=1; host:15; wait:5; jump; wait:25; {_tour}quit"
+SCENARIOS["look-15"] = f"ingame; host:15; wait:5; jump; wait:25; {_tour}quit"
 
 SUITES = {
     "smoke": ["boot", "solo-12", "match-12", "loop-12", "skin", "regular"],

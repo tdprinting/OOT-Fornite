@@ -227,6 +227,7 @@ const unsigned char* WarMapPixels(int map) {
     if(map==royale::kMoonfallMapIndex)colours=royale::moonfall::kColours;
     if(map==royale::kSkyloftMapIndex)colours=royale::skyloft::kColours;
     if(map==royale::kGreatHyruleKingdomMapIndex)colours=royale::great_hyrule_kingdom::kColours;
+    if(map==royale::kHyruleThirdStormMapIndex)colours=royale::hyrule_third_storm::Ground().colours.data();
     if(map==royale::kSandboxMapIndex)colours=royale::sandbox::Terrain().colours.data();
     std::shared_ptr<Fast::Texture> original;
     if(!colours) {

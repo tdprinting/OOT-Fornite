@@ -9,6 +9,7 @@ exporters check against are in `shared/engine_limits.h`. "Now" below is after ro
 | Limit | Was | Now | Where |
 |---|---|---|---|
 | Collision vertices per mesh | 8191 (first two corners, 13 bits), 65535 (third) | 536,870,911 (29 bits, all corners) | `z64bgcheck.h` `COLPOLY_VTX_INDEX` |
+| Collision plane distance | s16 (a tilted wall past about 32767 units from the origin overflowed) | s32 (`patches/0040`; ROM scenes are sign-extended on load) | `z64bgcheck.h` `CollisionPoly.dist` |
 | Collision triangles per mesh | 32767 (s16 polygon numbers) | 2,147,483,647 | `z64bgcheck.h` `SSNode`, `z_bgcheck.c` |
 | Collision lookup nodes (our maps) | about 58,000 (0x23000 x 2 bytes; 65535 hard cap); round 1 about 390,000 | about 2.1 million (0x400000 x 4 = 16 MB; 32-bit node numbers) | `BgCheck_Allocate` |
 | Collision lookup grid (our maps) | 32 x 2 x 32 cells; round 1 64 x 4 x 64 | 256 x 8 x 256 cells (about 250 units across on a world-wide map; 6 MB) | `BgCheck_Allocate` |

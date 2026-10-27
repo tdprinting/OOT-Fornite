@@ -241,7 +241,7 @@ bool MapOption(const char* name, bool fallback = true) {
 // Jones / Peter / Master Chief stations. Off, the War Table offers only the release game. Nothing is removed, only hidden.
 bool DevMode() { return CVarGetInteger(CVAR_SETTING("Royale.DevMode"), 0) != 0; }
 // Release battlefields: Great Hyrule Kingdom (the main map) and Moonfall Isle, with Hyrule Kingdom and Skyloft Isles as beta.
-bool ReleaseMap(int id) { return id == royale::kGreatHyruleKingdomMapIndex || id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
+bool ReleaseMap(int id) { return id == royale::kHyruleThirdStormMapIndex || id == royale::kGreatHyruleKingdomMapIndex || id == royale::kMoonfallMapIndex || id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex; }
 std::string MapLabel(int id) {
     std::string s = royale::MapOf(id).name;
     if (!DevMode() && (id == royale::kKingdomMapIndex || id == royale::kSkyloftMapIndex)) s += " (beta)";
@@ -360,7 +360,7 @@ void DrawMinimap(ImDrawList* dl, ImVec2 ds, float scale, const royale::HudState&
     const GameMinimap* gm = gFortniteScene ? nullptr : GameMinimapFor(gPlayState->sceneNum);
     if (gFortniteScene) {   // the island's own picture (its texture), laid over the whole map
         ImTextureID tex = FortniteMinimapTexture();
-        if (tex != nullptr) dl->AddImage(tex, toMap(-royale::fortnite::kHalfX, -royale::fortnite::kHalfZ), toMap(royale::fortnite::kHalfX, royale::fortnite::kHalfZ), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 210));
+        if (tex != nullptr) dl->AddImage(tex, toMap(-royale::fortnite::MapHalfX(), -royale::fortnite::MapHalfZ()), toMap(royale::fortnite::MapHalfX(), royale::fortnite::MapHalfZ()), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 210));
     } else if (gm != nullptr && gMapData != nullptr && owIndex >= 0 && owIndex < 20) {
         const float sx = gMapData->owCompassInfo[owIndex][0], sz = gMapData->owCompassInfo[owIndex][1];
         const float ox = gMapData->owCompassInfo[owIndex][2], oy = gMapData->owCompassInfo[owIndex][3];

@@ -352,11 +352,117 @@ void DrawAuthoredStructures(PlayState* play) {
     CLOSE_DISPS(play->state.gfxCtx);
 }
 
+// ---- Hyrule Before the Third Storm (map 15) ----------------------------------------------------------------------------------------------
+// The map is cut into 4096-unit squares (hyrule_third_storm::kCells per side). A square within kNear of the camera draws its near mesh, the
+// rest their far mesh (the ground and big buildings, cut hard), out to the map's far clip. Each batch is one texture in one square; its
+// vertices go to the renderer in windows of up to 60 shared corners (kWindows, corner numbers in kIndices), not three per triangle.
+struct ThirdStormStats { int nearTris = 0, farTris = 0, batches = 0, nearSquares = 0; uint32_t frame = 0; };
+ThirdStormStats gThirdStormStats;   // last frame's numbers, for the map debug view (MapDebug.inc)
+void DrawHyruleThirdStorm(PlayState* play) {
+    namespace h = royale::hyrule_third_storm;
+    const h::DrawTables& D = h::Draw();   // decoded once, on the first frame on this map
+    const size_t kBatchCount = D.batches.size();
+    struct Cache { std::vector<Vtx> v; std::vector<Gfx> list; uint32_t seen = 0; int tris = 0; };
+    static std::vector<Cache> cache;
+    if (cache.size() != kBatchCount) cache.assign(kBatchCount, Cache{});
+    static std::vector<uint8_t> nearSquare(static_cast<size_t>(h::kCells) * h::kCells, 0);
+    const uint32_t frame = play->state.frames;
+    for (auto& c : cache) if (!c.v.empty() && frame - c.seen > 180) c = Cache{};   // free what has not been seen for 9 seconds
+    auto listFor = [&](size_t i) -> Gfx* {
+        auto& c = cache[i]; c.seen = frame;
+        if (c.list.empty()) {
+            const auto& b = D.batches[i];
+            uint32_t nv = 0, ntri = 0;
+            for (uint32_t w = 0; w < b.windows; ++w) { nv += D.windows[b.firstWindow + w].vertices; ntri += D.windows[b.firstWindow + w].triangles; }
+            c.v.resize(nv);
+            for (uint32_t k = 0; k < nv; ++k) {
+                const auto& s = D.verts[b.firstVertex + k];
+                auto& d = c.v[k].v;
+                d.ob[0] = s.x; d.ob[1] = s.y; d.ob[2] = s.z; d.flag = 0; d.tc[0] = s.s; d.tc[1] = s.t;
+                d.cn[0] = s.r; d.cn[1] = s.g; d.cn[2] = s.b; d.cn[3] = 255;
+            }
+            c.list.resize(b.windows + ntri / 2 + 2 + b.windows);
+            Gfx* p = c.list.data();
+            uint32_t vo = 0, io = b.firstIndex;
+            for (uint32_t w = 0; w < b.windows; ++w) {
+                const auto& win = D.windows[b.firstWindow + w];
+                gSPVertex(p++, reinterpret_cast<uintptr_t>(&c.v[vo]), win.vertices, 0);
+                int t = 0;
+                for (; t + 1 < win.triangles; t += 2, io += 6)
+                    gSP2Triangles(p++, D.index[io], D.index[io + 1], D.index[io + 2], 0, D.index[io + 3], D.index[io + 4], D.index[io + 5], 0);
+                if (t < win.triangles) { gSP1Triangle(p++, D.index[io], D.index[io + 1], D.index[io + 2], 0); io += 3; }
+                vo += win.vertices;
+            }
+            gSPEndDisplayList(p++);
+            c.list.resize(static_cast<size_t>(p - c.list.data()));
+            c.tris = static_cast<int>(ntri);
+        }
+        return c.list.data();
+    };
+    const Vec3f eye = play->view.eye;
+    float fx = play->view.lookAt.x - eye.x, fy = play->view.lookAt.y - eye.y, fz = play->view.lookAt.z - eye.z;
+    const float fl = std::sqrt(fx * fx + fy * fy + fz * fz);
+    if (fl > 1.0f) { fx /= fl; fy /= fl; fz /= fl; } else { fx = 0; fy = -1; fz = 0; }
+    // which squares are near: with a little slack at the edge so a square does not flip back and forth as the camera swings
+    int nearCount = 0;
+    for (int j = 0; j < h::kCells; ++j)
+        for (int i = 0; i < h::kCells; ++i) {
+            const float cx = -h::kHalf + (i + 0.5f) * h::kCell, cz = -h::kHalf + (j + 0.5f) * h::kCell;
+            const float d = std::hypot(cx - eye.x, cz - eye.z) - h::kCell * 0.71f;
+            uint8_t& n = nearSquare[static_cast<size_t>(j) * h::kCells + i];
+            n = d < h::kNear - (n ? -300.0f : 300.0f) ? 1 : 0;
+            nearCount += n;
+        }
+    static std::vector<uint32_t> visible;
+    visible.clear();
+    const float farClip = h::kFarClip;
+    for (size_t i = 0; i < kBatchCount; ++i) {
+        const auto& b = D.batches[i];
+        if ((b.lod == 0) != (nearSquare[b.cell] != 0)) continue;
+        const float dx = b.x - eye.x, dy = b.y - eye.y, dz = b.z - eye.z;
+        if (dx * fx + dy * fy + dz * fz < -static_cast<float>(b.radius)) continue;                     // wholly behind the camera
+        if (dx * dx + dz * dz > (farClip + b.radius) * (farClip + b.radius)) continue;
+        visible.push_back(static_cast<uint32_t>(i));
+    }
+    std::sort(visible.begin(), visible.end(), [&D](uint32_t a, uint32_t b) { return D.batches[a].texture < D.batches[b].texture; });   // one texture load each
+    OPEN_DISPS(play->state.gfxCtx);
+    Gfx_SetupDL_25Opa(play->state.gfxCtx);
+    Matrix_Translate(0, 0, 0, MTXMODE_NEW);
+    gSPMatrix(POLY_OPA_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
+    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);   // the sun is baked in; some walls and cloth are single sheets
+    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
+    static_assert(h::kTextureSize == 256, "256 x 256 RGBA16: mask 8, shift 15 (4096 texture units a repeat, as the other maps)");
+    int loaded = -1;
+    ThirdStormStats st; st.frame = frame; st.nearSquares = nearCount;
+    for (const uint32_t i : visible) {
+        const auto& b = D.batches[i];
+        if (!GfxHasRoom(play, 20)) break;
+        if (loaded != b.texture) {
+            gDPLoadTextureTile(POLY_OPA_DISP++, D.Texture(b.texture), G_IM_FMT_RGBA, G_IM_SIZ_16b, 256, 256, 0, 0, 255, 255, 0,
+                               G_TX_WRAP | G_TX_NOMIRROR, G_TX_WRAP | G_TX_NOMIRROR, 8, 8, 15, 15);
+            loaded = b.texture;
+        }
+        gSPDisplayList(POLY_OPA_DISP++, listFor(i));
+        (b.lod == 0 ? st.nearTris : st.farTris) += cache[i].tris;
+        ++st.batches;
+    }
+    gSPTexture(POLY_OPA_DISP++, 0, 0, 0, G_TX_RENDERTILE, G_OFF);
+    CLOSE_DISPS(play->state.gfxCtx);
+    gThirdStormStats = st;
+}
+void DrawMapDebugWorld(PlayState* play);   // MapDebug.inc: the collision overlay (Debug > MapDebug)
+
 // Draws only the chunks in front of the camera, each in the detail its distance calls for: full up close, half a little further, two triangles
 // per square far away. Open sea costs two triangles a square whatever the distance.
 void FortniteTerrain_Draw(Actor*, PlayState* play) {
     GfxLayer layer(play, GfxLayerId::Terrain);
     if (!layer.Open()) return;
+    if (OnHyruleThirdStormTerrain()) {   // its own ground and everything on it; no island heightfield under it
+        DrawHyruleThirdStorm(play);
+        DrawMapDebugWorld(play);
+        return;
+    }
     namespace fn = royale::fortnite;
     if (!gFortniteGpu.built) BuildFortniteGpu();
     constexpr int kChunk = FortniteGpu::kChunk, kChunks = FortniteGpu::kChunks;

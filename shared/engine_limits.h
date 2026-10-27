@@ -4,7 +4,7 @@
 
 // The engine's size limits as raised for modern phones (Odin 2 Portal and up) by patches/0029-royale-raise-engine-limits.patch,
 // patches/libultraship/0007-raise-renderer-limits.patch and, for world-wide maps, patches/0039-royale-raise-engine-limits-2.patch and
-// patches/libultraship/0013-raise-renderer-limits-2.patch. Map exporters and tests check against these. The old values are in the comments;
+// patches/libultraship/0013-raise-renderer-limits-2.patch (and the 32-bit plane distance of patches/0040). Map exporters and tests check against these. The old values are in the comments;
 // docs/ENGINE_LIMITS.md has the full table.
 namespace royale::engine {
 
@@ -13,6 +13,9 @@ inline constexpr uint32_t kCollisionMaxVertices = (1u << 29) - 1;   // was 8191 
 inline constexpr uint32_t kCollisionMaxPolygons = 0x7FFFFFFF;       // was 32767 (polygon numbers were s16)
 // Collision vertices are still 16-bit positions, as in every OoT scene: the world is -32767 to 32767 units on each axis.
 inline constexpr int kWorldCoordMax = 32767;
+// A collision triangle's plane distance (-(normal . corner)) is 32 bit since patches/0040 (it was s16, so a tilted wall more than about
+// 32767 units from the origin overflowed: a world-wide map's corners reach |x| + |z| = 64800).
+inline constexpr int64_t kCollisionMaxPlaneDist = 2147483647;
 // Our maps' static collision (BgCheck_Allocate): the lookup grid and the room for its lists (8-byte nodes; a triangle is listed once per cell
 // it touches). A map whose triangles touch more than kCollisionMaxListNodes cells in all does not fit.
 inline constexpr int kCollisionGridX = 256, kCollisionGridY = 8, kCollisionGridZ = 256;   // was 64 x 4 x 64

@@ -639,6 +639,7 @@ void DrawEndScreen(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const r
 
 void DrawUnderwaterOverlay(ImDrawList* dl, ImVec2 ds);   // the water section
 void DrawGearReport(ImDrawList* dl, ImFont* font, ImVec2 ds);   // Equipment.inc (Debug > GearReport)
+void DrawMapDebugPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale);   // MapDebug.inc (Debug > MapDebug)
 // The map intro (MapIntro.inc, later in the file): its cards and letterbox, drawn under the loading splash.
 bool DrawMapIntro(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale, const royale::HudState& h);
 void DrawOverlay() {
@@ -653,6 +654,7 @@ void DrawOverlay() {
     DrawUnderwaterOverlay(dl, ds);
     DrawGearReport(dl, font, ds);
     const float scale = std::clamp(ds.y / 720.0f, 0.8f, 2.2f);
+    DrawMapDebugPanel(dl, font, ds, scale);
     const ImU32 white = HudColor(royale::wartable::theme::Ink), gold = HudColor(royale::wartable::theme::Gold),
                 green = IM_COL32(110, 230, 130, 255);
     auto text = [&](float x, float y, ImU32 col, float size, const std::string& t) {

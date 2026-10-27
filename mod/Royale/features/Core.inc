@@ -498,17 +498,18 @@ constexpr DebugSwitch kDebugSwitches[] = {
     { "ItemMaps", "Sword and shield sunlight detail (normal and bump maps)" },
     { "GearReport", "Gear report: show on screen what Link's hands, back and feet draw (off by default)" },
     { "Skins", "Player models: newer bodies for Link on the game's own animations (off: everyone is the game's Link)" },
+    { "MapDebug", "Map debug view: collision drawn over the map, floor and draw numbers, problem spots; L + D-pad teleports (off by default)" },
 };
 constexpr int kDebugCount = static_cast<int>(sizeof(kDebugSwitches) / sizeof(kDebugSwitches[0]));
 enum DebugId { kDbgCarts, kDbgWeather, kDbgStormWall, kDbgFoliage, kDbgCloth, kDbgMusic, kDbgTerrain, kDbgTimeOfDay, kDbgAllies, kDbgBossFx,
-               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport, kDbgSkins };
-static_assert(kDbgSkins + 1 == kDebugCount, "one switch per DebugId");
+               kDbgLoot, kDbgProps, kDbgProjectiles, kDbgMinimap, kDbgWind, kDbgTornado, kDbgSky, kDbgFog, kDbgScenery, kDbgGroundPatches, kDbgWater, kDbgAvriella, kDbgRagdoll, kDbgLobbyFish, kDbgHitFx, kDbgShadows, kDbgItemMaps, kDbgGearReport, kDbgSkins, kDbgMapDebug };
+static_assert(kDbgMapDebug + 1 == kDebugCount, "one switch per DebugId");
 bool gDebugOn[kDebugCount];
 bool gDebugLoaded = false;
 void LoadDebugSwitches() {
     for (int i = 0; i < kDebugCount; i++) {
         const std::string key = std::string(CVAR_SETTING("Royale.Debug.")) + kDebugSwitches[i].key;
-        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport ? 0 : 1) != 0;   // (the gear report is a bug-report aid: off unless asked for)
+        gDebugOn[i] = CVarGetInteger(key.c_str(), i == kDbgGearReport || i == kDbgMapDebug ? 0 : 1) != 0;   // (the gear report and map debug view are aids: off unless asked for)
     }
     gDebugLoaded = true;
 }
@@ -761,6 +762,7 @@ bool OnRiftlandsTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId
 bool OnMoonfallTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kMoonfallMapIndex; }
 bool OnSkyloftTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kSkyloftMapIndex; }
 bool OnGreatHyruleKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kGreatHyruleKingdomMapIndex; }
+bool OnHyruleThirdStormTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kHyruleThirdStormMapIndex; }
 bool OnKingdomTerrain() { return OnIsland() && royale::fortnite::gTerrainMapId==royale::kKingdomMapIndex; }
 
 // Where the floor raycasts start. A match's maps are open to the sky, so from high above; in the regular game's houses, grottos and dungeons, floors
@@ -804,6 +806,12 @@ bool RawFloorAt(float x, float z, float* outY = nullptr) {   // the scene's own 
         if (std::fabs(x)>=royale::fortnite::kHalfX || std::fabs(z)>=royale::fortnite::kHalfZ) return false;
         float lootY;
         if (outY) *outY = royale::GreatHyruleKingdomLootHeightAt({x,z},&lootY) ? lootY : royale::GreatHyruleKingdomGroundHeight({x,z});
+        return true;
+    }
+    if (OnIsland() && gMapId == royale::kHyruleThirdStormMapIndex) {   // its own +-32400 square
+        if (!royale::hyrule_third_storm::HasFloor(x, z)) return false;
+        float lootY;
+        if (outY) *outY = royale::HyruleThirdStormLootHeightAt({x,z},&lootY) ? lootY : royale::HyruleThirdStormGroundHeight({x,z});
         return true;
     }
     if (OnIsland()) return royale::fortnite::GroundHeight(x, z, outY);
@@ -902,7 +910,7 @@ float gMeasuredRadius = 0;
 
 // Water is no place for a chest or a spawn: the surface is above the floor under it.
 bool UnderWater(float x, float z, float floorY) {
-    if (OnIsland()) return std::fabs(x) < royale::fortnite::kHalfX && std::fabs(z) < royale::fortnite::kHalfZ && floorY + 15.0f < royale::fortnite::WaterHeightAt(x,z);
+    if (OnIsland()) return std::fabs(x) < royale::fortnite::MapHalfX() && std::fabs(z) < royale::fortnite::MapHalfZ() && floorY + 15.0f < royale::fortnite::WaterHeightAt(x,z);
     float surface = 0;
     WaterBox* box = nullptr;
     return WaterBox_GetSurface1(gPlayState, &gPlayState->colCtx, x, z, &surface, &box) != 0 && surface > floorY + 15.0f;
@@ -929,6 +937,7 @@ bool WalkableAt(royale::Vec2 p) {
     if (gMapId == royale::kMoonfallMapIndex) return royale::MoonfallPlacementValid(p);
     if (gMapId == royale::kSkyloftMapIndex) return royale::SkyloftPlacementValid(p);
     if (gMapId == royale::kGreatHyruleKingdomMapIndex) return royale::GreatHyruleKingdomPlacementValid(p);
+    if (gMapId == royale::kHyruleThirdStormMapIndex) return royale::HyruleThirdStormPlacementValid(p);
     if (gMapId == royale::kConvergenceMapIndex && royale::ConvergenceObstacleAt(p)) return false;
     if (gMapId == royale::kKingdomMapIndex && royale::KingdomObstacleAt(p)) return false;
     if (gMapId == royale::kRiftlandsMapIndex && royale::RiftlandsObstacleAt(p)) return false;
@@ -943,7 +952,7 @@ bool MeasureField(royale::Circle* out) {
     if (!InField()) return false;
     if (royale::IsTestMap(gMapId) || royale::IsAuthoredMap(gMapId)) {   // authored maps retain their intended storm footprint
         *out = royale::MapOf(gMapId).fallback;
-        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : gMapId == royale::kSkyloftMapIndex ? 100.0f : gMapId == royale::kGreatHyruleKingdomMapIndex ? 260.0f : 0.0f;
+        gMedianFloorY = gMapId == royale::kConvergenceMapIndex ? 60.0f : gMapId == royale::kKingdomMapIndex ? 300.0f : gMapId == royale::kMoonfallMapIndex ? 100.0f : gMapId == royale::kSkyloftMapIndex ? 100.0f : gMapId == royale::kGreatHyruleKingdomMapIndex ? 260.0f : gMapId == royale::kHyruleThirdStormMapIndex ? 500.0f : 0.0f;
         gMapMeasured = true;
         gMeasuredRadius = out->radius;
         return true;

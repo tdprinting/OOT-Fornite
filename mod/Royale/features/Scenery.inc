@@ -311,8 +311,9 @@ bool BuildSolidMesh(float x, float z, bool force) {
         const bool moonfallMap=OnMoonfallTerrain();
         const bool skyloftMap=OnSkyloftTerrain();
         const bool greatHyruleMap=OnGreatHyruleKingdomTerrain();
+        const bool thirdStormMap=OnHyruleThirdStormTerrain();
         const bool kingdomMap=OnKingdomTerrain();
-        const auto chosen=greatHyruleMap?royale::GreatHyruleKingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):skyloftMap?royale::SkyloftCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):moonfallMap?royale::MoonfallCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):riftlandsMap?royale::RiftlandsCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):kingdomMap?royale::KingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
+        const auto chosen=thirdStormMap?royale::HyruleThirdStormCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):greatHyruleMap?royale::GreatHyruleKingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):skyloftMap?royale::SkyloftCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):moonfallMap?royale::MoonfallCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):riftlandsMap?royale::RiftlandsCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):kingdomMap?royale::KingdomCollidersNear(x,player?player->actor.world.pos.y:0,z,limit):royale::ConvergenceCollidersNear(x,player?player->actor.world.pos.y:0,z,limit);
         std::vector<uint64_t> keys;
         for(size_t i:chosen) keys.push_back((1ull<<62)|i);
         std::sort(keys.begin(),keys.end());
@@ -322,7 +323,7 @@ bool BuildSolidMesh(float x, float z, bool force) {
         // Keep a valid header even where there are no nearby objects.
         b.V(-10,-10000,-10);b.V(10,-10000,-10);b.V(0,-10000,10);
         b.T(0,1,2,{0,-10010,0},0,0);
-        for(size_t i:chosen) { if(greatHyruleMap) b.Box(royale::great_hyrule_kingdom::kPropColliders[i]); else if(skyloftMap) b.Box(royale::skyloft::kPropColliders[i]); else if(moonfallMap) b.Box(royale::moonfall::kPropColliders[i]); else if(riftlandsMap) b.Box(royale::riftlands::kPropColliders[i]); else if(kingdomMap) b.Box(royale::kingdom::kPropColliders[i]); else b.Box(royale::convergence::kPropColliders[i]); }
+        for(size_t i:chosen) { if(thirdStormMap) b.Box(royale::hyrule_third_storm::kPropColliders[i]); else if(greatHyruleMap) b.Box(royale::great_hyrule_kingdom::kPropColliders[i]); else if(skyloftMap) b.Box(royale::skyloft::kPropColliders[i]); else if(moonfallMap) b.Box(royale::moonfall::kPropColliders[i]); else if(riftlandsMap) b.Box(royale::riftlands::kPropColliders[i]); else if(kingdomMap) b.Box(royale::kingdom::kPropColliders[i]); else b.Box(royale::convergence::kPropColliders[i]); }
         gSolidHeader={};gSolidHeader.numVertices=static_cast<u32>(b.nv);gSolidHeader.vtxList=gSolidVtx;
         gSolidHeader.numPolygons=static_cast<u32>(b.np);gSolidHeader.polyList=gSolidPoly;gSolidHeader.surfaceTypeList=gSolidSurfaces;
         Vec3s lo=gSolidVtx[0],hi=lo;

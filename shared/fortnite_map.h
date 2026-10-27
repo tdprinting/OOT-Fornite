@@ -9,6 +9,7 @@
 #include "moonfall_data.h"
 #include "skyloft_data.h"
 #include "great_hyrule_kingdom_data.h"
+#include "hyrule_third_storm_ground.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -87,11 +88,23 @@ inline void UseTerrainForMap(int mapId) {
         gHeightData = great_hyrule_kingdom::kHeights; gColourData = great_hyrule_kingdom::kColours; gCoverData = great_hyrule_kingdom::kCover;
         gSpawnX = great_hyrule_kingdom::kSpawnX; gSpawnZ = great_hyrule_kingdom::kSpawnZ;
     }
+    if (mapId == 15) {   // Hyrule Before the Third Storm (map.h kHyruleThirdStormMapIndex): its tables cover its own +-32400 square
+        gHeightData = hyrule_third_storm::kHeights; gColourData = hyrule_third_storm::Ground().colours.data(); gCoverData = hyrule_third_storm::kCover;
+        gSpawnX = hyrule_third_storm::kSpawnX; gSpawnZ = hyrule_third_storm::kSpawnZ;
+    }
 }
+// The square the current map covers: the island's for every map but Hyrule Before the Third Storm, which is 4.4 times as wide.
+inline float MapHalfX() { return gTerrainMapId == 15 ? hyrule_third_storm::kHalf : kHalfX; }
+inline float MapHalfZ() { return gTerrainMapId == 15 ? hyrule_third_storm::kHalf : kHalfZ; }
 inline int VertexHeight(int i, int j) { return gHeightData[std::clamp(j, 0, kCells) * kVerts + std::clamp(i, 0, kCells)]; }
 
 // Ground height under (x, z), exactly on the collision's triangles. False outside the map (there is nothing there).
 inline bool GroundHeight(float x, float z, float* y) {
+    if (gTerrainMapId == 15) {   // its walk grid: the floor you would stand on
+        if (!hyrule_third_storm::HasFloor(x, z)) return false;
+        if (y) *y = hyrule_third_storm::GroundY(x, z);
+        return true;
+    }
     if (x <= -kHalfX || x >= kHalfX || z <= -kHalfZ || z >= kHalfZ) return false;
     const float fx = (x + kHalfX) / kCellX, fz = (z + kHalfZ) / kCellZ;
     const int i = std::min(kCells - 1, static_cast<int>(fx)), j = std::min(kCells - 1, static_cast<int>(fz));
@@ -102,6 +115,7 @@ inline bool GroundHeight(float x, float z, float* y) {
     return true;
 }
 inline float WaterHeightAt(float x,float z) {
+    if(gTerrainMapId==15) return hyrule_third_storm::WaterY(x,z);
     if(gTerrainMapId==11) for(const auto& b:riftlands::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
     if(gTerrainMapId==12) for(const auto& b:moonfall::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
     if(gTerrainMapId==13) for(const auto& b:skyloft::kPools) if(x>=b.x0&&x<=b.x1&&z>=b.z0&&z<=b.z1) return b.y;
@@ -114,6 +128,7 @@ inline bool IsWaterAt(float x, float z) {
 }
 // How steep the ground is at (x, z): the up part of its triangle's normal (1 is flat). 0 outside the map.
 inline float GroundUp(float x, float z) {
+    if (gTerrainMapId == 15) return hyrule_third_storm::GroundUp(x, z);
     if (x <= -kHalfX || x >= kHalfX || z <= -kHalfZ || z >= kHalfZ) return 0.0f;
     const float fx = (x + kHalfX) / kCellX, fz = (z + kHalfZ) / kCellZ;
     const int i = std::min(kCells - 1, static_cast<int>(fx)), j = std::min(kCells - 1, static_cast<int>(fz));
@@ -139,7 +154,7 @@ inline Cover CoverAt(float x, float z) {
 
 struct Vert { int16_t x, y, z; };
 // One triangle the way the game stores it: three vertex numbers, the unit normal times 32767 (always pointing up) and the plane distance.
-struct Poly { uint32_t a, b, c; int16_t nx, ny, nz, dist; uint8_t surface = 0; };   // surface: an index into the map's table (0 plain ground)
+struct Poly { uint32_t a, b, c; int16_t nx, ny, nz; int32_t dist; uint8_t surface = 0; };   // surface: an index into the map's table (0 plain ground); dist is 32 bit (patches/0040)
 struct Mesh {
     std::vector<Vert> verts;
     std::vector<Poly> polys;
@@ -210,6 +225,20 @@ inline Mesh BuildCollision() {
         }
         return m;
     }
+    if (gTerrainMapId == 15) {   // Hyrule Before the Third Storm: the drawn ground and buildings themselves, a surface per triangle
+        const auto& g = hyrule_third_storm::Ground();   // decoded from the generated tables on first use
+        m.verts.reserve(g.verts.size());
+        m.polys.reserve(g.tris.size());
+        for (const auto& v : g.verts) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : g.tris) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
+        if (m.verts.empty()) m.verts.push_back({0,-30000,0});
+        m.lo = m.hi = m.verts.front();
+        for (const auto& v : m.verts) {
+            m.lo = {std::min(m.lo.x,v.x),std::min(m.lo.y,v.y),std::min(m.lo.z,v.z)};
+            m.hi = {std::max(m.hi.x,v.x),std::max(m.hi.y,v.y),std::max(m.hi.z,v.z)};
+        }
+        return m;
+    }
     if (gTerrainMapId == 14) {   // Great Hyrule Kingdom: the same baked mesh layout as Moonfall
         for (const auto& v : great_hyrule_kingdom::kCollisionVertices) m.verts.push_back({v.x,v.y,v.z});
         for (const auto& p : great_hyrule_kingdom::kCollisionTriangles) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
@@ -240,7 +269,7 @@ inline Mesh BuildCollision() {
         Poly p;
         p.a = static_cast<uint32_t>(a); p.b = static_cast<uint32_t>(b); p.c = static_cast<uint32_t>(c);
         p.nx = static_cast<int16_t>(std::lround(nx * 32767.0)); p.ny = static_cast<int16_t>(std::lround(ny * 32767.0)); p.nz = static_cast<int16_t>(std::lround(nz * 32767.0));
-        p.dist = static_cast<int16_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
+        p.dist = static_cast<int32_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
         m.polys.push_back(p);
     };
     for (int j = 0; j < kCells; j++)
@@ -255,7 +284,7 @@ inline Mesh BuildCollision() {
         Poly p;
         p.a = static_cast<uint32_t>(a); p.b = static_cast<uint32_t>(b); p.c = static_cast<uint32_t>(c);
         p.nx = static_cast<int16_t>(std::lround(nx * 32767.0)); p.ny = static_cast<int16_t>(std::lround(ny * 32767.0)); p.nz = static_cast<int16_t>(std::lround(nz * 32767.0));
-        p.dist = static_cast<int16_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
+        p.dist = static_cast<int32_t>(std::lround(-(nx * P.x + ny * P.y + nz * P.z)));
         m.polys.push_back(p);
     };
     int made = 0;

@@ -38,6 +38,7 @@
 | Android updater UI | `Updater.inc` |
 | Dynamic lighting, shadows, graphics menu registration | `Lighting.inc` |
 | Engine collision exports and native menu bridge | `EngineBridge.inc` |
+| Map debug view (Debug > MapDebug, off by default): the engine's collision drawn over the map, floor/draw/frame numbers, the exporter's problem spots, L + D-pad teleport (`docs/HYRULE_THIRD_STORM.md`) | `MapDebug.inc` |
 | Crash context: mod state snapshot and change breadcrumbs for `royale-crash.txt` and `royale-trace.txt` (ring buffer `Crumb` in `Core.inc`, handler in `MusicDiagnostics.inc`; `docs/BUILDING.md`) | `CrashContext.inc` |
 | Automated playtest driver: runs a step script from the `ROYALE_AUTOTEST` environment variable (boot, host maps, bus jump, scene tour, checks) for `tools/playtest/`; inert otherwise (`docs/PLAYTEST.md`) | `AutoTest.inc` |
 
@@ -58,4 +59,5 @@ The split reduces the amount of code an agent must read; it does not reduce comp
 - Hyrule Riftlands map: `docs/HYRULE_RIFTLANDS.md`; authoring `tools/maps/riftlands/`; generated `shared/riftlands_*`; concept and prop specs `map-concepts/hyrule-riftlands/`.
 - Moonfall Isle map (ID 12): `docs/MOONFALL_ISLE.md`; authoring `tools/maps/moonfall/`; generated `shared/moonfall_*`.
 - Skyloft Isles map (ID 13): `docs/SKYLOFT.md`; authoring `tools/maps/skyloft/`; generated `shared/skyloft_*`.
+- Hyrule Before the Third Storm map (ID 15, the biggest): `docs/HYRULE_THIRD_STORM.md`; Blender source in the map project; authoring `tools/maps/hyrule_third_storm/`; generated `shared/hyrule_third_storm_data.h`/`_model.h`; hand-written `shared/hyrule_third_storm_layout.h`, `_ground.h`; drawn by `DrawHyruleThirdStorm` (`Terrain.inc`).
 - Great Hyrule Kingdom map (the main map, ID 14): `docs/GREAT_HYRULE_KINGDOM.md`; authoring `tools/maps/great_hyrule_kingdom/`; generated `shared/great_hyrule_kingdom_data.h`/`_model.h`; hand-written `shared/great_hyrule_kingdom_layout.h`.
