@@ -62,15 +62,32 @@ int main() {
     CHECK(badPlane == 0);
     CHECK(worstDist <= engine::kCollisionMaxPlaneDist);
     for (const auto& v : mesh.verts) CHECK(std::abs(v.x) <= engine::kWorldCoordMax && std::abs(v.z) <= engine::kWorldCoordMax);
-    // how many lookup nodes the engine will need (a triangle is listed once per grid cell its box touches): must fit BgCheck_Allocate's room
+    // how many lookup nodes the engine will need: a triangle is listed once per grid cell its box touches, each cell reaching
+    // kCollisionCellOverlap past its sides (BgCheck_SetSubdivisionDimension, BgCheck_GetSubdivisionMin/MaxBounds). An upper bound (the
+    // engine skips cells the triangle itself misses); it must fit BgCheck_Allocate's room, or the engine drops triangles from full lists.
     {
-        const float cx = (mesh.hi.x - mesh.lo.x) / float(engine::kCollisionGridX), cy = std::max(1.0f, (mesh.hi.y - mesh.lo.y) / float(engine::kCollisionGridY)), cz = (mesh.hi.z - mesh.lo.z) / float(engine::kCollisionGridZ);
+        const int amount[3] = {engine::kCollisionGridX, engine::kCollisionGridY, engine::kCollisionGridZ};
+        const float lo[3] = {float(mesh.lo.x), float(mesh.lo.y), float(mesh.lo.z)}, hi[3] = {float(mesh.hi.x), float(mesh.hi.y), float(mesh.hi.z)};
+        float len[3];
+        for (int k = 0; k < 3; ++k) len[k] = std::max(float(static_cast<int>((hi[k] - lo[k]) / amount[k]) + 1), engine::kCollisionCellMin);
+        auto cellLo = [&](float v, int k) {
+            const float d = v - lo[k]; int s = static_cast<int>(d / len[k]);
+            if (static_cast<int>(d) % static_cast<int>(len[k]) < engine::kCollisionCellOverlap && s > 0) --s;
+            return std::clamp(s, 0, amount[k] - 1);
+        };
+        auto cellHi = [&](float v, int k) {
+            const float d = v - lo[k]; int s = static_cast<int>(d / len[k]);
+            if (static_cast<int>(len[k]) - engine::kCollisionCellOverlap < static_cast<int>(d) % static_cast<int>(len[k]) && s < amount[k] - 1) ++s;
+            return std::clamp(s, 0, amount[k] - 1);
+        };
         size_t nodes = 0;
         for (const auto& p : mesh.polys) {
             const auto& a = mesh.verts[p.a]; const auto& b = mesh.verts[p.b]; const auto& c = mesh.verts[p.c];
-            auto span = [](int lo, int hi, float o, float cell) { return static_cast<size_t>(std::floor((hi - o) / cell) - std::floor((lo - o) / cell) + 1); };
-            nodes += span(std::min({a.x, b.x, c.x}), std::max({a.x, b.x, c.x}), mesh.lo.x, cx) * span(std::min({a.y, b.y, c.y}), std::max({a.y, b.y, c.y}), mesh.lo.y, cy) *
-                     span(std::min({a.z, b.z, c.z}), std::max({a.z, b.z, c.z}), mesh.lo.z, cz);
+            const float mn[3] = {float(std::min({a.x, b.x, c.x})), float(std::min({a.y, b.y, c.y})), float(std::min({a.z, b.z, c.z}))};
+            const float mx[3] = {float(std::max({a.x, b.x, c.x})), float(std::max({a.y, b.y, c.y})), float(std::max({a.z, b.z, c.z}))};
+            size_t n = 1;
+            for (int k = 0; k < 3; ++k) n *= static_cast<size_t>(cellHi(mx[k], k) - cellLo(mn[k], k) + 1);
+            nodes += n;
         }
         std::printf("  collision: %zu vertices, %zu triangles (%zu need the 32-bit plane distance), about %zu lookup nodes of %zu; built in %.0f ms\n",
                     mesh.verts.size(), mesh.polys.size(), farPlane, nodes, engine::kCollisionMaxListNodes, buildMs);

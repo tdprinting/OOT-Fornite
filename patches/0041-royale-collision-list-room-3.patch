@@ -1,0 +1,69 @@
+diff --git a/soh/src/code/z_bgcheck.c b/soh/src/code/z_bgcheck.c
+index 317b06e..eaa699a 100644
+--- a/soh/src/code/z_bgcheck.c
++++ b/soh/src/code/z_bgcheck.c
+@@ -79,6 +79,9 @@ void SSList_SetNull(SSList* ssList) {
+ void SSNodeList_SetSSListHead(SSNodeList* nodeList, SSList* ssList, s32* polyId) {
+     u32 newNodeId = SSNodeList_GetNextNodeIdx(nodeList);
+ 
++    if (newNodeId == SS_NULL) {
++        return; // OOT Royale: the list is full: drop the poly (see SSNodeList_GetNextNodeIdx)
++    }
+     SSNode_SetValue(&nodeList->tbl[newNodeId], polyId, ssList->head);
+     ssList->head = newNodeId;
+ }
+@@ -490,6 +493,9 @@ void StaticLookup_AddPolyToSSList(CollisionContext* colCtx, SSList* ssList, Coll
+         // if at the end of the list
+         if (curNode->next == SS_NULL) {
+             newNodeId = SSNodeList_GetNextNodeIdx(&colCtx->polyNodes);
++            if (newNodeId == SS_NULL) {
++                return; // OOT Royale: the list is full: drop the poly
++            }
+             SSNode_SetValue(&colCtx->polyNodes.tbl[newNodeId], &polyId, SS_NULL);
+             curNode->next = newNodeId;
+             return;
+@@ -503,6 +509,9 @@ void StaticLookup_AddPolyToSSList(CollisionContext* colCtx, SSList* ssList, Coll
+             polyYMin < vtxList[COLPOLY_VTX_INDEX(polyList[curPolyId].flags_vIB)].y &&
+             polyYMin < vtxList[polyList[curPolyId].vIC].y) {
+             newNodeId = SSNodeList_GetNextNodeIdx(&colCtx->polyNodes);
++            if (newNodeId == SS_NULL) {
++                return; // OOT Royale: the list is full: drop the poly
++            }
+             SSNode_SetValue(&colCtx->polyNodes.tbl[newNodeId], &polyId, curNode->next);
+             curNode->next = newNodeId;
+             return;
+@@ -1588,10 +1597,12 @@ void BgCheck_Allocate(CollisionContext* colCtx, PlayState* play, CollisionHeader
+         extern s32 Royale_IsCustomCollision(CollisionHeader * header);
+         if (Royale_IsCustomCollision(colHeader)) {
+             // OOT Royale (limits for modern phones like the Odin 2 Portal): node numbers are 32 bit now, so this is no longer capped at 65535.
+-            // Round 2 (patches/0039, maps that fill the whole +-32767 world with hundreds of thousands of triangles): 0x400000 is quadrupled
+-            // below to 16 MB, room for about 2 million list nodes (was 0xC0000, 390000). 256 x 8 x 256 cells are about 250 units across on a
+-            // world-wide map (were 64 x 4 x 64, about 1000), so every raycast walks a short list.
+-            colCtx->memSize = 0x400000;
++            // Round 2 (patches/0039, maps that fill the whole +-32767 world with hundreds of thousands of triangles): 256 x 8 x 256 cells are
++            // about 250 units across on a world-wide map (were 64 x 4 x 64, about 1000), so every raycast walks a short list.
++            // Round 3 (patches/0041, Hyrule Before the Third Storm: 325,000 triangles needing up to 1.44 million list nodes): 0x800000 is
++            // quadrupled below to 32 MB of the 160 MB play heap. The 6 MB lookup table comes out of it too, leaving about 3.2 million nodes
++            // (0x400000 left 1.09 million, not the 2 million it was taken for).
++            colCtx->memSize = 0x800000;
+             colCtx->subdivAmount.x = 256;
+             colCtx->subdivAmount.y = 8;
+             colCtx->subdivAmount.z = 256;
+@@ -2495,10 +2506,13 @@ SSNode* SSNodeList_GetNextNode(SSNodeList* this) {
+  * Get next SSNodeList SSNode index
+  */
+ u32 SSNodeList_GetNextNodeIdx(SSNodeList* this) {
+-    u32 new_index = this->count++;
+-
+-    assert(new_index < this->max);
+-    return new_index;
++    // OOT Royale: assert is off in release builds, and a full list used to write past tbl into the lookup table allocated just above it
++    // (a crash later, far from the cause). Now a full list answers SS_NULL and the poly is left out of that cell: a missing floor in one
++    // spot instead of a crash. BgCheck_Allocate leaves room for every map we ship (shared/engine_limits.h kCollisionMaxListNodes).
++    if (this->count >= this->max) {
++        return SS_NULL;
++    }
++    return this->count++;
+ }
+ 
+ /**

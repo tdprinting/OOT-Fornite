@@ -11,7 +11,7 @@ exporters check against are in `shared/engine_limits.h`. "Now" below is after ro
 | Collision vertices per mesh | 8191 (first two corners, 13 bits), 65535 (third) | 536,870,911 (29 bits, all corners) | `z64bgcheck.h` `COLPOLY_VTX_INDEX` |
 | Collision plane distance | s16 (a tilted wall past about 32767 units from the origin overflowed) | s32 (`patches/0040`; ROM scenes are sign-extended on load) | `z64bgcheck.h` `CollisionPoly.dist` |
 | Collision triangles per mesh | 32767 (s16 polygon numbers) | 2,147,483,647 | `z64bgcheck.h` `SSNode`, `z_bgcheck.c` |
-| Collision lookup nodes (our maps) | about 58,000 (0x23000 x 2 bytes; 65535 hard cap); round 1 about 390,000 | about 2.1 million (0x400000 x 4 = 16 MB; 32-bit node numbers) | `BgCheck_Allocate` |
+| Collision lookup nodes (our maps) | about 58,000 (0x23000 x 2 bytes; 65535 hard cap); round 1 about 390,000 | about 3.1 million (0x800000 x 4 = 32 MB less the 6 MB lookup grid; 32-bit node numbers; patches/0041, was 0x400000: 1.09 million); a full list now drops the triangle instead of overwriting the grid | `BgCheck_Allocate` |
 | Collision lookup grid (our maps) | 32 x 2 x 32 cells; round 1 64 x 4 x 64 | 256 x 8 x 256 cells (about 250 units across on a world-wide map; 6 MB) | `BgCheck_Allocate` |
 | Moving / solid-scenery collision (our maps) | 1024 triangles and vertices, 1000 nodes; round 1 8192 | 32768 triangles and vertices, 34816 nodes | `BgCheck_Allocate` |
 | Collision memory, every other scene | memSize x 2 | memSize x 4 (nodes and triangles got bigger; every scene keeps at least its old room) | `BgCheck_Allocate` |

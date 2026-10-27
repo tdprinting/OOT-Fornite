@@ -19,7 +19,12 @@ inline constexpr int64_t kCollisionMaxPlaneDist = 2147483647;
 // Our maps' static collision (BgCheck_Allocate): the lookup grid and the room for its lists (8-byte nodes; a triangle is listed once per cell
 // it touches). A map whose triangles touch more than kCollisionMaxListNodes cells in all does not fit.
 inline constexpr int kCollisionGridX = 256, kCollisionGridY = 8, kCollisionGridZ = 256;   // was 64 x 4 x 64
-inline constexpr size_t kCollisionMaxListNodes = 0x400000 * 4 / 8;                       // about 2.1 million (was about 390000)
+// Each cell reaches kCollisionCellOverlap units past its sides (BGCHECK_SUBDIV_OVERLAP) and is at least kCollisionCellMin long. The room is
+// 32 MB (0x800000 x 4, patches/0041) less the lookup grid (12 bytes a cell) and about 2 MB of moving-collision lists and per-triangle flags.
+inline constexpr int kCollisionCellOverlap = 50;
+inline constexpr float kCollisionCellMin = 150.0f;
+inline constexpr size_t kCollisionLookupBytes = size_t(kCollisionGridX) * kCollisionGridY * kCollisionGridZ * 12;
+inline constexpr size_t kCollisionMaxListNodes = (0x800000 * 4 - kCollisionLookupBytes - 2 * 1024 * 1024) / 8;   // about 3.1 million (was 1.09 million)
 // Moving and solid-scenery collision on our maps (the dyna lists): polygons and vertices.
 inline constexpr int kDynaMaxPolygons = 32768;                                            // was 8192 (1024 originally)
 // Memory the game states may use (z_play.c, z64.h). Pages that are never touched are never backed by real memory.
