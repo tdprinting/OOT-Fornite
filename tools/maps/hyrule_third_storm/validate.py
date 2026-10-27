@@ -93,7 +93,7 @@ def main():
     win = blob(model, "kWindowsB64", "u1").reshape(-1, 2)
     check(win[:, 0].max() <= 128 and win[:, 0].min() >= 3, "a window loads more than 128 vertices")
     batches = blob(model, "kBatchesB64", np.dtype([("fv", "<u4"), ("fw", "<u4"), ("fi", "<u4"), ("w", "<u2"), ("tex", "<u2"), ("x", "<i2"), ("y", "<i2"), ("z", "<i2"), ("r", "<u2"), ("cell", "<u2"), ("lod", "u1")]))
-    check(batches["tex"].max() < int(re.search(r"kTextureCount = (\d+)", model).group(1)), "texture index")
+    check(batches["tex"].max() < int(re.search(r"kTextureCount = (\d+)", data).group(1)), "texture index")
     check(int(batches["fw"][-1]) + int(batches["w"][-1]) <= len(win), "batch windows past the table")
     rep = {"floor_share": round(share, 4), "chests": int(len(loot)), "floor_loot": int(len(floor_sites)), "chests_without_floor": len(bad),
            "pools": int(len(pools)), "collision_vertices": nv, "collision_triangles": int(len(tri)), "plane_dist_over_s16": int((dist > 32767).sum()),

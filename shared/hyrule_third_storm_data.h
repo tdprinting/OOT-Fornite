@@ -7684,4 +7684,9 @@ inline constexpr DebugSpot kDebugSpots[] = {
 };
 inline constexpr float kSpawnX = -5000, kSpawnZ = 1496;   // the lobby: the open Field
 inline constexpr float kFarClip = 46000.0f;   // gMapFarClip on this map
+inline constexpr int kCells = 17;
+inline constexpr float kCell = 4096.0f;
+inline constexpr float kNear = 7000.0f;
+inline constexpr int kTextureSize = 256;
+inline constexpr int kTextureCount = 16;
 }}  // namespace royale::hyrule_third_storm
