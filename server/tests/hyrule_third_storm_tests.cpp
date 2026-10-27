@@ -48,7 +48,7 @@ int main() {
     t0 = std::chrono::steady_clock::now();
     const fortnite::Mesh mesh = fortnite::BuildCollision();
     const double buildMs = Ms(t0);
-    CHECK(mesh.verts.size() == G.verts.size() && mesh.polys.size() == G.tris.size());
+    { std::vector<h::Vertex> v; std::vector<h::Triangle> t; h::LoadCollision(v, t); CHECK(!t.empty() && mesh.verts.size() == v.size() && mesh.polys.size() == t.size()); }
     CHECK(Count(h::kSurfaces) <= 16);
     int64_t worstDist = 0; size_t badPlane = 0, farPlane = 0;
     for (const auto& p : mesh.polys) {

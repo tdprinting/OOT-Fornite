@@ -37,35 +37,42 @@ template <size_t N> std::vector<uint8_t> DecodeBase64(const char* const (&pieces
 
 struct Vertex { int16_t x, y, z; };
 struct Triangle { uint32_t a, b, c; int16_t nx, ny, nz; int32_t dist; uint8_t surface; };   // dist is 32 bit (patches/0040)
+// The collision is big and only the game (and the map's test) needs it, so it lives in hyrule_third_storm_collision.h, decoded by
+// hyrule_third_storm_draw.h, which sets this hook when it is included. Without it there is no collision (the server never needs any).
+inline void (*gLoadCollision)(std::vector<Vertex>&, std::vector<Triangle>&) = nullptr;
 struct GroundTables {
     std::vector<int16_t> walk;        // kGrid x kGrid floor heights (kNoFloor: none)
     std::vector<uint8_t> flags;       // kGrid x kGrid: 1 water, 2 too steep
     std::vector<uint8_t> colours;     // the minimap: 385 x 385 x (r, g, b)
-    std::vector<Vertex> verts;        // collision
-    std::vector<Triangle> tris;
     bool ok = false;                  // every table the size it should be
 };
+// zigzag varints (the exporter's varints())
+inline bool ReadVarint(const std::vector<uint8_t>& b, size_t* k, int64_t* v) {
+    uint64_t z = 0; int shift = 0;
+    while (*k < b.size()) {
+        const uint8_t c = b[(*k)++];
+        z |= static_cast<uint64_t>(c & 0x7F) << shift; shift += 7;
+        if (!(c & 0x80)) { *v = static_cast<int64_t>(z >> 1) ^ -static_cast<int64_t>(z & 1); return true; }
+        if (shift > 63) return false;
+    }
+    return false;
+}
 inline const GroundTables& Ground() {
     static const GroundTables t = [] {
         GroundTables g;
-        auto le16 = [](const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); };
-        auto le32 = [](const uint8_t* p) { return static_cast<uint32_t>(p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<uint32_t>(p[3]) << 24)); };
         const auto w = DecodeBase64(kWalkB64, kWalkB64Bytes);
-        g.walk.resize(w.size() / 2);
-        for (size_t i = 0; i < g.walk.size(); ++i) g.walk[i] = le16(&w[i * 2]);
-        g.flags = DecodeBase64(kWalkFlagsB64, kWalkFlagsB64Bytes);
-        g.colours = DecodeBase64(kColoursB64, kColoursB64Bytes);
-        const auto v = DecodeBase64(kCollisionVerticesB64, kCollisionVerticesB64Bytes);
-        g.verts.resize(v.size() / 6);
-        for (size_t i = 0; i < g.verts.size(); ++i) g.verts[i] = {le16(&v[i * 6]), le16(&v[i * 6 + 2]), le16(&v[i * 6 + 4])};
-        const auto c = DecodeBase64(kCollisionTrianglesB64, kCollisionTrianglesB64Bytes);
-        g.tris.resize(c.size() / 23);
-        for (size_t i = 0; i < g.tris.size(); ++i) {
-            const uint8_t* p = &c[i * 23];
-            g.tris[i] = {le32(p), le32(p + 4), le32(p + 8), le16(p + 12), le16(p + 14), le16(p + 16), static_cast<int32_t>(le32(p + 18)), p[22]};
+        g.walk.reserve(kWalkCount);
+        size_t k = 0; int64_t d = 0, h = 0;
+        while (g.walk.size() < kWalkCount && ReadVarint(w, &k, &d)) { h += d; g.walk.push_back(static_cast<int16_t>(h)); }
+        const auto f = DecodeBase64(kWalkFlagsB64, kWalkFlagsB64Bytes);
+        g.flags.reserve(kWalkCount);
+        for (size_t i = 0; i + 1 < f.size() && g.flags.size() < kWalkCount;) {
+            const uint8_t value = f[i++]; int64_t n = 0;
+            size_t j = i; if (!ReadVarint(f, &j, &n)) break; i = j;
+            g.flags.insert(g.flags.end(), static_cast<size_t>(std::max<int64_t>(0, n)), value);
         }
-        g.ok = g.walk.size() == static_cast<size_t>(kGrid) * kGrid && g.flags.size() == g.walk.size() && g.colours.size() == 385u * 385u * 3u &&
-               !g.verts.empty() && !g.tris.empty() && w.size() == kWalkB64Bytes && c.size() == kCollisionTrianglesB64Bytes;
+        g.colours = DecodeBase64(kColoursB64, kColoursB64Bytes);
+        g.ok = g.walk.size() == static_cast<size_t>(kGrid) * kGrid && g.flags.size() == g.walk.size() && g.colours.size() == 385u * 385u * 3u;
         if (!g.ok) {   // keep every lookup in range whatever happened
             g.walk.assign(static_cast<size_t>(kGrid) * kGrid, 0); g.flags.assign(g.walk.size(), 0); g.colours.assign(385u * 385u * 3u, 90);
         }

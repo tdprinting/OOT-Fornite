@@ -8,6 +8,15 @@ import numpy as np
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 DATA = os.path.join(ROOT, "shared", "hyrule_third_storm_data.h")
 MODEL = os.path.join(ROOT, "shared", "hyrule_third_storm_model.h")
+COLLISION = os.path.join(ROOT, "shared", "hyrule_third_storm_collision.h")
+
+def unvarints(raw):
+    out = []; z = 0; shift = 0
+    for c in raw:
+        z |= (c & 0x7F) << shift; shift += 7
+        if not c & 0x80:
+            out.append((z >> 1) ^ -(z & 1)); z = 0; shift = 0
+    return out
 
 def block(text, name):
     m = re.search(r"\b" + name + r"\[\]\s*=\s*\{", text)
@@ -20,7 +29,7 @@ def block(text, name):
         j += 1
     return text[i:j - 1]
 
-def blob(text, name, dtype):
+def blob(text, name, dtype=None):
     """A base64 table the exporter wrote (kNameB64 pieces and kNameB64Bytes), as a numpy array of dtype."""
     import base64
     n = int(re.search(name + r"Bytes = (\d+)", text).group(1))
@@ -28,7 +37,7 @@ def blob(text, name, dtype):
     j = text.index("};", m.end())
     raw = base64.b64decode("".join(re.findall(r'"([A-Za-z0-9+/=]*)"', text[m.end():j])))
     if len(raw) != n: raise SystemExit(f"{name}: {len(raw)} bytes, header says {n}")
-    return np.frombuffer(raw, dtype=dtype)
+    return raw if dtype is None else np.frombuffer(raw, dtype=dtype)
 
 def numbers(s): return np.array(re.findall(r"-?\d+(?:\.\d+)?", s), np.float64)
 
@@ -41,10 +50,10 @@ def main():
     fails = []
     def check(ok, what):
         if not ok: fails.append(what)
-    data = open(DATA, encoding="utf-8").read(); model = open(MODEL, encoding="utf-8").read()
+    data = open(DATA, encoding="utf-8").read(); model = open(MODEL, encoding="utf-8").read(); col = open(COLLISION, encoding="utf-8").read()
     grid = int(re.search(r"kGrid = (\d+)", data).group(1)); step = float(re.search(r"kStep = ([\d.]+)", data).group(1))
     half = float(re.search(r"kHalf = ([\d.]+)", data).group(1))
-    walk = blob(data, "kWalkB64", "<i2").astype(np.int64)
+    walk = np.cumsum(np.array(unvarints(blob(data, "kWalkB64")), np.int64))
     check(len(walk) == grid * grid, "walk grid size")
     W = walk.reshape(grid, grid); org = -step * (grid - 1) / 2
     def floor(x, z, y=None):   # the floor within one grid step closest to height y (chests stand against walls)
@@ -72,8 +81,8 @@ def main():
     pools = rows(data, "kPools", 5)
     for p in pools: check(p[1] > p[0] and p[3] > p[2] and p[1] - p[0] <= 32767 and p[3] - p[2] <= 32767, f"pool {p}")
     # collision
-    nv = len(blob(data, "kCollisionVerticesB64", "<i2")) // 3
-    tt = blob(data, "kCollisionTrianglesB64", np.dtype([("a", "<u4"), ("b", "<u4"), ("c", "<u4"), ("nx", "<i2"), ("ny", "<i2"), ("nz", "<i2"), ("d", "<i4"), ("s", "u1")]))
+    nv = len(blob(col, "kCollisionVerticesB64", "<i2")) // 3
+    tt = blob(col, "kCollisionTrianglesB64", np.dtype([("a", "<u4"), ("b", "<u4"), ("c", "<u4"), ("nx", "<i2"), ("ny", "<i2"), ("nz", "<i2"), ("d", "<i4"), ("s", "u1")]))
     corners = np.c_[tt["a"], tt["b"], tt["c"]]
     check(corners.max() < nv, "collision corner out of range")
     dist = np.abs(tt["d"].astype(np.int64))

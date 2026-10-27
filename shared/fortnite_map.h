@@ -226,11 +226,12 @@ inline Mesh BuildCollision() {
         return m;
     }
     if (gTerrainMapId == 15) {   // Hyrule Before the Third Storm: the drawn ground and buildings themselves, a surface per triangle
-        const auto& g = hyrule_third_storm::Ground();   // decoded from the generated tables on first use
-        m.verts.reserve(g.verts.size());
-        m.polys.reserve(g.tris.size());
-        for (const auto& v : g.verts) m.verts.push_back({v.x,v.y,v.z});
-        for (const auto& p : g.tris) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
+        std::vector<hyrule_third_storm::Vertex> verts; std::vector<hyrule_third_storm::Triangle> tris;
+        if (hyrule_third_storm::gLoadCollision) hyrule_third_storm::gLoadCollision(verts, tris);   // set by hyrule_third_storm_draw.h (the game)
+        m.verts.reserve(verts.size());
+        m.polys.reserve(tris.size());
+        for (const auto& v : verts) m.verts.push_back({v.x,v.y,v.z});
+        for (const auto& p : tris) m.polys.push_back({p.a,p.b,p.c,p.nx,p.ny,p.nz,p.dist,p.surface});
         if (m.verts.empty()) m.verts.push_back({0,-30000,0});
         m.lo = m.hi = m.verts.front();
         for (const auto& v : m.verts) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "hyrule_third_storm_ground.h"
+#include "hyrule_third_storm_collision.h"
 #include "hyrule_third_storm_model.h"
 // Hyrule Before the Third Storm's drawn map, decoded once from the generated base64 tables (hyrule_third_storm_model.h) on first use.
 // Drawn by DrawHyruleThirdStorm in mod/Royale/features/Terrain.inc: one batch is one texture in one 4096-unit square at one level of detail;
@@ -49,4 +50,20 @@ inline const DrawTables& Draw() {
     }();
     return t;
 }
+// The collision (hyrule_third_storm_collision.h): decoded when the engine builds the scene's collision (fortnite::BuildCollision).
+inline void LoadCollision(std::vector<Vertex>& verts, std::vector<Triangle>& tris) {
+    auto u16 = [](const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); };
+    auto u32 = [](const uint8_t* p) { return static_cast<uint32_t>(p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<uint32_t>(p[3]) << 24)); };
+    const auto v = DecodeBase64(kCollisionVerticesB64, kCollisionVerticesB64Bytes);
+    verts.resize(v.size() / 6);
+    for (size_t i = 0; i < verts.size(); ++i) verts[i] = {u16(&v[i * 6]), u16(&v[i * 6 + 2]), u16(&v[i * 6 + 4])};
+    const auto c = DecodeBase64(kCollisionTrianglesB64, kCollisionTrianglesB64Bytes);
+    tris.resize(c.size() / 23);
+    for (size_t i = 0; i < tris.size(); ++i) {
+        const uint8_t* p = &c[i * 23];
+        tris[i] = {u32(p), u32(p + 4), u32(p + 8), u16(p + 12), u16(p + 14), u16(p + 16), static_cast<int32_t>(u32(p + 18)), p[22]};
+        if (tris[i].a >= verts.size() || tris[i].b >= verts.size() || tris[i].c >= verts.size()) { tris.clear(); break; }   // a damaged table: none
+    }
+}
+inline const bool kCollisionHooked = (gLoadCollision = &LoadCollision, true);
 }}  // namespace royale::hyrule_third_storm
