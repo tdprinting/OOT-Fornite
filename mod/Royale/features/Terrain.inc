@@ -425,6 +425,7 @@ void DrawHyruleThirdStorm(PlayState* play) {
         visible.push_back(static_cast<uint32_t>(i));
     }
     std::sort(visible.begin(), visible.end(), [&D](uint32_t a, uint32_t b) { return D.batches[a].texture < D.batches[b].texture; });   // one texture load each
+    ThirdStormStats st; st.frame = frame; st.nearSquares = nearCount;   // (before OPEN_DISPS: it opens a block of its own)
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Opa(play->state.gfxCtx);
     Matrix_Translate(0, 0, 0, MTXMODE_NEW);
@@ -434,7 +435,6 @@ void DrawHyruleThirdStorm(PlayState* play) {
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
     static_assert(h::kTextureSize == 256, "256 x 256 RGBA16: mask 8, shift 15 (4096 texture units a repeat, as the other maps)");
     int loaded = -1;
-    ThirdStormStats st; st.frame = frame; st.nearSquares = nearCount;
     for (const uint32_t i : visible) {
         const auto& b = D.batches[i];
         if (!GfxHasRoom(play, 20)) break;

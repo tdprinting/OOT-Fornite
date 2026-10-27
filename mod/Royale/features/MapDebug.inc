@@ -7,6 +7,8 @@
 // what is drawn (all collision, floors only, walls only, nothing), D-pad Down to rise 1500 units (look at a spot from above, then fall).
 // A grey patch where you can see the map but no colour is drawn is drawn geometry with no collision: you would fall or walk through there.
 
+namespace {   // the same unnamed namespace as the other features (Terrain.inc, EndMatch.inc and Vehicles.inc declare these functions)
+
 struct MapDebugState {
     int mode = 0;                 // 0 all, 1 floors, 2 walls, 3 nothing
     int target = -1;              // last teleport target
@@ -71,6 +73,7 @@ void DrawMapDebugWorld(PlayState* play) {
                 picked.push_back(i);
                 if (static_cast<int>(picked.size()) >= kMapDebugMaxTris) break;
             }
+    int n = 0;   // (before OPEN_DISPS: it opens a block of its own)
     OPEN_DISPS(play->state.gfxCtx);
     Gfx_SetupDL_25Xlu(play->state.gfxCtx);
     gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK | G_CULL_FRONT | G_FOG);
@@ -78,7 +81,6 @@ void DrawMapDebugWorld(PlayState* play) {
     gDPSetCombineLERP(POLY_XLU_DISP++, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, COMBINED, 0, 0, 0, COMBINED);
     Matrix_Translate(0, 0, 0, MTXMODE_NEW);
     gSPMatrix(POLY_XLU_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_NOPUSH | G_MTX_LOAD | G_MTX_MODELVIEW);
-    int n = 0;
     for (uint32_t i : picked) {
         const CollisionPoly& p = gFortnitePoly[i];
         const float nx = p.normal.x / 32767.0f, ny = p.normal.y / 32767.0f, nz = p.normal.z / 32767.0f;
@@ -224,3 +226,5 @@ void DrawMapDebugPanel(ImDrawList* dl, ImFont* font, ImVec2 ds, float scale) {
     for (size_t i = 0; i < lines.size(); ++i)
         dl->AddText(font, size, ImVec2(x, y + lh * i), lines[i].rfind("!!", 0) == 0 ? IM_COL32(255, 110, 110, 255) : IM_COL32(235, 235, 235, 255), lines[i].c_str());
 }
+
+}  // namespace
