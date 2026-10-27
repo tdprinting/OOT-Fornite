@@ -120,6 +120,8 @@ void AutoHost(int map, bool solo) {
     ui.mapId = map;
     gSession.SelectMap(map);
     WarHost(solo, solo && royale::IsTestMap(map), royale::IsTestMap(map) ? map : royale::kSandboxMapIndex);
+    if (gSession.GetMode() == royale::RoyaleSession::Mode::Idle)   // WarHost refused: say why instead of waiting out the step
+        AutoLog("  host: no lobby (in game %d, notice \"%s\", error \"%s\")", InGame() ? 1 : 0, gWar.notice.c_str(), ui.error.c_str());
 }
 
 // One step's work this frame: true when it is done.
