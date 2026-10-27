@@ -154,8 +154,8 @@ void DrinkSounds(Player* player) {
 // as you move. Link's own movement then does the rest: he lands on them, walks and rolls across them, hops up small steps, grabs and climbs
 // ledges, and stops at their sides, exactly as on the scene's own floor. The game only has room for so much of this kind of collision
 // (shared with chests, gates and moving platforms), so only the nearest pieces are in it at a time; the far ones don't matter to you.
-constexpr int kSolidMaxVtx = 3000;    // was 420; the game's moving-collision lists hold 8192 on our maps now (patches/0029)
-constexpr int kSolidMaxPoly = 3000;
+constexpr int kSolidMaxVtx = 12000;   // was 3000 (420 originally); the game's moving-collision lists hold 32768 on our maps now (patches/0039)
+constexpr int kSolidMaxPoly = 12000;
 constexpr float kSolidRadius = 1500.0f;   // scenery within this of you is solid
 Vec3s gSolidVtx[kSolidMaxVtx];
 CollisionPoly gSolidPoly[kSolidMaxPoly];

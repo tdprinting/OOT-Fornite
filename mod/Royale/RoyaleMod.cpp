@@ -12,6 +12,7 @@
 #include "anim.h"
 #include "link_anims.h"
 #include "cloth.h"
+#include "engine_limits.h"
 #include "build_version.h"
 #include "lilo_anim.h"
 #include "lilo_sounds.h"

@@ -1,0 +1,95 @@
+diff --git a/soh/include/z64.h b/soh/include/z64.h
+index 79b4c93..9cd9802 100644
+--- a/soh/include/z64.h
++++ b/soh/include/z64.h
+@@ -39,9 +39,9 @@
+ #endif
+ 
+ #define AUDIO_HEAP_SIZE  0x380000
+-// OOT Royale: was 4 MB. The play heap (64 MB, z_play.c) and every other game state heap come from it. 128 MB is small next to
+-// the Odin 2 Portal's 8-16 GB, and pages the game never touches are never backed by real memory.
+-#define SYSTEM_HEAP_SIZE (1024 * 1024 * 128)
++// OOT Royale: was 4 MB (128 MB before patches/0039). The play heap (160 MB, z_play.c) and every other game state heap come from it. 256 MB is
++// small next to the Odin 2 Portal's 8-16 GB, and pages the game never touches are never backed by real memory.
++#define SYSTEM_HEAP_SIZE (1024 * 1024 * 256)
+ 
+ #ifdef __cplusplus
+ namespace LUS
+@@ -97,12 +97,14 @@ typedef struct {
+ 
+ typedef struct {
+     /* 0x00000 */ u16 headMagic; // GFXPOOL_HEAD_MAGIC
+-    // OOT Royale: 4x the original display-list buffers (limits for modern phones like the Odin 2 Portal). They were 0x2FC0, 0x1000, 0x800 and 0x100
+-    // commands; when one overflows the whole frame is dropped, and the solid buffer also holds each frame's Graph_Alloc data.
+-    Gfx polyOpaBuffer[0x2FC0 * 4];
+-    Gfx polyXluBuffer[0x1000 * 4];
+-    Gfx overlayBuffer[0x800 * 4];
+-    Gfx workBuffer[0x100 * 4];
++    // OOT Royale: bigger display-list buffers (limits for modern phones like the Odin 2 Portal). They were 0x2FC0, 0x1000, 0x800 and 0x100
++    // commands; when one overflows the whole frame is dropped, and the solid buffer also holds each frame's Graph_Alloc data. patches/0029 made
++    // them 4x; patches/0039 makes the solid and see-through ones 16x (about 1.5 MB and 0.5 MB) and the overlay and work ones 8x, for maps that
++    // draw hundreds of batches a frame.
++    Gfx polyOpaBuffer[0x2FC0 * 16];
++    Gfx polyXluBuffer[0x1000 * 16];
++    Gfx overlayBuffer[0x800 * 8];
++    Gfx workBuffer[0x100 * 8];
+     /* 0x11308 */ Gfx unusedBuffer[0x40];
+     /* 0x12408 */ u16 tailMagic; // GFXPOOL_TAIL_MAGIC
+ } GfxPool; // size = 0x24820 in the original
+diff --git a/soh/src/code/z_bgcheck.c b/soh/src/code/z_bgcheck.c
+index 5a1893c..317b06e 100644
+--- a/soh/src/code/z_bgcheck.c
++++ b/soh/src/code/z_bgcheck.c
+@@ -1588,14 +1588,16 @@ void BgCheck_Allocate(CollisionContext* colCtx, PlayState* play, CollisionHeader
+         extern s32 Royale_IsCustomCollision(CollisionHeader * header);
+         if (Royale_IsCustomCollision(colHeader)) {
+             // OOT Royale (limits for modern phones like the Odin 2 Portal): node numbers are 32 bit now, so this is no longer capped at 65535.
+-            // 0xC0000 is quadrupled below to 3 MB: room for about 390000 list nodes. Finer cells keep the lists short on bigger maps.
+-            colCtx->memSize = 0xC0000;
+-            colCtx->subdivAmount.x = 64;
+-            colCtx->subdivAmount.y = 4;
+-            colCtx->subdivAmount.z = 64;
+-            colCtx->dyna.polyListMax = 4096; // doubled below: room for 8192 moving/solid-scenery polygons (was 1024)
+-            colCtx->dyna.vtxListMax = 4096;
+-            colCtx->dyna.polyNodesMax = 8192 + 512; // one node per moving polygon (8192 after doubling) plus headroom
++            // Round 2 (patches/0039, maps that fill the whole +-32767 world with hundreds of thousands of triangles): 0x400000 is quadrupled
++            // below to 16 MB, room for about 2 million list nodes (was 0xC0000, 390000). 256 x 8 x 256 cells are about 250 units across on a
++            // world-wide map (were 64 x 4 x 64, about 1000), so every raycast walks a short list.
++            colCtx->memSize = 0x400000;
++            colCtx->subdivAmount.x = 256;
++            colCtx->subdivAmount.y = 8;
++            colCtx->subdivAmount.z = 256;
++            colCtx->dyna.polyListMax = 16384; // doubled below: room for 32768 moving/solid-scenery polygons (was 8192, 1024 originally)
++            colCtx->dyna.vtxListMax = 16384;
++            colCtx->dyna.polyNodesMax = 32768 + 2048; // one node per moving polygon (32768 after doubling) plus headroom
+         }
+     }
+     colCtx->lookupTbl = THA_AllocEndAlign(
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+index f562d64..f815868 100644
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -407,8 +407,9 @@ void Play_Init(GameState* thisx) {
+     // OTRTODO allocate double the normal amount of memory
+     // This is to avoid some parts of the game, like loading actors, causing OoM
+     // This is potionally unavoidable due to struct size differences, but is x2 the right amount?
+-    // OOT Royale: 64 MB play heap (about 17x the original 3.8 MB): actors, collision lists, effects and big custom maps all come from it.
+-    GameState_Realloc(&play->state, 1024 * 1024 * 64);
++    // OOT Royale: 160 MB play heap (about 42x the original 3.8 MB; was 64 MB before patches/0039): actors, collision lists (16 MB of nodes and a
++    // 6 MB lookup grid on the biggest maps), effects and big custom maps all come from it. Untouched pages are never backed by real memory.
++    GameState_Realloc(&play->state, 1024 * 1024 * 160);
+     KaleidoManager_Init(play);
+     View_Init(&play->view, gfxCtx);
+     Audio_SetExtraFilter(0);
+@@ -1412,7 +1413,10 @@ void Play_Draw(PlayState* play) {
+         POLY_OPA_DISP = Play_SetFog(play, POLY_OPA_DISP);
+         POLY_XLU_DISP = Play_SetFog(play, POLY_XLU_DISP);
+ 
+-        func_800AA460(&play->view, play->view.fovy, play->view.zNear, play->lightCtx.fogFar);
++        // OOT Royale: a map wider than the fog distance asks for a farther clip (fogFar is s16, so a scene alone stops at 32767). The mod
++        // returns the scene's own value on every other map.
++        extern f32 Royale_FarClip(s16 sceneFar);
++        func_800AA460(&play->view, play->view.fovy, play->view.zNear, Royale_FarClip(play->lightCtx.fogFar));
+         func_800AAA50(&play->view, 15);
+ 
+         // Flip the projections and invert culling for the OPA and XLU display buffers

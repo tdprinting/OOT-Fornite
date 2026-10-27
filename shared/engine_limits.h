@@ -2,8 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 
-// The engine's size limits as raised for modern phones (Odin 2 Portal and up) by patches/0029-royale-raise-engine-limits.patch and
-// patches/libultraship/0007-raise-renderer-limits.patch. Map exporters and tests check against these. The old values are in the comments;
+// The engine's size limits as raised for modern phones (Odin 2 Portal and up) by patches/0029-royale-raise-engine-limits.patch,
+// patches/libultraship/0007-raise-renderer-limits.patch and, for world-wide maps, patches/0039-royale-raise-engine-limits-2.patch and
+// patches/libultraship/0013-raise-renderer-limits-2.patch. Map exporters and tests check against these. The old values are in the comments;
 // docs/ENGINE_LIMITS.md has the full table.
 namespace royale::engine {
 
@@ -12,16 +13,30 @@ inline constexpr uint32_t kCollisionMaxVertices = (1u << 29) - 1;   // was 8191 
 inline constexpr uint32_t kCollisionMaxPolygons = 0x7FFFFFFF;       // was 32767 (polygon numbers were s16)
 // Collision vertices are still 16-bit positions, as in every OoT scene: the world is -32767 to 32767 units on each axis.
 inline constexpr int kWorldCoordMax = 32767;
+// Our maps' static collision (BgCheck_Allocate): the lookup grid and the room for its lists (8-byte nodes; a triangle is listed once per cell
+// it touches). A map whose triangles touch more than kCollisionMaxListNodes cells in all does not fit.
+inline constexpr int kCollisionGridX = 256, kCollisionGridY = 8, kCollisionGridZ = 256;   // was 64 x 4 x 64
+inline constexpr size_t kCollisionMaxListNodes = 0x400000 * 4 / 8;                       // about 2.1 million (was about 390000)
+// Moving and solid-scenery collision on our maps (the dyna lists): polygons and vertices.
+inline constexpr int kDynaMaxPolygons = 32768;                                            // was 8192 (1024 originally)
+// Memory the game states may use (z_play.c, z64.h). Pages that are never touched are never backed by real memory.
+inline constexpr size_t kPlayHeapBytes = size_t(160) << 20;                               // was 64 MB (3.8 MB originally)
+inline constexpr size_t kSystemHeapBytes = size_t(256) << 20;                             // was 128 MB (4 MB originally)
+// The farthest a map may ask the camera to draw (Royale_FarClip, patches/0039). A scene's own fog distance is s16, so 32767 at most.
+inline constexpr float kFarClipMax = 64000.0f;
 
 // Rendering (libultraship Fast3D). The F3DEX2 commands keep a vertex number in 7 bits, so 128 is the most one load can ever address.
 inline constexpr int kRspMaxVertices = 128;        // was 64 (a gSPVertex of more than 64 wrote past the cache)
-inline constexpr int kTrianglesPerDrawCall = 1024; // was 256
-inline constexpr int kTextureCacheEntries = 2048;  // was 500
-inline constexpr int kTextureBaseline = 256;       // Tee's baseline for new textures: 256 x 256 (load them as tiles; a block load stops at 4096 texels)
+inline constexpr int kTrianglesPerDrawCall = 4096; // was 1024 (256 originally)
+inline constexpr int kTextureCacheEntries = 4096;  // was 2048 (500 originally)
+inline constexpr int kTextureMaxSize = 512;        // the largest map texture: 512 x 512 (Tee, 2026-10-26). The renderer takes up to 8192; the
+                                                   // F3DEX2 tile commands address 1024; 512 RGBA16 is 512 KB a texture
+inline constexpr int kTextureBaseline = 256;       // the usual size for models: 256 x 256 (load as tiles; a block load stops at 4096 texels)
 
-// The game's per-frame display-list buffers (z64.h GfxPool), in commands. All four are 4x the original.
-inline constexpr size_t kPolyOpaCommands = 0x2FC0 * 4;
-inline constexpr size_t kPolyXluCommands = 0x1000 * 4;
-inline constexpr size_t kOverlayCommands = 0x800 * 4;
+// The game's per-frame display-list buffers (z64.h GfxPool), in commands: 16x the original for the solid and see-through ones, 8x for the
+// overlay (all were 4x before patches/0039).
+inline constexpr size_t kPolyOpaCommands = 0x2FC0 * 16;
+inline constexpr size_t kPolyXluCommands = 0x1000 * 16;
+inline constexpr size_t kOverlayCommands = 0x800 * 8;
 
 }  // namespace royale::engine

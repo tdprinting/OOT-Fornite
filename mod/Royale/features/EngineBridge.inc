@@ -183,6 +183,13 @@ extern "C" CollisionHeader* Royale_CustomCollision(PlayState* play) {
 extern "C" s32 Royale_IsCustomCollision(CollisionHeader* header) { return gFortniteBuilt && header == &gFortniteHeader; }
 extern "C" s32 Royale_HideRooms(void) { return gFortniteScene && gPlayState != nullptr && gPlayState->sceneNum == SCENE_HYRULE_FIELD; }
 
+// The camera's far clip (patches/0039, Play_Draw). A map wider than the scene's fog distance sets gMapFarClip (game units, at most
+// engine::kFarClipMax); 0, as on every map so far, keeps the scene's own value.
+float gMapFarClip = 0.0f;
+extern "C" f32 Royale_FarClip(s16 sceneFar) {
+    return std::max(static_cast<float>(sceneFar), std::min(gMapFarClip, royale::engine::kFarClipMax));
+}
+
 namespace {
 #include "RoyaleWarTable.h"
 }

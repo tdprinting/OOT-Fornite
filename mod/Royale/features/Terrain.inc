@@ -254,10 +254,12 @@ void DrawAuthoredStructures(PlayState* play) {
     gDPSetCombineMode(POLY_OPA_DISP++, G_CC_MODULATEIDECALA, G_CC_PASS2);
     int loaded = -1;
     // The exporters write 4096 texture units per repeat whatever the texture's size (128 texels in S10.5). A 256 texture wraps at 2^8 texels and
-    // takes shift 15 (the coordinates times two), so one repeat is still the whole image.
-    static_assert(T::kTextureSize == 128 || T::kTextureSize == 256, "authored textures are 128 or 256 square");
+    // takes shift 15 (the coordinates times two), a 512 one wraps at 2^9 and takes shift 14 (times four), so one repeat is still the whole image.
+    static_assert(T::kTextureSize == 128 || T::kTextureSize == 256 || T::kTextureSize == 512, "authored textures are 128, 256 or 512 square");
+    static_assert(T::kTextureSize <= royale::engine::kTextureMaxSize, "bigger than the engine's largest map texture");
     static_assert(sizeof(T::kTextures[0]) == static_cast<size_t>(T::kTextureSize) * T::kTextureSize * 2, "RGBA16 texture bytes");
-    constexpr int kMask = T::kTextureSize == 256 ? 8 : 7, kShift = T::kTextureSize == 256 ? 15 : 0;
+    constexpr int kMask = T::kTextureSize == 512 ? 9 : T::kTextureSize == 256 ? 8 : 7;
+    constexpr int kShift = T::kTextureSize == 512 ? 14 : T::kTextureSize == 256 ? 15 : 0;
     auto loadTexture = [&](int texture) {
         if (loaded == texture) return;
         gDPLoadTextureTile(POLY_OPA_DISP++, T::kTextures[texture], G_IM_FMT_RGBA, G_IM_SIZ_16b, T::kTextureSize, T::kTextureSize, 0, 0, T::kTextureSize - 1, T::kTextureSize - 1, 0,

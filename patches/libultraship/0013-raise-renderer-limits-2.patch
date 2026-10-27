@@ -1,0 +1,28 @@
+diff --git a/src/graphic/Fast3D/gfx_pc.cpp b/src/graphic/Fast3D/gfx_pc.cpp
+index 97b12b2..68e49d9 100644
+--- a/src/graphic/Fast3D/gfx_pc.cpp
++++ b/src/graphic/Fast3D/gfx_pc.cpp
+@@ -70,7 +70,9 @@ using namespace std;
+ #define RATIO_Y \
+     ((fbActive ? active_fb->second.applied_height : gfx_current_dimensions.height) / (2.0f * HALF_SCREEN_HEIGHT))
+ 
+-#define TEXTURE_CACHE_MAX_SIZE 2048 // OOT Royale: textures kept on the GPU before the cache is flushed (was 500); 256 x 256 is the baseline now
++// OOT Royale: textures kept on the GPU before the cache is flushed (was 500, then 2048). 512 x 512 is the largest map texture now
++// (patches/libultraship/0013): load it as a tile, never a block (a block load stops at 4096 texels).
++#define TEXTURE_CACHE_MAX_SIZE 4096
+ 
+ static struct {
+     TextureCacheMap map;
+diff --git a/src/graphic/Fast3D/gfx_pc.h b/src/graphic/Fast3D/gfx_pc.h
+index 6767ee8..0406325 100644
+--- a/src/graphic/Fast3D/gfx_pc.h
++++ b/src/graphic/Fast3D/gfx_pc.h
+@@ -127,7 +127,7 @@ struct ShaderMod {
+     uint8_t type;
+ };
+ 
+-#define MAX_BUFFERED 1024 // OOT Royale: triangles batched per draw call (was 256): fewer draw calls for big models and maps
++#define MAX_BUFFERED 4096 // OOT Royale: triangles batched per draw call (was 256, then 1024): fewer draw calls for big models and maps
+ // #define MAX_LIGHTS 2
+ #define MAX_LIGHTS 32
+ // OOT Royale: the vertex cache (was 64). 128 is the most the F3DEX2 commands can address (G_VTX and G_TRI keep a vertex number in 7 bits), so a

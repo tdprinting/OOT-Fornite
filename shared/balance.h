@@ -96,7 +96,7 @@ constexpr float kAdultTaken = 0.8f;      // damage taken
 constexpr float kAdultSpeed = 1.1f;
 constexpr float kAdultScale = 1.35f;     // how much bigger Link is drawn
 
-constexpr int kMaxProps = 4000;   // was 1200 (a prop number is 16 bit on the wire, so 65535 is the ceiling)
+constexpr int kMaxProps = 16000;  // was 4000 (1200 originally; a prop number is 16 bit on the wire, so 65535 is the ceiling)
 
 // Supply drops: a crate with guaranteed Legendary loot is announced, lands a few seconds later in the part of the map that is still safe, and everybody races for it.
 constexpr float kSupplyFirstSec = 55.0f;   // match time of the first drop
