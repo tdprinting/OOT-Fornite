@@ -202,6 +202,19 @@ static void BusPathRules() {
         CHECK(Distance(BusPosAt(b, -5.0f), b.start) < 0.01f && Distance(BusPosAt(b, cross + 30.0f), b.end) < 0.01f);   // clamped at both ends
         CHECK(std::fabs(BusTimeNearest(b, BusPosAt(b, open)) - open) < 0.01f);
     }
+    // A circle that reaches its square's corners (Hyrule Before the Third Storm): the doors open and close inside the world square, never over
+    // the void past its edges (a solo playtest landed at x 36574).
+    const Circle storm = kMaps[kHyruleThirdStormMapIndex].fallback;
+    for (uint64_t seed = 1; seed <= 200; ++seed) {
+        const BusPath b = MakeBusPath(seed, storm);
+        float open = 0, close = 0;
+        BusWindow(b, open, close);
+        CHECK(close > open + 10.0f);
+        for (float t : {open, close, (open + close) * 0.5f}) {
+            const Vec2 p = BusPosAt(b, t);
+            CHECK(std::fabs(p.x) <= kBusJumpWorldMax + 2.0f && std::fabs(p.z) <= kBusJumpWorldMax + 2.0f);
+        }
+    }
     // The same seed gives the same line; another seed another one.
     CHECK(Distance(MakeBusPath(7, moon).start, MakeBusPath(7, moon).start) == 0.0f && Distance(MakeBusPath(7, moon).start, MakeBusPath(8, moon).start) > 100.0f);
     // A small map slows the bus (never under 25 s); a huge one speeds it up (never over 60 s).

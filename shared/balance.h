@@ -46,6 +46,9 @@ constexpr float kBusMaxCrossSec = 60.0f;     // and a huge map speeds it up, so 
 constexpr float kBusMargin = 1500.0f;        // the line starts and ends this far outside the map circle
 constexpr float kBusCorridor = 0.45f;        // the line passes the centre no further away than this share of the map radius
 constexpr float kBusJumpOpen = 0.92f;        // jumping is allowed while the bus is inside this share of the map radius (over land)
+constexpr float kBusJumpWorldMax = 30000.0f; // ...and within this many units of the world origin on x and z: a map whose circle reaches its square's
+                                             // corners (Hyrule Before the Third Storm, +-32400) would otherwise open the doors over the void past its
+                                             // edges. 2400 units short of that edge leaves room for the glide.
 constexpr float kBusClimbFrom = 600.0f;      // during the countdown the bus climbs from this height to kBusAltitude (only drawn)
 constexpr float kFreefallSpeed = kDiveSpeed; // falling after the jump, before the glider opens
 constexpr float kAutoGlideHeight = 600.0f;   // the glider opens by itself this high above the ground

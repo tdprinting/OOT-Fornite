@@ -38,8 +38,8 @@ inline Vec2 BusDir(const BusPath& b) {
 // Heading in radians, OoT style (0 = +z, growing towards +x).
 inline float BusYaw(const BusPath& b) { const Vec2 d = BusDir(b); return std::atan2(d.x, d.z); }
 
-// The stretch of the line inside the jump circle (kBusJumpOpen of the map radius): the bus opens its doors at BusOpenSec and everyone still
-// aboard is pushed off at BusCloseSec. Both are seconds since the drop began.
+// The stretch of the line inside the jump circle (kBusJumpOpen of the map radius) and the world square (kBusJumpWorldMax): the bus opens its
+// doors at BusOpenSec and everyone still aboard is pushed off at BusCloseSec. Both are seconds since the drop began.
 inline void BusWindow(const BusPath& b, float& open, float& close) {
     open = close = 0;
     if (b.length <= 0 || b.speed <= 0) return;
@@ -49,8 +49,16 @@ inline void BusWindow(const BusPath& b, float& open, float& close) {
     const float off2 = fx * fx + fz * fz - along * along;                 // squared distance of the line from the centre
     const float r = b.radius * kBusJumpOpen;
     const float half = std::sqrt((std::max)(0.0f, r * r - off2));
-    open = std::clamp((along - half) / b.speed, 0.0f, BusCrossSec(b));
-    close = std::clamp((along + half) / b.speed, open, BusCrossSec(b));
+    float lo = along - half, hi = along + half;                           // distances along the line
+    const float s[2] = {b.start.x, b.start.z}, v[2] = {d.x, d.z};
+    for (int k = 0; k < 2; ++k) {                                         // clip to the square, one axis at a time
+        if (std::fabs(v[k]) < 1e-6f) { if (std::fabs(s[k]) > kBusJumpWorldMax) hi = lo; continue; }
+        const float a = (-kBusJumpWorldMax - s[k]) / v[k], c = (kBusJumpWorldMax - s[k]) / v[k];
+        lo = (std::max)(lo, (std::min)(a, c));
+        hi = (std::min)(hi, (std::max)(a, c));
+    }
+    open = std::clamp(lo / b.speed, 0.0f, BusCrossSec(b));
+    close = std::clamp(hi / b.speed, open, BusCrossSec(b));
 }
 inline float BusOpenSec(const BusPath& b) { float o, c; BusWindow(b, o, c); return o; }
 inline float BusCloseSec(const BusPath& b) { float o, c; BusWindow(b, o, c); return c; }

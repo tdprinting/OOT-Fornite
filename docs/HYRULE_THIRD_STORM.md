@@ -92,3 +92,15 @@ Known problems (the debug view and `walk.png` show them):
 - About 16 chests have no floor within a step (most are on upper floors or in Death Mountain's and Kakariko's rock-cut rooms).
 - The map's own known join problems (`map/notes/world.md`): steps of up to 1 m at some road ends, edge lips up to 17.7 m (Kakariko).
 - Not yet run on the Odin: frame rate, the look of the baked colours and textures, and the time to lay the map out on the phone.
+
+Headless playtest (Linux, software rendering, 2026-10-27): solo-15, match-15 (31 bots, 22 drawn), perf-15 and tour-15 (24 stops) all pass.
+perf-15 ran 17.5 game updates a second of 20, but 40% of the time is Mesa's software rasteriser (no GPU in WSL), so it says nothing about the
+phone. What it took:
+- The engine's collision list overflowed and crashed (`StaticLookup_AddPolyToSSList`): `patches/0041` gives it 32 MB (room for 3.1 million
+  nodes, 1.44 million needed) and makes a full list drop a poly instead of writing past the table. `server/tests` checks the budget.
+- The generated tables compile in their own file, `mod/Royale/RoyaleThirdStormTables.cpp` (one translation unit with them ran out of memory).
+- The bus opened its doors over the void: the map circle reaches the square's corners, so most of the bus line inside it lies past the square's
+  edges (solo-15 landed at x 36574). The jump window is now also clipped to +-`kBusJumpWorldMax` (30000) on x and z (`shared/bus.h`).
+
+Still to look at: tour stop 17 (River Bridge Camp, 3840 x 10816) left the camera under the river bank; tour stop 2 (Kakariko Graveyard)
+shows stacked red roof planes, not collision (no ceilings there): check both on the Odin with the debug view.
